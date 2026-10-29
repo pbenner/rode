@@ -1,0 +1,96 @@
+name: Package Debian
+
+on:
+  workflow_dispatch:
+    inputs:
+      maintainer:
+        description: 'Package maintainer: Name <email> (defaults to the DEB_MAINTAINER repository variable)'
+        type: string
+        required: false
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+jobs:
+  debian:
+    # Fix the build distribution so ubuntu-latest cannot silently raise the ABI floor.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DEB_MAINTAINER: ${{ inputs.maintainer || vars.DEB_MAINTAINER }}
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate package metadata
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          maintainer = os.environ["DEB_MAINTAINER"]
+          if not re.fullmatch(r"[^\r\n<>]+ <[^\s<>]+@[^\s<>]+>", maintainer):
+              sys.exit("Set the maintainer input or DEB_MAINTAINER repository variable to Name <email>.")
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          if os.environ["GITHUB_REF_TYPE"] == "tag" and os.environ["GITHUB_REF_NAME"] != f"v{version}":
+              sys.exit(f"Version tag must match Cargo.toml: expected v{version}.")
+          epoch = subprocess.check_output(["git", "show", "-s", "--format=%ct"], text=True).strip()
+          with open(os.environ["GITHUB_ENV"], "a") as environment:
+              environment.write(f"SOURCE_DATE_EPOCH={int(epoch)}\n")
+          PY
+
+      - name: Install build and package-check dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config musl-tools dpkg-dev binutils \
+            python3 libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev \
+            libegl1 libgl1-mesa-dri desktop-file-utils xvfb xauth
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debian-ubuntu-24.04-amd64
+
+      - name: Build editor, static terminal helper and Debian package
+        id: package
+        run: |
+          rode_deb=$(scripts/build-deb.sh --maintainer "$DEB_MAINTAINER" --output target/debian)
+          printf 'package=%s\n' "$rode_deb" >> "$GITHUB_OUTPUT"
+
+      - name: Validate extracted package and GUI
+        env:
+          DEB_PATH: ${{ steps.package.outputs.package }}
+        run: xvfb-run -a python3 scripts/test-deb.py --gui "$DEB_PATH"
+
+      - name: Write package checksum
+        working-directory: target/debian
+        env:
+          DEB_PATH: ${{ steps.package.outputs.package }}
+        run: sha256sum -- "$(basename -- "$DEB_PATH")" > SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        id: artifact
+        with:
+          name: rode-debian-amd64
+          path: |
+            ${{ steps.package.outputs.package }}
+            target/debian/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Link package download
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: |
+          printf '[Download Debian package and SHA-256 checksum](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,41 @@
+{
+  "name": "Neon",
+  "base": "phosphor",
+  "colors": {
+    "background": "#110b1b",
+    "panel": "#191124",
+    "raised": "#281b37",
+    "border": "#493455",
+    "text": "#e9dff4",
+    "muted": "#b09cbd",
+    "accent": "#ff79d7",
+    "success": "#85ecc4",
+    "error": "#ff8a9e",
+    "selection": "#54305f",
+    "hover": "#352141",
+    "active": "#482852",
+    "gutter": "#8b709c",
+    "terminal_background": "#110b1b",
+    "terminal_foreground": "#e5d3f0"
+  },
+  "syntax": {
+    "comment": "#a18aac",
+    "keyword": "#ff79d7",
+    "type": "#78e6f3",
+    "function": "#c9a1ff",
+    "string": "#a1edc2",
+    "number": "#ffc98d",
+    "constant": "#ffd694",
+    "variable": "#e9dff4",
+    "operator": "#f1abdd",
+    "punctuation": "#bba5c8",
+    "builtin": "#8edbe9",
+    "attribute": "#e7b3ff"
+  },
+  "ansi": [
+    "#281b37", "#ed829b", "#85d7b5", "#e8c080",
+    "#92b4f5", "#e385cc", "#76d5e5", "#e2cde9",
+    "#a18aac", "#ffa5bc", "#abf2d0", "#ffdfa2",
+    "#b7d0ff", "#ffabe8", "#a3f0fc", "#fff0ff"
+  ]
+}

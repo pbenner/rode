@@ -1,0 +1,41 @@
+{
+  "name": "Code Dark",
+  "base": "phosphor",
+  "colors": {
+    "background": "#1e1e1e",
+    "panel": "#252526",
+    "raised": "#2d2d30",
+    "border": "#3e3e42",
+    "text": "#d4d4d4",
+    "muted": "#9d9d9d",
+    "accent": "#569cd6",
+    "success": "#89d185",
+    "error": "#f48771",
+    "selection": "#264f78",
+    "hover": "#2a2d2e",
+    "active": "#303c4a",
+    "gutter": "#858585",
+    "terminal_background": "#1e1e1e",
+    "terminal_foreground": "#cccccc"
+  },
+  "syntax": {
+    "comment": "#6a9955",
+    "keyword": "#569cd6",
+    "type": "#4ec9b0",
+    "function": "#dcdcaa",
+    "string": "#ce9178",
+    "number": "#b5cea8",
+    "constant": "#4fc1ff",
+    "variable": "#9cdcfe",
+    "operator": "#d4d4d4",
+    "punctuation": "#d4d4d4",
+    "builtin": "#dcdcaa",
+    "attribute": "#c586c0"
+  },
+  "ansi": [
+    "#1e1e1e", "#f14c4c", "#23d18b", "#e5e510",
+    "#569cd6", "#d670d6", "#29b8db", "#cccccc",
+    "#808080", "#f48771", "#89d185", "#f9f1a5",
+    "#9cdcfe", "#e2a8e2", "#6ddde5", "#ffffff"
+  ]
+}

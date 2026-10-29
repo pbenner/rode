@@ -1,0 +1,41 @@
+{
+  "name": "Amber",
+  "base": "phosphor",
+  "colors": {
+    "background": "#100c07",
+    "panel": "#171109",
+    "raised": "#241b10",
+    "border": "#493722",
+    "text": "#eed6ae",
+    "muted": "#b19a77",
+    "accent": "#ffbd59",
+    "success": "#b7ce87",
+    "error": "#f48777",
+    "selection": "#4c3518",
+    "hover": "#332514",
+    "active": "#423019",
+    "gutter": "#8c7352",
+    "terminal_background": "#100c07",
+    "terminal_foreground": "#e5bc7b"
+  },
+  "syntax": {
+    "comment": "#a28d70",
+    "keyword": "#ffbd59",
+    "type": "#ffe0a3",
+    "function": "#e9ce8f",
+    "string": "#c1d99a",
+    "number": "#f29e74",
+    "constant": "#f3c478",
+    "variable": "#eed6ae",
+    "operator": "#d8b88a",
+    "punctuation": "#bba17b",
+    "builtin": "#edd292",
+    "attribute": "#d9b0b8"
+  },
+  "ansi": [
+    "#241b10", "#db8174", "#a5bc80", "#e7b761",
+    "#8dabc4", "#bc99b9", "#8abcb1", "#ddc7a3",
+    "#a28d70", "#ffa697", "#c5dea0", "#ffda8a",
+    "#b2cde5", "#dfbbdc", "#afdfd1", "#fff0d3"
+  ]
+}

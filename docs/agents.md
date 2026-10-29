@@ -1,0 +1,54 @@
+# Agent chat
+
+Open **View → Agent chat**, use the speech-bubble activity icon, or press **Ctrl+Shift+A**. Choose a provider and open its settings button. Send a message with **Send** or **Ctrl+Enter**; Enter inserts a newline. Replies stream into the chat, with selectable text, copy buttons, code blocks, and expandable tool results. Permission requests and questions appear above the conversation.
+
+The agent starts in the opened project folder, on the computer hosting that project. The panel identifies **LOCAL** or **SSH**, the folder, and the actual sandbox mode. Without an opened folder, it uses RODE's startup working directory. No agent process starts until you send a message.
+
+## Providers
+
+| Provider | Required software on the project host | Configuration |
+| --- | --- | --- |
+| Codex | An authenticated Codex CLI with app-server stdio support | Executable and optional model; blank model uses the CLI default |
+| Codex · local model | Codex CLI and a running Ollama or compatible Responses server | Codex executable, API base URL, and an already installed model name |
+| Other agent · ACP | An agent implementing ACP v1 over stdio, with its own file/command tools | Executable and arguments as a JSON array |
+
+Executables can be absolute paths, project-relative paths such as `./tools/my-agent`, or names on PATH. RODE also checks `~/.local/bin`. Arguments are passed directly, without shell expansion. To customize environment variables or launch a special CLI profile, select your own small wrapper script. Install and authenticate agents explicitly using their own tools; RODE does not install CLIs, download models, manage accounts, or store API keys.
+
+### Codex
+
+Install and log in to [Codex CLI](https://developers.openai.com/codex/cli/) on the project host before using chat. The default executable is `codex`. You can point settings at an existing standalone binary. RODE uses its [app-server protocol](https://developers.openai.com/codex/app-server/) for conversations, command/file tools, approvals, questions, and interruption. This supports multi-turn coding work rather than single-shot shell output.
+
+Codex starts with `on-request` approval and workspace-write access, or read-only if selected. Existing CLI instructions, configuration, and authentication still apply. You may need to grant access to a custom `CODEX_HOME`, executable, or runtime through the sandbox settings. RODE does not edit the CLI's configuration files.
+
+### Local models with Ollama
+
+Use Codex as the coding agent and Ollama as the model server. This keeps planning, file editing, and command execution in the agent, with inference served locally. Ollama documents a [Codex integration using its Responses API](https://docs.ollama.com/integrations/codex).
+
+1. Install Codex and Ollama on the appropriate hosts. Start Ollama, for example with `ollama serve`, if it is not already running.
+2. Install a tool-capable model of your choice explicitly. Use `ollama list` to see installed model names. The model must fit your hardware; Ollama recommends at least a 64k context window for Codex.
+3. In RODE, choose **Codex · local model**. Set **Local model API base URL** to `http://127.0.0.1:11434/v1` and enter the exact installed model name.
+4. Send a message. RODE selects a dedicated `rode_local` Responses provider without requiring OpenAI authentication or falling back to an OpenAI model. Web search is disabled for this provider.
+
+**`localhost` means the project host.** For an SSH project, that endpoint is on the remote computer. If your server is on your desktop, use an explicitly configured SSH reverse tunnel or another address reachable from the remote host. RODE does not create model tunnels. A server offering only `/v1/chat/completions` is insufficient; it must implement Codex-compatible `/v1/responses` streaming and tools. Other local servers can use the same settings when they meet that interface. Select an actual local model if you want local inference; a server may also expose cloud-backed model names.
+
+The model server is a separately managed service. The coding agent and its command children enter the project sandbox; RODE does not start the model server inside it. A loopback server also requires **Allow network access** in the sandbox policy.
+
+### Other agents
+
+Choose **Other agent · ACP** and supply the installed agent's ACP command. For example, arguments `['acp', '--verbose']` must be entered as valid JSON: `["acp", "--verbose"]`. Use the agent's documented ACP launch arguments, rather than its ordinary interactive terminal command. See the [ACP agent directory](https://agentclientprotocol.com/get-started/agents) for implementations and adapters.
+
+RODE implements ACP **v1** initialization, project sessions, streamed text/tool updates, permission choices, and cancellation. It advertises no client filesystem or terminal capabilities: the agent must execute its own tools inside its process tree. Unsupported client filesystem, terminal, authentication, custom-tool, and elicitation requests fail explicitly. Authenticate the agent beforehand. Arbitrary interactive CLIs and the ACP v2 draft are not supported by this chat client; ordinary agent CLIs remain usable in the integrated terminal.
+
+## Sandbox, edits, and lifecycle
+
+An active [project sandbox](sandbox.md) encloses the whole agent process and its tool children, locally or over SSH. It uses the same folder grants, writable caches, network setting, and selected Python environment as other project commands. Approving an agent request cannot widen those outer mounts or network restrictions. Codex is told when a writable external sandbox is enforcing access, avoiding nested isolation. Read-only projects retain Codex read-only mode as well as the outer filesystem restrictions.
+
+When bwrap is unavailable, the panel reports normal mode with the same visible fallback as the rest of the project. No later agent failure triggers a retry outside an active sandbox. `~/.codex` is a shared writable path by default; other agents' settings, credentials, runtimes, and caches may need explicit grants. Their child processes inherit the project host environment.
+
+Agents read files from disk. The composer shows an unsaved-buffer notice with **Save all**; sending a message does not save or upload unsaved buffers. After a turn, clean editor files refresh using version checks while dirty buffers stay intact. If both you and the agent change the same file, the normal save conflict protections apply. Review agent changes through the existing Git panel.
+
+**Stop** requests interruption, then closes an unresponsive process after three seconds; a second click closes it immediately. **New chat** stops the process and clears the displayed conversation. **Disconnect** closes an idle agent. Closing the chat panel hides it while a running task continues. Switching projects or applying a new sandbox stops the old agent. Agent shutdown never interrupts the project terminal or shared SSH master.
+
+Provider settings are saved immediately per host/project. Changing settings starts a new conversation on the next send; changing Python environments requires New chat for the process to inherit the new environment. RODE keeps a bounded conversation in memory, without saving transcripts or restoring sessions after exit. The agent CLI may maintain its own history. URLs and command arguments are saved preferences, so use the CLI's login/environment for secrets.
+
+Messages are limited to 32 KiB, protocol lines to 256 KiB, and displayed history to 128 messages / 512 KiB. Large tool output is truncated explicitly. Images, file attachments, session history browsing, model discovery, and interactive login in chat are not implemented. Transport tests use deterministic peers; a real Codex compatibility test is available in the [development guide](development.md).

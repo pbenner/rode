@@ -1,0 +1,106 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    env:
+      RODE_TEST_LLDB: /usr/bin/lldb-dap-19
+      RODE_TEST_JUPYTER: ${{ github.workspace }}/target/notebook-env/bin/python
+      RODE_TEST_PRETTIER: ${{ github.workspace }}/target/language-tools/node_modules/.bin/prettier
+      RODE_TEST_RUFF: ${{ github.workspace }}/target/test-tools/bin/ruff
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v10
+      - name: Check Python with Ruff
+        run: |
+          scripts/uvx.sh ruff@0.17.3 check .
+          scripts/uvx.sh ruff@0.17.3 format --check .
+          scripts/uvx.sh --from ruff==0.17.3 python - <<'PY'
+          from pathlib import Path
+          import shutil
+          destination = Path('target/test-tools/bin/ruff')
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(shutil.which('ruff'), destination)
+          PY
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev openssh-server xvfb imagemagick libxtst6 bubblewrap golang-go clang-format shfmt poppler-utils dpkg-dev desktop-file-utils gocryptfs lldb-19
+      - name: Install test formatter
+        run: npm install --prefix target/language-tools --ignore-scripts --no-audit --no-fund prettier@3.6.2
+      - name: Install notebook test dependencies
+        run: |
+          uv venv --python python3 target/notebook-env
+          uv pip install --python target/notebook-env/bin/python jupyter-client==8.10.0 ipykernel==7.4.0 matplotlib==3.11.2
+      - run: cargo fmt --all --check
+      - name: Check Rust API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps --document-private-items
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace --all-targets
+      - run: scripts/build-sessiond.sh
+      - run: bash scripts/test-ssh.sh
+      - run: cargo build --locked --release
+      - name: Build and inspect Debian package
+        id: deb
+        run: |
+          rode_deb=$(scripts/build-deb.sh --skip-build)
+          xvfb-run -a python3 scripts/test-deb.py --gui "$rode_deb"
+          printf '%s\n' "package=$rode_deb" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rode-debian-amd64
+          path: ${{ steps.deb.outputs.package }}
+          if-no-files-found: error
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-debugger-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-terminal-keys-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-sessions-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-binary-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-notebooks-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-layout-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-languages-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-syntax-themes-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-agent-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-multiprocess-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_SSH_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_WORKBENCH_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_IMAGES_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARKDOWN_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_PDF_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_NOTEBOOK_UI=1 RODE_NOTEBOOK_UI_REMOTE_ONLY=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARP_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_LATEX_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_VAULT_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-ui-smoke
+          path: |
+            target/ui-smoke/
+            target/layout-ui/
+            target/project-ui/
+            target/workbench-ui/
+            target/agent-ui/
+            target/debugger-ui/
+            target/multiprocess-ui/
+            target/images-ui/
+            target/markdown-ui/
+            target/latex-ui/
+            target/vaults-ui/
+            target/languages-ui/
+            target/syntax-themes-ui/
+            target/pdf-ui/
+            target/sessions-ui/
+            target/terminal-keys-ui/
+            target/marp-ui/

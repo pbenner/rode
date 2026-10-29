@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- SPDX-License-Identifier: MIT; RODE bracketed-r application artwork. -->
+  <title>RODE</title>
+  <rect x="2" y="2" width="252" height="252" rx="42" fill="#101010" stroke="#333333" stroke-width="4"/>
+  <g fill="none" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M80 66H54V190H80 M176 66H202V190H176" stroke="#e5af26"/>
+    <path d="M109 172V112 M109 133C109 117 120 108 137 108H150" stroke="#d4d4d4"/>
+  </g>
+</svg>

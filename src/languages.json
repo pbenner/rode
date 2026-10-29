@@ -1,0 +1,707 @@
+[
+  {
+    "id": "python",
+    "syntax": "py",
+    "extensions": [
+      "py",
+      "pyi",
+      "pyw"
+    ],
+    "filenames": [],
+    "formatter": "ruff",
+    "check": true,
+    "run": [
+      "python",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "go",
+    "syntax": "go",
+    "extensions": [
+      "go"
+    ],
+    "filenames": [],
+    "formatter": "gofmt",
+    "check": true,
+    "run": [
+      "go",
+      "run",
+      "{path}"
+    ],
+    "build": [
+      "go",
+      "build",
+      "./..."
+    ]
+  },
+  {
+    "id": "rust",
+    "syntax": "rs",
+    "extensions": [
+      "rs"
+    ],
+    "filenames": [],
+    "formatter": "rustfmt",
+    "check": false,
+    "run": [
+      "cargo",
+      "run"
+    ],
+    "build": [
+      "cargo",
+      "build"
+    ]
+  },
+  {
+    "id": "c",
+    "syntax": "c",
+    "extensions": [
+      "c",
+      "h"
+    ],
+    "filenames": [],
+    "formatter": "clang-format",
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "cpp",
+    "syntax": "cpp",
+    "extensions": [
+      "cpp",
+      "cc",
+      "cxx",
+      "c++",
+      "hpp",
+      "hh",
+      "hxx",
+      "h++",
+      "cu",
+      "cuh"
+    ],
+    "filenames": [],
+    "formatter": "clang-format",
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "javascript",
+    "syntax": "js",
+    "extensions": [
+      "js",
+      "mjs",
+      "cjs"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": [
+      "node",
+      "{path}"
+    ],
+    "build": [
+      "npm",
+      "run",
+      "build"
+    ]
+  },
+  {
+    "id": "jsx",
+    "syntax": "tsx",
+    "extensions": [
+      "jsx"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": [
+      "npm",
+      "run",
+      "build"
+    ]
+  },
+  {
+    "id": "typescript",
+    "syntax": "ts",
+    "extensions": [
+      "ts",
+      "mts",
+      "cts"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": [
+      "tsx",
+      "{path}"
+    ],
+    "build": [
+      "npm",
+      "run",
+      "build"
+    ]
+  },
+  {
+    "id": "tsx",
+    "syntax": "tsx",
+    "extensions": [
+      "tsx"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": [
+      "npm",
+      "run",
+      "build"
+    ]
+  },
+  {
+    "id": "java",
+    "syntax": "java",
+    "extensions": [
+      "java"
+    ],
+    "filenames": [],
+    "formatter": "clang-format",
+    "check": false,
+    "run": [
+      "java",
+      "{path}"
+    ],
+    "build": [
+      "javac",
+      "{path}"
+    ]
+  },
+  {
+    "id": "csharp",
+    "syntax": "cs",
+    "extensions": [
+      "cs"
+    ],
+    "filenames": [],
+    "formatter": "clang-format",
+    "check": false,
+    "run": [
+      "dotnet",
+      "run"
+    ],
+    "build": [
+      "dotnet",
+      "build"
+    ]
+  },
+  {
+    "id": "bash",
+    "syntax": "sh",
+    "extensions": [
+      "sh",
+      "bash"
+    ],
+    "filenames": [
+      ".bashrc",
+      ".bash_profile",
+      ".profile"
+    ],
+    "formatter": "shfmt",
+    "check": true,
+    "run": [
+      "bash",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "zsh",
+    "syntax": "zsh",
+    "extensions": [
+      "zsh"
+    ],
+    "filenames": [
+      ".zshrc",
+      ".zprofile"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "zsh",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "fish",
+    "syntax": "fish",
+    "extensions": [
+      "fish"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "fish",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "ruby",
+    "syntax": "rb",
+    "extensions": [
+      "rb",
+      "rake",
+      "gemspec"
+    ],
+    "filenames": [
+      "Gemfile",
+      "Rakefile"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "ruby",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "php",
+    "syntax": "php",
+    "extensions": [
+      "php",
+      "phtml"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "php",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "lua",
+    "syntax": "lua",
+    "extensions": [
+      "lua"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "lua",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "julia",
+    "syntax": "jl",
+    "extensions": [
+      "jl"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "julia",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "fortran",
+    "syntax": "f90",
+    "extensions": [
+      "f",
+      "for",
+      "f90",
+      "f95",
+      "f03",
+      "f08"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "r",
+    "syntax": "r",
+    "extensions": [
+      "r",
+      "rmd"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "Rscript",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "swift",
+    "syntax": "swift",
+    "extensions": [
+      "swift"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "swift",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "kotlin",
+    "syntax": "kt",
+    "extensions": [
+      "kt",
+      "kts"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "dart",
+    "syntax": "dart",
+    "extensions": [
+      "dart"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "dart",
+      "run",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "scala",
+    "syntax": "scala",
+    "extensions": [
+      "scala",
+      "sc"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "perl",
+    "syntax": "pl",
+    "extensions": [
+      "pl",
+      "pm"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "perl",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "haskell",
+    "syntax": "hs",
+    "extensions": [
+      "hs",
+      "lhs"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "elixir",
+    "syntax": "ex",
+    "extensions": [
+      "ex",
+      "exs"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": [
+      "elixir",
+      "{path}"
+    ],
+    "build": null
+  },
+  {
+    "id": "sql",
+    "syntax": "sql",
+    "extensions": [
+      "sql"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "json",
+    "syntax": "json",
+    "extensions": [
+      "json",
+      "jsonc"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "toml",
+    "syntax": "toml",
+    "extensions": [
+      "toml"
+    ],
+    "filenames": [
+      "Cargo.lock",
+      "uv.lock"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "yaml",
+    "syntax": "yaml",
+    "extensions": [
+      "yaml",
+      "yml"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "html",
+    "syntax": "html",
+    "extensions": [
+      "html",
+      "htm"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "css",
+    "syntax": "css",
+    "extensions": [
+      "css"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "scss",
+    "syntax": "scss",
+    "extensions": [
+      "scss"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "sass",
+    "syntax": "sass",
+    "extensions": [
+      "sass"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "xml",
+    "syntax": "xml",
+    "extensions": [
+      "xml",
+      "xsd",
+      "xsl",
+      "svg"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "markdown",
+    "syntax": "md",
+    "extensions": [
+      "md",
+      "markdown",
+      "mdown",
+      "mkd"
+    ],
+    "filenames": [],
+    "formatter": "prettier",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "dockerfile",
+    "syntax": "Dockerfile",
+    "extensions": [
+      "dockerfile"
+    ],
+    "filenames": [
+      "Dockerfile",
+      "Containerfile"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "makefile",
+    "syntax": "Makefile",
+    "extensions": [
+      "mk"
+    ],
+    "filenames": [
+      "Makefile",
+      "makefile",
+      "GNUmakefile"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "cmake",
+    "syntax": "cmake",
+    "extensions": [
+      "cmake"
+    ],
+    "filenames": [
+      "CMakeLists.txt"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "diff",
+    "syntax": "diff",
+    "extensions": [
+      "diff",
+      "patch"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "gitignore",
+    "syntax": "gitignore",
+    "extensions": [],
+    "filenames": [
+      ".gitignore",
+      ".gitignore_global",
+      ".dockerignore",
+      ".ignore"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "dotenv",
+    "syntax": "env",
+    "extensions": [
+      "env"
+    ],
+    "filenames": [
+      ".env",
+      ".env.local",
+      ".env.production",
+      ".env.development"
+    ],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "latex",
+    "syntax": "LaTeX",
+    "extensions": [
+      "tex",
+      "ltx",
+      "sty",
+      "cls",
+      "dtx",
+      "ins"
+    ],
+    "filenames": [],
+    "formatter": "latexindent",
+    "checker": "chktex",
+    "check": true,
+    "run": null,
+    "build": null
+  },
+  {
+    "id": "bibtex",
+    "syntax": "bib",
+    "extensions": [
+      "bib"
+    ],
+    "filenames": [],
+    "formatter": null,
+    "check": false,
+    "run": null,
+    "build": null
+  }
+]

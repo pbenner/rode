@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=RODE
+GenericName=Code Editor
+Comment=Edit local projects and remote computers over SSH
+Exec=rode %f
+TryExec=rode
+Icon=rode
+Terminal=false
+Categories=Development;IDE;
+MimeType=inode/directory;
+Keywords=editor;code;development;SSH;terminal;
+StartupNotify=false
+StartupWMClass=RODE

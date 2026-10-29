@@ -1,0 +1,27 @@
+:root,
+[data-bs-theme="dark"] {
+  --bs-primary: #dca325;
+  --bs-link-color: #dca325;
+  --bs-link-hover-color: #f1c265;
+  --bs-body-bg: #111111;
+  --bs-body-color: #d8d8d8;
+  --bs-secondary-bg: #191919;
+  --bs-border-color: #303030;
+}
+
+body { background-image: none; }
+a { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.navbar { background: #161616 !important; border-bottom: 1px solid #303030; }
+.navbar-brand { color: #dca325 !important; font-weight: 650; letter-spacing: .08em; }
+.bs-sidebar { background: #191919; border: 1px solid #303030; border-radius: 6px; }
+.bs-sidebar .nav > li > a.active { color: #dca325; border-right-color: #dca325; }
+pre { background: #191919; border: 1px solid #303030; border-radius: 6px; padding: 1rem; }
+code { color: #dca325; }
+pre code { color: #d8d8d8; }
+img { border: 1px solid #303030; border-radius: 6px; max-width: 100%; height: auto; }
+table { width: 100%; }
+footer { opacity: .75; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; }
+}

@@ -1,0 +1,22 @@
+RODE
+====
+
+Run `rode` or launch RODE from your desktop's Development menu.
+Open a local project with `rode /path/to/project`.
+Connect over SSH with `rode --ssh user@host --remote-path '~/project'`.
+
+The package includes the static rode-sessiond helper for persistent local/SSH
+terminals. Remote file access requires Python 3 on the remote host. Optional
+features use installed project-host tools; configure them inside RODE.
+
+PDF previews use desktop Poppler tools (poppler-utils). Project sandboxing uses
+bubblewrap when available; normal mode remains usable without it.
+Encrypted projects require gocryptfs and working FUSE on the project host.
+Use File -> Open encrypted project to create or unlock encrypted storage.
+
+Documentation: https://pbenner.github.io/rode/
+Source: https://github.com/pbenner/rode
+
+Package installation/removal does not start or stop user terminal sessions,
+alter user preferences, or deploy a system service. Restart the editor to use
+new binaries, retaining persistent sessions when needed.

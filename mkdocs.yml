@@ -1,0 +1,62 @@
+site_name: RODE
+site_description: Native Rust editing for local projects and remote computers over SSH.
+site_url: https://pbenner.github.io/rode/
+repo_url: https://github.com/pbenner/rode
+repo_name: pbenner/rode
+edit_uri: ""
+site_dir: target/site
+theme:
+  name: mkdocs
+  color_mode: dark
+  user_color_mode_toggle: false
+  nav_style: dark
+nav:
+  - Overview: index.md
+  - Get started: getting-started.md
+  - Guides:
+      - Remote connections: remote.md
+      - Encrypted projects: encrypted-projects.md
+      - Editing and shortcuts: editing.md
+      - Image previews: images.md
+      - PDF previews: pdf.md
+      - Hex and binary analysis: binary.md
+      - Extensions: extensions.md
+      - Jupyter notebooks: notebooks.md
+      - Markdown previews: markdown.md
+      - Marp presentations: marp.md
+      - LaTeX: latex.md
+      - Programming languages: languages.md
+      - Interactive debugger: debugger.md
+      - Persistent terminals: terminals.md
+      - Interactive Slurm: slurm.md
+      - Project tools: project-tools.md
+      - Agent chat: agents.md
+  - Reference:
+      - Debian packages: packaging.md
+      - Configuration and multiple windows: configuration.md
+      - Security review: security.md
+      - Themes: themes.md
+      - Syntax highlighting themes: syntax-themes.md
+      - Theme format: theme-format.md
+      - Sandbox access: sandbox.md
+      - Artwork and licensing: licensing.md
+  - Development:
+      - Validation and hooks: development.md
+      - Source architecture: architecture.md
+hooks:
+  - scripts/docs_hook.py
+plugins:
+  - search
+extra_css:
+  - stylesheets/rode.css
+markdown_extensions:
+  - admonition
+  - fenced_code
+  - tables
+  - toc:
+      permalink: true
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+    unrecognized_links: warn

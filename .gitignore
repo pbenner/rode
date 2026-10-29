@@ -1,0 +1,15 @@
+/target/
+*.swp
+.DS_Store
+__pycache__/
+*.py[cod]
+/.ruff_cache/
+/.venv/
+/site/
+.env
+.env.*
+!.env.example
+
+# Local project guidance
+/AGENTS.md
+/DESIGN.md

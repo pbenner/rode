@@ -1,0 +1,41 @@
+{
+  "name": "Carbon",
+  "base": "phosphor",
+  "colors": {
+    "background": "#101010",
+    "panel": "#111111",
+    "raised": "#1d1d1d",
+    "border": "#303030",
+    "text": "#d4d4d4",
+    "muted": "#8a8a8a",
+    "accent": "#dca325",
+    "success": "#73aa69",
+    "error": "#d44c47",
+    "selection": "#343434",
+    "hover": "#242424",
+    "active": "#2b2b2b",
+    "gutter": "#555555",
+    "terminal_background": "#101010",
+    "terminal_foreground": "#d4d4d4"
+  },
+  "syntax": {
+    "comment": "#808080",
+    "keyword": "#129b78",
+    "type": "#e6b93c",
+    "function": "#cb3834",
+    "string": "#d4d4d4",
+    "number": "#d59442",
+    "constant": "#e6b93c",
+    "variable": "#d4d4d4",
+    "operator": "#b8b8b8",
+    "punctuation": "#969696",
+    "builtin": "#d68e21",
+    "attribute": "#d68e21"
+  },
+  "ansi": [
+    "#1d1d1d", "#cf4848", "#73aa69", "#dca325",
+    "#669bd0", "#a878b5", "#3fa8a0", "#d4d4d4",
+    "#727272", "#e37070", "#91c384", "#e9c45c",
+    "#8cb6df", "#c29ad0", "#72c7bd", "#eeeeee"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "Ice",
+  "base": "phosphor",
+  "colors": {
+    "background": "#080f1a",
+    "panel": "#0d1725",
+    "raised": "#162438",
+    "border": "#2c425b",
+    "text": "#d0e2f5",
+    "muted": "#8ba6c2",
+    "accent": "#6cddff",
+    "success": "#7ce5bc",
+    "error": "#ff8eaa",
+    "selection": "#22486a",
+    "hover": "#192f46",
+    "active": "#21415c",
+    "gutter": "#617f9f",
+    "terminal_background": "#080f1a",
+    "terminal_foreground": "#c3e1f4"
+  },
+  "syntax": {
+    "comment": "#819cb7",
+    "keyword": "#6cddff",
+    "type": "#abc7ff",
+    "function": "#7ce5bc",
+    "string": "#bae5e3",
+    "number": "#e6c58c",
+    "constant": "#c5b8f6",
+    "variable": "#d0e2f5",
+    "operator": "#a6c7e8",
+    "punctuation": "#99b1cb",
+    "builtin": "#9ed9f2",
+    "attribute": "#c6b8ee"
+  },
+  "ansi": [
+    "#162438", "#ed8b9e", "#7dd5ad", "#d9c187",
+    "#84b8f4", "#b8a3e4", "#6ccde1", "#c3d9ef",
+    "#819cb7", "#ffabc0", "#a0f0cc", "#f3dfac",
+    "#abd0ff", "#dbc1ff", "#9beaff", "#e7f4ff"
+  ]
+}

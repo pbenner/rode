@@ -1,0 +1,5 @@
+{
+  "system_read_only": ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/run/munge"],
+  "home_read_only": [".local", ".rustup", ".bashrc", ".profile", ".gitconfig", ".config/git"],
+  "home_read_write": [".cargo", ".cache/uv", ".codex"]
+}

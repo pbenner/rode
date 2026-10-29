@@ -1,0 +1,41 @@
+{
+  "name": "Matrix",
+  "base": "phosphor",
+  "colors": {
+    "background": "#060c08",
+    "panel": "#0a120d",
+    "raised": "#111e16",
+    "border": "#254431",
+    "text": "#c0e8c9",
+    "muted": "#7ca88a",
+    "accent": "#52ff8a",
+    "success": "#52ff8a",
+    "error": "#ff7c85",
+    "selection": "#1d4b30",
+    "hover": "#172c1e",
+    "active": "#20422d",
+    "gutter": "#547b60",
+    "terminal_background": "#060c08",
+    "terminal_foreground": "#a9e8ba"
+  },
+  "syntax": {
+    "comment": "#749680",
+    "keyword": "#52ff8a",
+    "type": "#b1f5a0",
+    "function": "#7ae8c5",
+    "string": "#cee5a0",
+    "number": "#e9ce89",
+    "constant": "#e9ce89",
+    "variable": "#c0e8c9",
+    "operator": "#8cdda6",
+    "punctuation": "#91b99d",
+    "builtin": "#81e5a7",
+    "attribute": "#a5dfcc"
+  },
+  "ansi": [
+    "#111e16", "#ed797e", "#70d68f", "#d7c983",
+    "#7dafe0", "#c1a0d9", "#78d7c2", "#c0e8c9",
+    "#749680", "#ff9ca1", "#52ff8a", "#f1e2a4",
+    "#a1c8ef", "#ddbcf1", "#a0f1de", "#e0ffe8"
+  ]
+}
