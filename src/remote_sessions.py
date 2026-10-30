@@ -85,7 +85,7 @@ def native_sessions(request):
         if hashlib.sha256(source.read(24 * 1024 * 1024 + 1)).hexdigest() != digest:
             raise ValueError("Installed terminal helper failed its integrity check.")
     protocol = globals()["project_run"]([executable, "protocol"], timeout=5)
-    if protocol["code"] != 0 or protocol["stdout"].strip() != "2":
+    if protocol["code"] != 0 or protocol["stdout"].strip() != "4":
         raise ValueError(
             "The packaged terminal helper uses an older protocol. Rebuild it with "
             "scripts/build-sessiond.sh or select an updated RODE_SESSION_HELPER. "
@@ -93,14 +93,36 @@ def native_sessions(request):
         )
     operation = request["operation"]
     payload = dict(operation)
+    if operation["action"] == "agents":
+        import shutil
+
+        payload = operation["request"]
+        if payload["action"] not in ("agents", "create_agent", "end_agent"):
+            raise ValueError("Only agent control requests are accepted here.")
+        if payload["action"] == "create_agent":
+            spec = payload["spec"]
+            root, program = spec["plan"]["root"], spec["executable"]
+            if "/" in program or program.startswith("~"):
+                program = globals()["project_resolve"](root, program)
+            else:
+                local = os.path.expanduser("~/.local/bin/" + program)
+                program = shutil.which(program) or (local if os.path.isfile(local) else program)
+            spec["executable"] = program
+            python = globals()["project_python"](root, spec["python"])
+            spec["env"] = globals()["project_environment"](python)
     if operation["action"] == "create":
         plan = operation["plan"]
         argv = list(plan["prefix"]) if plan["active"] else []
-        argv += [os.environ.get("SHELL", "/bin/sh"), "-l"]
+        allocation = operation.get("allocation")
+        argv += allocation["argv"] if allocation else [os.environ.get("SHELL", "/bin/sh"), "-l"]
         python = globals()["project_python"](plan["root"], operation["python"])
         env = globals()["project_environment"](python)
         initial_input = ""
-        if os.path.isabs(python):
+        if allocation:
+            env = {
+                key: value for key, value in env.items() if not key.startswith(("SALLOC_", "SRUN_"))
+            }
+        if not allocation and os.path.isabs(python):
             folder, prefix = os.path.dirname(python), os.path.dirname(os.path.dirname(python))
             deactivate = "if command -v deactivate >/dev/null 2>&1; then deactivate; fi; "
             if os.path.isfile(os.path.join(prefix, "pyvenv.cfg")):
@@ -131,6 +153,7 @@ def native_sessions(request):
             initial_input=initial_input,
             env=env,
             persistent=operation["persistent"],
+            allocation=allocation["job_name"] if allocation else None,
         )
     env = dict(os.environ)
     if request.get("directory"):

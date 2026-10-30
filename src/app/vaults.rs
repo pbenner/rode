@@ -202,6 +202,11 @@ impl EditorApp {
             self.notify("Stop terminal sessions with Sessions → End before locking this encrypted project or exiting RODE. Detached/shared jobs must be stopped too.", true);
             return;
         }
+        if self.agents.chat.persistent() && (self.agents.chat.connected() || self.agents.chat.busy)
+        {
+            self.notify("Stop the persistent agent with Running → End before locking this encrypted project.", true);
+            return;
+        }
         self.stop_project_agent();
         self.stop_notebook_kernels("Locking encrypted project");
         self.stop_debugger();
@@ -229,6 +234,7 @@ impl EditorApp {
         if self.vaults.locking
             && !self.vaults.lock_sent
             && !self.debugger_stopping()
+            && !self.agent_installation_pending()
             && self.vaults.work.load(Ordering::Acquire) == 0
             && let Some(client) = &self.vaults.active
         {

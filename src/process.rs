@@ -82,7 +82,7 @@ impl Launch {
             "Invalid process arguments."
         );
         ensure!(
-            (8192..=2 * 1024 * 1024).contains(&self.line_limit),
+            (8192..=4 * 1024 * 1024).contains(&self.line_limit),
             "Invalid process line limit."
         );
         Ok(())
@@ -97,20 +97,7 @@ struct RemoteLaunch {
     python_program: bool,
 }
 
-/// Bounded worker-to-UI process notifications.
-#[derive(Debug)]
-pub enum Event {
-    /// The subprocess launch completed.
-    Started,
-    /// One parsed JSON protocol message.
-    Message(Value),
-    /// A bounded stderr fragment for display.
-    Stderr(String),
-    /// A transport, parsing or supervision failure.
-    Error(String),
-    /// The child exited; missing status includes signal-based termination.
-    Exited(Option<i32>),
-}
+pub use rode_agent_core::Event;
 
 #[derive(Default)]
 struct Control {
@@ -431,7 +418,7 @@ fn run_session(
     Ok(())
 }
 
-fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
+pub(crate) fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
     if program.contains('/') || program.starts_with('~') {
         let path = files::expand_home(program);
         if path.is_absolute() {

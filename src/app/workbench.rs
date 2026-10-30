@@ -51,6 +51,7 @@ pub(super) struct Preferences {
     sandbox: sandbox::Options,
     slurm_queue: String,
     slurm_cancel: String,
+    slurm_allocation: crate::slurm::Allocation,
     pub(super) marp: crate::marp::Settings,
     pub(super) latex: crate::latex::Settings,
     pub(super) debugger: crate::debugger::Settings,
@@ -67,6 +68,7 @@ impl Default for Preferences {
             sandbox: Default::default(),
             slurm_queue: "squeue".into(),
             slurm_cancel: "scancel".into(),
+            slurm_allocation: Default::default(),
             marp: Default::default(),
             latex: Default::default(),
             debugger: Default::default(),
@@ -151,6 +153,14 @@ pub(super) struct Workbench {
 }
 
 impl Workbench {
+    pub(super) fn slurm_allocation(&self) -> &crate::slurm::Allocation {
+        &self.prefs.slurm_allocation
+    }
+    pub(super) fn save_slurm_allocation(&mut self, settings: crate::slurm::Allocation) {
+        self.prefs.slurm_allocation = settings.clone();
+        self.draft.slurm_allocation = settings;
+        self.save_preferences();
+    }
     pub(super) fn debugger_settings(&self) -> &crate::debugger::Settings {
         &self.prefs.debugger
     }

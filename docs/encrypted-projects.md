@@ -17,7 +17,7 @@ Existing gocryptfs forward-mode storage using its standard `gocryptfs.conf` is s
 
 ## Lock and exit
 
-Use **Encryption / Lock… → Stop project tools & lock**, or **Project: Lock encrypted project**. Save or explicitly discard edits first. Stop terminal jobs with **Sessions → End**, including detached/shared persistent jobs. Locking stops RODE's agent, notebook kernels, builds and adapters, waits for file operations, and requests a normal unmount. It never force-unmounts or lazily detaches a filesystem.
+Use **Encryption / Lock… → Stop project tools & lock**, or **Project: Lock encrypted project**. Save or explicitly discard edits first. Stop terminal jobs with **Sessions → End**, including detached/shared persistent jobs, and persistent agents with **Agent chat → Running → End**. Locking stops RODE's nonpersistent agent, notebook kernels, builds and adapters, waits for file operations, and requests a normal unmount. It never force-unmounts or lazily detaches a filesystem.
 
 Another RODE window, a running terminal/job, or a sandbox still referencing the decrypted filesystem prevents locking. A refused lock remains clearly **UNLOCKED**, keeps buffers available, and reports what must be stopped. Same-account mount namespaces are checked because unmounting one host path alone need not remove a sandbox's bind mount. Host restrictions that prevent this check can also prevent locking.
 

@@ -22,6 +22,7 @@ enum PaletteAction {
     Save,
     SaveAs,
     Terminal,
+    Slurm,
     Explorer,
     Find,
     Shortcuts,
@@ -38,6 +39,7 @@ enum PaletteAction {
     Fix,
     Run,
     Agent,
+    AgentSessions,
     Debug,
     DebugStart,
     DebugStop,
@@ -132,6 +134,7 @@ impl EditorApp {
             (PaletteAction::Fix, "Ruff: Apply safe fixes", ""),
             (PaletteAction::Run, "Code: Run current file / project", ""),
             (PaletteAction::Agent, "Agent: Chat", "Ctrl+Shift+A"),
+            (PaletteAction::AgentSessions, "Agent: Running sessions", ""),
             (PaletteAction::Debug, "Debug: Show debugger", ""),
             (PaletteAction::DebugStart, "Debug: Start / continue", "F5"),
             (PaletteAction::DebugStop, "Debug: Stop / detach", "Shift+F5"),
@@ -149,6 +152,11 @@ impl EditorApp {
             ),
             (PaletteAction::ReloadPdf, "PDF: Reload preview", ""),
             (PaletteAction::NewTerminal, "Terminal: New terminal", ""),
+            (
+                PaletteAction::Slurm,
+                "Terminal: Allocate Slurm resources",
+                "",
+            ),
             (
                 PaletteAction::PersistentTerminal,
                 "Terminal: New persistent terminal",
@@ -332,6 +340,7 @@ impl EditorApp {
                 PaletteAction::Save => self.save_active(ctx, false),
                 PaletteAction::SaveAs => self.save_active(ctx, true),
                 PaletteAction::Terminal => self.toggle_terminal(ctx),
+                PaletteAction::Slurm => self.open_slurm(ctx),
                 PaletteAction::Explorer => self.show_explorer = !self.show_explorer,
                 PaletteAction::Find => {
                     self.markdown_source();
@@ -349,6 +358,7 @@ impl EditorApp {
                 PaletteAction::Fix => self.format_active(true, true, ctx),
                 PaletteAction::Run => self.run_active(false, ctx),
                 PaletteAction::Agent => self.toggle_panel(Panel::Agent, ctx),
+                PaletteAction::AgentSessions => self.open_background_agents(ctx),
                 PaletteAction::Debug => self.toggle_panel(Panel::Debug, ctx),
                 PaletteAction::DebugStart => self.start_debugger(ctx),
                 PaletteAction::DebugStop => self.stop_debugger(),

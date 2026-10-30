@@ -15,6 +15,7 @@ path = "src/bin/rode-sessiond.rs"
 
 [dependencies]
 rode-session = { path = "crates/rode-session" }
+rode-agent-core = { path = "crates/rode-agent-core" }
 anyhow = "1"
 base64 = "0.22"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "pnm", "tga"] }
@@ -48,5 +49,5 @@ strip = true
 opt-level = 1
 
 [workspace]
-members = ["crates/rode-session"]
-default-members = [".", "crates/rode-session"]
+members = ["crates/rode-session", "crates/rode-agent-core"]
+default-members = [".", "crates/rode-session", "crates/rode-agent-core"]

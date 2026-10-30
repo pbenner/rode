@@ -21,6 +21,262 @@ fn openssh_proxyjump_roundtrip_and_disconnect() {
     roundtrip("rode-jump");
 }
 
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn interactive_slurm_shells_receive_scheduler_environment_over_ssh_and_proxyjump() {
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let base = tempfile::tempdir().unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < end,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        for sandbox in [false, true] {
+            let root = base.path().join(if sandbox { "sandbox" } else { "normal" });
+            std::fs::create_dir(&root).unwrap();
+            let response = remote
+                .request(&Request::Prepare {
+                    path: root.to_string_lossy().into(),
+                    sandbox: rode::sandbox::Options {
+                        enabled: sandbox,
+                        ..Default::default()
+                    },
+                })
+                .unwrap();
+            let plan = response.project.unwrap();
+            if sandbox && !plan.active {
+                eprintln!("Compute sandbox fixture unavailable: {}", plan.reason);
+            }
+            interactive_allocation_roundtrip(&remote, &plan);
+        }
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
+    use rode_agent_core::service::{Spec, State, Update};
+    use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, sync::Arc};
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    let connect = |profile: Profile| {
+        let remote = Remote::new(profile).unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        (remote, login)
+    };
+    for jump in ["", "rode-jump"] {
+        for sandbox in [false, true] {
+            let base = tempfile::tempdir().unwrap();
+            let root = base.path().join("project");
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(base.path().join("private.txt"), "outside project").unwrap();
+            let executable = root.join("agent.py");
+            std::fs::write(&executable, include_str!("fixtures/persistent_agent.py")).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let (remote, login) = connect(Profile {
+                host: "rode-test".into(),
+                config: config.clone(),
+                jump: jump.into(),
+                ..Default::default()
+            });
+            let plan = remote
+                .request(&Request::Prepare {
+                    path: root.to_string_lossy().into(),
+                    sandbox: rode::sandbox::Options {
+                        enabled: sandbox,
+                        ..Default::default()
+                    },
+                })
+                .unwrap()
+                .project
+                .unwrap();
+            let policy = rode::sessions::fingerprint(&plan);
+            let runtime = base.path().join("runtime").to_string_lossy().into_owned();
+            let rpc = |remote: &Remote, request, upload| {
+                let response = remote
+                    .request(&Request::Tool {
+                        request: rode::project::Request::Sessions {
+                            root: plan.root.clone(),
+                            operation: rode::sessions::Operation::Agents {
+                                request: Box::new(request),
+                            },
+                            helper: Some(native_test_helper(upload)),
+                            directory: Some(runtime.clone()),
+                        },
+                    })
+                    .unwrap();
+                let Some(rode::project::Response::Sessions(reply)) = response.tool else {
+                    panic!()
+                };
+                reply
+            };
+            let spec = Spec {
+                id: rode_session::new_id().unwrap(),
+                name: "SSH background fixture".into(),
+                policy: policy.clone(),
+                mode: plan.label().into(),
+                config: rode_agent_core::Config {
+                    codex: executable.to_string_lossy().into(),
+                    ..Default::default()
+                },
+                plan: rode_agent_core::Plan {
+                    root: plan.root.clone(),
+                    active: plan.active,
+                    project_read_only: plan.project_read_only,
+                    prefix: plan.prefix.clone(),
+                },
+                executable: executable.to_string_lossy().into(),
+                env: BTreeMap::new(),
+                python: "off".into(),
+                persistent: true,
+                text: Some("work".into()),
+            };
+            let reply = rpc(
+                &remote,
+                rode_session::Request::CreateAgent {
+                    spec: Box::new(spec),
+                },
+                true,
+            );
+            let rode_session::Response::Agent(info) = &reply.response else {
+                panic!()
+            };
+            let info = info.clone();
+            let attach = |remote: &Remote| {
+                let mut control = rode::sandbox::Plan::default();
+                control.root = plan.root.clone();
+                let mut argv = vec![reply.executable.clone()];
+                argv.extend(reply.prefix.clone());
+                argv.extend(["attach-agent".into(), info.id.clone(), policy.clone()]);
+                rode::process::Session::start(
+                    rode::process::Launch {
+                        argv,
+                        remote: Some(remote.clone()),
+                        plan: control,
+                        python: "off".into(),
+                        python_program: false,
+                        line_limit: 4 * 1024 * 1024,
+                        native_debug: false,
+                    },
+                    Arc::new(|| {}),
+                )
+                .unwrap()
+            };
+            let mut state: Option<State> = None;
+            let first = attach(&remote);
+            let until = Instant::now() + Duration::from_secs(12);
+            while state.as_ref().is_none_or(|s| !s.chat.connected)
+                || !root.join("work-started").exists()
+            {
+                if let Some(event) = first.poll() {
+                    match event {
+                        rode::process::Event::Message(value) => {
+                            state = Some(
+                                serde_json::from_value::<Update>(value)
+                                    .unwrap()
+                                    .apply(state.as_ref())
+                                    .unwrap(),
+                            )
+                        }
+                        rode::process::Event::Error(error)
+                        | rode::process::Event::Stderr(error) => panic!("{error}"),
+                        _ => {}
+                    }
+                }
+                assert!(Instant::now() < until, "SSH agent did not initialize");
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            let pid = std::fs::read(root.join("agent.pid")).unwrap();
+            let scope: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(root.join("agent-scope.json")).unwrap())
+                    .unwrap();
+            assert_eq!(scope["cwd"], plan.root);
+            assert_eq!(scope["private_visible"], !plan.active);
+            drop(first);
+            drop(login);
+            remote.cleanup();
+            std::fs::write(root.join("continue"), "continue").unwrap();
+            let until = Instant::now() + Duration::from_secs(8);
+            while !root.join("work-done").exists() {
+                assert!(
+                    Instant::now() < until,
+                    "Agent stopped when SSH disconnected"
+                );
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            let (next, login) = connect(remote.profile.clone());
+            let second = attach(&next);
+            let until = Instant::now() + Duration::from_secs(12);
+            state = None;
+            while state.as_ref().is_none_or(|s| {
+                !s.chat
+                    .messages
+                    .iter()
+                    .any(|m| m.text.contains("background complete 1"))
+            }) {
+                if let Some(rode::process::Event::Message(value)) = second.poll() {
+                    state = Some(
+                        serde_json::from_value::<Update>(value)
+                            .unwrap()
+                            .apply(state.as_ref())
+                            .unwrap(),
+                    );
+                }
+                assert!(Instant::now() < until, "SSH agent did not reattach");
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            assert_eq!(std::fs::read(root.join("agent.pid")).unwrap(), pid);
+            rpc(
+                &next,
+                rode_session::Request::EndAgent {
+                    id: info.id.clone(),
+                    policy: policy.clone(),
+                },
+                false,
+            );
+            let until = Instant::now() + Duration::from_secs(8);
+            loop {
+                let rode_session::Response::Agents(infos) =
+                    rpc(&next, rode_session::Request::Agents, false).response
+                else {
+                    panic!()
+                };
+                if !infos.iter().any(|i| i.id == info.id) {
+                    break;
+                }
+                assert!(Instant::now() < until, "Remote agent did not stop");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            drop(second);
+            drop(login);
+            next.cleanup();
+        }
+    }
+}
+
 fn roundtrip(jump: &str) {
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
     let root = tempfile::tempdir().unwrap();
@@ -365,6 +621,7 @@ fn roundtrip(jump: &str) {
     binary_extension_roundtrip(&remote, &plan, &path);
     agent_roundtrip(&remote, &plan);
     native_upgrade_roundtrip(&remote, &plan);
+    interactive_allocation_roundtrip(&remote, &plan);
     let (native_info, native_reply, native_runtime) = native_terminal_start(&remote, &plan);
     drop(terminal);
     let start = Instant::now();
@@ -460,8 +717,12 @@ fn roundtrip(jump: &str) {
 
 fn native_test_helper(data: bool) -> rode::sessions::Helper {
     use base64::{Engine, engine::general_purpose::STANDARD};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/release/rode-sessiond-static");
+    let path = std::env::var_os("RODE_TEST_SESSION_HELPER")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("target/release/rode-sessiond-static")
+        });
     let bytes = std::fs::read(path).expect("Run scripts/build-sessiond.sh before the SSH test");
     rode::sessions::Helper {
         digest: rode::files::digest(&bytes),
@@ -804,6 +1065,71 @@ fn native_attach(
     )
     .unwrap()
 }
+fn interactive_allocation_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+    let root = Path::new(&plan.root);
+    let tools = root.join("slurm-tools");
+    fs::create_dir_all(&tools).unwrap();
+    for name in ["salloc", "srun", "squeue", "scancel"] {
+        let path = tools.join(name);
+        fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let state = root.join("slurm-state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("grant"), "").unwrap();
+    let id = rode_session::new_id().unwrap();
+    let settings = rode::slurm::Allocation {
+        allocator: tools.join("salloc").to_string_lossy().into(),
+        runner: tools.join("srun").to_string_lossy().into(),
+        ..Default::default()
+    };
+    let runtime = root.parent().unwrap().join("slurm-runtime");
+    let response = remote
+        .request(&Request::Tool {
+            request: rode::project::Request::Sessions {
+                root: plan.root.clone(),
+                operation: rode::sessions::Operation::Create {
+                    id: id.clone(),
+                    name: "SSH allocation".into(),
+                    plan: Box::new(plan.clone()),
+                    policy: rode::sessions::fingerprint(plan),
+                    python: "off".into(),
+                    persistent: false,
+                    allocation: Some(settings.launch(plan, &id).unwrap()),
+                },
+                helper: Some(native_test_helper(true)),
+                directory: Some(runtime.to_string_lossy().into()),
+            },
+        })
+        .unwrap();
+    let Some(rode::project::Response::Sessions(reply)) = response.tool else {
+        panic!()
+    };
+    let rode_session::Response::Session(info) = &reply.response else {
+        panic!()
+    };
+    assert_eq!(info.allocation, Some(format!("rode-{id}")));
+    let view = native_attach(remote, &reply, info);
+    view.send(b"printf 'SSH_SLURM_%s_%s_%s\\n' \"$SLURM_JOB_ID\" \"$SLURM_STEP_ID\" \"$CUDA_VISIBLE_DEVICES\"\n".to_vec()).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while !view.contents().contains("SSH_SLURM_4242_0_0,1") {
+        assert!(
+            view.is_alive() && Instant::now() < end,
+            "{}",
+            view.contents()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    view.send(b"exit\n".to_vec()).unwrap();
+    while view.is_alive() {
+        assert!(Instant::now() < end, "SSH allocation did not exit");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(state.join("ended").exists());
+    assert!(remote.connected());
+}
+
 fn native_upgrade_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
     fn wait_output(terminal: &Terminal, token: &str, runtime: &std::path::Path) {
         let until = Instant::now() + Duration::from_secs(8);
@@ -905,6 +1231,7 @@ Inputs: {:?}",
     wait_output(&old_view, "LEGACY_READY", &runtime);
     drop(old_view);
     let response = request(rode::sessions::Operation::Create {
+        allocation: None,
         id: rode_session::new_id().unwrap(),
         name: "Updated terminal".into(),
         plan: Box::new(plan.clone()),
@@ -973,7 +1300,7 @@ Inputs: {:?}",
     );
     assert!(current.contents().contains("UPDATED_SURVIVED"));
     wait("new cleanup", &|| {
-        !runtime.join("protocol-2/socket").exists()
+        !runtime.join("protocol-4/socket").exists()
     });
     let response = request(rode::sessions::Operation::List).unwrap();
     assert!(
@@ -1013,6 +1340,7 @@ fn native_terminal_start(
             request: rode::project::Request::Sessions {
                 root: plan.root.clone(),
                 operation: rode::sessions::Operation::Create {
+                    allocation: None,
                     persistent: true,
                     id: rode_session::new_id().unwrap(),
                     name: "Persistent SSH test".into(),

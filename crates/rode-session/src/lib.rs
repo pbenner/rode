@@ -1,5 +1,6 @@
-//! A headless, per-user PTY service. GUI clients may disconnect without ending
-//! the shell. The only listener is an owner-only Unix domain socket.
+//! A headless, per-user PTY and coding-agent service. GUI clients may disconnect
+//! without ending explicitly persistent jobs. The only listener is an owner-only
+//! Unix domain socket.
 //!
 //! Control requests use tagged JSON. Attachments use a separate framed stream
 //! for terminal bytes, resize and lifetime updates. A session owns the PTY and
@@ -22,6 +23,11 @@
 //! and last-view cleanup therefore differ. Capability probing and separate
 //! service generations preserve running jobs during editor upgrades instead of
 //! restarting a service merely to obtain newer behavior.
+//!
+//! Agent controllers share this host lifetime but use a single controlling view
+//! rather than PTY-style shared input. Their complete protocol/history state
+//! comes from `rode-agent-core`, keeping remote helpers independent of the GUI.
+//! Pending questions wait without a view; persistence never broadens policy.
 #![warn(missing_docs)]
 use anyhow::{Context, Result, bail, ensure};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
@@ -48,13 +54,17 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod agents;
+
 /// Runtime-directory generation; distinct from optional protocol feature levels.
 pub const VERSION: u32 = 1;
 /// Feature level that supports explicit persistence toggles.
 pub const PERSISTENCE_PROTOCOL: u32 = 2;
+/// Current feature level, including allocation metadata for scheduler terminals.
+pub const PROTOCOL: u32 = 4;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
-const MAX_FRAME: usize = 1024 * 1024;
+const MAX_FRAME: usize = 4 * 1024 * 1024;
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 8;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -103,6 +113,10 @@ pub struct Info {
     /// Whether this service can change persistence in place.
     #[serde(default)]
     pub persistence_supported: bool,
+    /// Scheduler job name for a managed interactive allocation, retained across
+    /// renames and shared attachments. Absence also supports older services.
+    #[serde(default)]
+    pub allocation: Option<String>,
 }
 fn persistent_default() -> bool {
     true
@@ -115,6 +129,31 @@ pub enum Request {
     List,
     /// Probe persistence support before sending newer requests to legacy services.
     SupportsPersistence,
+    /// Probe allocation metadata before creating work in an older service.
+    SupportsAllocations,
+    /// Probe native agent-controller support without starting an agent.
+    SupportsAgents,
+    /// List live agents without starting a service or inference.
+    Agents,
+    /// Create a host-owned conversation controller on explicit Send/History.
+    CreateAgent {
+        /// Captured and validated host launch context.
+        spec: Box<rode_agent_core::service::Spec>,
+    },
+    /// Attach the sole controlling desktop to a live agent.
+    AttachAgent {
+        /// Native agent identity.
+        id: String,
+        /// Original policy fingerprint.
+        policy: String,
+    },
+    /// Explicitly terminate one agent and its scoped process tree.
+    EndAgent {
+        /// Native agent identity.
+        id: String,
+        /// Original policy fingerprint.
+        policy: String,
+    },
     /// Create a supervised PTY shell with explicit lifetime and environment.
     Create {
         /// Unique identifier for the new session.
@@ -137,6 +176,9 @@ pub enum Request {
         /// Whether to retain the shell after its final view disconnects.
         #[serde(default = "persistent_default")]
         persistent: bool,
+        /// Unique scheduler job name, if this terminal owns an allocation.
+        #[serde(default)]
+        allocation: Option<String>,
     },
     /// Attach a streaming view after verifying the workspace policy fingerprint.
     Attach {
@@ -179,6 +221,10 @@ pub enum Request {
 pub enum Response {
     /// Snapshot of discoverable running terminals.
     Sessions(Vec<Info>),
+    /// Live native agent controllers.
+    Agents(Vec<rode_agent_core::service::Info>),
+    /// Created native agent metadata.
+    Agent(rode_agent_core::service::Info),
     /// Metadata for the created or updated terminal.
     Session(Info),
     /// Successful operation without a result payload.
@@ -282,28 +328,30 @@ fn connect_at(dir: &Path) -> Result<UnixStream> {
 /// creation is serialized; existing legacy sessions remain separately discoverable.
 pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
     let until = Instant::now()
-        + if matches!(request, Request::List) {
+        + if matches!(request, Request::List | Request::Agents) {
             Duration::from_millis(500)
         } else {
             Duration::from_secs(10)
         };
     loop {
         let result = request_routed(request, launcher);
-        let retry = matches!(request, Request::Create { .. } | Request::List)
-            && result.as_ref().err().is_some_and(|error| {
-                error.to_string() == "Session service is stopping"
-                    || error.chain().any(|cause| {
-                        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
-                            matches!(
-                                io.kind(),
-                                std::io::ErrorKind::ConnectionRefused
-                                    | std::io::ErrorKind::ConnectionReset
-                                    | std::io::ErrorKind::BrokenPipe
-                                    | std::io::ErrorKind::UnexpectedEof
-                            )
-                        })
+        let retry = matches!(
+            request,
+            Request::Create { .. } | Request::CreateAgent { .. } | Request::List | Request::Agents
+        ) && result.as_ref().err().is_some_and(|error| {
+            error.to_string() == "Session service is stopping"
+                || error.chain().any(|cause| {
+                    cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                        matches!(
+                            io.kind(),
+                            std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::UnexpectedEof
+                        )
                     })
-            });
+                })
+        });
         if !retry || Instant::now() >= until {
             return result;
         }
@@ -312,10 +360,50 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 2] {
+fn service_directories() -> [PathBuf; 4] {
     let primary = directory();
-    let compatible = primary.join(format!("protocol-{PERSISTENCE_PROTOCOL}"));
-    [primary, compatible]
+    [
+        primary.clone(),
+        primary.join("protocol-2"),
+        primary.join("protocol-3"),
+        primary.join(format!("protocol-{PROTOCOL}")),
+    ]
+}
+fn agents_at(dir: &Path, launcher: &Launcher) -> Result<Vec<rode_agent_core::service::Info>> {
+    match request_once(&Request::Agents, launcher, dir) {
+        Ok(Response::Agents(infos)) => Ok(infos),
+        Err(error)
+            if service_offline(&error)
+                || error.to_string().contains("unknown variant `agents`") =>
+        {
+            Ok(vec![])
+        }
+        Err(error) => Err(error),
+        _ => bail!("Unexpected background-agent listing"),
+    }
+}
+fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
+    let primary = directory();
+    let compatible = primary.join(format!("protocol-{PROTOCOL}"));
+    if compatible.join("socket").exists() {
+        return Ok(compatible);
+    }
+    if primary.join("socket").exists() {
+        match request_once(&Request::SupportsAgents, launcher, &primary) {
+            Ok(Response::Ok) => {}
+            Err(error) if service_offline(&error) => {}
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("unknown variant `supports_agents`") =>
+            {
+                return Ok(compatible);
+            }
+            Err(error) => return Err(error),
+            _ => bail!("Unexpected native service capability response"),
+        }
+    }
+    Ok(primary)
 }
 fn list_at(dir: &Path, launcher: &Launcher) -> Result<Vec<Info>> {
     let response = match request_once(&Request::List, launcher, dir) {
@@ -352,60 +440,68 @@ fn service_offline(error: &anyhow::Error) -> bool {
     })
 }
 fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
-    let [primary, compatible] = service_directories();
     match request {
         Request::List => {
-            let mut infos = list_at(&primary, launcher)?;
-            infos.extend(list_at(&compatible, launcher)?);
-            // Older services can still report completed records. Hide those
-            // too; a disconnected view is never evidence of a dead shell.
+            let mut infos = vec![];
+            for dir in service_directories() {
+                infos.extend(list_at(&dir, launcher)?);
+            }
             infos.retain(|info| info.alive);
             infos.sort_by_key(|info| info.created);
             Ok(Response::Sessions(infos))
         }
+        Request::Agents => {
+            let mut infos = vec![];
+            for dir in service_directories() {
+                infos.extend(agents_at(&dir, launcher)?);
+            }
+            infos.retain(|info| info.alive);
+            infos.sort_by_key(|info| info.created);
+            Ok(Response::Agents(infos))
+        }
         Request::Create { id, .. } => {
-            // Preserve idempotence even if the older service exits while a
-            // retry is in flight or another RODE window starts a new service.
-            for dir in [&primary, &compatible] {
-                if list_at(dir, launcher)?.iter().any(|info| info.id == *id) {
-                    return request_once(request, launcher, dir);
+            for dir in service_directories() {
+                if list_at(&dir, launcher)?.iter().any(|info| info.id == *id) {
+                    return request_once(request, launcher, &dir);
                 }
             }
-            let dir = if compatible.join("socket").exists() {
-                compatible
-            } else if primary.join("socket").exists() {
-                match request_once(&Request::SupportsPersistence, launcher, &primary) {
-                    Ok(Response::Ok) => primary,
-                    Err(error) if service_offline(&error) => primary,
-                    Err(error)
-                        if error
-                            .to_string()
-                            .contains("unknown variant `supports_persistence`") =>
-                    {
-                        compatible
-                    }
-                    Err(error) => return Err(error),
-                    _ => bail!("Unexpected terminal service capability response"),
+            request_once(request, launcher, &creation_directory(launcher)?)
+        }
+        Request::CreateAgent { spec } => {
+            for dir in service_directories() {
+                if agents_at(&dir, launcher)?
+                    .iter()
+                    .any(|info| info.id == spec.id)
+                {
+                    return request_once(request, launcher, &dir);
                 }
-            } else {
-                primary
-            };
-            // Never stop/relaunch an older daemon: its PTYs may own long jobs.
-            // A separate singleton in the same private runtime owns new work.
-            request_once(request, launcher, &dir)
+            }
+            request_once(request, launcher, &creation_directory(launcher)?)
+        }
+        Request::AttachAgent { id, .. } | Request::EndAgent { id, .. } => {
+            for dir in service_directories() {
+                if agents_at(&dir, launcher)?.iter().any(|info| info.id == *id) {
+                    return request_once(request, launcher, &dir);
+                }
+            }
+            ensure!(
+                matches!(request, Request::EndAgent { .. }),
+                "Background agent is no longer available; refresh the list"
+            );
+            Ok(Response::Ok)
         }
         Request::Shutdown => {
-            let infos = match request_routed(&Request::List, launcher)? {
-                Response::Sessions(infos) => infos,
-                _ => unreachable!(),
-            };
             ensure!(
-                infos.iter().all(|info| !info.alive),
+                matches!(request_routed(&Request::List, launcher)?, Response::Sessions(infos) if infos.is_empty()),
                 "End running terminals before stopping the service"
             );
-            for dir in [&primary, &compatible] {
+            ensure!(
+                matches!(request_routed(&Request::Agents, launcher)?, Response::Agents(infos) if infos.is_empty()),
+                "End running agents before stopping the service"
+            );
+            for dir in service_directories() {
                 if dir.join("socket").exists() {
-                    match request_once(request, launcher, dir) {
+                    match request_once(request, launcher, &dir) {
                         Err(error) if service_offline(&error) => {}
                         result => {
                             result?;
@@ -415,7 +511,9 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
             }
             Ok(Response::Ok)
         }
-        Request::SupportsPersistence => request_once(request, launcher, &primary),
+        Request::SupportsPersistence | Request::SupportsAllocations | Request::SupportsAgents => {
+            request_once(request, launcher, &directory())
+        }
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -439,14 +537,21 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
     let mut stream = match connect_at(dir) {
         Ok(stream) => stream,
         Err(error) => {
-            if matches!(request, Request::List) {
+            if matches!(request, Request::List | Request::Agents) {
                 if !dir.join("socket").exists() {
-                    return Ok(Response::Sessions(vec![]));
+                    return Ok(if matches!(request, Request::Agents) {
+                        Response::Agents(vec![])
+                    } else {
+                        Response::Sessions(vec![])
+                    });
                 }
                 return Err(error)
                     .context("Session service is unavailable; existing jobs were not touched");
             }
-            if !matches!(request, Request::Create { .. }) {
+            if !matches!(
+                request,
+                Request::Create { .. } | Request::CreateAgent { .. }
+            ) {
                 return Err(error)
                     .context("Session service is offline; no session was created or ended.");
             }
@@ -607,6 +712,7 @@ impl Session {
     }
 }
 struct Server {
+    agents: agents::Store,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     last_exit: Mutex<Instant>,
     stop: AtomicBool,
@@ -618,7 +724,7 @@ impl Server {
         // starting concurrently must either keep this service alive or retry
         // against the next service, never be accepted while it is exiting.
         let sessions = self.sessions.lock().unwrap();
-        if !sessions.is_empty() {
+        if !sessions.is_empty() || self.agents.live() {
             *idle_since = None;
             return;
         }
@@ -645,7 +751,7 @@ impl Server {
             session.stopped.store(true, Ordering::Release);
         }
         sessions.remove(id);
-        if sessions.is_empty() {
+        if sessions.is_empty() && !self.agents.live() {
             self.stop.store(true, Ordering::Release);
         }
         drop(sessions);
@@ -675,6 +781,7 @@ impl Server {
             initial_input,
             env,
             persistent,
+            allocation,
         } = request
         else {
             unreachable!()
@@ -686,6 +793,12 @@ impl Server {
         ensure!(
             valid_id(&id) && valid_name(&name),
             "Invalid terminal ID/name"
+        );
+        ensure!(
+            allocation
+                .as_ref()
+                .is_none_or(|name| name == &format!("rode-{id}")),
+            "Allocation name must match its terminal ID"
         );
         ensure!(
             Path::new(&root).is_absolute() && root.len() <= 4096,
@@ -717,19 +830,19 @@ impl Server {
         // Choose automatic names under the singleton lock so simultaneous
         // windows and reattachments cannot create indistinguishable tabs.
         let mut name = name;
-        if name
-            .strip_prefix("Terminal ")
-            .and_then(|n| n.parse::<u64>().ok())
-            .is_some()
-        {
+        if let Some(prefix) = ["Terminal", "Slurm"].into_iter().find(|prefix| {
+            name.strip_prefix(&format!("{prefix} "))
+                .and_then(|n| n.parse::<u64>().ok())
+                .is_some()
+        }) {
             let mut number = 1u64;
             while sessions
                 .values()
-                .any(|session| session.info().name == format!("Terminal {number}"))
+                .any(|session| session.info().name == format!("{prefix} {number}"))
             {
                 number += 1;
             }
-            name = format!("Terminal {number}");
+            name = format!("{prefix} {number}");
         }
         if let Some(existing) = sessions.get(&id) {
             existing.check(&policy)?;
@@ -828,6 +941,7 @@ impl Server {
                     exit_code: None,
                     persistent,
                     persistence_supported: true,
+                    allocation,
                 };
                 let session = Arc::new(Session {
                     state: Mutex::new(State {
@@ -992,6 +1106,9 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let request: Request = recv_json(&mut stream)?;
+    if let Request::AttachAgent { id, policy } = &request {
+        return server.agents.attach(stream, id, policy);
+    }
     if let Request::Attach { id, policy } = &request {
         let session = server.find(id, policy)?;
         let viewer = server.next_viewer.fetch_add(1, Ordering::Relaxed);
@@ -1071,7 +1188,23 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     }
     let response = (|| -> Result<Response> {
         Ok(match request {
-            Request::SupportsPersistence => Response::Ok,
+            Request::SupportsPersistence
+            | Request::SupportsAllocations
+            | Request::SupportsAgents => Response::Ok,
+            Request::Agents => Response::Agents(server.agents.list()),
+            Request::CreateAgent { spec } => {
+                let _creation = server.sessions.lock().unwrap();
+                ensure!(
+                    !server.stop.load(Ordering::Acquire),
+                    "Session service is stopping"
+                );
+                Response::Agent(server.agents.create(*spec)?)
+            }
+            Request::EndAgent { id, policy } => {
+                server.agents.end(&id, &policy)?;
+                Response::Ok
+            }
+            Request::AttachAgent { .. } => unreachable!(),
             Request::List => {
                 let sessions = server.sessions.lock().unwrap();
                 let mut infos: Vec<_> = sessions.values().map(|session| session.info()).collect();
@@ -1127,12 +1260,16 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
                 {
                     sessions.remove(&id);
                 }
-                if sessions.is_empty() {
+                if sessions.is_empty() && !server.agents.live() {
                     server.stop.store(true, Ordering::Release);
                 }
                 Response::Ok
             }
             Request::Shutdown => {
+                ensure!(
+                    !server.agents.live(),
+                    "End running agents before stopping the service"
+                );
                 ensure!(
                     server
                         .sessions
@@ -1177,6 +1314,7 @@ pub fn serve() -> Result<()> {
     let listener = UnixListener::bind(socket())?;
     fs::set_permissions(socket(), fs::Permissions::from_mode(0o600))?;
     let server = Arc::new(Server {
+        agents: agents::Store::default(),
         sessions: Mutex::new(HashMap::new()),
         last_exit: Mutex::new(Instant::now()),
         stop: AtomicBool::new(false),
@@ -1322,7 +1460,7 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
 pub fn cli(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("protocol") if args.len() == 1 => {
-            println!("{PERSISTENCE_PROTOCOL}");
+            println!("{PROTOCOL}");
             Ok(())
         }
         Some("serve") => serve(),
@@ -1341,6 +1479,7 @@ pub fn cli(args: &[String]) -> Result<()> {
             serde_json::to_writer(std::io::stdout().lock(), &response)?;
             Ok(())
         }
+        Some("attach-agent") if args.len() == 3 => agents::bridge(&args[1], &args[2]),
         Some("attach") if args.len() == 3 => attach(&args[1], &args[2], false),
         Some("attach") if args.len() == 4 && args[1] == "--framed" => {
             attach(&args[2], &args[3], true)

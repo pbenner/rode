@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Native UI smoke test. Run on an isolated X display, e.g. xvfb-run -a.
+"""Native UI smoke test. Run on an isolated X display of at least 1380x900,
+e.g. xvfb-run -a -s "-screen 0 1600x1100x24".
 
 Requires Linux, libX11, libXtst, `xwininfo` (x11-utils), and ImageMagick's `import`.
 Uses only Python's standard library. Keyboard events and screenshots target this test's window.
@@ -32,7 +33,9 @@ xtest.XTestFakeKeyEvent.argtypes = [c.c_void_p, c.c_uint, c.c_int, c.c_ulong]
 xtest.XTestFakeMotionEvent.argtypes = [c.c_void_p, c.c_int, c.c_int, c.c_int, c.c_ulong]
 xtest.XTestFakeButtonEvent.argtypes = [c.c_void_p, c.c_uint, c.c_int, c.c_ulong]
 display = x11.XOpenDisplay(None)
-assert display, "No X display. Use xvfb-run -a python3 scripts/test-ui.py"
+assert display, (
+    'No X display. Use xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-ui.py'
+)
 
 
 def event(name, pressed):
@@ -99,6 +102,22 @@ def click(x, y):
     xtest.XTestFakeButtonEvent(display, 1, 0, 0)
     x11.XFlush(display)
     time.sleep(0.2)
+
+
+def assert_running(process, log_path):
+    """Report early native startup failure with bounded stderr, rather than a bare assert."""
+    code = process.poll()
+    if code is None:
+        return
+    path = Path(log_path)
+    with path.open("rb") as log:
+        log.seek(0, os.SEEK_END)
+        log.seek(max(0, log.tell() - 16 * 1024))
+        output = log.read().decode("utf-8", errors="replace").strip()
+    raise AssertionError(
+        f"RODE exited before its window appeared (exit code {code}).\n"
+        f"Startup log: {path}\n{output or '(no startup output)'}"
+    )
 
 
 def screenshot(window, name):

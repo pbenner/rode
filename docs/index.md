@@ -21,6 +21,6 @@ RODE combines a familiar editor layout with a real terminal, configurable dark t
 
 Linux is the validated desktop platform. Remote file access requires a POSIX shell and Python 3. The current version edits UTF-8 files up to 8 MiB and previews raster images up to 32 MiB with bounded decoded pixels; general language servers and crash recovery are outside the current feature set.
 
-For interactive GPU work, inspect allocated GPUs and explicitly release jobs from [Terminals & Slurm](slurm.md).
+For interactive GPU work, use [Slurm beside Persist](slurm.md) to request resources, follow pending/active status and open an allocated shell; persist/reattach it or explicitly release the job.
 
 Use [Extensions](extensions.md) to manage bundled features and install project-host tool adapters. [Hex and binary analysis](binary.md) provides byte editing, object metadata and native x86 disassembly.

@@ -297,6 +297,7 @@ impl Terminal {
         let read_visible = visible.clone();
         let read_parser = parser.clone();
         let read_ctx = ctx.clone();
+        let (drained_tx, drained_rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
             loop {
@@ -333,6 +334,7 @@ impl Terminal {
                     read_ctx.request_repaint_after(Duration::from_millis(16));
                 }
             }
+            let _ = drained_tx.send(());
             if read_visible.load(Ordering::Acquire) {
                 read_ctx.request_repaint();
             }
@@ -341,6 +343,10 @@ impl Terminal {
         let wait_ctx = ctx.clone();
         std::thread::spawn(move || {
             let _ = child.wait();
+            // The attachment process may exit while its final PTY frames are
+            // still buffered. Publish completion only after the parser drains
+            // them; bound the wait for descendants retaining a slave handle.
+            let _ = drained_rx.recv_timeout(Duration::from_secs(1));
             wait_alive.store(false, Ordering::Release);
             wait_ctx.request_repaint();
         });

@@ -195,6 +195,7 @@ impl EditorApp {
                     }).clicked() {
                     self.toggle_terminal_persistence(ctx);
                 }
+                self.slurm_terminal_button(ui, ctx);
                 if icons::small(ui, Icon::Close, "Hide terminal; keep session running").clicked() {
                     self.show_terminal = false;
                     self.focus_editor(ctx);

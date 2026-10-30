@@ -124,3 +124,76 @@ fn native_and_remote_slurm_queries_and_releases_use_exact_owned_allocations() {
         fs::remove_file(&log).unwrap();
     }
 }
+
+#[test]
+fn allocation_fields_are_literal_and_compute_sandbox_failure_never_falls_back() {
+    let root = tempfile::tempdir().unwrap();
+    let allocator = root.path().join("allocator");
+    let runner = root.path().join("runner");
+    let options = root.path().join("options.json");
+    fs::write(&allocator, format!("#!/usr/bin/python3\nimport json,os,sys\nargs=sys.argv[1:]\ni=next(i for i,v in enumerate(args) if not v.startswith('--'))\nopen({:?},'w').write(json.dumps(args[:i]))\nos.environ['SLURM_JOB_ID']='123'\nos.execv(args[i],args[i:])\n", options.to_str().unwrap())).unwrap();
+    fs::write(
+        &runner,
+        "#!/usr/bin/python3\nimport os,sys\nos.execv(sys.argv[5],sys.argv[5:])\n",
+    )
+    .unwrap();
+    for path in [&allocator, &runner] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let settings = slurm::Allocation {
+        allocator: allocator.to_string_lossy().into(),
+        runner: runner.to_string_lossy().into(),
+        account: "science ' $(touch injected) ; echo wrong".into(),
+        constraint: "gpu&fast".into(),
+        time: "2:30".into(),
+        ..Default::default()
+    };
+    let mut plan = rode::sandbox::Plan::default();
+    plan.active = true;
+    plan.prefix = vec!["/bin/false".into()];
+    plan.root = root.path().to_string_lossy().into();
+    let id = rode_session::new_id().unwrap();
+    let launch = settings.launch(&plan, &id).unwrap();
+    let output = Command::new(&launch.argv[0])
+        .args(&launch.argv[1..])
+        .current_dir(root.path())
+        .env("SHELL", "/bin/sh")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!root.path().join("injected").exists());
+    let args: Vec<String> = serde_json::from_slice(&fs::read(options).unwrap()).unwrap();
+    assert!(args.contains(&format!("--account={}", settings.account)));
+    assert!(args.contains(&"--constraint=gpu&fast".into()));
+    assert!(args.contains(&"--time=2:30:00".into()));
+    assert!(args.contains(&"--mem=80G".into()));
+    assert!(args.contains(&"--gpus=1".into()));
+    for invalid in [
+        slurm::Allocation {
+            nodes: 0,
+            ..Default::default()
+        },
+        slurm::Allocation {
+            allocator: "--no-shell".into(),
+            ..Default::default()
+        },
+        slurm::Allocation {
+            account: "line\nbreak".into(),
+            ..Default::default()
+        },
+        slurm::Allocation {
+            time: "2:99".into(),
+            ..Default::default()
+        },
+        slurm::Allocation {
+            time: "0".into(),
+            ..Default::default()
+        },
+        slurm::Allocation {
+            memory: "0".into(),
+            ..Default::default()
+        },
+    ] {
+        assert!(invalid.validate().is_err());
+    }
+}

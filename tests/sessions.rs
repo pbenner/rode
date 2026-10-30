@@ -83,6 +83,7 @@ impl Fixture {
         argv.push("/bin/sh".into());
         let response = self
             .rpc(&Request::Create {
+                allocation: None,
                 persistent,
                 id: id.clone(),
                 name: "Native test".into(),
@@ -155,7 +156,7 @@ fn cargo_helper_is_headless_and_shares_persistent_sessions_with_the_editor() {
     assert!(protocol.status.success());
     assert_eq!(
         String::from_utf8(protocol.stdout).unwrap().trim(),
-        rode_session::PERSISTENCE_PROTOCOL.to_string()
+        rode_session::PROTOCOL.to_string()
     );
     let mut fixture = Fixture::new();
     fixture.standalone = true;
@@ -215,6 +216,7 @@ fn an_unlinked_running_image_can_start_an_independent_native_service() {
     let policy = "a".repeat(64);
     fixture.ids.push((id.clone(), policy.clone()));
     let request = Request::Create {
+        allocation: None,
         id,
         policy,
         persistent: true,
@@ -360,6 +362,103 @@ fn older_session_metadata_retains_persistence_instead_of_ending_existing_jobs() 
     .unwrap();
     assert!(info.persistent);
     assert!(!info.persistence_supported);
+    assert!(info.allocation.is_none());
+}
+
+#[test]
+fn interactive_allocation_waits_then_supplies_the_scheduler_environment_and_survives_reattachment()
+{
+    use rode::slurm;
+    use std::os::unix::fs::PermissionsExt;
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    let tools = fixture.root.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    for name in ["salloc", "srun", "squeue", "scancel"] {
+        let path = tools.join(name);
+        fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let shell = tools.join("shell");
+    fs::write(&shell, "#!/bin/sh\nexec /bin/bash --noprofile --norc\n").unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+    let settings = slurm::Allocation {
+        allocator: tools.join("salloc").to_string_lossy().into(),
+        runner: tools.join("srun").to_string_lossy().into(),
+        gres: "gpu:2".into(),
+        cpus: 4,
+        ..Default::default()
+    };
+    let id = rode_session::new_id().unwrap();
+    let launch = settings.launch(&plan, &id).unwrap();
+    let policy = sessions::fingerprint(&plan);
+    let Response::Session(info) = fixture
+        .rpc(&Request::Create {
+            allocation: Some(launch.job_name.clone()),
+            id: id.clone(),
+            name: "Allocation test".into(),
+            root: plan.root.clone(),
+            policy: policy.clone(),
+            mode: plan.label().into(),
+            argv: launch.argv,
+            initial_input: String::new(),
+            persistent: true,
+            env: BTreeMap::from([
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("SHELL".into(), shell.to_string_lossy().into()),
+                ("SLURM_JOB_ID".into(), "stale-job".into()),
+            ]),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    fixture.ids.push((id.clone(), policy.clone()));
+    assert_eq!(info.allocation.as_deref(), Some(launch.job_name.as_str()));
+    let view = fixture.attach(&info);
+    let state = fixture.root.path().join("slurm-state");
+    wait(|| state.join("job.json").exists());
+    let queue = tools.join("squeue").to_string_lossy().into_owned();
+    let snapshot = slurm::snapshot(fixture.root.path(), &queue).unwrap();
+    assert_eq!(snapshot.jobs[0].state, "PENDING");
+    assert!(!snapshot.jobs[0].allocated());
+    fs::write(state.join("grant"), "").unwrap();
+    wait(|| {
+        fs::read_to_string(state.join("job.json"))
+            .unwrap_or_default()
+            .contains("RUNNING")
+    });
+    view.send(b"printf 'ENV_%s_%s_%s_%s\\n' \"$SLURM_JOB_ID\" \"$SLURM_JOB_GPUS\" \"$SLURM_STEP_ID\" \"$CUDA_VISIBLE_DEVICES\"\n".to_vec()).unwrap();
+    wait(|| view.contents().contains("ENV_4242_0,1_0_0,1"));
+    fixture
+        .rpc(&Request::Rename {
+            id: id.clone(),
+            policy: policy.clone(),
+            name: "Renamed training".into(),
+        })
+        .unwrap();
+    drop(view);
+    let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
+        panic!()
+    };
+    let restored = infos.iter().find(|i| i.id == id).unwrap();
+    assert_eq!(restored.allocation, info.allocation);
+    let first = fixture.attach(restored);
+    let second = fixture.attach(restored);
+    second
+        .send(b"printf 'RESTORED_%s\\n' \"$SLURM_JOB_ID\"\n".to_vec())
+        .unwrap();
+    wait(|| first.contents().contains("RESTORED_4242"));
+    slurm::cancel(
+        fixture.root.path(),
+        &queue,
+        &tools.join("scancel").to_string_lossy(),
+        "4242",
+    )
+    .unwrap();
+    wait(|| !second.is_alive());
+    wait(|| state.join("ended").exists());
+    assert!(state.join("cancelled").exists());
 }
 
 #[test]
@@ -435,7 +534,7 @@ fn older_service_keeps_its_jobs_while_new_terminals_get_persistence_controls() {
     let modern = fixture.create_with_persistence(&plan, false);
     assert!(modern.persistence_supported);
     assert!(!modern.persistent);
-    assert!(fixture.runtime.join("protocol-2/socket").exists());
+    assert!(fixture.runtime.join("protocol-4/socket").exists());
     let new_view = fixture.attach(&modern);
     new_view
         .send(b"printf 'MODERN_%s\\n' READY\n".to_vec())
@@ -501,6 +600,7 @@ fn older_service_keeps_its_jobs_while_new_terminals_get_persistence_controls() {
     // the older daemon has gone away. No shell is restarted or duplicated.
     let replay = fixture
         .rpc(&Request::Create {
+            allocation: None,
             id: modern.id.clone(),
             name: "Retry".into(),
             root: modern.root.clone(),
@@ -813,6 +913,7 @@ fn concurrent_rode_clients_start_one_service_and_keep_independent_sessions() {
             scope.spawn(move || {
                 let response = fixture
                     .rpc(&Request::Create {
+                        allocation: None,
                         persistent: true,
                         id: id.clone(),
                         name: "Terminal 1".into(),
@@ -861,6 +962,7 @@ fn new_sessions_activate_the_environment_after_shell_startup_but_reattach_does_n
     let policy = sessions::fingerprint(&plan);
     let response = fixture
         .rpc(&Request::Create {
+            allocation: None,
             persistent: true,
             id: id.clone(),
             name: "Environment test".into(),
@@ -911,6 +1013,7 @@ fn immediate_restart_after_ending_the_last_terminal_is_safe_and_create_is_idempo
         let info = fixture.create(&fixture.plan());
         let replay = fixture
             .rpc(&Request::Create {
+                allocation: None,
                 persistent: true,
                 id: info.id.clone(),
                 name: "Must not replace the original".into(),

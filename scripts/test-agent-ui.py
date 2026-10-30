@@ -24,6 +24,7 @@ from ui_harness import (
     text,
     theme,
     x11,
+    xtest,
 )
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
@@ -97,6 +98,69 @@ def send(root, message, first=False):
     time.sleep(0.3)
 
 
+def long_composer(root, window, prompt):
+    """Use native clipboard/input to exercise long drafts without an external clipboard tool."""
+    key("p", ("Control_L",))
+    text("prompt.txt")
+    key("Return")
+    time.sleep(0.4)
+    click(500, 220)
+    key("a", ("Control_L",))
+    key("c", ("Control_L",))
+    click(1280, 785)
+    key("v", ("Control_L",))
+    screenshot(window, "long-composer-end.png")
+
+    xtest.XTestFakeMotionEvent(display, -1, 1280, 795, 0)
+    for _ in range(24):
+        xtest.XTestFakeButtonEvent(display, 4, 1, 0)
+        xtest.XTestFakeButtonEvent(display, 4, 0, 0)
+    x11.XFlush(display)
+    time.sleep(0.3)
+    screenshot(window, "long-composer-scrolled.png")
+
+    # Drag the divider upward; releasing it must return typing to the draft.
+    xtest.XTestFakeMotionEvent(display, -1, 1180, 725, 0)
+    xtest.XTestFakeButtonEvent(display, 1, 1, 0)
+    x11.XFlush(display)
+    time.sleep(0.1)
+    for step in range(1, 11):
+        xtest.XTestFakeMotionEvent(display, -1, 1180, 725 - 20 * step, 0)
+        x11.XFlush(display)
+        time.sleep(0.03)
+    xtest.XTestFakeButtonEvent(display, 1, 0, 0)
+    x11.XFlush(display)
+    time.sleep(0.2)
+    key("End", ("Control_L",))
+    text(" visible-tail")
+    screenshot(window, "long-composer-resized.png")
+    key("a", ("Control_L",))
+    key("c", ("Control_L",))
+    xtest.XTestFakeMotionEvent(display, -1, 1180, 523, 0)
+    for _ in range(2):
+        xtest.XTestFakeButtonEvent(display, 1, 1, 0)
+        xtest.XTestFakeButtonEvent(display, 1, 0, 0)
+        x11.XFlush(display)
+        time.sleep(0.05)
+    screenshot(window, "long-composer-reset.png")
+    # Inspect what was retained through resize/scroll using the editor's ordinary
+    # save path, without sending a model prompt or adding a testing API to RODE.
+    key("n", ("Control_L",))
+    key("v", ("Control_L",))
+    key("s", ("Control_L", "Shift_L"))
+    time.sleep(0.2)
+    key("a", ("Control_L",))
+    text("composed.txt")
+    key("Return")
+    wait_for(lambda: (root / "composed.txt").exists(), "Could not inspect the long chat draft")
+    assert (root / "composed.txt").read_text() == prompt + " visible-tail"
+    assert (root / "prompt.txt").read_text() == prompt
+    assert not (root / "agent-rpc.jsonl").exists(), "Composing or resizing started an agent"
+    click(1280, 785)
+    key("a", ("Control_L",))
+    key("BackSpace")
+
+
 with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
     base = Path(directory)
     root = base / "project"
@@ -104,6 +168,13 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
     (base / "private.txt").write_text("outside the project")
     source = root / "main.py"
     source.write_text("# original on disk\n")
+    prompt = (
+        "\n".join(
+            f"Line {i:02}: a long message with λ and 🦀 and wrapping text " * 2 for i in range(60)
+        )
+        + "\nFINAL_LINE"
+    )
+    (root / "prompt.txt").write_text(prompt)
     shutil.copy2(ROOT / "tests/fixtures/agent.py", root / "agent.py")
     (root / "agent.py").chmod(0o755)
     environment = dict(
@@ -143,6 +214,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 lambda: agent_preferences(preferences).get("personality") == "default",
                 "Default personality was not saved",
             )
+            long_composer(root, window, prompt)
             send(root, "first\nsecond line", first=True)
             scope = json.loads((root / "agent-scope.json").read_text())
             assert scope["cwd"] == str(root)
@@ -422,7 +494,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert last["params"]["threadId"] == "saved-2"
             close_window(window, process)
             print(
-                "Agent UI: Enter/Shift+Enter, personalities, history restore, model/access selectors, saved policies, chat context, approvals, Stop, themes, and unsaved buffers passed."
+                "Agent UI: long-draft scrolling/resizing, Enter/Shift+Enter, personalities, history restore, model/access selectors, saved policies, chat context, approvals, Stop, themes, and unsaved buffers passed."
             )
         except Exception:
             if window is not None and process.poll() is None:

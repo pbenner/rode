@@ -311,6 +311,8 @@ enum Dialog {
     Save(u64),
     Commands,
     Sessions,
+    Slurm,
+    AgentSessions,
     TerminalExit,
     Shortcuts,
     Extensions,
@@ -1425,7 +1427,7 @@ impl EditorApp {
         self.latex = Default::default();
         self.pdf_cancel.store(true, Ordering::Release);
         self.pdf_cancel = Arc::new(AtomicBool::new(false));
-        self.stop_project_agent();
+        self.leave_project_agent();
         self.stop_notebook_kernels("Workspace changed");
         if !keep_buffers {
             self.tabs = Default::default();
@@ -1500,7 +1502,7 @@ impl EditorApp {
         if self.workspace.as_ref().is_none_or(|w| w.remote.is_none()) {
             return;
         }
-        if self.sessions_need_exit_check() {
+        if self.sessions_need_exit_check() || self.agent_installation_pending() {
             self.notify(
                 "Wait for terminal startup or persistence changes to finish before disconnecting SSH.",
                 false,
@@ -3389,13 +3391,15 @@ impl EditorApp {
         let encrypted_dialog = self.dialog == Dialog::Encrypted;
         let file_dialog = file_browser::is_file_dialog(&self.dialog);
         let response = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
-            ui.set_width(if self.dialog == Dialog::Sessions {
-                680_f32.min(ctx.content_rect().width() - 50.)
-            } else if self.dialog == Dialog::Connect {
-                500.
-            } else {
-                540.
-            });
+            ui.set_width(
+                if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions) {
+                    680_f32.min(ctx.content_rect().width() - 50.)
+                } else if self.dialog == Dialog::Connect {
+                    500.
+                } else {
+                    540.
+                },
+            );
             if self.dialog == Dialog::Extensions {
                 self.extensions_dialog(ui, ctx);
             } else if self.dialog == Dialog::Encrypted {
@@ -3410,6 +3414,10 @@ impl EditorApp {
                 self.command_dialog(ui, ctx);
             } else if self.dialog == Dialog::Sessions {
                 self.sessions_dialog(ui, ctx);
+            } else if self.dialog == Dialog::Slurm {
+                self.slurm_dialog(ui, ctx);
+            } else if self.dialog == Dialog::AgentSessions {
+                self.background_agents_dialog(ui, ctx);
             } else if self.dialog == Dialog::TerminalExit {
                 self.terminal_exit_dialog(ui, ctx);
             } else {

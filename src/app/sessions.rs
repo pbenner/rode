@@ -10,6 +10,7 @@ use crate::project;
 use crate::{sessions as service, slurm};
 use anyhow::Context;
 use std::collections::VecDeque;
+mod allocation;
 #[derive(Clone)]
 pub(super) struct Meta {
     pub key: String,
@@ -120,6 +121,8 @@ pub(super) struct Sessions {
     rename: Option<(String, String)>,
     persistence_pending: bool,
     quit_waiting: bool,
+    allocation_draft: slurm::Allocation,
+    allocation_error: String,
 }
 impl Sessions {
     pub(super) fn has_view(&self, key: &str) -> bool {
@@ -192,6 +195,14 @@ impl EditorApp {
     }
     pub(super) fn session_exit_pending(&self) -> bool {
         self.sessions.quit_waiting
+    }
+    pub(super) fn abort_agent_quit(&mut self, error: String, ctx: &egui::Context) {
+        if self.sessions.quit_waiting {
+            self.sessions.quit_waiting = false;
+            self.dialog = Dialog::None;
+            self.focus_editor(ctx);
+        }
+        self.notify(error, true);
     }
     pub(super) fn session_busy(&self) -> bool {
         self.sessions.starting || self.sessions.busy
@@ -284,6 +295,14 @@ impl EditorApp {
         self.create_native_terminal(false, ctx);
     }
     fn create_native_terminal(&mut self, persistent: bool, ctx: &egui::Context) {
+        self.create_terminal(persistent, None, ctx);
+    }
+    fn create_terminal(
+        &mut self,
+        persistent: bool,
+        allocation: Option<slurm::Allocation>,
+        ctx: &egui::Context,
+    ) {
         self.navigation.terminal_intent();
         if self.sessions.busy {
             return;
@@ -312,6 +331,16 @@ impl EditorApp {
         };
         self.sessions.next += 1;
         let plan = self.session_plan();
+        let allocation = match allocation
+            .map(|settings| settings.launch(&plan, &id))
+            .transpose()
+        {
+            Ok(launch) => launch,
+            Err(error) => {
+                self.sessions.allocation_error = error.to_string();
+                return;
+            }
+        };
         let policy = service::fingerprint(&plan);
         let python = self.terminal_python_selection();
         self.sessions.starting = true;
@@ -319,11 +348,20 @@ impl EditorApp {
         self.session_request(
             service::Operation::Create {
                 id,
-                name: format!("Terminal {}", self.sessions.next),
+                name: format!(
+                    "{} {}",
+                    if allocation.is_some() {
+                        "Slurm"
+                    } else {
+                        "Terminal"
+                    },
+                    self.sessions.next
+                ),
                 plan: Box::new(plan),
                 policy,
                 python,
                 persistent,
+                allocation,
             },
             Job::Create { persistent },
             ctx,
@@ -444,24 +482,35 @@ impl EditorApp {
                 self.show_terminal && self.navigation.visible(navigation::Pane::Terminal),
             );
         }
-        if self.dialog != Dialog::Sessions {
-            return;
-        }
-        if self
-            .sessions
-            .last
-            .is_none_or(|time| time.elapsed() >= Duration::from_secs(2))
+        let manager = self.dialog == Dialog::Sessions;
+        let allocation_visible = self.show_terminal
+            && self.navigation.visible(navigation::Pane::Terminal)
+            && self
+                .sessions
+                .active
+                .as_ref()
+                .and_then(|m| m.native.as_ref())
+                .is_some_and(|info| info.allocation.is_some())
+            && self.terminal.as_ref().is_some_and(Terminal::is_alive);
+        if manager
+            && self
+                .sessions
+                .last
+                .is_none_or(|time| time.elapsed() >= Duration::from_secs(2))
         {
             self.refresh_sessions(ctx);
         }
-        if self
-            .sessions
-            .slurm_last
-            .is_none_or(|time| time.elapsed() >= Duration::from_secs(15))
+        if (manager || allocation_visible || self.dialog == Dialog::Slurm)
+            && self
+                .sessions
+                .slurm_last
+                .is_none_or(|time| time.elapsed() >= Duration::from_secs(5))
         {
             self.refresh_slurm(None, ctx);
         }
-        ctx.request_repaint_after(Duration::from_secs(2));
+        if manager || allocation_visible || self.dialog == Dialog::Slurm {
+            ctx.request_repaint_after(Duration::from_secs(2));
+        }
     }
     fn attach_info(&mut self, info: rode_session::Info, ctx: &egui::Context) {
         self.navigation.terminal_intent();
@@ -633,6 +682,9 @@ impl EditorApp {
                         }
                     }
                     rode_session::Response::Session(info) => {
+                        if info.allocation.is_some() && matches!(job, Job::Create { .. }) {
+                            self.sessions.slurm_last = None;
+                        }
                         if let Job::Create { persistent } = &job {
                             if info.persistent != *persistent {
                                 self.notify("The running terminal service predates persistence controls. This session remains persistent; existing jobs were preserved. Finish old sessions before restarting the service.", true);
@@ -680,6 +732,9 @@ impl EditorApp {
                     }
                     rode_session::Response::Ok => {}
                     rode_session::Response::Error(error) => self.notify(error, true),
+                    rode_session::Response::Agents(_) | rode_session::Response::Agent(_) => {
+                        self.notify("Unexpected agent reply in terminal controls", true)
+                    }
                 }
                 if let Job::End(id) = &job {
                     self.remove_view(id);
@@ -1055,7 +1110,7 @@ impl EditorApp {
         ui.heading("Closing RODE");
         ui.spinner();
         ui.label(if self.agent_installation_pending() {
-            "Cancelling Codex installation and cleaning temporary files…"
+            "Finishing agent setup/lifetime changes and cleaning installation files…"
         } else {
             "Finishing terminal changes and stopping the debugger…"
         });

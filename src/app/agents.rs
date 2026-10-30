@@ -10,6 +10,8 @@ use crate::agent::{
     protocol::{Chat, Role},
 };
 use serde_json::json;
+mod background;
+mod composer;
 mod controls;
 mod history;
 mod runtime;
@@ -21,6 +23,7 @@ pub(super) struct Agents {
     key: String,
     draft: String,
     composing: bool,
+    composer: composer::State,
     arguments: String,
     argument_error: String,
     settings: bool,
@@ -32,6 +35,9 @@ pub(super) struct Agents {
     history_open: bool,
     history_filter: String,
     runtime: runtime::Runtime,
+    running: background::Running,
+    retired: Vec<Chat>,
+    attaching: bool,
 }
 impl Agents {
     pub(super) fn load(storage: Option<&dyn eframe::Storage>) -> Self {
@@ -48,6 +54,7 @@ impl Agents {
             key: String::new(),
             draft: String::new(),
             composing: false,
+            composer: composer::State::default(),
             arguments: "[]".into(),
             argument_error: String::new(),
             settings: false,
@@ -58,6 +65,9 @@ impl Agents {
             history_open: false,
             history_filter: String::new(),
             runtime: runtime::Runtime::default(),
+            running: Default::default(),
+            retired: vec![],
+            attaching: false,
             local_root: std::env::current_dir()
                 .unwrap_or_else(|_| files::expand_home("~"))
                 .to_string_lossy()
@@ -89,6 +99,14 @@ impl Agents {
             }
             self.pending = true;
         }
+    }
+    fn replace_chat(&mut self) {
+        let old = std::mem::take(&mut self.chat);
+        if old.work_pending() {
+            old.cancel_startup_for_exit();
+            self.retired.push(old);
+        }
+        self.attaching = false;
     }
 }
 
@@ -137,7 +155,8 @@ impl EditorApp {
             self.agents.history_open = false;
             self.agents.history_filter.clear();
             self.agents.save_config();
-            self.agents.chat = Chat::default();
+            self.agents.replace_chat();
+            self.agents.running = Default::default();
             self.agents.completed = 0;
             self.agents.draft.clear();
             self.agents.composing = false;
@@ -164,7 +183,31 @@ impl EditorApp {
             self.agents.history_open = false;
             self.agents.composing = false;
         }
+        let mut retirement_error = None;
+        for chat in &mut self.agents.retired {
+            chat.poll();
+            if let Some(error) = chat.take_persistence_error() {
+                retirement_error = Some(error);
+            }
+        }
+        self.agents.retired.retain(Chat::work_pending);
+        if let Some(error) = retirement_error {
+            self.abort_agent_quit(error, ctx);
+        }
         self.agents.chat.poll();
+        if let Some(error) = self.agents.chat.take_persistence_error() {
+            self.abort_agent_quit(error, ctx);
+        }
+        if self.agents.attaching
+            && let Some(config) = self.agents.chat.attached_config().cloned()
+        {
+            self.agents.config = config;
+            self.agents.arguments = serde_json::to_string(&self.agents.config.acp_arguments)
+                .unwrap_or_else(|_| "[]".into());
+            self.agents.save_config();
+            self.agents.attaching = false;
+        }
+        self.poll_background_agents(ctx);
         if let Some(browser) = &mut self.agents.browser {
             browser.poll();
             if browser.busy {
@@ -173,6 +216,7 @@ impl EditorApp {
             if !self.agents.chat.busy
                 && let Some(restored) = browser.take_restored()
             {
+                self.agents.replace_chat();
                 self.agents.chat.restore(restored);
                 self.agents.browser = None;
                 self.agents.history_open = false;
@@ -204,13 +248,27 @@ impl EditorApp {
         }
     }
 
+    pub(super) fn leave_project_agent(&mut self) {
+        self.agents.runtime.reset();
+        self.agents.browser = None;
+        self.agents.history_open = false;
+        self.agents.replace_chat();
+    }
+
     /// Clean exit lets owned setup workers release temporary files and locks.
     pub(super) fn cancel_agent_installation(&self) {
         self.agents.runtime.cancel_all();
+        self.agents.chat.cancel_startup_for_exit();
+        for chat in &self.agents.retired {
+            chat.cancel_startup_for_exit();
+        }
     }
 
     pub(super) fn agent_installation_pending(&self) -> bool {
         self.agents.runtime.pending()
+            || self.agents.running.mutating
+            || self.agents.chat.work_pending()
+            || self.agents.retired.iter().any(Chat::work_pending)
     }
 
     pub(super) fn persist_agent_preferences(
@@ -249,32 +307,21 @@ impl EditorApp {
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         // Give history the full compact panel; retain Stop while a turn is running.
         let hide_composer = self.agents.history_open && !self.agents.chat.busy;
-        let composer_height = if hide_composer {
-            0.
-        } else if unsaved > 0 {
-            162.
-        } else {
-            140.
-        };
         let read_only = self
             .workspace
             .as_ref()
             .is_some_and(|w| w.plan.project_read_only);
         let isolated = self.workspace.as_ref().is_some_and(|w| w.plan.active);
-        let composer = egui::Rect::from_min_max(
-            egui::pos2(
-                rect.left(),
-                (rect.bottom() - composer_height).max(rect.top()),
-            ),
-            rect.max,
-        );
-        let content = egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2(rect.right(), (composer.top() - 6.).max(rect.top())),
-        );
+        let layout = self
+            .agents
+            .composer
+            .layout(ui, rect, unsaved > 0, hide_composer, !modal);
+        let composer = layout.input;
+        let content = layout.content;
         let mut send = false;
         let mut stop = false;
         let mut new_chat = false;
+        let mut running = false;
         let mut save = false;
         let mut answer = None;
         let mut history_action = history::Action::default();
@@ -351,6 +398,7 @@ impl EditorApp {
                     agents.history_open = !agents.history_open;
                     if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
                 }
+                if ui.add_enabled(!offline, egui::Button::new("Running").small()).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
             if agents.history_open {
@@ -456,18 +504,9 @@ impl EditorApp {
             });
             let id = egui::Id::new("agent-composer");
             let shortcut = composer_submit(ui, id, modal, &mut agents.composing);
-            let response = ui.add(
-                egui::TextEdit::multiline(&mut agents.draft)
-                    .id(id)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("Message the agent…")
-                    .return_key(egui::KeyboardShortcut::new(
-                        egui::Modifiers::SHIFT,
-                        Key::Enter,
-                    ))
-                    .char_limit(agent::PROMPT_LIMIT),
-            );
+            let response = composer::editor(ui, &mut agents.draft, id, layout.stretch)
+                .inner
+                .response;
             if agents.focus && !modal {
                 if ui.memory(|m| m.allows_interaction(ui.layer_id())) {
                     response.request_focus();
@@ -477,42 +516,68 @@ impl EditorApp {
                 }
             }
             ui.horizontal(|ui| {
-                let enabled = !offline
-                    && !installing
-                    && !agents.chat.busy
-                    && !agents.history_open
-                    && !agents.draft.trim().is_empty()
-                    && agents.draft.len() <= agent::PROMPT_LIMIT
-                    && (agents.config.provider != Provider::Acp
-                        || agents.argument_error.is_empty());
-                if ui
-                    .add_enabled(enabled, egui::Button::new("Send"))
-                    .on_hover_text("Send · Enter\nShift+Enter for a new line")
-                    .clicked()
-                    || (shortcut && enabled)
-                {
-                    send = true;
-                }
-                if agents.chat.busy
-                    && ui
-                        .button(if agents.chat.stopping() {
-                            "Close process"
-                        } else {
-                            "Stop"
-                        })
-                        .clicked()
-                {
-                    stop = true;
-                }
-                if !agents.chat.busy && agents.chat.connected() && ui.button("Disconnect").clicked()
-                {
-                    agents.chat.disconnect();
-                    agents
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    background::persistence(ui, &mut agents.chat, palette, !offline && !modal);
+                    let remaining = ui.available_width().max(1.);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(remaining, ui.spacing().interact_size.y),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            let enabled = !offline
+                                && !installing
+                                && !agents.chat.busy
+                                && !agents.history_open
+                                && !agents.draft.trim().is_empty()
+                                && agents.draft.len() <= agent::PROMPT_LIMIT
+                                && (agents.config.provider != Provider::Acp
+                                    || agents.argument_error.is_empty());
+                            if ui
+                                .add_enabled(enabled, egui::Button::new("Send"))
+                                .on_hover_text("Send · Enter\nShift+Enter for a new line")
+                                .clicked()
+                                || (shortcut && enabled)
+                            {
+                                send = true;
+                            }
+                            if agents.chat.busy
+                                && ui
+                                    .button(if agents.chat.stopping() {
+                                        "Close process"
+                                    } else {
+                                        "Stop"
+                                    })
+                                    .clicked()
+                            {
+                                stop = true;
+                            }
+                            if !agents.chat.busy
+                                && agents.chat.connected()
+                                && ui
+                                    .button(if agents.chat.persistent() {
+                                        "Detach"
+                                    } else {
+                                        "Disconnect"
+                                    })
+                                    .clicked()
+                            {
+                                if agents.chat.persistent() {
+                                    agents.chat.detach();
+                                } else {
+                                    agents.chat.disconnect();
+                                }
+                                agents
                         .chat
                         .notice("Agent disconnected. The next message starts a new conversation.");
-                }
-                ui.add(egui::Label::new(palette.tag("Enter · Shift+Enter")).truncate())
-                    .on_hover_text("Enter to send; Shift+Enter for a new line");
+                            }
+                            if ui.available_width() > 100. {
+                                ui.add(
+                                    egui::Label::new(palette.tag("Enter · Shift+Enter")).truncate(),
+                                )
+                                .on_hover_text("Enter to send; Shift+Enter for a new line");
+                            }
+                        },
+                    );
+                });
             });
         });
         if agents.config != before {
@@ -542,7 +607,7 @@ impl EditorApp {
         if new_chat {
             agents.browser = None;
             agents.history_open = false;
-            agents.chat = Chat::default();
+            agents.replace_chat();
             agents.completed = 0;
             agents.focus = true;
         }
@@ -607,6 +672,9 @@ impl EditorApp {
         if refresh {
             self.reload_clean_documents(ctx);
         }
+        if running {
+            self.open_background_agents(ctx);
+        }
     }
 
     fn send_agent(&mut self, ctx: &egui::Context) {
@@ -614,6 +682,7 @@ impl EditorApp {
             return;
         }
         let launch = self.agent_launch();
+        self.agents.chat.use_service();
         let context = ctx.clone();
         match self.agents.chat.submit(
             launch,
@@ -637,7 +706,10 @@ impl EditorApp {
         }
         let launch = self.agent_launch();
         let context = ctx.clone();
-        match agent::history::Browser::open(launch, Arc::new(move || context.request_repaint())) {
+        match agent::history::Browser::open_service(
+            launch,
+            Arc::new(move || context.request_repaint()),
+        ) {
             Ok(browser) => {
                 self.agents.browser = Some(browser);
                 self.agents.history_open = true;

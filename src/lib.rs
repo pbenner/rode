@@ -3,7 +3,8 @@
 //! [`app`] owns UI state and accepts versioned worker results. [`files`],
 //! [`sandbox`] and [`ssh`] define host-aware I/O; [`process`] supervises bounded
 //! tool protocols. [`persistence`] merges explicit preferences across windows.
-//! [`rode_session`] owns persistent PTYs independently of desktop lifetimes.
+//! [`rode_session`] owns persistent PTYs and agent controllers independently of
+//! desktop lifetimes; [`rode_agent_core`] keeps their protocol logic headless.
 //!
 //! Blocking service entry points must run on workers or inside helper processes.
 //! A request's paths belong to its execution host; an active sandbox must never
@@ -21,8 +22,8 @@
 //! Local and SSH services share request models and host-policy rules. Small
 //! standard-library Python peers avoid installing the desktop application and
 //! its dependencies on every remote host; the cost is maintaining parity tests
-//! for two implementations. The native terminal service is separate because
-//! persistent shells need an owner that outlives both GUI and SSH attachments.
+//! for two implementations. The native host service is separate because
+//! persistent shells and agents need an owner that outlives GUI/SSH attachments.
 #![warn(missing_docs)]
 
 pub mod agent;

@@ -49,7 +49,7 @@ EOF
 sshd_pid=$!
 sleep 0.3
 if ! kill -0 "$sshd_pid" 2>/dev/null; then cat "$test_dir/sshd.log" >&2; exit 1; fi
-if ! RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home" "${CARGO:-cargo}" test --test ssh_roundtrip -- --ignored --nocapture; then
+if ! RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home" "${CARGO:-cargo}" test --test ssh_roundtrip "${RODE_SSH_TEST_FILTER:-}" -- --ignored --nocapture; then
     cat "$test_dir/sshd.log" >&2
     exit 1
 fi

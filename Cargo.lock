@@ -2270,6 +2270,7 @@ dependencies = [
  "object",
  "portable-pty",
  "pulldown-cmark",
+ "rode-agent-core",
  "rode-session",
  "ron",
  "serde",
@@ -2284,12 +2285,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rode-agent-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rode-session"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "libc",
  "portable-pty",
+ "rode-agent-core",
  "serde",
  "serde_json",
  "vt100",

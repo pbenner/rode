@@ -7,6 +7,7 @@ RODE owns terminal sessions through a small native Rust service on the computer 
 - **New** in the terminal header creates another native terminal with **Persist: off** in the current project, using its prepared sandbox and selected environment. Switch between views using the terminal tabs.
 - **Sessions**, or **View → Terminals & Slurm**, lists your running terminals on the current host, including attachment count, project path, and sandbox mode. Use **Attach**, **Rename**, or **End** there. Exited terminals are cleared automatically; the visible list refreshes every two seconds.
 - **Persist: off / on** at the far right of the terminal header controls whether that session keeps running after its last view closes. The button uses the theme's accent fill when on; click it again to switch off. New terminals start off. Change it at any time without restarting the shell or its commands. The setting belongs to the session and updates in every attached RODE window.
+- **Slurm…**, beside Persist, requests an [interactive allocation](slurm.md) in a new terminal. It shows pending status, then a filled allocated-GPU indicator, and provides confirmed cancellation/release. Slurm environment variables are available in the compute-node shell; enable Persist separately to retain it after exit.
 - **Detach** closes a view while its shell and commands continue; enable **Persist** first. In a narrow pane, Detach and Copy are under **More**. Hiding the terminal with **Ctrl+`** keeps the view attached.
 - Reopen the original project on the same host, with the same sandbox policy, and choose **Sessions → Attach** to resume. Changing projects closes the old views. Persistent sessions continue on their original host and sandbox; nonpersistent sessions end when their last view closes.
 
@@ -38,7 +39,7 @@ After an editor update, older services keep their existing shells and jobs. Upda
 
 If startup or a persistence change is still in flight, closing waits briefly for its result instead of asking for a policy. A failed persistence change reports the error; if closing was waiting for it, the window stays open so you can check the session state. Persistent-startup errors remain visible rather than silently substituting a temporary shell.
 
-Ending a terminal interrupts its shell/programs. It does not explicitly cancel Slurm jobs. Use the separate [allocation release control](slurm.md) to request that GPUs be freed. Closing RODE never automatically calls `scancel`.
+Ending a terminal interrupts its shell/programs. A managed allocation's `salloc` normally releases resources when its shell ends; use the confirmed [allocation release control](slurm.md) to explicitly request cancellation and verify cleanup. Closing RODE never automatically calls `scancel`.
 
 ## Remote helper and packaging
 

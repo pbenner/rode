@@ -19,6 +19,7 @@ libc = "0.2"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rode-agent-core = { path = "../rode-agent-core" }
 vt100 = "0.16"
 
 [[bin]]

@@ -1,6 +1,6 @@
 # Source architecture
 
-RODE has two Rust library crates: `rode` supplies desktop/editor services, and `rode-session` supplies the headless PTY service. The desktop uses egui/eframe. Local service implementations are Rust; SSH peers use the remote host's Python standard library. These peers implement the same protocols without requiring a remote editor installation.
+RODE has three Rust library crates: `rode` supplies desktop/editor services, `rode-agent-core` supplies the headless agent protocol/history controllers, and `rode-session` supplies the host-owned PTY/agent service. The desktop uses egui/eframe. Local services are Rust; SSH peers use the remote host's Python standard library to deploy/control the native helper without requiring a remote editor or GUI libraries.
 
 Build browsable API documentation with:
 
@@ -8,7 +8,7 @@ Build browsable API documentation with:
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --open
 ```
 
-The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures.
+The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html` and `target/doc/rode_session/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures.
 
 ## Source map
 
@@ -26,7 +26,9 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/extensions.rs`, `src/app/extensions.rs`, `src/remote_extensions.py` | Native feature activation, opt-in installed adapters and their UI/preferences |
 | `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
 | `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
-| `src/agent/`, `src/agent.rs`, `src/app/agents.rs` | Codex/ACP state machines, bounded chat, backend-owned history and explicit permission/question cards |
+| `crates/rode-agent-core/` | Shared Codex/ACP state machines, bounded chat/history, capabilities, personalities and host-service wire views |
+| `src/agent/`, `src/agent.rs`, `src/app/agents.rs`, `src/app/agents/background.rs` | Project-host preparation, disposable agent attachment, live-session discovery, history and permission/question UI |
+| `crates/rode-session/src/agents.rs`, `agents/transport.rs` | Headless agent ownership, fixed sandbox/executable/environment, controller leases, bounded subprocess I/O and lifetime cleanup |
 | `src/agent/personality.rs` | Bounded response-style hints, explicit default resets and display-only history cleanup; independent of tools and execution policies |
 | `src/agent/controls.rs`, `src/app/agents/controls.rs` | Bounded backend model/capability discovery and shared native model/access selectors |
 | `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `src/remote_debugger.py` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
@@ -35,7 +37,7 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/notebook/`, `src/notebook.rs`, `src/notebook_kernel.py`, `src/app/notebook_view.rs` | Metadata-preserving notebook model, versioned execution and native cells/outputs |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` modules and Python peers | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
-| `src/slurm.rs`, `src/remote_sessions.py` | Scheduler allocation snapshots and explicit, ownership-checked cancellation |
+| `src/slurm.rs`, `src/slurm/interactive.rs`, `src/app/sessions/allocation.rs`, `src/remote_sessions.py` | Terminal allocation forms, quoted salloc/srun launches, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
 | `src/vault.rs`, `src/remote_vault.py`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
 | `tests/`, `tests/fixtures/`, `scripts/test-*.py` | Service integration tests, deterministic peers and isolated native UI checks |
@@ -76,7 +78,15 @@ Bounded stdio protocols reuse authenticated transport without a new application 
 
 A GUI/SSH attachment cannot own a shell that must outlive it. The headless native terminal service owns PTYs, removing a tmux/screen prerequisite and supporting shared views. The cost is native-helper deployment and protocol compatibility across upgrades. Persistence belongs to the session, so closing one window differs from explicitly ending the shared shell. Capability probing preserves existing jobs instead of restarting their service for a newer client. See [process ownership](#process-and-resource-ownership) and [terminal lifetime](terminals.md).
 
-Agent history uses a separately supervised connection so failed or cancelled loading cannot replace the current conversation. Only explicit History starts it; opening the panel remains inert. Validated host/project metadata and current sandbox/permission settings precede replay. On success ownership transfers to the chat, with bounded recent messages and full context retained by the backend. RODE stores no duplicate transcript database. See `src/agent/history.rs`, `src/app/agents/history.rs` and [chat history](agents.md#chat-history).
+Agent history uses a separately supervised connection so failed or cancelled loading cannot replace the current conversation. Only explicit History starts it; opening the panel remains inert. Validated host/project metadata and current sandbox/permission settings precede replay. On success ownership transfers to the chat, with bounded recent messages and full context retained by the backend. RODE stores no duplicate transcript database. See `crates/rode-agent-core/src/history.rs`, `src/agent/history.rs`, `src/app/agents/history.rs` and [chat history](agents.md#chat-history).
+
+### Host-owned agents
+
+Persistent agents need their complete protocol controller on the host: leaving only the executable alive would strand initialization, permissions and cancellation timers in the departed GUI. `rode-agent-core` shares those controllers between the existing direct-transport API and `rode-session` without pulling desktop libraries into the remote helper. Agents keep the exact captured sandbox and host environment; the attachment broker runs outside that namespace but supplies no tool execution or policy escalation.
+
+One controlling lease serializes prompts and answers, while other windows may list/end jobs. Attachment loss preserves only explicitly persistent sessions. The host owns grace periods, cancellation deadlines and process-tree reaping. The GUI waits for persistence/start/end acknowledgements during clean exit and retains retiring views until their pending lifetime work finishes. Read-only discovery never starts a service or agent. Capability negotiation selects a compatible service generation without terminating older jobs.
+
+Bounded state remains in host memory; backend History is the durable store. Chat updates contain changed messages plus the retained message order, avoiding a full transcript transfer for each streamed token. Detached workers retain bounded output without continuously serializing UI snapshots. Approvals remain pending offline, and reattachment requires the original project policy. These choices keep the background path native and independent of tmux, screen or model servers managed by RODE.
 
 ### Native features and installed tools
 
@@ -150,7 +160,8 @@ Configuration has a different lock scope: a stable adjacent lock serializes read
 | Workspace/window | Private SSH master, background generations, active project tools and UI views |
 | `process::Session` | One supervised tool transport and owned process group; stop/drop requests scoped termination |
 | Debug coordinator | Adapter and debug-launched PTYs/descendants; detach externally attached targets |
-| Native terminal service | Shell PTYs, parser history and persistence flags independent of GUI processes |
+| Native host service | Shell PTYs, parser history, agent protocol controllers and per-session persistence independent of GUI processes |
+| Agent view | One controlling attachment; closing it stops only nonpersistent controllers |
 | Terminal view | Attachment transport only; last-view closure follows the session's explicit persistence setting |
 | Notebook tab/kernel | Stateful kernel and its private IPC runtime; stop on relevant tab/project/interpreter lifecycle changes |
 | Preview lease | Shared accounting retained by the last worker/tab/snapshot owner |

@@ -10,6 +10,11 @@ use std::{collections::BTreeMap, path::PathBuf};
 pub enum Operation {
     /// Discover running terminal sessions without attaching a view.
     List,
+    /// Native agent operations use the same verified host helper and service.
+    Agents {
+        /// Agent-only native service request.
+        request: Box<rode_session::Request>,
+    },
     /// Create a shell under the captured project plan and explicit lifetime policy.
     Create {
         /// New opaque session identifier.
@@ -24,6 +29,9 @@ pub enum Operation {
         python: String,
         /// Explicit opt-in lifetime after the final view closes.
         persistent: bool,
+        /// Optional managed scheduler launch; otherwise create the normal login shell.
+        #[serde(default)]
+        allocation: Option<crate::slurm::Launch>,
     },
     /// Change one session's display name.
     Rename {
@@ -105,8 +113,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
         )
         .context("Cannot check RODE_SESSION_HELPER; rebuild it with scripts/build-sessiond.sh")?;
         ensure!(
-            output.success()
-                && output.stdout.trim() == rode_session::PERSISTENCE_PROTOCOL.to_string(),
+            output.success() && output.stdout.trim() == rode_session::PROTOCOL.to_string(),
             "RODE_SESSION_HELPER uses an older terminal protocol. Rebuild it with scripts/build-sessiond.sh or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
         );
     }
@@ -122,6 +129,31 @@ pub fn local(operation: &Operation) -> Result<Reply> {
     };
     let request = match operation {
         Operation::List => rode_session::Request::List,
+        Operation::Agents { request } => {
+            let mut request = *request.clone();
+            ensure!(
+                matches!(
+                    request,
+                    rode_session::Request::Agents
+                        | rode_session::Request::CreateAgent { .. }
+                        | rode_session::Request::EndAgent { .. }
+                ),
+                "Only agent control requests are accepted here"
+            );
+            if let rode_session::Request::CreateAgent { spec } = &mut request {
+                let root = std::path::Path::new(&spec.plan.root);
+                spec.executable = crate::process::resolve_program(root, &spec.executable)
+                    .to_string_lossy()
+                    .into();
+                spec.env = std::env::vars_os()
+                    .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                    .collect();
+                let python = project::python_path(root, &spec.python);
+                spec.env
+                    .extend(project::environment_variables(&python.to_string_lossy()));
+            }
+            request
+        }
         Operation::Create {
             id,
             name,
@@ -129,6 +161,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             policy,
             python,
             persistent,
+            allocation,
         } => {
             ensure!(
                 *policy == fingerprint(plan),
@@ -140,7 +173,11 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             } else {
                 vec![]
             };
-            argv.extend([shell, "-l".into()]);
+            if let Some(launch) = allocation {
+                argv.extend(launch.argv.clone());
+            } else {
+                argv.extend([shell, "-l".into()]);
+            }
             let mut env: BTreeMap<String, String> = std::env::vars_os()
                 .filter_map(|(key, value)| {
                     Some((key.into_string().ok()?, value.into_string().ok()?))
@@ -148,6 +185,9 @@ pub fn local(operation: &Operation) -> Result<Reply> {
                 .collect();
             let python = project::python_path(std::path::Path::new(&plan.root), python);
             env.extend(project::environment_variables(&python.to_string_lossy()));
+            if allocation.is_some() {
+                env.retain(|key, _| !key.starts_with("SALLOC_") && !key.starts_with("SRUN_"));
+            }
             rode_session::Request::Create {
                 id: id.clone(),
                 name: name.clone(),
@@ -155,9 +195,15 @@ pub fn local(operation: &Operation) -> Result<Reply> {
                 policy: policy.clone(),
                 mode: plan.label().into(),
                 argv,
-                initial_input: initial_input(&python),
+                // Do not send shell input while the allocator is waiting for resources.
+                initial_input: if allocation.is_some() {
+                    String::new()
+                } else {
+                    initial_input(&python)
+                },
                 env,
                 persistent: *persistent,
+                allocation: allocation.as_ref().map(|launch| launch.job_name.clone()),
             }
         }
         Operation::Rename { id, policy, name } => rode_session::Request::Rename {

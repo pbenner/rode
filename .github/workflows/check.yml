@@ -6,6 +6,12 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     env:
+      # UI fixtures use a 1380x900 window; keep it inside the virtual screen.
+      RODE_XVFB_SCREEN: "-screen 0 1600x1100x24"
+      # Xvfb has no hardware GPU. Use the explicitly installed Mesa drivers.
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      __GLX_VENDOR_LIBRARY_NAME: mesa
+      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
       RODE_TEST_LLDB: /usr/bin/lldb-dap-19
       RODE_TEST_JUPYTER: ${{ github.workspace }}/target/notebook-env/bin/python
       RODE_TEST_PRETTIER: ${{ github.workspace }}/target/language-tools/node_modules/.bin/prettier
@@ -36,7 +42,8 @@ jobs:
       - name: Install system test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev \
+            libegl1 libegl-mesa0 libglx-mesa0 libgl1-mesa-dri \
             openssh-server xvfb xauth x11-utils imagemagick libxtst6 bubblewrap \
             golang-go clang-format shfmt poppler-utils gocryptfs lldb-19
       - name: Install test formatter
@@ -56,28 +63,30 @@ jobs:
       - run: scripts/build-sessiond.sh
       - run: bash scripts/test-ssh.sh
       - run: cargo build --locked --release
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-debugger-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-terminal-keys-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-sessions-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-binary-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-notebooks-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-layout-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-languages-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-syntax-themes-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-agent-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-codex-install-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-multiprocess-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_SSH_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_WORKBENCH_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_IMAGES_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARKDOWN_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_PDF_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_NOTEBOOK_UI=1 RODE_NOTEBOOK_UI_REMOTE_ONLY=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARP_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_LATEX_UI=1 xvfb-run -a bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_VAULT_UI=1 xvfb-run -a bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-debugger-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-terminal-keys-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-sessions-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-slurm-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-binary-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-notebooks-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-layout-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-languages-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-syntax-themes-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-persistence-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-codex-install-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-multiprocess-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_SSH_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_WORKBENCH_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_IMAGES_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARKDOWN_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_PDF_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_NOTEBOOK_UI=1 RODE_NOTEBOOK_UI_REMOTE_ONLY=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARP_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_LATEX_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_VAULT_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -88,6 +97,7 @@ jobs:
             target/project-ui/
             target/workbench-ui/
             target/agent-ui/
+            target/agent-persistence-ui/
             target/debugger-ui/
             target/multiprocess-ui/
             target/images-ui/
@@ -98,5 +108,6 @@ jobs:
             target/syntax-themes-ui/
             target/pdf-ui/
             target/sessions-ui/
+            target/slurm-ui/
             target/terminal-keys-ui/
             target/marp-ui/

@@ -13,7 +13,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/debugger-ui")
-from ui_harness import ARTIFACTS, BINARY, close_window, display, key, screenshot, text, theme, x11
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    assert_running,
+    close_window,
+    display,
+    key,
+    screenshot,
+    text,
+    theme,
+    x11,
+)
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
@@ -103,14 +114,15 @@ def run(remote=False, isolated=False):
             args += [str(project)]
             if isolated:
                 args += ["--sandbox"]
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
+        log_path = ARTIFACTS / (label + ".log")
+        with log_path.open("w") as log:
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
 
                 def mapped():
                     nonlocal window
-                    assert process.poll() is None
+                    assert_running(process, log_path)
                     match = re.search(
                         r'(0x[0-9a-f]+) "RODE',
                         subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
