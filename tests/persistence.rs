@@ -354,6 +354,39 @@ fn eviction_does_not_remove_another_processes_updated_profile() {
 }
 
 #[test]
+fn resetting_agent_controls_preserves_other_windows_model_and_permission_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let initial = json!({"same":{"acp_options":{"mode":"ask"},"model":"old"}});
+    fs::write(
+        &path,
+        ron::ser::to_string(&BTreeMap::from([(
+            "agent_preferences",
+            initial.to_string(),
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut resetting = open(&path);
+    let mut changing = open(&path);
+    let mut next = initial.clone();
+    next["same"]["model"] = "new-model".into();
+    next["same"]["approval"] = "never".into();
+    next["same"]["acp_options"]["model"] = "remote-model".into();
+    changing.set_string("agent_preferences", next.to_string());
+    drop(changing);
+    let mut reset = initial;
+    reset["same"]["acp_options"] = json!({});
+    resetting.set_string("agent_preferences", reset.to_string());
+    drop(resetting);
+    let merged: Value = serde_json::from_str(&values(&path)["agent_preferences"]).unwrap();
+    assert_eq!(merged["same"]["model"], "new-model");
+    assert_eq!(merged["same"]["approval"], "never");
+    assert_eq!(merged["same"]["acp_options"]["model"], "remote-model");
+    assert!(merged["same"]["acp_options"].get("mode").is_none());
+}
+
+#[test]
 fn implicit_defaults_from_an_old_window_do_not_reset_newer_settings() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("app.ron");

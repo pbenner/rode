@@ -26,7 +26,8 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/extensions.rs`, `src/app/extensions.rs`, `src/remote_extensions.py` | Native feature activation, opt-in installed adapters and their UI/preferences |
 | `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
 | `src/bundled.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, verified private SSH-cache deployment and release-bundle preparation |
-| `src/agent/`, `src/agent.rs`, `src/app/agents.rs` | Codex/ACP state machines, bounded chat and explicit permission/question cards |
+| `src/agent/`, `src/agent.rs`, `src/app/agents.rs` | Codex/ACP state machines, bounded chat, backend-owned history and explicit permission/question cards |
+| `src/agent/controls.rs`, `src/app/agents/controls.rs` | Bounded backend model/capability discovery and shared native model/access selectors |
 | `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `src/remote_debugger.py` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
 | `src/images.rs`, `src/pdf.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, memory leases, retained snapshots and specialized tabs |
 | `src/app/markdown.rs` | Unsaved-source Markdown rendering and sandbox-aware linked assets |
@@ -73,6 +74,8 @@ Persistence uses a worker because lock waits and filesystem sync can stall. Fail
 Bounded stdio protocols reuse authenticated transport without a new application listener or embedded agent runtime. Queue bounds make slow-consumer pressure visible instead of allowing unlimited memory or UI-thread pipe waits. Protocol clients must handle queue-full results; JSON/base64 encoding has overhead in return for simple bounded framing. Background workers start in new sessions to remove the launcher's controlling terminal while retaining owned process groups for cancellation. Interactive shells instead establish their own PTYs. Rationale lives in `src/process.rs`.
 
 A GUI/SSH attachment cannot own a shell that must outlive it. The headless native terminal service owns PTYs, removing a tmux/screen prerequisite and supporting shared views. The cost is native-helper deployment and protocol compatibility across upgrades. Persistence belongs to the session, so closing one window differs from explicitly ending the shared shell. Capability probing preserves existing jobs instead of restarting their service for a newer client. See [process ownership](#process-and-resource-ownership) and [terminal lifetime](terminals.md).
+
+Agent history uses a separately supervised connection so failed or cancelled loading cannot replace the current conversation. Only explicit History starts it; opening the panel remains inert. Validated host/project metadata and current sandbox/permission settings precede replay. On success ownership transfers to the chat, with bounded recent messages and full context retained by the backend. RODE stores no duplicate transcript database. See `src/agent/history.rs`, `src/app/agents/history.rs` and [chat history](agents.md#chat-history).
 
 ### Native features and installed tools
 

@@ -1,7 +1,7 @@
 //! Project-scoped agent chat and preferences. Processes/transcripts are kept
 //! out of app preferences; authentication remains with the installed agent.
 //!
-//! The first submitted message starts a process. Workspace/settings/feature changes stop the
+//! A submitted message or explicit History starts a process. Workspace/settings/feature changes stop the
 //! old process; approvals remain bounded by the enclosing sandbox. Replies may refresh clean
 //! disk-backed documents but never overwrite dirty buffers.
 use super::*;
@@ -10,6 +10,8 @@ use crate::agent::{
     protocol::{Chat, Role},
 };
 use serde_json::json;
+mod controls;
+mod history;
 
 pub(super) struct Agents {
     pub chat: Chat,
@@ -24,6 +26,9 @@ pub(super) struct Agents {
     pub focus: bool,
     completed: u64,
     local_root: String,
+    browser: Option<agent::history::Browser>,
+    history_open: bool,
+    history_filter: String,
 }
 impl Agents {
     pub(super) fn load(storage: Option<&dyn eframe::Storage>) -> Self {
@@ -45,6 +50,9 @@ impl Agents {
             pending: false,
             focus: false,
             completed: 0,
+            browser: None,
+            history_open: false,
+            history_filter: String::new(),
             local_root: std::env::current_dir()
                 .unwrap_or_else(|_| files::expand_home("~"))
                 .to_string_lossy()
@@ -118,6 +126,9 @@ impl EditorApp {
     pub(super) fn poll_agents(&mut self, ctx: &egui::Context) {
         let (_, _, key) = self.agent_location();
         if self.agents.key != key {
+            self.agents.browser = None;
+            self.agents.history_open = false;
+            self.agents.history_filter.clear();
             self.agents.save_config();
             self.agents.chat = Chat::default();
             self.agents.completed = 0;
@@ -133,7 +144,32 @@ impl EditorApp {
             self.agents.argument_error.clear();
             self.agents.key = key;
         }
+        if self.workbench.panel != Some(Panel::Agent)
+            || !self.navigation.visible(navigation::Pane::Tools)
+            || self
+                .agents
+                .browser
+                .as_ref()
+                .is_some_and(|browser| !browser.uses_interpreter(&self.agent_python()))
+        {
+            self.agents.browser = None;
+            self.agents.history_open = false;
+        }
         self.agents.chat.poll();
+        if let Some(browser) = &mut self.agents.browser {
+            browser.poll();
+            if browser.busy {
+                ctx.request_repaint_after(Duration::from_millis(250));
+            }
+            if !self.agents.chat.busy
+                && let Some(restored) = browser.take_restored()
+            {
+                self.agents.chat.restore(restored);
+                self.agents.browser = None;
+                self.agents.history_open = false;
+                self.agents.focus = true;
+            }
+        }
         if self.agents.completed != self.agents.chat.completed {
             self.agents.completed = self.agents.chat.completed;
             self.reload_clean_documents(ctx);
@@ -141,13 +177,15 @@ impl EditorApp {
         if self.agents.chat.busy {
             // Needed only for startup/cancellation deadlines. Streamed output
             // wakes the window directly; idle agent sessions do not poll it.
-            if !self.agents.chat.connected() || self.agents.chat.stopping() {
+            if self.agents.chat.has_deadline() {
                 ctx.request_repaint_after(Duration::from_millis(250));
             }
         }
     }
 
     pub(super) fn stop_project_agent(&mut self) {
+        self.agents.browser = None;
+        self.agents.history_open = false;
         if self.agents.chat.connected() || self.agents.chat.busy {
             self.agents.chat.disconnect();
             self.agents.chat.notice(
@@ -190,7 +228,20 @@ impl EditorApp {
         let unsaved = self.documents.iter().filter(|d| d.dirty()).count();
         let modal = self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal();
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let composer_height = if unsaved > 0 { 132. } else { 110. };
+        // Give history the full compact panel; retain Stop while a turn is running.
+        let hide_composer = self.agents.history_open && !self.agents.chat.busy;
+        let composer_height = if hide_composer {
+            0.
+        } else if unsaved > 0 {
+            162.
+        } else {
+            140.
+        };
+        let read_only = self
+            .workspace
+            .as_ref()
+            .is_some_and(|w| w.plan.project_read_only);
+        let isolated = self.workspace.as_ref().is_some_and(|w| w.plan.active);
         let composer = egui::Rect::from_min_max(
             egui::pos2(
                 rect.left(),
@@ -207,6 +258,7 @@ impl EditorApp {
         let mut new_chat = false;
         let mut save = false;
         let mut answer = None;
+        let mut history_action = history::Action::default();
         let agents = &mut self.agents;
         let before = agents.config.clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
@@ -244,6 +296,11 @@ impl EditorApp {
                             }
                             if !agents.argument_error.is_empty() { ui.colored_label(palette.error,&agents.argument_error); }
                             ui.label(palette.tag("Agent must provide its own file and command tools."));
+                            if ui.small_button("Reset saved agent controls").clicked() {
+                                agents.config.acp_options.clear();
+                                agents.chat.disconnect();
+                                agents.chat.notice("Agent controls reset. The next message starts a fresh conversation.");
+                            }
                         } else {
                             ui.label("Codex executable (auto: discover)");
                             ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Install the optional rode-codex package or use an installed Codex. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
@@ -256,15 +313,26 @@ impl EditorApp {
                                 ui.label("Model (blank: Codex default)");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.model).desired_width(f32::INFINITY).char_limit(256));
                             }
-                            ui.checkbox(&mut agents.config.read_only,"Start Codex tools in read-only mode");
                         }
                     });
-                    ui.label(RichText::new("Settings are saved for this project. Changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
+                    ui.label(RichText::new("Settings are saved for this project. Model and Access controls are below. Executable/provider changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
                 });
             }
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent}));
-            });
+            ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add_enabled(!offline,egui::Button::new("History").small().selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
+                    agents.history_open = !agents.history_open;
+                    if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
+                }
+                ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
+            }); });
+            if agents.history_open {
+                let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal);
+                history_action.refresh |= panel.refresh;
+                history_action.more=panel.more;
+                history_action.resume=panel.resume;
+                history_action.close=panel.close;
+                return;
+            }
             if let Some(prompt) = agents.chat.prompts.front_mut() {
                 egui::Frame::new().fill(palette.raised).stroke(Stroke::new(1.0_f32,palette.accent)).inner_margin(8).corner_radius(4).show(ui,|ui| {
                     egui::ScrollArea::vertical().id_salt("agent-request").max_height((ui.available_height()*0.65).clamp(60.,200.)).show(ui,|ui| {
@@ -322,6 +390,9 @@ impl EditorApp {
             });
         });
         ui.scope_builder(egui::UiBuilder::new().max_rect(composer), |ui| {
+            if hide_composer {
+                return;
+            }
             ui.set_clip_rect(ui.clip_rect().intersect(composer));
             ui.separator();
             if unsaved > 0 {
@@ -336,6 +407,21 @@ impl EditorApp {
                     }
                 });
             }
+            ui.add_enabled_ui(!agents.chat.busy && !offline, |ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 26.),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        controls::buttons(
+                            ui,
+                            &mut agents.config,
+                            &agents.chat,
+                            read_only,
+                            isolated,
+                        );
+                    },
+                );
+            });
             let id = egui::Id::new("agent-composer");
             let shortcut = !modal
                 && ui.memory(|m| m.has_focus(id))
@@ -359,6 +445,7 @@ impl EditorApp {
             ui.horizontal(|ui| {
                 let enabled = !offline
                     && !agents.chat.busy
+                    && !agents.history_open
                     && !agents.draft.trim().is_empty()
                     && agents.draft.len() <= agent::PROMPT_LIMIT
                     && (agents.config.provider != Provider::Acp
@@ -393,10 +480,23 @@ impl EditorApp {
             });
         });
         if agents.config != before {
+            agents.browser = None;
+            agents.history_open = false;
+            if agents.config.model() != before.model() {
+                agents.config.reasoning_effort.clear();
+            }
             agents.save_config();
+            if let Err(error) = agents.chat.configure_idle(&agents.config) {
+                agents.chat.disconnect();
+                agents
+                    .chat
+                    .notice(&format!("Agent control was not applied: {error}"));
+            }
         }
         let refresh = (new_chat || (stop && agents.chat.stopping())) && agents.chat.busy;
         if new_chat {
+            agents.browser = None;
+            agents.history_open = false;
             agents.chat = Chat::default();
             agents.completed = 0;
             agents.focus = true;
@@ -435,6 +535,23 @@ impl EditorApp {
         if send {
             self.send_agent(ctx);
         }
+        if history_action.close {
+            self.agents.browser = None;
+            self.agents.history_open = false;
+        } else if history_action.refresh {
+            self.open_agent_history(ctx);
+        } else if let Some(browser) = &mut self.agents.browser {
+            let result = if let Some(id) = history_action.resume {
+                browser.resume(&id)
+            } else if history_action.more {
+                browser.load_more()
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                self.agents.chat.notice(&error.to_string());
+            }
+        }
         if refresh {
             self.reload_clean_documents(ctx);
         }
@@ -444,26 +561,7 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Agents) {
             return;
         }
-        let (root, _, _) = self.agent_location();
-        let (plan, remote) = self
-            .workspace
-            .as_ref()
-            .map(|w| (w.plan.clone(), w.remote.clone()))
-            .unwrap_or_else(|| {
-                (
-                    sandbox::Plan {
-                        root,
-                        ..Default::default()
-                    },
-                    None,
-                )
-            });
-        let launch = Launch {
-            config: self.agents.config.clone(),
-            plan,
-            remote,
-            python: self.agent_python(),
-        };
+        let launch = self.agent_launch();
         let context = ctx.clone();
         match self.agents.chat.submit(
             launch,
@@ -478,6 +576,49 @@ impl EditorApp {
                 self.agents.chat.notice(&format!("{error:#}"));
                 self.agents.settings = true;
             }
+        }
+    }
+
+    fn open_agent_history(&mut self, ctx: &egui::Context) {
+        if !self.feature(crate::extensions::Feature::Agents) {
+            return;
+        }
+        let launch = self.agent_launch();
+        let context = ctx.clone();
+        match agent::history::Browser::open(launch, Arc::new(move || context.request_repaint())) {
+            Ok(browser) => {
+                self.agents.browser = Some(browser);
+                self.agents.history_open = true;
+            }
+            Err(error) => {
+                self.agents
+                    .chat
+                    .notice(&format!("Cannot open history: {error:#}"));
+                self.agents.history_open = false;
+            }
+        }
+    }
+
+    fn agent_launch(&self) -> Launch {
+        let (root, _, _) = self.agent_location();
+        let (plan, remote) = self
+            .workspace
+            .as_ref()
+            .map(|w| (w.plan.clone(), w.remote.clone()))
+            .unwrap_or_else(|| {
+                (
+                    sandbox::Plan {
+                        root,
+                        ..Default::default()
+                    },
+                    None,
+                )
+            });
+        Launch {
+            config: self.agents.config.clone(),
+            plan,
+            remote,
+            python: self.agent_python(),
         }
     }
 }

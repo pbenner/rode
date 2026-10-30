@@ -1,0 +1,14 @@
+Package: rode-codex
+Version: {version}
+Section: devel
+Priority: optional
+Architecture: {architecture}
+Maintainer: {maintainer}
+Installed-Size: {installed_size}
+Enhances: rode
+Homepage: https://github.com/openai/codex
+Description: optional native Codex runtime for RODE
+ A pinned upstream Codex executable with checksum metadata and license notices.
+ RODE discovers this runtime for local and SSH project agent chat.
+ Authentication and model services are configured separately.
+ No Node.js, npm, editor daemon or model is installed.

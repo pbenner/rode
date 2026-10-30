@@ -591,7 +591,10 @@ impl Storage for Preferences {
                 // entry eviction and explicit sandbox-override removal delete keys.
                 if edit.value.is_none() {
                     let removable = match key {
-                        "agent_preferences" => edit.path.len() == 1,
+                        "agent_preferences" => {
+                            edit.path.len() == 1
+                                || (edit.path.len() == 3 && edit.path[1] == "acp_options")
+                        }
                         "extension_preferences" => {
                             edit.path.len() == 1
                                 || (edit.path.len() == 3 && edit.path[1] == "settings")

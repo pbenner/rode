@@ -1,5 +1,5 @@
 //! Small Codex app-server / ACP v1 clients, sharing one bounded chat model.
-use super::{Config, Event, Launch, PROMPT_LIMIT, Provider, Session};
+use super::{Access, Approval, Config, Event, Launch, PROMPT_LIMIT, Provider, Session, controls};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -67,12 +67,18 @@ pub struct Prompt {
     pub questions: Vec<Question>,
     cancel: Value,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Call {
     Initialize,
     Conversation,
     Turn,
     Interrupt,
+    Models,
+    Configure {
+        id: String,
+        value: Value,
+        legacy: bool,
+    },
 }
 
 /// Lazy Codex/ACP conversation controller with bounded messages, prompts and pending calls.
@@ -91,6 +97,10 @@ pub struct Chat {
     pub completed: u64,
     /// Whether displayed chat content changed since the UI last observed it.
     pub changed: bool,
+    /// Models advertised by the current Codex process; empty before the first message.
+    pub models: Vec<controls::Model>,
+    /// Capability-driven ACP controls and their acknowledged backend values.
+    pub controls: Vec<controls::Control>,
     session: Option<Session>,
     config: Config,
     root: String,
@@ -106,9 +116,46 @@ pub struct Chat {
     deadline: Option<Instant>,
     last_stderr: String,
     serial: u64,
+    model_cursors: Vec<String>,
+    settings_attempts: usize,
 }
 
 impl Chat {
+    /// Adopt an acknowledged history restore, replacing only this chat's process.
+    /// Current project policy was captured before the backend resumed the thread.
+    pub fn restore(&mut self, restored: super::history::Restored) {
+        self.disconnect();
+        self.config = restored.launch.config;
+        self.root = restored.launch.plan.root;
+        self.read_only = restored.launch.plan.project_read_only
+            || (self.config.provider != Provider::Acp && self.config.access() == Access::ReadOnly);
+        self.external = restored.launch.plan.active && !self.read_only;
+        self.network = restored
+            .launch
+            .plan
+            .prefix
+            .iter()
+            .any(|arg| arg == "--share-net");
+        self.conversation = restored.id;
+        self.messages = restored.messages;
+        self.controls = restored.controls;
+        self.next_id = restored.next_id;
+        self.session = Some(restored.session);
+        self.status = "Ready · restored conversation".into();
+        self.changed = true;
+        if restored.limited {
+            self.notice(
+                "Showing recent saved messages; the agent retains the full conversation context.",
+            );
+        }
+        if self.config.provider == Provider::Codex {
+            let _ = self.call(
+                "model/list",
+                json!({"limit":32,"includeHidden":false}),
+                Call::Models,
+            );
+        }
+    }
     /// Return whether a transport and initialized conversation are present.
     pub fn connected(&self) -> bool {
         self.session.is_some() && !self.conversation.is_empty()
@@ -116,6 +163,36 @@ impl Chat {
     /// Return whether cancellation is awaiting completion or escalation.
     pub fn stopping(&self) -> bool {
         self.cancelling
+    }
+
+    /// Whether startup, setting acknowledgement or cancellation needs a timed repaint.
+    pub fn has_deadline(&self) -> bool {
+        self.deadline.is_some()
+    }
+
+    /// Whether cached capabilities belong to the currently selected executable/provider.
+    pub fn controls_match(&self, config: &Config) -> bool {
+        self.config.same_process(config)
+    }
+
+    /// Apply advertised ACP choices to an idle session without submitting a prompt.
+    /// New processes are still started only by an explicit chat message.
+    pub fn configure_idle(&mut self, config: &Config) -> Result<()> {
+        if config.provider != Provider::Acp
+            || !self.connected()
+            || self.busy
+            || !self.config.same_process(config)
+        {
+            return Ok(());
+        }
+        self.config = config.clone();
+        self.settings_attempts = 0;
+        self.busy = true;
+        if let Err(error) = self.begin_turn() {
+            self.disconnect();
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Validate and submit a bounded user message, starting the configured host-scoped process
@@ -136,16 +213,22 @@ impl Chat {
             "Agent messages are limited to 32 KiB."
         );
         let bundled = launch.config.argv()?[0] == crate::bundled::AUTO_CODEX;
-        if self.session.is_some() && self.config != launch.config {
+        let reset_defaults = (self.config.model() != launch.config.model()
+            && launch.config.model().is_empty())
+            || (self.config.reasoning_effort != launch.config.reasoning_effort
+                && launch.config.reasoning_effort.is_empty());
+        if self.session.is_some() && (!self.config.same_process(&launch.config) || reset_defaults) {
             self.disconnect();
             self.notice("Agent settings changed · starting a new conversation");
         }
+        self.read_only = launch.plan.project_read_only
+            || (launch.config.provider != Provider::Acp
+                && launch.config.access() == Access::ReadOnly);
+        self.external = launch.plan.active && !self.read_only;
+        self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
+        self.config = launch.config.clone();
         if self.session.is_none() {
             self.root = launch.plan.root.clone();
-            self.read_only = launch.plan.project_read_only || launch.config.read_only;
-            self.external = launch.plan.active && !self.read_only;
-            self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
-            self.config = launch.config.clone();
             // A first SSH start may stream a large native runtime. Keep this
             // bounded separately from the ordinary protocol handshake; Stop
             // still cancels preparation through the owned process transport.
@@ -170,10 +253,14 @@ impl Chat {
             text.clone(),
         );
         self.pending = Some(text);
+        self.settings_attempts = 0;
         self.busy = true;
         self.cancelling = false;
-        if !self.conversation.is_empty() {
-            self.begin_turn()?;
+        if !self.conversation.is_empty()
+            && let Err(error) = self.begin_turn()
+        {
+            self.disconnect();
+            return Err(error);
         }
         Ok(())
     }
@@ -249,6 +336,15 @@ impl Chat {
         if !self.busy {
             return;
         }
+        if self
+            .calls
+            .values()
+            .any(|call| matches!(call, Call::Configure { .. }))
+        {
+            self.disconnect();
+            self.status = "Stopped".into();
+            return;
+        }
         self.cancelling = true;
         self.status = "Stopping…".into();
         self.deadline = Some(Instant::now() + Duration::from_secs(3));
@@ -285,20 +381,86 @@ impl Chat {
         self.deadline = None;
         self.cancelling = false;
         self.last_stderr.clear();
+        self.models.clear();
+        self.controls.clear();
+        self.model_cursors.clear();
     }
 
     fn initialize(&mut self) -> Result<()> {
         self.deadline = Some(Instant::now() + Duration::from_secs(60));
         let params = if self.config.provider == Provider::Acp {
             json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},
-                "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}})
+                "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"configOptions":{"boolean":true}}}})
         } else {
             json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}})
         };
         self.call("initialize", params, Call::Initialize)
     }
     fn begin_turn(&mut self) -> Result<()> {
+        if self.cancelling {
+            return Ok(());
+        }
+        if self.config.provider == Provider::Acp {
+            ensure!(
+                self.config
+                    .acp_options
+                    .keys()
+                    .all(|id| self.controls.iter().any(|c| c.id == *id)),
+                "Agent no longer exposes a saved option. Reset agent controls in settings before sending."
+            );
+            // Model changes may alter reasoning options. Acknowledge them first,
+            // then validate dependent choices against the returned capabilities.
+            for control in self
+                .controls
+                .iter()
+                .filter(|c| c.category == "model")
+                .chain(self.controls.iter().filter(|c| c.category != "model"))
+            {
+                let id = &control.id;
+                let Some(value) = self.config.acp_options.get(id) else {
+                    continue;
+                };
+                ensure!(
+                    control.accepts(value),
+                    "Saved agent option {id} is unavailable. Reset agent controls in settings."
+                );
+                if control.current != *value {
+                    ensure!(
+                        self.settings_attempts < controls::CONTROL_LIMIT * 2,
+                        "Agent kept changing the selected settings. No prompt was sent."
+                    );
+                    self.settings_attempts += 1;
+                    let mut params = json!({"sessionId":self.conversation});
+                    let legacy = control.legacy;
+                    let method = if legacy {
+                        params["modeId"] = value.clone();
+                        "session/set_mode"
+                    } else {
+                        params["configId"] = id.clone().into();
+                        params["value"] = value.clone();
+                        if control.boolean {
+                            params["type"] = "boolean".into();
+                        }
+                        "session/set_config_option"
+                    };
+                    self.status = "Applying agent controls…".into();
+                    self.deadline = Some(Instant::now() + Duration::from_secs(30));
+                    return self.call(
+                        method,
+                        params,
+                        Call::Configure {
+                            id: id.clone(),
+                            value: value.clone(),
+                            legacy,
+                        },
+                    );
+                }
+            }
+        }
         let Some(text) = self.pending.take() else {
+            self.busy = false;
+            self.deadline = None;
+            self.status = "Ready".into();
             return Ok(());
         };
         self.status = "Working…".into();
@@ -313,10 +475,30 @@ impl Chat {
         } else {
             let mut params =
                 json!({"threadId":self.conversation,"input":[{"type":"text","text":text}]});
+            params["approvalPolicy"] = if self.read_only {
+                "never"
+            } else {
+                self.config.approval.codex()
+            }
+            .into();
+            if !self.config.model().is_empty() {
+                params["model"] = self.config.model().into();
+            }
+            if !self.config.reasoning_effort.is_empty() {
+                params["effort"] = self.config.reasoning_effort.clone().into();
+            }
             if self.external {
                 // bwrap already enforces the project policy for this process
                 // and every child. Tell Codex to use that external sandbox.
                 params["sandboxPolicy"] = json!({"type":"externalSandbox","networkAccess":if self.network {"enabled"} else {"restricted"}});
+            } else {
+                params["sandboxPolicy"] = if self.read_only {
+                    json!({"type":"readOnly"})
+                } else if self.config.access() == Access::Full {
+                    json!({"type":"dangerFullAccess"})
+                } else {
+                    json!({"type":"workspaceWrite","writableRoots":[self.root],"networkAccess":false})
+                };
             }
             self.call("turn/start", params, Call::Turn)
         }
@@ -374,6 +556,10 @@ impl Chat {
             return Ok(());
         };
         if let Some(error) = value.get("error") {
+            if matches!(call, Call::Models) {
+                self.notice("This agent does not provide a model catalog. Enter a model ID in Model controls.");
+                return Ok(());
+            }
             // A completed turn may race its interrupt response. Keep the
             // conversation; the cancellation deadline handles an unresponsive agent.
             if matches!(call, Call::Interrupt) {
@@ -399,7 +585,19 @@ impl Chat {
                     )?;
                 } else {
                     self.send(json!({"jsonrpc":"2.0","method":"initialized","params":{}}))?;
-                    let mut params = json!({"cwd":self.root,"approvalPolicy":"on-request","sandbox":if self.read_only {"read-only"} else {"workspace-write"}});
+                    if self.config.provider == Provider::Codex {
+                        self.call(
+                            "model/list",
+                            json!({"limit":32,"includeHidden":false}),
+                            Call::Models,
+                        )?;
+                    }
+                    let access = if self.read_only {
+                        Access::ReadOnly
+                    } else {
+                        self.config.access()
+                    };
+                    let mut params = json!({"cwd":self.root,"approvalPolicy":if self.read_only {"never"} else {self.config.approval.codex()},"sandbox":access.codex()});
                     if !self.config.model().is_empty() {
                         params["model"] = self.config.model().into();
                     }
@@ -420,6 +618,9 @@ impl Chat {
                     .filter(|s| !s.is_empty() && s.len() <= 256)
                     .context("Agent returned no conversation ID")?
                     .into();
+                if self.config.provider == Provider::Acp {
+                    self.controls = controls::acp(result);
+                }
                 self.begin_turn()?;
             }
             Call::Turn => {
@@ -436,6 +637,50 @@ impl Chat {
                 }
             }
             Call::Interrupt => {}
+            Call::Models => {
+                for model in controls::models(result) {
+                    if self.models.len() >= 128 {
+                        break;
+                    }
+                    if !self.models.iter().any(|m| m.value.id == model.value.id) {
+                        self.models.push(model);
+                    }
+                }
+                if let Some(cursor) = result["nextCursor"]
+                    .as_str()
+                    .filter(|s| controls::identifier(s, false))
+                    && self.model_cursors.len() < 3
+                    && !self.model_cursors.iter().any(|s| s == cursor)
+                    && self.models.len() < 128
+                {
+                    self.model_cursors.push(cursor.into());
+                    self.call(
+                        "model/list",
+                        json!({"limit":32,"includeHidden":false,"cursor":cursor}),
+                        Call::Models,
+                    )?;
+                }
+            }
+            Call::Configure { id, value, legacy } => {
+                if self.cancelling {
+                    self.finish(false, None);
+                    return Ok(());
+                }
+                if legacy {
+                    if let Some(control) = self.controls.iter_mut().find(|c| c.id == id) {
+                        control.current = value.clone();
+                    }
+                } else {
+                    self.controls = controls::acp(result);
+                }
+                ensure!(
+                    self.controls
+                        .iter()
+                        .any(|c| c.id == id && c.current == value),
+                    "Agent did not acknowledge the selected setting. No prompt was sent."
+                );
+                self.begin_turn()?;
+            }
         }
         Ok(())
     }
@@ -536,6 +781,16 @@ impl Chat {
                 self.replace(id, Role::Tool, title, &pretty(update));
                 self.changed = true;
             }
+            "config_option_update" => {
+                self.controls = controls::acp(update);
+            }
+            "current_mode_update" => {
+                if let Some(control) = self.controls.iter_mut().find(|c| c.legacy)
+                    && control.accepts(&update["currentModeId"])
+                {
+                    control.current = update["currentModeId"].clone();
+                }
+            }
             _ => {}
         }
     }
@@ -568,6 +823,13 @@ impl Chat {
             questions: vec![],
             cancel: json!({"decision":"cancel"}),
         };
+        let permission = matches!(
+            method,
+            "item/commandExecution/requestApproval"
+                | "item/fileChange/requestApproval"
+                | "item/permissions/requestApproval"
+                | "session/request_permission"
+        );
         match method {
             "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
                 prompt.title = if method.contains("commandExecution") {
@@ -586,6 +848,17 @@ impl Chat {
                         result: json!({"decision":"decline"}),
                     },
                 ];
+                if let Some(decisions) = params["availableDecisions"].as_array() {
+                    prompt
+                        .choices
+                        .retain(|c| decisions.contains(&c.result["decision"]));
+                    if prompt.choices.is_empty() {
+                        prompt.choices.push(Choice {
+                            label: "Cancel request".into(),
+                            result: json!({"decision":"cancel"}),
+                        });
+                    }
+                }
             }
             "item/permissions/requestApproval" => {
                 prompt.cancel = json!({"permissions":{},"scope":"turn"});
@@ -657,6 +930,28 @@ impl Chat {
                 self.notice(&format!("Agent requested unsupported client method {method}. Use an agent with its own filesystem/terminal tools."));
                 return self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"RODE does not provide client-side filesystem, terminal, authentication, or custom tool RPCs"}}));
             }
+        }
+        if permission
+            && (self.config.approval == Approval::Never
+                || self.read_only
+                || self.cancelling
+                || !self.busy)
+        {
+            let denied = if method == "session/request_permission" {
+                params["options"]
+                    .as_array()
+                    .and_then(|options| options.iter().find(|o| o["kind"] == "reject_once"))
+                    .and_then(|o| o["optionId"].as_str())
+                    .map(|id| json!({"outcome":{"outcome":"selected","optionId":id}}))
+                    .unwrap_or(prompt.cancel)
+            } else if method == "item/permissions/requestApproval" {
+                prompt.cancel
+            } else {
+                json!({"decision":if params["availableDecisions"].as_array().is_some_and(|choices| !choices.contains(&json!("decline"))) {"cancel"} else {"decline"}})
+            };
+            self.send(json!({"jsonrpc":"2.0","id":id,"result":denied}))?;
+            self.notice("Permission request denied by the selected agent access/approval policy.");
+            return Ok(());
         }
         ensure!(self.prompts.len() < 16, "Too many pending agent requests.");
         ensure!(

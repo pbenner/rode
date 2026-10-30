@@ -58,6 +58,13 @@ def rpc(root):
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
+def agent_preferences(path):
+    """Read the fixture's one workspace profile from the shared RON string map."""
+    match = re.search(r'"agent_preferences"\s*:\s*("(?:\\.|[^"\\])*")', path.read_text())
+    assert match, "No saved agent settings"
+    return next(iter(json.loads(json.loads(match[1])).values()))
+
+
 def sent(root, message):
     return any(
         m.get("method") in ("turn/start", "session/prompt")
@@ -122,6 +129,17 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             screenshot(window, "conversation-phosphor.png")
             theme("carbon")
             screenshot(window, "conversation-carbon.png")
+            click(1090, 752)
+            screenshot(window, "codex-model-controls.png")
+            click(1090, 633)  # Advertised Fixture Deep model, not a hard-coded product catalog.
+            wait_for(
+                lambda: agent_preferences(preferences).get("model") == "fixture-deep",
+                "Selected model was not persisted",
+            )
+            key("Escape")
+            click(1280, 752)
+            screenshot(window, "codex-access-controls.png")
+            key("Escape")
             send(root, "approve")
             assert not (root / "approved.txt").exists()
             screenshot(window, "permission.png")
@@ -205,6 +223,28 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             click(1229, 183)
             send(root, "acp-provider")
             assert any(m.get("method") == "session/new" for m in rpc(root))
+            click(1180, 752)
+            screenshot(window, "acp-model-controls.png")
+            key("Escape")
+            click(1300, 752)
+            screenshot(window, "acp-permission-controls.png")
+            click(1007, 557)  # An agent-advertised boolean, applied without another message.
+            wait_for(
+                lambda: (
+                    agent_preferences(preferences).get("acp_options", {}).get("automatic") is True
+                ),
+                "ACP option was not saved",
+            )
+            wait_for(
+                lambda: any(
+                    m.get("method") == "session/set_config_option"
+                    and m["params"].get("configId") == "automatic"
+                    and m["params"].get("type") == "boolean"
+                    for m in rpc(root)
+                ),
+                "ACP option was not sent to the running agent",
+            )
+            key("Escape")
             x11.XResizeWindow(display, window, 850, 560)
             x11.XFlush(display)
             time.sleep(0.4)
@@ -216,9 +256,79 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             time.sleep(0.3)
             send(root, "new-acp-conversation")
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
+            # The native permission selectors persist choices and affect the
+            # next Codex turn while the existing outer sandbox remains active.
+            click(1150, 183)
+            click(1160, 218)
+            click(1229, 183)  # Hide the automatically opened provider settings.
+            click(1280, 752)
+            click(1090, 645)  # Never ask.
+            wait_for(
+                lambda: agent_preferences(preferences).get("approval") == "never",
+                "Approval policy was not persisted",
+            )
+            click(1280, 752)  # Selecting a policy closes the native menu.
+            click(1090, 557)  # Full access inside the active project sandbox.
+            wait_for(
+                lambda: agent_preferences(preferences).get("access") == "full",
+                "Tool access was not persisted",
+            )
+            screenshot(window, "selected-access-controls.png")
+            key("Escape")
+            (root / "approved.txt").unlink(missing_ok=True)
+            send(root, "approve")
+            wait_for(
+                lambda: any(
+                    m.get("id") == 400 and m.get("result", {}).get("decision") == "decline"
+                    for m in rpc(root)
+                ),
+                "Never-ask policy did not decline the tool request",
+            )
+            assert not (root / "approved.txt").exists()
+            last = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
+            assert last["params"]["model"] == "fixture-deep"
+            assert last["params"]["approvalPolicy"] == "never"
+            if "[Sandbox]" in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True):
+                assert last["params"]["sandboxPolicy"]["type"] == "externalSandbox"
+            # History is explicit host work; opening it must not send a model prompt.
+            prompts_before = sum(m.get("method") == "turn/start" for m in rpc(root))
+            click(1340, 257)
+            wait_for(
+                lambda: any(m.get("method") == "thread/list" for m in rpc(root)),
+                "History did not list saved conversations",
+            )
+            time.sleep(0.3)
+            screenshot(window, "history-list.png")
+            assert sum(m.get("method") == "turn/start" for m in rpc(root)) == prompts_before
+            x11.XResizeWindow(display, window, 850, 560)
+            x11.XFlush(display)
+            time.sleep(0.3)
+            screenshot(window, "minimum-history.png")
+            x11.XResizeWindow(display, window, 1380, 900)
+            x11.XFlush(display)
+            time.sleep(0.3)
+            click(1200, 425)  # Load older metadata without prompting the model.
+            wait_for(
+                lambda: sum(m.get("method") == "thread/list" for m in rpc(root)) == 2,
+                "History did not load another page",
+            )
+            click(1200, 308)
+            text("saved-2")
+            time.sleep(0.2)
+            screenshot(window, "history-filtered.png")
+            click(1200, 363)  # The filter exposes the older conversation first.
+            wait_for(
+                lambda: any(m.get("method") == "thread/resume" for m in rpc(root)),
+                "History did not restore the selected conversation",
+            )
+            time.sleep(0.3)
+            screenshot(window, "history-restored.png")
+            send(root, "continue-saved-work")
+            last = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
+            assert last["params"]["threadId"] == "saved-2"
             close_window(window, process)
             print(
-                "Agent UI: chat, settings persistence, context, approvals, Stop, themes, and unsaved buffers passed."
+                "Agent UI: history restore, model/access selectors, saved policies, chat context, approvals, Stop, themes, and unsaved buffers passed."
             )
         except Exception:
             if window is not None and process.poll() is None:

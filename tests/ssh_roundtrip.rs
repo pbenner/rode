@@ -1072,7 +1072,7 @@ fn native_terminal_start(
 }
 
 fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
-    use rode::agent::{Config, Launch, Provider, protocol::Chat};
+    use rode::agent::{Access, Approval, Config, Launch, Provider, protocol::Chat};
     use std::{os::unix::fs::PermissionsExt, sync::Arc};
     let root = std::path::Path::new(&plan.root);
     let program = root.join("agent 'quoted'.py");
@@ -1080,7 +1080,7 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(root.parent().unwrap().join("private.txt"), "hidden").unwrap();
     for provider in [Provider::Codex, Provider::Acp] {
-        let launch = Launch {
+        let mut launch = Launch {
             config: Config {
                 provider,
                 codex: program.to_string_lossy().into(),
@@ -1121,6 +1121,76 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
         chat.cancel();
         wait_agent(&mut chat, |c| !c.busy);
         assert!(chat.connected());
+        launch.config.approval = Approval::Never;
+        launch.config.access = Access::Full;
+        if provider == Provider::Acp {
+            launch
+                .config
+                .acp_options
+                .insert("model".into(), serde_json::json!("fixture-deep"));
+            launch
+                .config
+                .acp_options
+                .insert("mode".into(), serde_json::json!("code"));
+        } else {
+            launch.config.model = "fixture-deep".into();
+            launch.config.reasoning_effort = "high".into();
+        }
+        std::fs::remove_file(root.join("approved.txt")).unwrap();
+        let completed = chat.completed;
+        chat.submit(launch.clone(), "approve".into(), Arc::new(|| {}))
+            .unwrap();
+        wait_agent(&mut chat, |c| c.completed > completed);
+        assert!(chat.prompts.is_empty());
+        assert!(!root.join("approved.txt").exists());
+        if provider == Provider::Acp {
+            assert!(
+                chat.controls
+                    .iter()
+                    .any(|c| c.id == "model" && c.current == "fixture-deep")
+            );
+        } else {
+            let log = std::fs::read_to_string(root.join("agent-rpc.jsonl")).unwrap();
+            let turn = log
+                .lines()
+                .rev()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|v| v["method"] == "turn/start")
+                .unwrap();
+            assert_eq!(turn["params"]["model"], "fixture-deep");
+            assert_eq!(turn["params"]["approvalPolicy"], "never");
+            if plan.active {
+                assert_eq!(turn["params"]["sandboxPolicy"]["type"], "externalSandbox");
+            }
+        }
+        // History opens a separate channel on the same authenticated master.
+        // Restoring adopts that channel and applies this project's current grants.
+        let mut browser =
+            rode::agent::history::Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        let until = Instant::now() + Duration::from_secs(15);
+        while browser.busy {
+            browser.poll();
+            assert!(Instant::now() < until, "{}", browser.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            browser.entries.iter().any(|e| e.id == "saved-1"),
+            "{}",
+            browser.status
+        );
+        browser.resume("saved-1").unwrap();
+        while browser.busy {
+            browser.poll();
+            assert!(Instant::now() < until, "{}", browser.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        chat.restore(
+            browser
+                .take_restored()
+                .unwrap_or_else(|| panic!("{}", browser.status)),
+        );
+        assert!(chat.messages.iter().any(|m| m.text == "Earlier answer 1"));
+        assert!(remote.connected());
         std::fs::remove_file(root.join("agent-child.pid")).unwrap();
         chat.submit(launch, "wait".into(), Arc::new(|| {})).unwrap();
         wait_agent(&mut chat, |_| {

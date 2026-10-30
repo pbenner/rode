@@ -202,31 +202,35 @@ fn codex_turn(program: &str, isolated: bool) {
     }
     let port = fs::read_to_string(temp.path().join("port")).unwrap();
     let mut chat = Chat::default();
-    chat.submit(
-        Launch {
-            config: Config {
-                provider: Provider::Local,
-                codex: wrapper.to_string_lossy().into(),
-                local_model: "fixture-local-model".into(),
-                local_url: format!("http://127.0.0.1:{port}/v1"),
+    let launch = Launch {
+        config: Config {
+            provider: Provider::Local,
+            codex: wrapper.to_string_lossy().into(),
+            local_model: "fixture-local-model".into(),
+            local_url: format!("http://127.0.0.1:{port}/v1"),
+            access: rode::agent::Access::Full,
+            approval: rode::agent::Approval::Never,
+            reasoning_effort: "high".into(),
+            ..Default::default()
+        },
+        plan: sandbox::prepare(
+            root.to_str().unwrap(),
+            &sandbox::Options {
+                enabled: isolated,
+                read_only: vec![program.into()],
+                overrides: std::collections::BTreeMap::from([(
+                    "~/.codex".into(),
+                    sandbox::Access::Hidden,
+                )]),
                 ..Default::default()
             },
-            plan: sandbox::prepare(
-                root.to_str().unwrap(),
-                &sandbox::Options {
-                    enabled: isolated,
-                    read_only: vec![program.into()],
-                    overrides: std::collections::BTreeMap::from([(
-                        "~/.codex".into(),
-                        sandbox::Access::Hidden,
-                    )]),
-                    ..Default::default()
-                },
-            )
-            .unwrap(),
-            remote: None,
-            python: "auto".into(),
-        },
+        )
+        .unwrap(),
+        remote: None,
+        python: "auto".into(),
+    };
+    chat.submit(
+        launch.clone(),
         "Reply once without tools.".into(),
         Arc::new(|| {}),
     )
@@ -261,4 +265,47 @@ fn codex_turn(program: &str, isolated: bool) {
             .unwrap();
     assert_eq!(request["model"], "fixture-local-model");
     assert_eq!(request["stream"], true);
+    // History discovery and replay use the real on-disk app-server rollouts,
+    // including threads created with source appServer, without another model call.
+    drop(chat);
+    let mut browser = rode::agent::history::Browser::open(launch, Arc::new(|| {})).unwrap();
+    let end = Instant::now() + Duration::from_secs(30);
+    while browser.busy {
+        browser.poll();
+        assert!(Instant::now() < end, "{}", browser.status);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(browser.entries.len(), 1, "{}", browser.status);
+    let id = browser.entries[0].id.clone();
+    browser.resume(&id).unwrap();
+    while browser.busy {
+        browser.poll();
+        assert!(Instant::now() < end, "{}", browser.status);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut restored = Chat::default();
+    restored.restore(
+        browser
+            .take_restored()
+            .unwrap_or_else(|| panic!("{}", browser.status)),
+    );
+    assert!(restored.connected());
+    assert!(
+        restored
+            .messages
+            .iter()
+            .any(|m| m.role == Role::User && m.text == "Reply once without tools.")
+    );
+    assert!(
+        restored
+            .messages
+            .iter()
+            .any(|m| m.role == Role::Assistant && m.text == "Local Responses fixture reply."),
+        "{:?}",
+        restored
+            .messages
+            .iter()
+            .map(|m| &m.text)
+            .collect::<Vec<_>>()
+    );
 }

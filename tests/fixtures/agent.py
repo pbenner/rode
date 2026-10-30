@@ -10,10 +10,64 @@ from pathlib import Path
 
 root = Path.cwd()
 acp = False
+thread_id = "thread-1"
+session_id = "session-1"
 counter = 0
 pending = None
 waiting = None
 child = None
+option_values = {"model": "fixture-fast", "mode": "ask", "effort": "low", "automatic": False}
+
+
+def saved(identity):
+    """Agent-owned history, with a deliberately foreign row to check client isolation."""
+    return {
+        "id": identity,
+        "sessionId": identity,
+        "cwd": str(root),
+        "modelProvider": "rode_local"
+        if any("model_providers.rode_local" in a for a in sys.argv)
+        else "openai",
+        "name": "Saved conversation " + identity,
+        "title": "Saved conversation " + identity,
+        "preview": "Earlier work on this project",
+        "updatedAt": 1700000000,
+        "status": {"type": "idle"},
+    }
+
+
+def controls():
+    """Advertise dependent model/effort choices and a permission mode without inference."""
+    options = []
+    for name, category, values in [
+        ("model", "model", ["fixture-fast", "fixture-deep"]),
+        ("mode", "mode", ["ask", "code"]),
+        (
+            "effort",
+            "thought_level",
+            ["low", "high"] if option_values["model"] == "fixture-deep" else ["low"],
+        ),
+    ]:
+        options.append(
+            {
+                "id": name,
+                "name": name.title(),
+                "category": category,
+                "type": "select",
+                "currentValue": option_values[name],
+                "options": [{"value": value, "name": value} for value in values],
+            }
+        )
+    options.append(
+        {
+            "id": "automatic",
+            "name": "Automatic mode",
+            "category": "mode",
+            "type": "boolean",
+            "currentValue": option_values["automatic"],
+        }
+    )
+    return options
 
 
 def metadata(name, text, append=False):
@@ -41,7 +95,7 @@ def reply(text):
         notify(
             "session/update",
             {
-                "sessionId": "session-1",
+                "sessionId": session_id,
                 "update": {
                     "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": text},
@@ -51,7 +105,7 @@ def reply(text):
     else:
         notify(
             "item/agentMessage/delta",
-            {"threadId": "thread-1", "itemId": f"reply-{counter}", "delta": text},
+            {"threadId": thread_id, "itemId": f"reply-{counter}", "delta": text},
         )
 
 
@@ -68,7 +122,7 @@ def finish(text, interrupted=False):
         notify(
             "turn/completed",
             {
-                "threadId": "thread-1",
+                "threadId": thread_id,
                 "turn": {
                     "id": f"turn-{counter}",
                     "status": "interrupted" if interrupted else "completed",
@@ -88,7 +142,12 @@ try:
             acp = "protocolVersion" in params
             response(
                 request,
-                {"protocolVersion": 1, "agentCapabilities": {}}
+                {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {}
+                    if "--no-history" in sys.argv
+                    else {"loadSession": True, "sessionCapabilities": {"list": {}}},
+                }
                 if acp
                 else {"userAgent": "fixture"},
             )
@@ -105,7 +164,150 @@ try:
                     }
                 ),
             )
-            response(request, {"sessionId": "session-1"} if acp else {"thread": {"id": "thread-1"}})
+            result = {"thread": {"id": thread_id}}
+            if acp:
+                result = {"sessionId": session_id}
+                if "--legacy-controls" in sys.argv:
+                    result["modes"] = {
+                        "currentModeId": option_values["mode"],
+                        "availableModes": [{"id": mode, "name": mode} for mode in ["ask", "code"]],
+                    }
+                else:
+                    result["configOptions"] = controls()
+            response(request, result)
+        elif method in ("thread/list", "session/list"):
+            assert params["cwd"] == str(root)
+            if params.get("cursor"):
+                rows = [saved("saved-2")]
+            else:
+                foreign = dict(saved("foreign"), cwd=str(root.parent))
+                rows = [foreign, saved("saved-1"), saved("saved-1")]
+            response(
+                request,
+                {
+                    "sessions" if acp else "data": rows,
+                    "nextCursor": None if params.get("cursor") else "history-page-2",
+                },
+            )
+        elif method == "thread/read":
+            row = saved(params["threadId"])
+            if "--wrong-history-root" in sys.argv:
+                row["cwd"] = str(root.parent)
+            response(request, {"thread": row})
+        elif method == "thread/resume":
+            thread_id = params["threadId"]
+            response(request, {"thread": saved(thread_id)})
+        elif method == "thread/turns/list":
+            assert params["threadId"] == thread_id
+            n = 1 if params.get("cursor") else 2
+            response(
+                request,
+                {
+                    "data": [
+                        {
+                            "id": f"saved-turn-{n}",
+                            "items": [
+                                {
+                                    "id": f"user-{n}",
+                                    "type": "userMessage",
+                                    "content": [{"type": "text", "text": f"Earlier question {n}"}],
+                                },
+                                {
+                                    "id": f"tool-{n}",
+                                    "type": "commandExecution",
+                                    "command": "pwd",
+                                    "aggregatedOutput": str(root),
+                                },
+                                {
+                                    "id": f"agent-{n}",
+                                    "type": "agentMessage",
+                                    "text": f"Earlier answer {n}",
+                                },
+                            ],
+                        }
+                    ],
+                    "nextCursor": None if params.get("cursor") else "older-turn",
+                },
+            )
+        elif method == "session/load":
+            session_id = params["sessionId"]
+            if "--wait-history" in sys.argv:
+                continue
+            for n in (1, 2):
+                for kind, content in (
+                    ("user_message_chunk", f"Earlier question {n}"),
+                    ("agent_message_chunk", f"Earlier answer {n}"),
+                ):
+                    notify(
+                        "session/update",
+                        {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": kind,
+                                "messageId": f"{kind}-{n}",
+                                "content": {"type": "text", "text": content},
+                            },
+                        },
+                    )
+            response(request, {"configOptions": controls()})
+        elif method == "model/list":
+            models = (
+                []
+                if params.get("cursor")
+                else [
+                    {
+                        "id": "fixture-fast",
+                        "model": "fixture-fast",
+                        "displayName": "Fixture Fast",
+                        "isDefault": True,
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "low", "description": "Less reasoning"}
+                        ],
+                    },
+                    {"id": "hidden", "model": "hidden", "hidden": True},
+                ]
+            )
+            if params.get("cursor"):
+                models = [
+                    {
+                        "id": "fixture-deep",
+                        "model": "fixture-deep",
+                        "displayName": "Fixture Deep",
+                        "supportedReasoningEfforts": [
+                            {"reasoningEffort": "low"},
+                            {"reasoningEffort": "high"},
+                        ],
+                    }
+                ]
+            response(
+                request,
+                {"data": models, "nextCursor": None if params.get("cursor") else "second-page"},
+            )
+        elif method == "session/set_config_option":
+            name = params["configId"]
+            valid = next(option for option in controls() if option["id"] == name)
+            if "--wait-controls" in sys.argv:
+                continue
+            if valid["type"] == "boolean":
+                assert params["type"] == "boolean" and isinstance(params["value"], bool)
+            else:
+                assert params["value"] in [option["value"] for option in valid["options"]]
+            if "--ignore-controls" not in sys.argv:
+                option_values[name] = params["value"]
+            response(request, {"configOptions": controls()})
+        elif method == "session/set_mode":
+            option_values["mode"] = params["modeId"]
+            notify(
+                "session/update",
+                {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "current_mode_update",
+                        "currentModeId": params["modeId"],
+                    },
+                },
+            )
+            response(request, {})
         elif method in ("turn/start", "session/prompt"):
             counter += 1
             waiting = request
@@ -132,8 +334,8 @@ try:
                         if acp
                         else "item/commandExecution/requestApproval",
                         "params": {
-                            "sessionId": "session-1",
-                            "threadId": "thread-1",
+                            "sessionId": session_id,
+                            "threadId": thread_id,
                             "turnId": f"turn-{counter}",
                             "itemId": "tool-1",
                             "command": "create approved.txt",
@@ -152,7 +354,7 @@ try:
                         "id": 401,
                         "method": "item/tool/requestUserInput",
                         "params": {
-                            "threadId": "thread-1",
+                            "threadId": thread_id,
                             "turnId": f"turn-{counter}",
                             "itemId": "question-1",
                             "isBlocking": True,
