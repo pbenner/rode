@@ -144,9 +144,35 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
                 styled["params"].get("personality").is_none(),
                 "Do not alter a vendor operating-mode selector"
             );
+            for (index, message) in ["continue", "one more follow-up"].iter().enumerate() {
+                submit(&mut chat, launch.clone(), message);
+                wait(&mut chat, |c| c.completed == 3 + index as u64);
+                let calls = log(&root);
+                let follow_up = calls
+                    .iter()
+                    .rev()
+                    .find(|v| v["method"] == first["method"])
+                    .unwrap();
+                assert_eq!(follow_up["params"][field][0]["text"], *message);
+                assert_eq!(follow_up["params"][field].as_array().unwrap().len(), 2);
+                assert_eq!(follow_up["params"][field][1]["text"], hint);
+                for key in [
+                    "model",
+                    "effort",
+                    "approvalPolicy",
+                    "sandboxPolicy",
+                    "threadId",
+                    "sessionId",
+                ] {
+                    assert_eq!(
+                        follow_up["params"][key], styled["params"][key],
+                        "{provider:?}: {key}"
+                    );
+                }
+            }
             launch.config.personality = Personality::Default;
             submit(&mut chat, launch.clone(), "normal again");
-            wait(&mut chat, |c| c.completed == 3);
+            wait(&mut chat, |c| c.completed == 5);
             let calls = log(&root);
             let reset = calls
                 .iter()
@@ -169,11 +195,17 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
                     .filter(|m| m.role == Role::User)
                     .map(|m| m.text.as_str())
                     .collect::<Vec<_>>(),
-                ["first", "approve", "normal again"]
+                [
+                    "first",
+                    "approve",
+                    "continue",
+                    "one more follow-up",
+                    "normal again"
+                ]
             );
             chat.disconnect();
             submit(&mut chat, launch, "fresh");
-            wait(&mut chat, |c| c.completed == 4);
+            wait(&mut chat, |c| c.completed == 6);
             let calls = log(&root);
             let fresh = calls
                 .iter()

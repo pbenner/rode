@@ -10,10 +10,13 @@ root = Path(sys.argv[1])
 
 
 class Handler(BaseHTTPRequestHandler):
+    sequence = 0
+
     def log_message(self, *_args):
         pass
 
     def do_POST(self):
+        Handler.sequence += 1
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         (root / "request.json").write_bytes(body)
         self.send_response(200)
@@ -21,14 +24,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         item = {
-            "id": "msg_fixture",
+            "id": f"msg_fixture_{Handler.sequence}",
             "type": "message",
             "role": "assistant",
             "status": "completed",
             "content": [{"type": "output_text", "text": "Local Responses fixture reply."}],
         }
         response = {
-            "id": "resp_fixture",
+            "id": f"resp_fixture_{Handler.sequence}",
             "object": "response",
             "created_at": 1,
             "status": "completed",

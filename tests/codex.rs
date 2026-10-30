@@ -162,6 +162,54 @@ fn installed_codex_completes_a_turn_against_a_loopback_responses_fixture() {
 }
 
 fn codex_turn(program: &str, isolated: bool) {
+    fn finish_turn(chat: &mut Chat) {
+        let until = Instant::now() + Duration::from_secs(30);
+        while chat.busy {
+            chat.poll();
+            assert!(
+                Instant::now() < until,
+                "Codex turn timed out: {}",
+                chat.status
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            chat.status,
+            "Ready",
+            "{}",
+            chat.messages
+                .iter()
+                .map(|m| m.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    fn check_latest_prompt(directory: &std::path::Path, task: &str) {
+        let request: Value =
+            serde_json::from_str(&fs::read_to_string(directory.join("request.json")).unwrap())
+                .unwrap();
+        assert_eq!(request["model"], "fixture-local-model");
+        assert_eq!(request["stream"], true);
+        // Looking anywhere in history could pass with only the first turn's
+        // hint. Check the most recent user input that actually reaches a model.
+        let latest = request["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|v| v["role"] == "user")
+            .unwrap();
+        let text = latest["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(task), "{latest}");
+        assert!(text.contains("name=\"jackson_lamb\""), "{latest}");
+        assert_eq!(text.matches("<rode_response_style ").count(), 1, "{latest}");
+    }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
     fs::create_dir(&root).unwrap();
@@ -236,41 +284,26 @@ fn codex_turn(program: &str, isolated: bool) {
         Arc::new(|| {}),
     )
     .unwrap();
-    let until = Instant::now() + Duration::from_secs(30);
-    while chat.busy {
-        chat.poll();
-        assert!(
-            Instant::now() < until,
-            "Codex turn timed out: {}",
-            chat.status
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(
-        chat.status,
-        "Ready",
-        "{}",
-        chat.messages
-            .iter()
-            .map(|m| m.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    finish_turn(&mut chat);
     assert!(
         chat.messages
             .iter()
             .any(|m| m.role == Role::Assistant && m.text == "Local Responses fixture reply.")
     );
-    let request: Value =
-        serde_json::from_str(&fs::read_to_string(temp.path().join("request.json")).unwrap())
+    check_latest_prompt(temp.path(), "Reply once without tools.");
+    for task in [
+        "Continue without tools.",
+        "One more follow-up without tools.",
+    ] {
+        chat.submit(launch.clone(), task.into(), Arc::new(|| {}))
             .unwrap();
-    assert_eq!(request["model"], "fixture-local-model");
-    assert_eq!(request["stream"], true);
-    assert!(request["input"].to_string().contains("rode_response_style"));
+        finish_turn(&mut chat);
+        check_latest_prompt(temp.path(), task);
+    }
     // History discovery and replay use the real on-disk app-server rollouts,
     // including threads created with source appServer, without another model call.
     drop(chat);
-    let mut browser = rode::agent::history::Browser::open(launch, Arc::new(|| {})).unwrap();
+    let mut browser = rode::agent::history::Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
     let end = Instant::now() + Duration::from_secs(30);
     while browser.busy {
         browser.poll();
@@ -320,4 +353,10 @@ fn codex_turn(program: &str, isolated: bool) {
             .map(|m| &m.text)
             .collect::<Vec<_>>()
     );
+    let task = "Continue the restored conversation without tools.";
+    restored
+        .submit(launch, task.into(), Arc::new(|| {}))
+        .unwrap();
+    finish_turn(&mut restored);
+    check_latest_prompt(temp.path(), task);
 }

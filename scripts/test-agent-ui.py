@@ -47,6 +47,14 @@ def window_for(process):
             time.sleep(0.8)
             x11.XSetInputFocus(display, window, 1, 0)
             x11.XFlush(display)
+
+            # The project banner moves the chat header. Wait for preparation
+            # before clicking its controls, especially during parallel builds.
+            def project_ready():
+                info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                return "project" in info and "[Opening project]" not in info
+
+            wait_for(project_ready, "Project did not finish preparing before chat input")
             return window
         assert process.poll() is None, "RODE exited before opening a window"
         time.sleep(0.05)
@@ -177,12 +185,15 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             send(root, "approve")
             selected_turn = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert selected_turn["params"]["effort"] == "high"
+            assert selected_turn["params"]["input"][1] == styled["params"]["input"][1]
             assert not (root / "approved.txt").exists()
             screenshot(window, "permission.png")
             click(1047, 371)  # Allow once, after the visible command and Details.
             wait_for(lambda: (root / "approved.txt").exists(), "Approval was not delivered")
             time.sleep(0.3)
             send(root, "wait")
+            follow_up = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
+            assert follow_up["params"]["input"][1] == styled["params"]["input"][1]
             wait_for(lambda: (root / "agent-child.pid").exists(), "Long task did not start")
             click(1070, 840)  # Stop, without interrupting the project terminal.
             wait_for(

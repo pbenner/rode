@@ -69,8 +69,15 @@ fn log(root: &Path) -> Vec<Value> {
 #[test]
 fn both_protocols_list_without_inference_filter_projects_page_and_resume_in_place() {
     for provider in [Provider::Codex, Provider::Acp] {
-        for isolated in [false, true] {
-            let (temp, mut launch) = fixture(provider, isolated);
+        for (requested, unavailable) in [(false, false), (true, false), (true, true)] {
+            let (temp, mut launch) = fixture(provider, requested && !unavailable);
+            if unavailable {
+                // Exercise requested-but-inactive fallback even on hosts where
+                // the real probe succeeds. Do not fabricate an active sandbox.
+                launch.plan.requested = true;
+                launch.plan.reason = "Sandbox unavailable (fixture)".into();
+            }
+            let active = launch.plan.active;
             launch.config.access = Access::Full;
             launch.config.approval = Approval::Never;
             let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
@@ -152,7 +159,7 @@ fn both_protocols_list_without_inference_filter_projects_page_and_resume_in_plac
                 assert_eq!(resume["params"]["excludeTurns"], true);
                 assert_eq!(
                     prompt["params"]["sandboxPolicy"]["type"],
-                    if isolated {
+                    if active {
                         "externalSandbox"
                     } else {
                         "dangerFullAccess"
