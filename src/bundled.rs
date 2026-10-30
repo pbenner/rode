@@ -23,7 +23,7 @@ use std::{
     fs,
     io::Read,
     os::unix::{
-        fs::{MetadataExt, PermissionsExt},
+        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         process::CommandExt,
     },
     path::{Path, PathBuf},
@@ -145,9 +145,18 @@ fn read_release(directory: &Path) -> Result<Arc<Release>> {
         metadata.is_dir() && protected(&metadata),
         "Unsafe Codex runtime directory"
     );
-    let file = crate::persistence::open_regular(&directory.join("manifest.json"), false)?;
+    // The shared config reader intentionally follows symlinks. Runtime pins
+    // must not: reject the final symlink atomically when opening, then check
+    // type/ownership/permissions on that same descriptor. NONBLOCK prevents a
+    // substituted FIFO from waiting for a peer before its type is checked.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(directory.join("manifest.json"))
+        .context("Cannot safely open Codex runtime manifest")?;
+    let metadata = file.metadata()?;
     ensure!(
-        protected(&file.metadata()?),
+        metadata.is_file() && protected(&metadata),
         "Unsafe Codex runtime manifest"
     );
     let mut raw = String::new();
@@ -496,11 +505,24 @@ mod tests {
         fs::write(&path, PIN).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_release(root.path()).is_ok());
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+        assert!(read_release(&alias).is_err());
+        for mode in [0o664, 0o646, 0o666] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            assert!(read_release(root.path()).is_err(), "mode {mode:o}");
+        }
+        fs::remove_file(&path).unwrap();
+        let target = root.path().join("other.json");
+        fs::write(&target, PIN).unwrap();
+        // The target must otherwise be safe: relying on the process umask can
+        // mask a missing symlink check by failing the permission check instead.
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
         assert!(read_release(root.path()).is_err());
         fs::remove_file(&path).unwrap();
-        fs::write(root.path().join("other.json"), PIN).unwrap();
-        std::os::unix::fs::symlink(root.path().join("other.json"), &path).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         assert!(read_release(root.path()).is_err());
     }
 
