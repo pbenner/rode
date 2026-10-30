@@ -6,6 +6,12 @@ rust-version = "1.88"
 license = "MIT"
 description = "Native persistent PTY service for the RODE editor"
 repository = "https://github.com/pbenner/rode"
+autobins = false
+
+[features]
+# The editor package supplies the installed rode-sessiond frontend. This separate
+# target keeps static helper builds independent of the desktop dependency graph.
+standalone = []
 
 [dependencies]
 anyhow = "1"
@@ -16,5 +22,6 @@ serde_json = "1"
 vt100 = "0.16"
 
 [[bin]]
-name = "rode-sessiond"
+name = "rode-sessiond-standalone"
 path = "src/main.rs"
+required-features = ["standalone"]

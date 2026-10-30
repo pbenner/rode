@@ -12,6 +12,7 @@ use crate::agent::{
 use serde_json::json;
 mod controls;
 mod history;
+mod runtime;
 
 pub(super) struct Agents {
     pub chat: Chat,
@@ -30,6 +31,7 @@ pub(super) struct Agents {
     browser: Option<agent::history::Browser>,
     history_open: bool,
     history_filter: String,
+    runtime: runtime::Runtime,
 }
 impl Agents {
     pub(super) fn load(storage: Option<&dyn eframe::Storage>) -> Self {
@@ -55,6 +57,7 @@ impl Agents {
             browser: None,
             history_open: false,
             history_filter: String::new(),
+            runtime: runtime::Runtime::default(),
             local_root: std::env::current_dir()
                 .unwrap_or_else(|_| files::expand_home("~"))
                 .to_string_lossy()
@@ -126,8 +129,10 @@ impl EditorApp {
     }
 
     pub(super) fn poll_agents(&mut self, ctx: &egui::Context) {
+        self.agents.runtime.poll();
         let (_, _, key) = self.agent_location();
         if self.agents.key != key {
+            self.agents.runtime.reset();
             self.agents.browser = None;
             self.agents.history_open = false;
             self.agents.history_filter.clear();
@@ -188,6 +193,7 @@ impl EditorApp {
     }
 
     pub(super) fn stop_project_agent(&mut self) {
+        self.agents.runtime.reset();
         self.agents.browser = None;
         self.agents.history_open = false;
         if self.agents.chat.connected() || self.agents.chat.busy {
@@ -196,6 +202,15 @@ impl EditorApp {
                 "Project session changed. The next message starts a new agent conversation.",
             );
         }
+    }
+
+    /// Clean exit lets owned setup workers release temporary files and locks.
+    pub(super) fn cancel_agent_installation(&self) {
+        self.agents.runtime.cancel_all();
+    }
+
+    pub(super) fn agent_installation_pending(&self) -> bool {
+        self.agents.runtime.pending()
     }
 
     pub(super) fn persist_agent_preferences(
@@ -263,7 +278,14 @@ impl EditorApp {
         let mut save = false;
         let mut answer = None;
         let mut history_action = history::Action::default();
+        let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
         let agents = &mut self.agents;
+        let installing = agents.runtime.installing();
+        let install_enabled = !offline
+            && !modal
+            && !agents.chat.busy
+            && matches!(agents.config.codex.trim(), "" | "auto" | "codex")
+            && std::env::var_os("RODE_CODEX_BUNDLE").is_none();
         let before = agents.config.clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(content));
@@ -308,7 +330,7 @@ impl EditorApp {
                             }
                         } else {
                             ui.label("Codex executable (auto: discover)");
-                            ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Install the optional rode-codex package or use an installed Codex. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
+                            ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Use Install Codex below, the optional rode-codex package or an installed executable. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
                             if agents.config.provider == Provider::Local {
                                 ui.label("Local model API base URL");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048)).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");
@@ -318,13 +340,14 @@ impl EditorApp {
                                 ui.label("Model (blank: Codex default)");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.model).desired_width(f32::INFINITY).char_limit(256));
                             }
+                            agents.runtime.ui(ui, remote.as_ref(), install_enabled);
                         }
                     });
                     ui.label(RichText::new("Settings are saved for this project. Model and Access controls are below. Executable/provider changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled(!offline,egui::Button::new("History").small().selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
+                if ui.add_enabled(!offline && !installing,egui::Button::new("History").small().selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
                     agents.history_open = !agents.history_open;
                     if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
                 }
@@ -366,12 +389,16 @@ impl EditorApp {
                 });
             }
             egui::ScrollArea::vertical().id_salt("agent-transcript").stick_to_bottom(true).auto_shrink([false,false]).max_height(ui.available_height().max(1.)).show(ui,|ui| {
+                if agents.config.provider != Provider::Acp && !agents.settings
+                    && (agents.chat.messages.is_empty() || agents.runtime.started()) {
+                    agents.runtime.ui(ui, remote.as_ref(), install_enabled);
+                }
                 if agents.chat.messages.is_empty() {
                     ui.add_space(8.);
                     ui.label(RichText::new("Work on this project with an agent").strong());
                     ui.add(egui::Label::new("Ask a question, request a change, or investigate an issue. The agent works in the folder above.").wrap());
                     if agents.config.provider == Provider::Local { ui.add(egui::Label::new("Start Ollama or a compatible local server and select an installed model in settings.").wrap()); }
-                    else if agents.config.provider == Provider::Codex { ui.add(egui::Label::new("Use the optional rode-codex package or an installed Codex. Authenticate on the project host before sending a message.").wrap()); }
+                    else if agents.config.provider == Provider::Codex { ui.add(egui::Label::new("Install Codex above or use an existing executable. Authenticate on the project host before sending a message.").wrap()); }
                     else { ui.add(egui::Label::new("Install and authenticate your agent on this host before sending a message.").wrap()); }
                 }
                 for message in &agents.chat.messages {
@@ -451,6 +478,7 @@ impl EditorApp {
             }
             ui.horizontal(|ui| {
                 let enabled = !offline
+                    && !installing
                     && !agents.chat.busy
                     && !agents.history_open
                     && !agents.draft.trim().is_empty()
@@ -488,6 +516,9 @@ impl EditorApp {
             });
         });
         if agents.config != before {
+            if !before.same_process(&agents.config) {
+                agents.runtime.reset();
+            }
             agents.browser = None;
             agents.history_open = false;
             if agents.config.model() != before.model() {
@@ -547,7 +578,14 @@ impl EditorApp {
             }
         }
         if send {
-            self.send_agent(ctx);
+            if self.agents.runtime.installing() {
+                self.notify(
+                    "Wait for Codex installation to finish or cancel it before sending.",
+                    false,
+                );
+            } else {
+                self.send_agent(ctx);
+            }
         }
         if history_action.close {
             self.agents.browser = None;

@@ -5,7 +5,7 @@ A lightweight native Rust code editor for local and SSH projects, with on-demand
 - **[Terminals that survive editor exit](docs/terminals.md).** Enable **Persist**, keep shells running through editor exit or SSH loss, and reattach later—even from multiple RODE windows. Native Rust implementation; no tmux/screen dependency.
 - **[Remote projects through your SSH setup](docs/remote.md).** Use existing OpenSSH aliases, keys and jump hosts. Browse and edit remote folders while Git, tools and debuggers run where the files live.
 - **[One sandbox policy for the project](docs/sandbox.md).** Configure filesystem grants locally or over SSH; editor I/O, shells, agents and tools share the active policy. Unavailable sandboxing is clearly labelled normal mode.
-- **[Agent chat inside that sandbox](docs/agents.md).** Use the optional `rode-codex` runtime or an installed agent locally or over SSH, including local models served by Ollama and ACP agents. Browse saved chats and resume work; model, reasoning, reply personality and permission controls follow each integration's capabilities. Codex needs no VS Code or Node.js; approvals cannot widen the active sandbox.
+- **[Agent chat inside that sandbox](docs/agents.md).** Install Codex from the chat panel without root access, or use an installed agent locally or over SSH, including local models served by Ollama and ACP agents. Browse saved chats and resume work; model, reasoning, reply personality and permission controls follow each integration's capabilities. Codex needs no VS Code or Node.js; approvals cannot widen the active sandbox.
 - **[GPU and Slurm controls](docs/slurm.md).** View host CPU/GPU telemetry and Slurm GPU allocation counts; release selected allocations after confirmation. Pair with persistent terminals for interactive ML work.
 - **[Encrypted local and remote projects](docs/encrypted-projects.md).** Open gocryptfs storage as a normal project; locking requires active project jobs to stop.
 
@@ -18,14 +18,13 @@ Also included:
 ![RODE](assets/carbon.png)
 
 ```sh
-cargo run --release -- /path/to/project
-# Build the headless helper for remote persistent terminals:
-scripts/build-sessiond.sh
+cargo install --locked --path .
+rode /path/to/project
 # Or connect to a remote computer:
-./target/release/rode --ssh user@host --remote-path '~/project'
+rode --ssh user@host --remote-path '~/project'
 ```
 
-Linux is the validated platform. Build with Rust 1.88+; remote access requires OpenSSH, a POSIX shell, and Python 3. Package `rode-sessiond-static` beside `rode` for remote persistent terminals; no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).
+Linux is the validated platform. Build with Rust 1.88+; Cargo installs both the editor and its headless terminal helper. Remote access requires OpenSSH, a POSIX shell, and Python 3. For hosts needing a static helper, see [terminal setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).
 
 Debian/Ubuntu packages are built for release version tags or manually through **Actions → Package Debian → Run workflow**. Build locally with `scripts/build-deb.sh`; see [packaging and installation](docs/packaging.md).
 

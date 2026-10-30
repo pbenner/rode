@@ -5,10 +5,10 @@
 //! The optional runtime package carries an independent upstream Rust executable,
 //! keeping Node.js, npm and VS Code out of the runtime requirements. Its protected
 //! manifest selects a pinned version independently of editor updates. Package
-//! installation (or an explicit user bundle override) is the trust boundary;
+//! installation, explicit per-user preparation, or a user bundle override is the trust boundary;
 //! manifest checksums detect damaged assets, not a malicious package publisher.
-//! Pins and notices are build inputs;
-//! the application never downloads or updates executables from the internet.
+//! Pins and notices are build inputs. Only the explicit user-runtime installer
+//! downloads executables; discovery, startup and chat never fetch updates.
 //! Discovery, hashing and transfer run in the existing process worker. Remote copies
 //! are immutable, versioned and published atomically under an owned cache lock.
 //! Only the verified tool directory is mounted read-only into an active sandbox;
@@ -37,6 +37,7 @@ use std::{
 
 pub(crate) const AUTO_CODEX: &str = "@rode/codex";
 const PIN: &str = include_str!("../packaging/codex.json");
+pub(crate) mod install;
 
 #[derive(Deserialize)]
 struct Manifest {
@@ -243,6 +244,33 @@ fn verify(directory: &Path, release: &Release, target: &Target, cancel: &AtomicB
     Ok(())
 }
 
+/// Retain portable/source layouts while allowing Cargo-installed or copied editors
+/// to use independently installed runtimes. Ignore relative XDG/HOME values so an
+/// arbitrary working directory cannot become an executable-discovery location.
+fn user_runtime_root(data_home: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    data_home
+        .filter(|p| p.is_absolute())
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            home.filter(|p| p.is_absolute())
+                .map(|p| p.join(".local/share"))
+        })
+        .map(|data| data.join("rode/codex"))
+}
+
+fn runtime_roots(bin: &Path, data_home: Option<&Path>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = vec![
+        bin.join("rode-codex"),
+        bin.join("../lib/rode/codex"),
+        bin.join("../codex"),
+    ];
+    if let Some(root) = user_runtime_root(data_home, home) {
+        roots.push(root);
+    }
+    roots.push(PathBuf::from("/usr/lib/rode/codex"));
+    roots
+}
+
 fn find(architecture: &str, cancel: &AtomicBool) -> Result<Option<Bundle>> {
     if let Some(path) = std::env::var_os("RODE_CODEX_BUNDLE") {
         let directory = PathBuf::from(path);
@@ -263,11 +291,13 @@ fn find(architecture: &str, cancel: &AtomicBool) -> Result<Option<Bundle>> {
     if bin.file_name().is_some_and(|n| n == "deps") {
         bin = bin.parent().context("Missing Cargo profile directory")?;
     }
-    for base in [
-        bin.join("rode-codex"),
-        bin.join("../lib/rode/codex"),
-        bin.join("../codex"),
-    ] {
+    let data_home = std::env::var_os("XDG_DATA_HOME");
+    let home = std::env::var_os("HOME");
+    for base in runtime_roots(
+        bin,
+        data_home.as_deref().map(Path::new),
+        home.as_deref().map(Path::new),
+    ) {
         let release = if base.join("manifest.json").try_exists()? {
             read_release(&base)?
         } else {
@@ -407,7 +437,7 @@ pub(crate) fn prepare(
                     return Ok((program.into(), plan.prefix.clone()));
                 }
                 bail!(
-                    "No optional Codex runtime for {architecture}. Install rode-codex, prepare that architecture with scripts/bundle-codex.py, or configure an installed executable on the SSH host."
+                    "No optional Codex runtime for {architecture}. Use Install Codex in the chat panel, install rode-codex, or configure an installed executable on the SSH host."
                 );
             };
             spec["action"] = "install".into();
@@ -440,7 +470,7 @@ pub(crate) fn prepare(
         return Ok((program.to_string_lossy().into(), plan.prefix.clone()));
     }
     bail!(
-        "Codex is unavailable. Install the optional rode-codex package, run python3 scripts/bundle-codex.py, or choose a compatible executable or another agent in Agent settings. Editing remains available."
+        "Codex is unavailable. Use Install Codex in the chat panel, install the optional rode-codex package, or choose a compatible executable or another agent in Agent settings. Editing remains available."
     )
 }
 
@@ -449,13 +479,41 @@ pub(crate) fn prepare(
 pub fn codex(args: &[String]) -> Result<()> {
     let cancel = AtomicBool::new(false);
     let program = find(std::env::consts::ARCH, &cancel)?.map(|bundle| bundle.directory.join("codex")).or_else(installed)
-        .context("Codex is unavailable. Install the optional rode-codex package, prepare it with python3 scripts/bundle-codex.py, or install a compatible Codex executable")?;
+        .context("Codex is unavailable. Use Install Codex in RODE's chat panel, install the optional rode-codex package, or install a compatible Codex executable")?;
     Err(Command::new(program).args(args).exec()).context("Cannot run Codex")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_search_preserves_portable_roots_and_finds_user_and_system_installs() {
+        let bin = Path::new("/cargo/bin");
+        let home = Some(Path::new("/home/fixture"));
+        assert_eq!(
+            runtime_roots(bin, Some(Path::new("/data")), home),
+            [
+                "/cargo/bin/rode-codex",
+                "/cargo/bin/../lib/rode/codex",
+                "/cargo/bin/../codex",
+                "/data/rode/codex",
+                "/usr/lib/rode/codex",
+            ]
+            .map(PathBuf::from)
+        );
+        for data_home in [None, Some(Path::new("")), Some(Path::new("relative"))] {
+            assert_eq!(
+                runtime_roots(bin, data_home, home)[3],
+                Path::new("/home/fixture/.local/share/rode/codex")
+            );
+            assert_eq!(runtime_roots(bin, data_home, None).len(), 4);
+            assert_eq!(
+                runtime_roots(bin, data_home, Some(Path::new("relative"))).len(),
+                4
+            );
+        }
+    }
 
     #[test]
     fn installed_manifest_rejects_path_escapes_and_unbounded_pins() {

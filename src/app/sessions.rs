@@ -432,7 +432,10 @@ impl EditorApp {
         });
     }
     pub(super) fn session_tick(&mut self, ctx: &egui::Context) {
-        if self.sessions.quit_waiting && !self.sessions_need_exit_check() {
+        if self.sessions.quit_waiting
+            && !self.sessions_need_exit_check()
+            && !self.agent_installation_pending()
+        {
             self.final_quit(ctx);
             return;
         }
@@ -1039,7 +1042,8 @@ impl EditorApp {
     }
     pub(super) fn quit_terminals(&mut self, ctx: &egui::Context) {
         self.stop_debugger();
-        if self.sessions_need_exit_check() {
+        self.cancel_agent_installation();
+        if self.sessions_need_exit_check() || self.agent_installation_pending() {
             self.sessions.quit_waiting = true;
             self.set_dialog(Dialog::TerminalExit);
         } else {
@@ -1050,7 +1054,11 @@ impl EditorApp {
         self.sessions.quit_waiting = true;
         ui.heading("Closing RODE");
         ui.spinner();
-        ui.label("Finishing terminal changes and stopping the debugger…");
+        ui.label(if self.agent_installation_pending() {
+            "Cancelling Codex installation and cleaning temporary files…"
+        } else {
+            "Finishing terminal changes and stopping the debugger…"
+        });
         ui.small("RODE will close automatically when it completes.");
     }
 }

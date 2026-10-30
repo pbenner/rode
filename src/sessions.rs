@@ -222,11 +222,18 @@ pub fn helper(with_data: bool) -> Result<Helper> {
             target
                 .join(format!("{}-unknown-linux-musl", std::env::consts::ARCH))
                 .join(bin.file_name().unwrap())
+                .join("rode-sessiond-standalone"),
+        );
+        // Preserve discovery of static helpers built before the Cargo install target.
+        candidates.push(
+            target
+                .join(format!("{}-unknown-linux-musl", std::env::consts::ARCH))
+                .join(bin.file_name().unwrap())
                 .join("rode-sessiond"),
         );
     }
     candidates.push(bin.join("rode-sessiond"));
-    let path=candidates.into_iter().find(|p|p.is_file()).context("Remote persistent terminals need the packaged rode-sessiond helper. Run scripts/build-sessiond.sh or set RODE_SESSION_HELPER to a compatible helper binary.")?;
+    let path=candidates.into_iter().find(|p|p.is_file()).context("Remote persistent terminals need rode-sessiond beside the editor. Reinstall with cargo install --locked --path . from the RODE source checkout, use scripts/build-sessiond.sh for a static helper, or set RODE_SESSION_HELPER to a compatible helper binary.")?;
     let bytes = std::fs::read(&path)?;
     ensure!(
         bytes.len() <= 24 * 1024 * 1024,

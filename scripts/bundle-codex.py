@@ -117,9 +117,107 @@ def prepare(architecture=None, destination=None):
     return destination
 
 
+def user_runtime_root():
+    """Match the editor's stable user-data lookup, independent of Cargo's install root."""
+    data_home = Path(os.environ.get("XDG_DATA_HOME", ""))
+    if not data_home.is_absolute():
+        home = Path(os.environ.get("HOME", ""))
+        if not home.is_absolute():
+            raise ValueError("Set HOME or an absolute XDG_DATA_HOME to install a user runtime")
+        data_home = home / ".local/share"
+    return data_home / "rode/codex"
+
+
+def protected_directory(path):
+    """Refuse existing symlinked/shared runtime directories instead of trusting their contents."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = path.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+    ):
+        raise ValueError(f"Unsafe Codex runtime directory: {path}")
+
+
+def install(architecture=None):
+    """Explicitly prepare a user runtime and atomically select it after verification.
+
+    The shared install lock serializes architectures and versions, so a concurrent
+    setup cannot publish a selector before its payload is complete. Existing editors
+    keep using their selected executable; no process, credentials or settings change.
+    """
+    architecture = architecture or platform.machine()
+    architecture = {"arm64": "aarch64", "amd64": "x86_64"}.get(architecture, architecture)
+    manifest = json.loads(MANIFEST.read_text())
+    if architecture not in manifest["targets"]:
+        raise ValueError("Bundled Codex supports Linux x86_64 and aarch64")
+    base = user_runtime_root()
+    # Existing preferences may have created RODE's parent with umask 002.
+    # Tighten that owned directory without touching its files or stable locks.
+    if base.parent.exists():
+        descriptor = os.open(
+            base.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        try:
+            metadata = os.fstat(descriptor)
+            if metadata.st_uid != os.geteuid():
+                raise ValueError("Codex application-data directory must belong to this user")
+            if metadata.st_mode & 0o022:
+                os.fchmod(descriptor, stat.S_IMODE(metadata.st_mode) & ~0o022)
+        finally:
+            os.close(descriptor)
+    protected_directory(base.parent)
+    protected_directory(base)
+    descriptor = os.open(
+        base / ".install.lock",
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        0o600,
+    )
+    with os.fdopen(descriptor, "a+b") as lock:
+        metadata = os.fstat(lock.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o022
+        ):
+            raise ValueError("Unsafe Codex runtime install lock")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        version = base / manifest["version"]
+        protected_directory(version)
+        destination = version / architecture
+        if destination.exists() or destination.is_symlink():
+            protected_directory(destination)
+        bundle = prepare(architecture, destination)
+        selector = (bundle / "manifest.json").read_bytes()
+        if json.loads(selector) != manifest:
+            raise ValueError("Codex pin changed during installation; retry with a stable checkout")
+        with tempfile.NamedTemporaryFile(prefix=".manifest-", dir=base, delete=False) as out:
+            temporary = Path(out.name)
+            try:
+                out.write(selector)
+                out.flush()
+                os.fchmod(out.fileno(), 0o644)
+                os.fsync(out.fileno())
+                os.replace(temporary, base / "manifest.json")
+            finally:
+                temporary.unlink(missing_ok=True)
+    return bundle
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--architecture", choices=["x86_64", "aarch64"])
-    parser.add_argument("--output", type=Path)
+    destination = parser.add_mutually_exclusive_group()
+    destination.add_argument("--output", type=Path)
+    destination.add_argument(
+        "--install",
+        action="store_true",
+        help="install for this user so Cargo-installed editors can discover the runtime",
+    )
     options = parser.parse_args()
-    print(prepare(options.architecture, options.output))
+    print(
+        install(options.architecture)
+        if options.install
+        else prepare(options.architecture, options.output)
+    )

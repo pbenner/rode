@@ -25,7 +25,7 @@ def output(*command, cwd=ROOT):
     return subprocess.check_output(command, cwd=cwd, text=True).strip()
 
 
-def build(package, binary, target=None):
+def build(package, binary, target=None, features=None):
     """Build a selected Cargo binary and resolve its reported artifact instead of assuming a target path."""
     command = [
         CARGO,
@@ -40,6 +40,8 @@ def build(package, binary, target=None):
     ]
     if target:
         command += ["--target", target]
+    if features:
+        command += ["--features", features]
     executable = None
     with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True) as process:
         for line in process.stdout:
@@ -333,13 +335,17 @@ def main():
     helper_target = {"amd64": "x86_64", "arm64": "aarch64"}[architecture] + "-unknown-linux-musl"
     if args.skip_build:
         binary = (args.binary or target / "release/rode").resolve()
-        helper = (args.helper or target / helper_target / "release/rode-sessiond").resolve()
+        standalone = target / helper_target / "release/rode-sessiond-standalone"
+        legacy = target / helper_target / "release/rode-sessiond"
+        helper = (args.helper or (standalone if standalone.is_file() else legacy)).resolve()
     else:
         binary = build("rode", "rode")
         subprocess.run(
             [os.environ.get("RUSTUP", "rustup"), "target", "add", helper_target], check=True
         )
-        helper = build("rode-session", "rode-sessiond", helper_target)
+        helper = build(
+            "rode-session", "rode-sessiond-standalone", helper_target, features="standalone"
+        )
     check_elf(binary, architecture)
     check_elf(helper, architecture, static=True)
     version = args.version or package["version"].replace("-", "~", 1) + "-1"

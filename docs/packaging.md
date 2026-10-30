@@ -59,13 +59,13 @@ rode --codex login
 
 This component needs Python 3, `dpkg-deb`, `dpkg` and `readelf`, with no Rust compiler or editor build. It prepares the exact upstream asset pinned in `packaging/codex.json`, verifies archive/executable/notice hashes and packages the static runtime. It requires no Node.js/npm. Its version comes from the Codex manifest, independently of `Cargo.toml`; `--version` can override its Debian revision too. Compatible runtime releases require real protocol checks.
 
-The editor lists `rode-codex` only in **Suggests**, so ordinary installation does not pull it in automatically. An existing compatible Codex executable can be selected instead. A missing upstream architecture affects only this explicitly requested runtime build; it is never consulted by the core package builder. The current native Debian builder remains limited to amd64/arm64; separating Codex does not claim new editor platforms.
+The editor lists `rode-codex` only in **Suggests**, so ordinary installation does not pull it in automatically. Users may instead click **Install Codex** in the chat panel for rootless installation in their user data directory, or select an existing compatible executable. A missing upstream architecture affects only this explicitly requested runtime build; it is never consulted by the core package builder. The current native Debian builder remains limited to amd64/arm64; separating Codex does not claim new editor platforms.
 
 ## Contents and dependencies
 
 The package installs:
 
-- `/usr/bin/rode` and the static `/usr/bin/rode-sessiond`. The editor discovers the sibling helper for local terminals and SSH deployment.
+- `/usr/bin/rode` and the static `/usr/bin/rode-sessiond`. The editor discovers the sibling helper for SSH deployment; local terminals default to the matching embedded service.
 - A desktop launcher and the scalable `[r]` application icon.
 - The project license, [artwork licensing notes](licensing.md), upstream dependency/Rust/embedded-definition notices, README, and package changelog under `/usr/share/doc/rode/`. The notices include the complete Hack, Noto Emoji, Ubuntu and emoji-icon-font license texts supplied by egui; these are separate from the Rust code license. Missing crate license files use versioned upstream snapshots with verified hashes; missing license coverage stops packaging.
 

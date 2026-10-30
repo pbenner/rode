@@ -7,14 +7,15 @@ For Debian/Ubuntu, `scripts/build-deb.sh` creates an installable editor package 
 Install a stable Rust toolchain (Rust 1.88 or newer), then:
 
 ```sh
-cargo run --release -- .
+cargo install --locked --path .
+rode /path/to/project
 ```
 
-For remote persistent terminals, also run `scripts/build-sessiond.sh` and package `target/release/rode-sessiond-static` beside the editor. See [terminal setup](terminals.md#remote-helper-and-packaging).
+This installs **both `rode` and `rode-sessiond`** into Cargo's binary directory, normally `~/.cargo/bin`, without root access. RODE discovers the sibling helper for SSH persistent terminals on compatible Linux hosts. For older/different Linux hosts, build a static helper with `scripts/build-sessiond.sh`; see [terminal setup](terminals.md#remote-helper-and-packaging).
 
-For Codex chat, install the optional `rode-codex` package, use an existing executable, or prepare a source-build runtime with `python3 scripts/bundle-codex.py`. Authenticate locally with `rode --codex login`, then leave the agent executable set to `auto`; see [agent setup](agents.md). VS Code, Node.js and npm are not needed. Editing and other tools work without Codex.
+For Codex chat, click **Install Codex** in the chat panel, install the optional `rode-codex` package, or use an existing executable. Authenticate locally with `rode --codex login`, then leave the agent executable set to `auto`; see [agent setup](agents.md). VS Code, Node.js and npm are not needed. Editing and other tools work without Codex.
 
-The compiled application is `target/release/rode`. Use the release build when evaluating responsiveness or memory use. Linux is the validated platform; the SSH backend uses Unix OpenSSH ControlMaster.
+For development without installing, `cargo build --locked --release` builds `target/release/rode` and `target/release/rode-sessiond`; `cargo run --release -- .` runs only the editor target. Use the release build when evaluating responsiveness or memory use. Linux is the validated platform; the SSH backend uses Unix OpenSSH ControlMaster.
 
 On Debian/Ubuntu, common build/runtime prerequisites are a C compiler, `pkg-config`, OpenGL, X11 or Wayland libraries, and the OpenSSH client. If development libraries are missing:
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Native UI smoke test. Run on an isolated X display, e.g. xvfb-run -a.
 
-Requires Linux, libX11, libXtst, and ImageMagick's `import`. Uses only Python's
-standard library. Keyboard events and screenshots target this test's window.
+Requires Linux, libX11, libXtst, `xwininfo` (x11-utils), and ImageMagick's `import`.
+Uses only Python's standard library. Keyboard events and screenshots target this test's window.
 """
 
 import ctypes as c

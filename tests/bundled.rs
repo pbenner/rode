@@ -260,6 +260,68 @@ fn optional_package_selects_its_own_pinned_version_without_an_editor_rebuild() {
 }
 
 #[test]
+fn cargo_installed_editors_find_user_runtimes_and_reject_damaged_selectors() {
+    for data_setting in [Some("absolute"), None, Some(""), Some("relative")] {
+        let root = tempfile::tempdir().unwrap();
+        // Cargo's install location has no relationship to the source-build cache.
+        let bin = root.path().join("cargo install/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let editor = bin.join("rode");
+        fs::copy(env!("CARGO_BIN_EXE_rode"), &editor).unwrap();
+        let home = root.path().join("home");
+        let data = if data_setting == Some("absolute") {
+            root.path().join("custom user data")
+        } else {
+            home.join(".local/share")
+        };
+        let base = data.join("rode/codex");
+        let directory = base
+            .join("9-independent-fixture")
+            .join(std::env::consts::ARCH);
+        let manifest = write_runtime(&directory, std::env::consts::ARCH);
+        fs::set_permissions(&base, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(base.join("manifest.json"), manifest.to_string()).unwrap();
+        fs::set_permissions(
+            base.join("manifest.json"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let invoke = || {
+            let mut command = Command::new(&editor);
+            command
+                .args(["--codex", "--version"])
+                .env_remove("RODE_CODEX_BUNDLE")
+                .env("HOME", &home)
+                .env("PATH", "")
+                .current_dir(root.path());
+            match data_setting {
+                Some("absolute") => command.env("XDG_DATA_HOME", &data),
+                Some(value) => command.env("XDG_DATA_HOME", value),
+                None => command.env_remove("XDG_DATA_HOME"),
+            };
+            project::run(command, vec![], Duration::from_secs(5)).unwrap()
+        };
+        assert_eq!(
+            invoke().checked().unwrap().trim(),
+            "optional-runtime-fixture"
+        );
+        // A per-user installation has the same fail-closed manifest policy as a package.
+        fs::set_permissions(
+            base.join("manifest.json"),
+            fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+        let output = invoke();
+        assert!(!output.success());
+        assert!(
+            output.stderr.contains("Unsafe Codex runtime manifest"),
+            "{}",
+            output.stderr
+        );
+    }
+}
+
+#[test]
 fn a_missing_runtime_architecture_preserves_installed_codex_fallback() {
     let root = tempfile::tempdir().unwrap();
     let bundle = root.path().join("bundle");

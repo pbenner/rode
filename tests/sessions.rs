@@ -23,6 +23,7 @@ struct Fixture {
     root: tempfile::TempDir,
     runtime: PathBuf,
     ids: Vec<(String, String)>,
+    standalone: bool,
 }
 impl Fixture {
     fn new() -> Self {
@@ -32,11 +33,19 @@ impl Fixture {
             root,
             runtime,
             ids: vec![],
+            standalone: false,
         }
     }
     fn rpc(&self, request: &Request) -> anyhow::Result<Response> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_rode"))
-            .args(["--session-service", "request"])
+        let mut command = if self.standalone {
+            Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+        } else {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
+            command.arg("--session-service");
+            command
+        };
+        let mut child = command
+            .arg("request")
             .env("RODE_SESSION_DIR", &self.runtime)
             .env("RODE_TEST_PARENT_ONLY", "daemon-only")
             .stdin(Stdio::piped())
@@ -92,14 +101,14 @@ impl Fixture {
         info
     }
     fn attach(&self, info: &rode_session::Info) -> Terminal {
-        let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_rode"));
-        cmd.args([
-            "--session-service",
-            "attach",
-            "--framed",
-            &info.id,
-            &info.policy,
-        ]);
+        let mut cmd = if self.standalone {
+            CommandBuilder::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+        } else {
+            let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_rode"));
+            command.arg("--session-service");
+            command
+        };
+        cmd.args(["attach", "--framed", &info.id, &info.policy]);
         cmd.env("RODE_SESSION_DIR", &self.runtime);
         Terminal::spawn_native(&eframe::egui::Context::default(), cmd, "Native test".into())
             .unwrap()
@@ -135,6 +144,46 @@ impl Fixture {
         plan
     }
 }
+#[test]
+fn cargo_helper_is_headless_and_shares_persistent_sessions_with_the_editor() {
+    let protocol = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+        .arg("protocol")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .unwrap();
+    assert!(protocol.status.success());
+    assert_eq!(
+        String::from_utf8(protocol.stdout).unwrap().trim(),
+        rode_session::PERSISTENCE_PROTOCOL.to_string()
+    );
+    let mut fixture = Fixture::new();
+    fixture.standalone = true;
+    let info = fixture.create(&fixture.plan());
+    let terminal = fixture.attach(&info);
+    terminal
+        .send(b"TOKEN=cargo-installed; printf 'READY_%s\\n' HELPER\n".to_vec())
+        .unwrap();
+    wait(|| terminal.contents().contains("READY_HELPER"));
+    drop(terminal);
+    // The helper's short-lived creator/attachment clients have exited; an
+    // ordinary editor process must still discover and use the same owned shell.
+    fixture.standalone = false;
+    let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
+        panic!()
+    };
+    assert!(
+        infos
+            .iter()
+            .any(|session| session.id == info.id && session.persistent)
+    );
+    let terminal = fixture.attach(&info);
+    terminal
+        .send(b"printf 'TOKEN_%s\\n' \"$TOKEN\"\n".to_vec())
+        .unwrap();
+    wait(|| terminal.contents().contains("TOKEN_cargo-installed"));
+}
+
 #[test]
 fn an_unlinked_running_image_can_start_an_independent_native_service() {
     let mut fixture = Fixture::new();

@@ -25,7 +25,7 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/project.rs`, `src/languages.rs`, `src/remote_project.py` | Installed tools, embedded language catalogue, normalized diagnostics and host counters |
 | `src/extensions.rs`, `src/app/extensions.rs`, `src/remote_extensions.py` | Native feature activation, opt-in installed adapters and their UI/preferences |
 | `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
-| `src/bundled.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, verified private SSH-cache deployment and release-bundle preparation |
+| `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs` | Codex/ACP state machines, bounded chat, backend-owned history and explicit permission/question cards |
 | `src/agent/personality.rs` | Bounded response-style hints, explicit default resets and display-only history cleanup; independent of tools and execution policies |
 | `src/agent/controls.rs`, `src/app/agents/controls.rs` | Bounded backend model/capability discovery and shared native model/access selectors |
@@ -34,7 +34,7 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/app/markdown.rs` | Unsaved-source Markdown rendering and sandbox-aware linked assets |
 | `src/notebook/`, `src/notebook.rs`, `src/notebook_kernel.py`, `src/app/notebook_view.rs` | Metadata-preserving notebook model, versioned execution and native cells/outputs |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` modules and Python peers | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
-| `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs and view lifetimes |
+| `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
 | `src/slurm.rs`, `src/remote_sessions.py` | Scheduler allocation snapshots and explicit, ownership-checked cancellation |
 | `src/vault.rs`, `src/remote_vault.py`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
