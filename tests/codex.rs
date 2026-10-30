@@ -38,6 +38,68 @@ fn response(session: &Session, id: u64) -> Value {
 }
 
 #[test]
+fn bundled_auto_discovery_initializes_on_the_project_host_without_external_auth() {
+    let Ok(bundle) = std::env::var("RODE_TEST_CODEX_BUNDLE") else {
+        return;
+    };
+    for isolated in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("codex-home")).unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--ignored", "--exact", "bundled_auto_child", "--nocapture"])
+            .env("RODE_CODEX_BUNDLE", &bundle)
+            .env("RODE_BUNDLE_PROJECT", root.path())
+            .env("RODE_BUNDLE_SANDBOX", if isolated { "1" } else { "0" })
+            .env("CODEX_HOME", root.path().join("codex-home"))
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("CODEX_API_KEY");
+        let output = rode::project::run(command, vec![], Duration::from_secs(45)).unwrap();
+        assert!(output.success(), "{}\n{}", output.stdout, output.stderr);
+    }
+}
+
+#[test]
+#[ignore = "private subprocess entry point for bundled Codex with isolated credentials"]
+fn bundled_auto_child() {
+    let root = std::env::var("RODE_BUNDLE_PROJECT").unwrap();
+    let plan = sandbox::prepare(
+        &root,
+        &sandbox::Options {
+            enabled: std::env::var("RODE_BUNDLE_SANDBOX").unwrap() == "1",
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let session = Session::start(
+        Launch {
+            config: Config {
+                provider: Provider::Local,
+                local_model: "fixture-local-model".into(),
+                local_url: "http://127.0.0.1:9/v1".into(),
+                ..Default::default()
+            },
+            plan,
+            remote: None,
+            python: "off".into(),
+        },
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    session.send(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"rode","title":"RODE","version":"0.1.0"}}})).unwrap();
+    assert!(response(&session, 1)["userAgent"].is_string());
+    session
+        .send(&json!({"method":"initialized","params":{}}))
+        .unwrap();
+    session.send(&json!({"id":2,"method":"thread/start","params":{"cwd":root,"model":"fixture-local-model","modelProvider":"rode_local","approvalPolicy":"on-request","sandbox":"workspace-write"}})).unwrap();
+    assert_eq!(
+        response(&session, 2)["thread"]["modelProvider"],
+        "rode_local"
+    );
+    session.stop();
+}
+
+#[test]
 fn installed_codex_initializes_a_project_with_an_isolated_local_provider() {
     let Ok(program) = std::env::var("RODE_TEST_CODEX") else {
         eprintln!("Set RODE_TEST_CODEX to check a real Codex app-server without inference.");

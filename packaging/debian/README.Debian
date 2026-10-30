@@ -9,6 +9,13 @@ The package includes the static rode-sessiond helper for persistent local/SSH
 terminals. Remote file access requires Python 3 on the remote host. Optional
 features use installed project-host tools; configure them inside RODE.
 
+Codex is optional: install the separate rode-codex package, or configure an
+existing executable in Agent settings. The editor package never downloads a
+Codex runtime. No VS Code, Node.js or npm is needed for the optional runtime.
+Sign in with `rode --codex login`; agent settings default to auto discovery.
+SSH chat can copy the matching optional runtime into a private project-host
+cache on first use, and runs its tools under the project sandbox.
+
 PDF previews use desktop Poppler tools (poppler-utils). Project sandboxing uses
 bubblewrap when available; normal mode remains usable without it.
 Encrypted projects require gocryptfs and working FUSE on the project host.

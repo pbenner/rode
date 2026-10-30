@@ -42,7 +42,7 @@ impl Provider {
 pub struct Config {
     /// Protocol/provider to launch on the next explicit message.
     pub provider: Provider,
-    /// Installed Codex executable on the project host.
+    /// `auto` discovers the optional Codex runtime or an installed project-host executable.
     pub codex: String,
     /// Optional model override for the normal Codex provider.
     pub model: String,
@@ -61,7 +61,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             provider: Provider::Codex,
-            codex: "codex".into(),
+            codex: "auto".into(),
             model: String::new(),
             local_model: String::new(),
             local_url: "http://127.0.0.1:11434/v1".into(),
@@ -89,7 +89,10 @@ impl Config {
             args
         } else {
             vec![
-                self.codex.trim().into(),
+                match self.codex.trim() {
+                    "" | "auto" | "codex" => crate::bundled::AUTO_CODEX.into(),
+                    program => program.into(),
+                },
                 "app-server".into(),
                 "--listen".into(),
                 "stdio://".into(),

@@ -135,7 +135,7 @@ impl Chat {
             text.len() <= PROMPT_LIMIT,
             "Agent messages are limited to 32 KiB."
         );
-        launch.config.argv()?;
+        let bundled = launch.config.argv()?[0] == crate::bundled::AUTO_CODEX;
         if self.session.is_some() && self.config != launch.config {
             self.disconnect();
             self.notice("Agent settings changed · starting a new conversation");
@@ -146,9 +146,21 @@ impl Chat {
             self.external = launch.plan.active && !self.read_only;
             self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
             self.config = launch.config.clone();
+            // A first SSH start may stream a large native runtime. Keep this
+            // bounded separately from the ordinary protocol handshake; Stop
+            // still cancels preparation through the owned process transport.
+            let preparing_remote_bundle = bundled && launch.remote.is_some();
             self.session = Some(Session::start(launch, wake)?);
-            self.status = "Starting agent…".into();
-            self.deadline = Some(Instant::now() + Duration::from_secs(60));
+            self.status = if preparing_remote_bundle {
+                "Preparing Codex on SSH host…"
+            } else {
+                "Starting agent…"
+            }
+            .into();
+            self.deadline = Some(
+                Instant::now()
+                    + Duration::from_secs(if preparing_remote_bundle { 420 } else { 60 }),
+            );
         }
         self.serial += 1;
         self.push(
@@ -276,6 +288,7 @@ impl Chat {
     }
 
     fn initialize(&mut self) -> Result<()> {
+        self.deadline = Some(Instant::now() + Duration::from_secs(60));
         let params = if self.config.provider == Provider::Acp {
             json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},
                 "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}})

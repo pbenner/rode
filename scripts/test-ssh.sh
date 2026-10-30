@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_dir=$(mktemp -d /tmp/rode-ssh-test.XXXXXX)
+mkdir -m 700 "$test_dir/codex-home"
 sshd_pid=
 cleanup() {
     if [[ -n "$sshd_pid" ]]; then kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
@@ -28,6 +29,7 @@ KbdInteractiveAuthentication no
 UsePAM no
 AllowUsers $test_user
 LogLevel VERBOSE
+AcceptEnv CODEX_HOME RODE_CODEX_CACHE
 EOF
 read -r key_type key_data _ < "$test_dir/host.pub"
 printf '[127.0.0.1]:%s %s %s\n' "$test_port" "$key_type" "$key_data" > "$test_dir/known_hosts"
@@ -41,12 +43,13 @@ Host rode-test rode-jump
     UserKnownHostsFile $test_dir/known_hosts
     StrictHostKeyChecking yes
     BatchMode yes
+    SetEnv CODEX_HOME=$test_dir/codex-home RODE_CODEX_CACHE=$test_dir/codex-cache
 EOF
 "$sshd_bin" -D -e -f "$test_dir/sshd_config" > "$test_dir/sshd.log" 2>&1 &
 sshd_pid=$!
 sleep 0.3
 if ! kill -0 "$sshd_pid" 2>/dev/null; then cat "$test_dir/sshd.log" >&2; exit 1; fi
-if ! RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" "${CARGO:-cargo}" test --test ssh_roundtrip -- --ignored --nocapture; then
+if ! RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home" "${CARGO:-cargo}" test --test ssh_roundtrip -- --ignored --nocapture; then
     cat "$test_dir/sshd.log" >&2
     exit 1
 fi

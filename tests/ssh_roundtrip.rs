@@ -357,6 +357,7 @@ fn roundtrip(jump: &str) {
     }
     debugger_roundtrip(&remote, &plan);
     native_debugger_roundtrip(&remote, &plan.root);
+    bundled_runtime_roundtrip(&remote, root.path());
     notebook_roundtrip(&remote, &plan.root, &path);
     marp_roundtrip(&remote, &plan);
     latex_roundtrip(&remote, &plan, &path);
@@ -466,6 +467,124 @@ fn native_test_helper(data: bool) -> rode::sessions::Helper {
         digest: rode::files::digest(&bytes),
         architecture: std::env::consts::ARCH.into(),
         data: data.then(|| STANDARD.encode(bytes)),
+    }
+}
+
+fn bundled_runtime_roundtrip(remote: &Remote, root: &std::path::Path) {
+    use serde_json::{Value, json};
+    let bytes = std::fs::read("/usr/bin/true").unwrap();
+    let target = json!({"size":bytes.len(),"sha256":rode::files::digest(&bytes)});
+    let mut spec = json!({"action":"install","version":"0-ssh-fixture",
+        "targets":{"x86_64":target,"aarch64":target},
+        "notices":[{"file":"LICENSE","sha256":rode::files::digest(b"fixture license\n")}],
+        "notice_data":{"LICENSE":"fixture license\n"}});
+    let parent = root.join("private-runtime");
+    std::fs::create_dir(&parent).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let cache = parent.join("cache ' 🦀");
+    let call = |spec: &Value, bytes: Vec<u8>| {
+        let mut command = Command::new("ssh");
+        command.args(remote.channel_args(false)).arg(format!(
+            "RODE_CODEX_CACHE={} python3 -c {} {}",
+            rode::ssh::quote(cache.to_str().unwrap()),
+            rode::ssh::quote(include_str!("../src/remote_codex.py")),
+            rode::ssh::quote(&spec.to_string())
+        ));
+        let text = rode::project::run(command, bytes, Duration::from_secs(10))
+            .unwrap()
+            .checked()
+            .unwrap();
+        serde_json::from_str::<Value>(&text).unwrap()
+    };
+    let first = call(&spec, bytes.clone());
+    spec["action"] = "probe".into();
+    let cached = call(&spec, vec![]);
+    assert_eq!(cached["cached"], true);
+    assert_eq!(first["executable"], cached["executable"]);
+    assert!(
+        remote.connected(),
+        "Runtime deployment closed the authentication master"
+    );
+    if std::env::var_os("RODE_TEST_CODEX_BUNDLE").is_some() {
+        actual_bundled_codex_roundtrip(remote, root);
+    }
+}
+
+fn actual_bundled_codex_roundtrip(remote: &Remote, root: &std::path::Path) {
+    use rode::agent::{Config, Event, Launch, Provider, Session};
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+    let home = std::env::var("RODE_TEST_CODEX_REMOTE_HOME").expect("Use scripts/test-ssh.sh");
+    for isolated in [false, true] {
+        let plan = remote
+            .request(&Request::Prepare {
+                path: root.to_string_lossy().into(),
+                sandbox: rode::sandbox::Options {
+                    enabled: isolated,
+                    share_network: false,
+                    read_write: vec![home.clone()],
+                    ..Default::default()
+                },
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        let session = Session::start(
+            Launch {
+                config: Config {
+                    provider: Provider::Local,
+                    local_model: "fixture-local-model".into(),
+                    local_url: "http://127.0.0.1:9/v1".into(),
+                    ..Default::default()
+                },
+                plan,
+                remote: Some(remote.clone()),
+                python: "off".into(),
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let reply = |id: u64| {
+            let until = Instant::now() + Duration::from_secs(200);
+            let mut diagnostics = String::new();
+            loop {
+                match session.poll() {
+                    Some(Event::Message(value)) if value["id"] == id => {
+                        assert!(value.get("error").is_none(), "{value}\n{diagnostics}");
+                        break value["result"].clone();
+                    }
+                    Some(Event::Error(error)) => panic!("{error}\n{diagnostics}"),
+                    Some(Event::Stderr(text)) => diagnostics.push_str(&text),
+                    Some(Event::Exited(code)) => {
+                        panic!("Bundled Codex exited: {code:?}\n{diagnostics}")
+                    }
+                    _ => {}
+                }
+                assert!(
+                    Instant::now() < until,
+                    "Bundled SSH Codex timed out: {diagnostics}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        session.send(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"rode","title":"RODE","version":"0.1.0"}}})).unwrap();
+        let initialized: Value = reply(1);
+        assert!(initialized["userAgent"].is_string());
+        session
+            .send(&json!({"method":"initialized","params":{}}))
+            .unwrap();
+        session.send(&json!({"id":2,"method":"thread/start","params":{"cwd":root,"model":"fixture-local-model","modelProvider":"rode_local","approvalPolicy":"on-request","sandbox":"workspace-write"}})).unwrap();
+        assert_eq!(reply(2)["thread"]["modelProvider"], "rode_local");
+        session.stop();
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end {
+            if matches!(session.poll(), Some(Event::Exited(_))) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(remote.connected());
     }
 }
 

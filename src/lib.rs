@@ -28,6 +28,7 @@
 pub mod agent;
 pub mod app;
 pub mod binary;
+pub mod bundled;
 pub mod debugger;
 pub mod extensions;
 pub mod files;

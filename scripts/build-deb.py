@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -276,6 +277,12 @@ def main():
     """Validate build/package options and create a rootless archive without installing into the host."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--component",
+        choices=["editor", "codex"],
+        default="editor",
+        help="build the editor (default) or the optional, independently versioned Codex runtime",
+    )
+    parser.add_argument(
         "--skip-build", action="store_true", help="package existing release binaries"
     )
     parser.add_argument("--binary", type=Path, help="existing GUI executable (with --skip-build)")
@@ -297,17 +304,26 @@ def main():
         "--shlibs-depends", help="override dpkg-shlibdeps output for a verified build environment"
     )
     args = parser.parse_args()
+    codex_component = args.component == "codex"
+    if codex_component and (args.binary or args.helper or args.skip_build or args.shlibs_depends):
+        parser.error("--binary/--helper/--skip-build/--shlibs-depends apply only to the editor")
     if (args.binary or args.helper) and not args.skip_build:
         parser.error("--binary/--helper require --skip-build")
-    for program in [CARGO, "rustc", "dpkg", "dpkg-deb", "readelf"]:
+    tools = ["dpkg", "dpkg-deb", "readelf"]
+    if not codex_component:
+        tools.extend([CARGO, "rustc"])
+    for program in tools:
         if not shutil.which(program):
             raise ValueError(f"Missing build tool: {program}")
-    if not args.shlibs_depends and not shutil.which("dpkg-shlibdeps"):
+    if not codex_component and not args.shlibs_depends and not shutil.which("dpkg-shlibdeps"):
         raise ValueError("Install dpkg-dev to provide dpkg-shlibdeps")
     if not re.fullmatch(r"[^\r\n<>]+ <[^\s<>]+@[^\s<>]+>", args.maintainer):
         raise ValueError("Maintainer must be one line: Name <email>")
     if args.shlibs_depends and ("\n" in args.shlibs_depends or "\r" in args.shlibs_depends):
         raise ValueError("Dependencies must be a single control-field value")
+    if codex_component:
+        package_codex(args)
+        return
     metadata = json.loads(output(CARGO, "metadata", "--locked", "--no-deps", "--format-version=1"))
     package = next(value for value in metadata["packages"] if value["name"] == "rode")
     target = Path(metadata["target_directory"])
@@ -327,62 +343,128 @@ def main():
     check_elf(binary, architecture)
     check_elf(helper, architecture, static=True)
     version = args.version or package["version"].replace("-", "~", 1) + "-1"
-    subprocess.run(["dpkg", "--validate-version", version], check=True)
-    if "/" in version or any(character.isspace() for character in version):
-        raise ValueError("Invalid package version")
     shlibs = args.shlibs_depends or shared_dependencies(binary, args.maintainer)
     if not shlibs.strip():
         raise ValueError("Shared-library dependency list must not be empty")
-    destination = (args.output or target / "debian").resolve()
+    files = {
+        "usr/bin/rode": binary,
+        "usr/bin/rode-sessiond": helper,
+        "usr/share/applications/RODE.desktop": ROOT / "packaging/debian/RODE.desktop",
+        "usr/share/icons/hicolor/scalable/apps/rode.svg": ROOT / "assets/rode.svg",
+        "usr/share/doc/rode/copyright": ROOT / "LICENSE",
+        "usr/share/doc/rode/README.Debian": ROOT / "packaging/debian/README.Debian",
+        "usr/share/doc/rode/ARTWORK-LICENSING.md": ROOT / "docs/licensing.md",
+    }
+    print(
+        write_package(
+            args,
+            "rode",
+            version,
+            architecture,
+            args.output or target / "debian",
+            files,
+            {"usr/bin/rode", "usr/bin/rode-sessiond"},
+            {
+                "README.md.gz": (ROOT / "README.md").read_bytes(),
+                "THIRD-PARTY-NOTICES.gz": notices(binary),
+            },
+            shlibs=shlibs,
+        )
+    )
+
+
+def package_codex(args):
+    """Build only the optional runtime; no Cargo tools, GUI build or core-package dependency."""
+    manifest_path = ROOT / "packaging/codex.json"
+    manifest = json.loads(manifest_path.read_text())
+    architecture = output("dpkg", "--print-architecture")
+    codex_arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(architecture)
+    if codex_arch not in manifest["targets"]:
+        raise ValueError(
+            f"No pinned Codex runtime for {architecture}; build the editor without --component codex"
+        )
+    target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+    if not target.is_absolute():
+        target = ROOT / target
+    suffix = Path(manifest["version"]) / codex_arch
+    bundle = runpy.run_path(str(ROOT / "scripts/bundle-codex.py"))["prepare"](
+        codex_arch, target / "codex" / suffix
+    )
+    check_elf(bundle / "codex", architecture, static=True)
+    files = {str(Path("usr/lib/rode/codex") / suffix / p.name): p for p in bundle.iterdir()}
+    # A small selector lets the optional package choose its own pinned version;
+    # the launcher verifies both this manifest and the versioned payload.
+    files["usr/lib/rode/codex/manifest.json"] = manifest_path
+    files["usr/share/doc/rode-codex/copyright"] = bundle / "LICENSE"
+    files["usr/share/doc/rode-codex/README.Debian"] = ROOT / "packaging/debian/README.codex"
+    notices = [f"OpenAI Codex {manifest['version']}\nSource: {manifest['release']}\n"]
+    for notice in manifest["notices"]:
+        notices.extend([f"\n{notice['source']}\n", (bundle / notice["file"]).read_text()])
+    print(
+        write_package(
+            args,
+            "rode-codex",
+            args.version or manifest["version"] + "-1",
+            architecture,
+            args.output or target / "debian",
+            files,
+            {str(Path("usr/lib/rode/codex") / suffix / "codex")},
+            {"CODEX-NOTICES.gz": "".join(notices).encode()},
+        )
+    )
+
+
+def write_package(
+    args, name, version, architecture, destination, files, executables, documents, **fields
+):
+    """Assemble one allowlisted component with normalized metadata and atomic publication."""
+    subprocess.run(["dpkg", "--validate-version", version], check=True)
+    if "/" in version or any(character.isspace() for character in version):
+        raise ValueError("Invalid package version")
+    destination = destination.resolve()
     destination.mkdir(parents=True, exist_ok=True)
     timestamp = epoch()
     environment = dict(os.environ, SOURCE_DATE_EPOCH=str(timestamp))
-    artifact = destination / f"rode_{version.split(':', 1)[-1]}_{architecture}.deb"
+    artifact = destination / f"{name}_{version.split(':', 1)[-1]}_{architecture}.deb"
     with tempfile.TemporaryDirectory(prefix=".rode-deb-", dir=destination) as directory:
         work = Path(directory)
         stage = work / "root"
-        files = {
-            "usr/bin/rode": binary,
-            "usr/bin/rode-sessiond": helper,
-            "usr/share/applications/RODE.desktop": ROOT / "packaging/debian/RODE.desktop",
-            "usr/share/icons/hicolor/scalable/apps/rode.svg": ROOT / "assets/rode.svg",
-            "usr/share/doc/rode/copyright": ROOT / "LICENSE",
-            "usr/share/doc/rode/README.Debian": ROOT / "packaging/debian/README.Debian",
-            "usr/share/doc/rode/ARTWORK-LICENSING.md": ROOT / "docs/licensing.md",
-        }
-        for name, source in files.items():
-            path = stage / name
+        for payload_name, source in files.items():
+            path = stage / payload_name
             path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, path)
-        documentation = stage / "usr/share/doc/rode"
-        compressed(documentation / "README.md.gz", (ROOT / "README.md").read_bytes(), timestamp)
-        compressed(documentation / "THIRD-PARTY-NOTICES.gz", notices(binary), timestamp)
+        documentation = stage / "usr/share/doc" / name
+        for filename, data in documents.items():
+            compressed(documentation / filename, data, timestamp)
         date = datetime.datetime.fromtimestamp(timestamp, datetime.timezone.utc).strftime(
             "%a, %d %b %Y %H:%M:%S +0000"
         )
-        changelog = f"rode ({version}) unstable; urgency=medium\n\n  * Build the upstream native editor and static terminal helper.\n\n -- {args.maintainer}  {date}\n"
+        changelog = f"{name} ({version}) unstable; urgency=medium\n\n  * Package the {name} component.\n\n -- {args.maintainer}  {date}\n"
         compressed(documentation / "changelog.Debian.gz", changelog.encode(), timestamp)
         control = stage / "DEBIAN"
         control.mkdir()
         installed_size = sum(path.stat().st_size for path in stage.rglob("*") if path.is_file())
-        template = (ROOT / "packaging/debian/control.in").read_text()
+        template = (
+            ROOT / "packaging/debian" / ("control.in" if name == "rode" else "control.codex.in")
+        ).read_text()
         (control / "control").write_text(
             template.format(
                 version=version,
                 architecture=architecture,
                 maintainer=args.maintainer,
                 installed_size=(installed_size + 1023) // 1024,
-                shlibs=shlibs,
+                **fields,
             )
         )
         sums = [
-            f"{hashlib.md5(path.read_bytes()).hexdigest()}  {path.relative_to(stage)}\n"
+            f"{hash_file(path, 'md5')}  {path.relative_to(stage)}\n"
             for path in sorted(stage.rglob("*"))
             if path.is_file() and control not in path.parents
         ]
         (control / "md5sums").write_text("".join(sums))
         for path in stage.rglob("*"):
-            path.chmod(0o755 if path.is_dir() or path.parent == stage / "usr/bin" else 0o644)
+            executable = str(path.relative_to(stage)) in executables
+            path.chmod(0o755 if path.is_dir() or executable else 0o644)
             os.utime(path, (timestamp, timestamp))
         stage.chmod(0o755)
         os.utime(stage, (timestamp, timestamp))
@@ -402,7 +484,16 @@ def main():
             stdout=sys.stderr,
         )
         os.replace(temporary, artifact)
-    print(artifact)
+    return artifact
+
+
+def hash_file(path, algorithm):
+    """Stream checksums so optional large runtimes never require a whole-file buffer."""
+    result = hashlib.new(algorithm)
+    with path.open("rb") as source:
+        while block := source.read(1024 * 1024):
+            result.update(block)
+    return result.hexdigest()
 
 
 if __name__ == "__main__":

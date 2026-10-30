@@ -25,6 +25,7 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/project.rs`, `src/languages.rs`, `src/remote_project.py` | Installed tools, embedded language catalogue, normalized diagnostics and host counters |
 | `src/extensions.rs`, `src/app/extensions.rs`, `src/remote_extensions.py` | Native feature activation, opt-in installed adapters and their UI/preferences |
 | `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
+| `src/bundled.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, verified private SSH-cache deployment and release-bundle preparation |
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs` | Codex/ACP state machines, bounded chat and explicit permission/question cards |
 | `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `src/remote_debugger.py` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
 | `src/images.rs`, `src/pdf.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, memory leases, retained snapshots and specialized tabs |
@@ -78,6 +79,12 @@ A GUI/SSH attachment cannot own a shell that must outlive it. The headless nativ
 Bundled features remain Rust modules with native UI and common lifecycle guards. Disabling suppresses activation/work rather than unloading code. Installed adapters use explicit, versioned executable messages instead of a dynamic Rust ABI or a general scripting runtime. This limits extension surfaces and adds process startup overhead, while keeping the execution boundary and source-result guards consistent with other tools.
 
 Desktop-installed, initially disabled manifests keep repository opening separate from executable activation. Tools still run on the project host within its grants; an adapter or agent approval cannot widen that boundary. Installed compilers, formatters, model servers and debugger adapters remain user-managed, with the documented default `uvx ruff` exception. Rationale lives in `src/extensions.rs` and `src/process.rs`; [extensions](extensions.md) defines the supported API.
+
+### Optional native Codex runtime
+
+Codex is a separately versioned native executable in the optional `rode-codex` package, keeping the core editor independent of that payload, VS Code, Node.js and npm. Core packaging never prepares or downloads Codex. SHA-256/size pins and upstream notices are explicit runtime-package build inputs. Source builds optionally prepare the same runtime with a standard-library Python script; the application itself never downloads binaries from the internet or starts inference servers. The optional package's protected manifest selects its version independently of the editor; package installation is the trust boundary, while bounded manifests and checksum validation detect damaged assets. Runtime updates require protocol compatibility checks.
+
+An `auto` executable is resolved only in the process worker after a message. A custom executable bypasses bundle preparation. SSH deployment streams the matching binary over authenticated multiplexed channels, verifies and atomically publishes a private immutable cache, and shares a lock across windows. Credentials remain on their host. An active project sandbox adds only this verified tool directory as a read-only mount; it does not acquire new user-folder or network grants. Versioned directories avoid replacing another process's running runtime. See [agent setup](agents.md) and [packaging](packaging.md).
 
 ### Document models and editing history
 

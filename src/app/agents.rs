@@ -245,8 +245,8 @@ impl EditorApp {
                             if !agents.argument_error.is_empty() { ui.colored_label(palette.error,&agents.argument_error); }
                             ui.label(palette.tag("Agent must provide its own file and command tools."));
                         } else {
-                            ui.label("Codex executable on this host");
-                            ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("codex or /path/to/codex").char_limit(4096));
+                            ui.label("Codex executable (auto: discover)");
+                            ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Install the optional rode-codex package or use an installed Codex. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
                             if agents.config.provider == Provider::Local {
                                 ui.label("Local model API base URL");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048)).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");
@@ -298,6 +298,7 @@ impl EditorApp {
                     ui.label(RichText::new("Work on this project with an agent").strong());
                     ui.add(egui::Label::new("Ask a question, request a change, or investigate an issue. The agent works in the folder above.").wrap());
                     if agents.config.provider == Provider::Local { ui.add(egui::Label::new("Start Ollama or a compatible local server and select an installed model in settings.").wrap()); }
+                    else if agents.config.provider == Provider::Codex { ui.add(egui::Label::new("Use the optional rode-codex package or an installed Codex. Authenticate on the project host before sending a message.").wrap()); }
                     else { ui.add(egui::Label::new("Install and authenticate your agent on this host before sending a message.").wrap()); }
                 }
                 for message in &agents.chat.messages {

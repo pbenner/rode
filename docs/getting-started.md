@@ -2,7 +2,7 @@
 
 ## Run
 
-For Debian/Ubuntu, `scripts/build-deb.sh` creates an installable package with the desktop launcher and terminal helper. See [package prerequisites and installation](packaging.md).
+For Debian/Ubuntu, `scripts/build-deb.sh` creates an installable editor package with the desktop launcher and terminal helper. Codex is a separate optional package built with `scripts/build-deb.sh --component codex`. See [package prerequisites and installation](packaging.md).
 
 Install a stable Rust toolchain (Rust 1.88 or newer), then:
 
@@ -11,6 +11,8 @@ cargo run --release -- .
 ```
 
 For remote persistent terminals, also run `scripts/build-sessiond.sh` and package `target/release/rode-sessiond-static` beside the editor. See [terminal setup](terminals.md#remote-helper-and-packaging).
+
+For Codex chat, install the optional `rode-codex` package, use an existing executable, or prepare a source-build runtime with `python3 scripts/bundle-codex.py`. Authenticate locally with `rode --codex login`, then leave the agent executable set to `auto`; see [agent setup](agents.md). VS Code, Node.js and npm are not needed. Editing and other tools work without Codex.
 
 The compiled application is `target/release/rode`. Use the release build when evaluating responsiveness or memory use. Linux is the validated platform; the SSH backend uses Unix OpenSSH ControlMaster.
 
@@ -28,6 +30,6 @@ Earlier Linux release smoke measurements (before the persistent-terminal service
 
 Launch `rode /path/to/project`, or use **File → Open project folder**. Use **Ctrl+P** to open a file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
 
-Use **New** in the terminal header for multiple native persistent shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). On exit, choose whether attached terminal work should keep running.
+Use **New** in the terminal header for multiple native shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). Enable **Persist** for shells that should survive exit; new shells default to ending when their last view closes.
 
 For remote files, use [SSH connections](remote.md). For isolation, see [sandbox access](sandbox.md). Configuration paths and detailed theme settings are documented under [Themes](themes.md).

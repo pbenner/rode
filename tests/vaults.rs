@@ -5,7 +5,7 @@ use rode::{files, vault};
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
-    os::unix::fs::PermissionsExt,
+    os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
@@ -61,11 +61,14 @@ impl Peer {
         self.input.flush().unwrap();
         self.next()
     }
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 impl Drop for Peer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop();
     }
 }
 fn request(path: &Path, program: &str, create: bool) -> vault::Open {
@@ -243,21 +246,85 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
                 fs::read_to_string(&file).unwrap(),
                 "RODE encrypted payload 4821"
             );
-            // Both windows may exit concurrently. Exactly one shared view
-            // releases its lease; the final view must actually unmount.
+            // Concurrent close releases one shared view. The final view must
+            // verify unmount or retain its lease if namespace checks are denied.
             for peer in [&mut first, &mut second] {
                 writeln!(peer.input, "{{\"action\":\"close\"}}").unwrap();
                 peer.input.flush().unwrap();
             }
             let replies = [first.next(), second.next()];
+            let details = serde_json::to_string(&replies).unwrap();
+            let (mut shared, mut locked, mut restricted) = (0, 0, 0);
+            for reply in &replies {
+                match reply {
+                    vault::Reply::Closed { locked: true, .. } => locked += 1,
+                    vault::Reply::Closed {
+                        locked: false,
+                        message,
+                        ..
+                    } if message.starts_with(
+                        "Another RODE window still has this encrypted project open.",
+                    ) =>
+                    {
+                        shared += 1
+                    }
+                    vault::Reply::Closed {
+                        locked: false,
+                        message,
+                        ..
+                    } if message.starts_with(
+                        "Cannot verify other mount namespaces; project remains unlocked",
+                    ) =>
+                    {
+                        restricted += 1
+                    }
+                    _ => panic!(
+                        "Unexpected concurrent close reply (first Python={python}): {details}"
+                    ),
+                }
+            }
             assert_eq!(
-                replies
-                    .iter()
-                    .filter(|reply| matches!(reply, vault::Reply::Closed { locked: true, .. }))
-                    .count(),
-                1
+                shared, 1,
+                "Exactly one concurrent close must release a shared lease (first Python={python}): {details}"
             );
-            assert_eq!(replies.iter().filter(|reply| matches!(reply,vault::Reply::Closed { locked:false,message,.. } if message.contains("Another RODE window"))).count(),1);
+            assert_eq!(
+                locked + restricted,
+                1,
+                "The final close must lock or explicitly refuse unverifiable namespaces (first Python={python}): {details}"
+            );
+            if restricted == 1 {
+                // FUSE access does not imply permission to inspect every other
+                // same-UID process namespace (e.g. on a hardened CI runner).
+                // Refusing to claim a lock is the required production behavior.
+                assert_eq!(
+                    fs::read_to_string(&file).unwrap(),
+                    "RODE encrypted payload 4821"
+                );
+                let lease = fs::File::open(runtime(&cipher).join("views.lock")).unwrap();
+                let result =
+                    unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                let error = std::io::Error::last_os_error();
+                assert_eq!(result, -1, "A refused lock lost the final view lease");
+                assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+                drop(lease);
+                eprintln!("Host namespace verification prevents a verified lock: {details}");
+                // Stop only our lease peers, then normally unmount only this
+                // fixture. This cleanup is not a verified RODE lock and never
+                // uses force/lazy unmount or relaxes the application guard.
+                first.stop();
+                second.stop();
+                let program = rode::sandbox::find_program("fusermount3")
+                    .or_else(|| rode::sandbox::find_program("fusermount"))
+                    .expect("FUSE fixture cleanup requires fusermount3/fusermount");
+                let mut command = Command::new(program);
+                command
+                    .args(["-u", "--", &info.mountpoint])
+                    .current_dir("/");
+                rode::project::run(command, vec![], std::time::Duration::from_secs(10))
+                    .unwrap()
+                    .checked()
+                    .unwrap();
+            }
             drop(second);
 
             assert!(fs::read_to_string(&file).is_err());
@@ -286,6 +353,7 @@ fn python_peer_releases_a_shared_close_lease_atomically_without_fuse() {
 import fcntl, runpy, sys
 scope = runpy.run_path(sys.argv[1], run_name='vault_unit_fixture')
 class MockMount(scope['Mount']):
+    inspection_error = None
     def mounted(self):
         return 'fixture'
     def unmount_locked(self):
@@ -296,6 +364,8 @@ class MockMount(scope['Mount']):
                 fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ValueError('Another RODE window still has this encrypted project open.') from None
+            if self.inspection_error:
+                raise ValueError(self.inspection_error)
 settings = dict(cipherdir=sys.argv[2], program='gocryptfs', unmount_program='')
 first, second = MockMount(settings, False), MockMount(settings, False)
 for mount in (first, second):
@@ -305,6 +375,20 @@ reply = scope['close'](first, retain_on_failure=True)
 assert not reply['locked'] and first.lease is not None
 reply = scope['close'](first, retain_on_failure=True, close_shared=True)
 assert not reply['locked'] and first.lease is None
+# Namespace inspection refusal must keep the final lease even on window close.
+# Only the known shared-view refusal permits abandoning a lease without locking.
+second.inspection_error = 'Cannot verify other mount namespaces; project remains unlocked.'
+reply = scope['close'](second, retain_on_failure=True, close_shared=True)
+assert not reply['locked'] and reply['message'] == second.inspection_error
+assert second.lease is not None and second.directory is not None
+with second.lock_file('views.lock') as exclusive:
+    try:
+        fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        pass
+    else:
+        raise AssertionError('A refused lock lost the final view lease')
+second.inspection_error = None
 reply = scope['close'](second, retain_on_failure=True, close_shared=True)
 assert reply['locked'] and second.lease is None
 "#;

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -734,8 +734,30 @@ pub(crate) fn run_controlled(
     )
 }
 pub(crate) fn run_controlled_limited(
-    mut command: Command,
+    command: Command,
     input: Vec<u8>,
+    timeout: Duration,
+    cancel: &AtomicBool,
+    lifeline: bool,
+    output_limit: u64,
+    terminate_grace: Duration,
+) -> Result<Output> {
+    run_controlled_stream(
+        command,
+        std::io::Cursor::new(input),
+        timeout,
+        cancel,
+        lifeline,
+        output_limit,
+        terminate_grace,
+    )
+}
+
+/// Stream an owned input without retaining large executable transfers in memory.
+/// The same cancellation, output bounds and process-group cleanup apply as for tools.
+pub(crate) fn run_controlled_stream(
+    mut command: Command,
+    mut input: impl Read + Send + 'static,
     timeout: Duration,
     cancel: &AtomicBool,
     lifeline: bool,
@@ -756,7 +778,7 @@ pub(crate) fn run_controlled_limited(
     let stderr = child.stderr.take().context("Missing command stderr")?;
     let (input_tx, input_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = stdin.write_all(&input);
+        let _ = std::io::copy(&mut input, &mut stdin);
         if lifeline {
             let _ = input_tx.send(stdin);
         }

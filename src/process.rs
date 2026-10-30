@@ -281,7 +281,14 @@ fn run_session(
     if control.stopped.load(Ordering::Acquire) {
         return Ok(());
     }
-    let argv = launch.argv.clone();
+    let mut argv = launch.argv.clone();
+    let mut launch = launch;
+    if argv[0] == crate::bundled::AUTO_CODEX {
+        let (program, prefix) =
+            crate::bundled::prepare(&launch.plan, launch.remote.as_ref(), &control.stopped)?;
+        argv[0] = program;
+        launch.plan.prefix = prefix;
+    }
     let mut helper_binary = None;
     let (mut command, bootstrap) = if let Some(remote) = &launch.remote {
         ensure!(

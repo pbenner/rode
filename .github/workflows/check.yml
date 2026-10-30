@@ -33,7 +33,7 @@ jobs:
           destination.parent.mkdir(parents=True, exist_ok=True)
           shutil.copy2(shutil.which('ruff'), destination)
           PY
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev openssh-server xvfb imagemagick libxtst6 bubblewrap golang-go clang-format shfmt poppler-utils dpkg-dev desktop-file-utils gocryptfs lldb-19
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev openssh-server xvfb imagemagick libxtst6 bubblewrap golang-go clang-format shfmt poppler-utils gocryptfs lldb-19
       - name: Install test formatter
         run: npm install --prefix target/language-tools --ignore-scripts --no-audit --no-fund prettier@3.6.2
       - name: Install notebook test dependencies
@@ -41,6 +41,7 @@ jobs:
           uv venv --python python3 target/notebook-env
           uv pip install --python target/notebook-env/bin/python jupyter-client==8.10.0 ipykernel==7.4.0 matplotlib==3.11.2
       - run: cargo fmt --all --check
+      - run: python3 scripts/test-packaging.py
       - name: Check Rust API documentation
         env:
           RUSTDOCFLAGS: -D warnings
@@ -50,17 +51,6 @@ jobs:
       - run: scripts/build-sessiond.sh
       - run: bash scripts/test-ssh.sh
       - run: cargo build --locked --release
-      - name: Build and inspect Debian package
-        id: deb
-        run: |
-          rode_deb=$(scripts/build-deb.sh --skip-build)
-          xvfb-run -a python3 scripts/test-deb.py --gui "$rode_deb"
-          printf '%s\n' "package=$rode_deb" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: rode-debian-amd64
-          path: ${{ steps.deb.outputs.package }}
-          if-no-files-found: error
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-debugger-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a bash scripts/test-ssh.sh
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a python3 scripts/test-terminal-keys-ui.py

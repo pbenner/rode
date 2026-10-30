@@ -41,6 +41,12 @@ The collector covers the workspace's normal/build dependency graph for the build
 
 `rode --syntax-licenses` and `rode --theme-licenses` print the separate acknowledgements for embedded grammars and syntax themes; they are not a complete font/dependency license listing.
 
+## Optional Codex runtime
+
+The separate optional `rode-codex` package redistributes an unmodified native Codex executable from the pinned [OpenAI Codex release](https://github.com/openai/codex/releases/tag/rust-v0.166.0), independently of the VS Code extension. The core editor package contains no Codex payload. Codex's upstream code license is Apache 2.0; RODE's MIT license does not replace it or the terms of its dependencies.
+
+`packaging/codex.json` records the release, architecture-specific archive/executable sizes and SHA-256 hashes, and the source/hash of each shipped notice snapshot. `packaging/codex-licenses/` preserves upstream LICENSE, NOTICE and third-party texts, including the Ratatui MIT notice referenced by Codex. Complete texts travel with the runtime and are also assembled into `/usr/share/doc/rode-codex/CODEX-NOTICES.gz`. Runtime preparation checks these pins; upgrades require reviewing and updating the manifest and notices together. RODE does not modify the executable or reuse VS Code artwork/branding.
+
 ## Future artwork changes
 
 Keep the native icon style, record sources for imported or adapted artwork, retain the exact upstream license and required credits, and check trademark conditions separately. Do not trace vendor icons or copy SVG paths into Rust and label them MIT merely because the representation changed. Prefer independently designed generic symbols over product logos. Review both source artwork and published screenshots when replacing an asset with uncertain provenance.

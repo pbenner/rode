@@ -8,6 +8,13 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "--codex") {
+        if let Err(error) = rode::bundled::codex(&args[1..]) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.as_slice() == ["--debug-helper"] {
         if let Err(error) = rode::debugger::bridge::coordinator() {
             eprintln!("{error:#}");
@@ -110,6 +117,9 @@ fn main() -> eframe::Result {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
             "RODE — native Rust editor\n\nUsage: rode [DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--sandbox]\n\nSSH aliases and settings from ~/.ssh/config are honored.\nRemote file access requires python3; authentication happens in the terminal.\nThemes: phosphor (default), carbon, code-dark, matrix, amber, ice, neon, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
+        );
+        println!(
+            "\nOptional Codex runtime: rode --codex [ARGUMENTS], e.g. rode --codex login.\nInstall rode-codex or supply an installed Codex executable."
         );
         return Ok(());
     }

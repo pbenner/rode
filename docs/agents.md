@@ -8,15 +8,23 @@ The agent starts in the opened project folder, on the computer hosting that proj
 
 | Provider | Required software on the project host | Configuration |
 | --- | --- | --- |
-| Codex | An authenticated Codex CLI with app-server stdio support | Executable and optional model; blank model uses the CLI default |
-| Codex · local model | Codex CLI and a running Ollama or compatible Responses server | Codex executable, API base URL, and an already installed model name |
+| Codex | Optional `rode-codex` runtime or an installed Codex; authenticate on the project host | Executable defaults to `auto`; optional model; blank model uses the Codex default |
+| Codex · local model | Optional runtime or installed Codex and a running Ollama or compatible Responses server | Executable defaults to `auto`, API base URL, and an already installed model name |
 | Other agent · ACP | An agent implementing ACP v1 over stdio, with its own file/command tools | Executable and arguments as a JSON array |
 
-Executables can be absolute paths, project-relative paths such as `./tools/my-agent`, or names on PATH. RODE also checks `~/.local/bin`. Arguments are passed directly, without shell expansion. To customize environment variables or launch a special CLI profile, select your own small wrapper script. Install and authenticate agents explicitly using their own tools; RODE does not install CLIs, download models, manage accounts, or store API keys.
+Custom executables can be absolute paths, project-relative paths such as `./tools/my-agent`, or names on PATH. RODE also checks `~/.local/bin`. Arguments are passed directly, without shell expansion. To customize environment variables or launch a special CLI profile, select your own small wrapper script. Other agents and model servers remain user-installed; RODE does not download models, manage accounts, or store API keys.
 
 ### Codex
 
-Install and log in to [Codex CLI](https://developers.openai.com/codex/cli/) on the project host before using chat. The default executable is `codex`. You can point settings at an existing standalone binary. RODE uses its [app-server protocol](https://developers.openai.com/codex/app-server/) for conversations, command/file tools, approvals, questions, and interruption. This supports multi-turn coding work rather than single-shot shell output.
+The editor and Codex are separate packages. Optional **`rode-codex`** supplies a pinned native [Codex CLI](https://developers.openai.com/codex/cli/) executable, independent of VS Code, Node.js and npm. Leave **Codex executable** set to `auto`. Older saved settings containing `codex` also select this mode. An explicit custom executable overrides discovery; without the optional runtime, an installed Codex on PATH or in `~/.local/bin` remains usable. RODE uses the [app-server protocol](https://developers.openai.com/codex/app-server/) for conversations, command/file tools, approvals, questions and interruption.
+
+For a local project, authenticate in a terminal with `rode --codex login`. Use `rode --codex --version` to check the bundled version. These commands forward to Codex without starting the editor. Existing Codex authentication/configuration in `~/.codex` remains usable after uninstalling VS Code. Local-model mode does not require OpenAI authentication.
+
+For SSH projects, the first message deploys the pinned runtime to a private cache on the project host, using the existing authenticated connection. Transfers are streamed, size/SHA-256 checked, serialized across windows and atomically published. Subsequent starts reuse the verified cache. Credentials are never copied from the desktop. Authenticate on that host using the cached executable at `~/.cache/rode/codex/VERSION/ARCH/SHA256/codex`, for example with `login --device-auth`. `RODE_CODEX_CACHE` on the host can select another absolute cache location with an owned, non-writable-by-others parent.
+
+The optional package includes its own CPU architecture. If the remote computer needs another architecture, prepare it with `python3 scripts/bundle-codex.py --architecture aarch64` (or `x86_64`) in a source build, include it in a portable bundle, or configure an installed executable on that host. When no upstream binary exists, provide a compatible source-built executable if supported, or choose an ACP agent. Missing Codex affects only that integration. RODE does not silently download another runtime or execute the agent on the desktop instead.
+
+Source builds optionally prepare the runtime with `python3 scripts/bundle-codex.py`. Portable distributions put version/architecture folders under `rode-codex/` beside `rode`; Debian's optional package installs them under `/usr/lib/rode/codex/`. `RODE_CODEX_BUNDLE` selects an explicit prepared runtime directory. The optional package has its own version and protected checksum manifest, allowing compatible runtime upgrades without rebuilding the editor. Runtime releases still require protocol compatibility checks. The application does not fetch updates during startup or chat. Discovery and verification happen on workers, and no agent starts before a message. The binary adds disk/download size only when installed and is not loaded into the editor's idle process.
 
 Codex starts with `on-request` approval and workspace-write access, or read-only if selected. Existing CLI instructions, configuration, and authentication still apply. You may need to grant access to a custom `CODEX_HOME`, executable, or runtime through the sandbox settings. RODE does not edit the CLI's configuration files.
 
@@ -24,7 +32,7 @@ Codex starts with `on-request` approval and workspace-write access, or read-only
 
 Use Codex as the coding agent and Ollama as the model server. This keeps planning, file editing, and command execution in the agent, with inference served locally. Ollama documents a [Codex integration using its Responses API](https://docs.ollama.com/integrations/codex).
 
-1. Install Codex and Ollama on the appropriate hosts. Start Ollama, for example with `ollama serve`, if it is not already running.
+1. Use the optional Codex runtime or an installed Codex, and install Ollama on the appropriate host. Start Ollama, for example with `ollama serve`, if it is not already running.
 2. Install a tool-capable model of your choice explicitly. Use `ollama list` to see installed model names. The model must fit your hardware; Ollama recommends at least a 64k context window for Codex.
 3. In RODE, choose **Codex · local model**. Set **Local model API base URL** to `http://127.0.0.1:11434/v1` and enter the exact installed model name.
 4. Send a message. RODE selects a dedicated `rode_local` Responses provider without requiring OpenAI authentication or falling back to an OpenAI model. Web search is disabled for this provider.
@@ -42,6 +50,8 @@ RODE implements ACP **v1** initialization, project sessions, streamed text/tool 
 ## Sandbox, edits, and lifecycle
 
 An active [project sandbox](sandbox.md) encloses the whole agent process and its tool children, locally or over SSH. It uses the same folder grants, writable caches, network setting, and selected Python environment as other project commands. Approving an agent request cannot widen those outer mounts or network restrictions. Codex is told when a writable external sandbox is enforcing access, avoiding nested isolation. Read-only projects retain Codex read-only mode as well as the outer filesystem restrictions.
+
+Bundled Codex adds only its verified runtime directory as a read-only tool mount at `/rode-codex`. Other cached files and the rest of home are not exposed by this mount. Preparing/deploying the runtime happens on the host; execution always uses the captured project sandbox. Custom executables retain the existing explicit grant requirements.
 
 When bwrap is unavailable, the panel reports normal mode with the same visible fallback as the rest of the project. No later agent failure triggers a retry outside an active sandbox. `~/.codex` is a shared writable path by default; other agents' settings, credentials, runtimes, and caches may need explicit grants. Their child processes inherit the project host environment.
 

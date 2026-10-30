@@ -7,6 +7,10 @@ on:
         description: 'Package maintainer: Name <email> (defaults to the DEB_MAINTAINER repository variable)'
         type: string
         required: false
+      build_codex:
+        description: 'Also build the separate optional rode-codex package'
+        type: boolean
+        default: true
   push:
     tags: ['v[0-9]*']
 
@@ -94,3 +98,68 @@ jobs:
           ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
         run: |
           printf '[Download Debian package and SHA-256 checksum](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  codex:
+    name: Optional Codex runtime
+    # Publish the core artifact first. A runtime download/architecture failure
+    # cannot discard the validated editor package or make it a dependency.
+    needs: debian
+    if: github.event_name != 'workflow_dispatch' || inputs.build_codex
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEB_MAINTAINER: ${{ inputs.maintainer || vars.DEB_MAINTAINER }}
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Use reproducible source timestamps
+        run: printf 'SOURCE_DATE_EPOCH=%s\n' "$(git show -s --format=%ct)" >> "$GITHUB_ENV"
+      - name: Install build and validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config dpkg-dev binutils python3 \
+            libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev \
+            libegl1 libgl1-mesa-dri desktop-file-utils xvfb xauth bubblewrap
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debian-ubuntu-24.04-amd64
+      - uses: actions/download-artifact@v8
+        with:
+          name: rode-debian-amd64
+          path: target/editor-package
+      - name: Build optional runtime without building the editor
+        id: package
+        run: |
+          codex_deb=$(scripts/build-deb.sh --component codex --maintainer "$DEB_MAINTAINER" --output target/codex-debian)
+          printf 'package=%s\n' "$codex_deb" >> "$GITHUB_OUTPUT"
+      - name: Validate separate packages and automatic runtime discovery
+        env:
+          CODEX_DEB: ${{ steps.package.outputs.package }}
+        run: xvfb-run -a python3 scripts/test-deb.py --gui --codex-package "$CODEX_DEB" target/editor-package/rode_*.deb
+      - name: Check Codex protocol without a model or account
+        run: |
+          codex_bundle=$(python3 scripts/bundle-codex.py)
+          RODE_TEST_CODEX="$codex_bundle/codex" RODE_TEST_CODEX_BUNDLE="$codex_bundle" \
+            cargo test --locked --release --test codex
+      - name: Write runtime package checksum
+        working-directory: target/codex-debian
+        env:
+          CODEX_DEB: ${{ steps.package.outputs.package }}
+        run: sha256sum -- "$(basename -- "$CODEX_DEB")" > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        id: artifact
+        with:
+          name: rode-codex-debian-amd64
+          path: |
+            ${{ steps.package.outputs.package }}
+            target/codex-debian/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Link optional runtime download
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: printf '[Download optional Codex package and checksum](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
