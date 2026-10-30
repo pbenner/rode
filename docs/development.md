@@ -73,7 +73,7 @@ Markdown checks use `cargo test --lib markdown` for unsaved-buffer rendering, so
 
 ## Terminal color checks
 
-`cargo test --lib terminal` and `cargo test --test themes --test persistence` cover actual egui glyph colors for ANSI/256-color/RGB/inverse text, exact-color mode, unchanged parser output, decorative glyphs, bounded contrast caches, theme defaults/validation, per-theme overrides, independent concurrent edits and stale explicit resets. `scripts/test-terminal-colors-ui.py` uses a real native PTY and isolated preferences to check contrast changes, ANSI swatches, theme switching, restart persistence and continued shell input. Run it on an isolated X display; screenshots/logs go to `target/terminal-colors-ui/`.
+`cargo test --lib terminal` and `cargo test --test themes --test persistence` cover actual egui glyph colors for ANSI/256-color/RGB/inverse text, Bash PS1 bold/bright colors and resets across every built-in theme, exact-color mode, unchanged parser output, decorative glyphs, bounded contrast caches, theme defaults/validation, per-theme overrides, independent concurrent edits and stale explicit resets. `scripts/test-terminal-colors-ui.py` uses a real native PTY and isolated preferences to check contrast changes, ANSI swatches, theme switching, restart persistence and continued shell input. It also runs a real Bash prompt with status/Git expansions, checks bright-black host/marker and bright-blue path colors, and compares success/failure colors with xterm when installed; xterm is an optional test reference, not an application dependency. Run it on an isolated X display; screenshots/logs go to `target/terminal-colors-ui/`.
 
 ## Agent checks
 

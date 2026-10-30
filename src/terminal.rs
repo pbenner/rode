@@ -592,8 +592,16 @@ impl Terminal {
                     }
                     let pos =
                         origin + egui::vec2(col as f32 * char_size.x, row as f32 * char_size.y);
-                    let mut fg =
-                        ansi_color(cell.fgcolor(), palette.terminal_foreground, &palette.ansi);
+                    // Bash PS1 commonly uses SGR 1;30 / 1;34. Match xterm's
+                    // default boldColors behavior: brighten only the basic
+                    // foreground bank, never backgrounds, RGB or indices 8+.
+                    let foreground = match cell.fgcolor() {
+                        vt100::Color::Idx(index @ 0..=7) if cell.bold() => {
+                            vt100::Color::Idx(index + 8)
+                        }
+                        color => color,
+                    };
+                    let mut fg = ansi_color(foreground, palette.terminal_foreground, &palette.ansi);
                     let mut bg =
                         ansi_color(cell.bgcolor(), palette.terminal_background, &palette.ansi);
                     if cell.inverse() {
@@ -777,19 +785,88 @@ mod lifecycle_tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
+    fn glyph_color(shapes: &[egui::epaint::ClippedShape], text: &str) -> Color32 {
+        shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => {
+                    Some(t.galley.job.sections[0].format.color)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing rendered glyph {text}"))
+    }
+
+    #[test]
+    fn bash_prompt_bold_colors_follow_theme_with_normal_resets_and_backgrounds() {
+        let ctx = egui::Context::default();
+        let (mut terminal, stream) = Terminal::stream(&ctx, "Bash prompt".into(), |_| {});
+        stream.end();
+        terminal.parser.lock().unwrap().process(
+            b"\x1b[1;30mH\x1b[1;34mP\x1b[0;35mG\x1b[1;30m>\x1b[0mN\x1b[1;38;2;9;10;11mR\x1b[1;38;5;17mX\x1b[1;90mB\x1b[22;30mD\x1b[1;30;41mI\x1b[22mJ\x1b[0;34mK"
+        );
+        let original = terminal.contents();
+        for theme in crate::theme::Theme::builtins() {
+            let palette = theme.palette;
+            assert_eq!(palette.terminal_minimum_contrast, 1.);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 240.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        terminal.ui(ui, 14., palette);
+                    });
+                },
+            );
+            for (glyph, expected) in [
+                ("H", palette.ansi[8]),
+                ("P", palette.ansi[12]),
+                ("G", palette.ansi[5]),
+                (">", palette.ansi[8]),
+                ("N", palette.terminal_foreground),
+                ("R", Color32::from_rgb(9, 10, 11)),
+                ("X", Color32::from_rgb(0, 0, 95)),
+                ("B", palette.ansi[8]),
+                ("D", palette.ansi[0]),
+                ("I", palette.ansi[8]),
+                ("J", palette.ansi[0]),
+                ("K", palette.ansi[4]),
+            ] {
+                assert_eq!(
+                    glyph_color(&output.shapes, glyph),
+                    expected,
+                    "{}: {glyph}",
+                    theme.id
+                );
+            }
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == palette.ansi[1]))
+            );
+            assert!(
+                !output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == palette.ansi[9]))
+            );
+            assert_eq!(terminal.contents(), original);
+            let parser = terminal.parser.lock().unwrap();
+            let host = parser.screen().cell(0, 0).unwrap();
+            assert!(host.bold());
+            assert_eq!(host.fgcolor(), vt100::Color::Idx(0));
+            assert!(!parser.screen().cell(0, 8).unwrap().bold());
+        }
+    }
+
     #[test]
     fn rendering_protects_ansi_extended_rgb_and_inverse_without_changing_output() {
-        fn glyph_color(shapes: &[egui::epaint::ClippedShape], text: &str) -> Color32 {
-            shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::Text(t) if t.galley.job.text == text => {
-                        Some(t.galley.job.sections[0].format.color)
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("Missing rendered glyph {text}"))
-        }
         let ctx = egui::Context::default();
         let (mut terminal, stream) = Terminal::stream(&ctx, "Colors".into(), |_| {});
         stream.end();

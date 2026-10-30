@@ -16,7 +16,7 @@
     "active": "#21415c",
     "gutter": "#617f9f",
     "terminal_background": "#080f1a",
-    "terminal_foreground": "#c3e1f4"
+    "terminal_foreground": "#ffffff"
   },
   "syntax": {
     "comment": "#819cb7",
@@ -34,8 +34,8 @@
   },
   "ansi": [
     "#162438", "#ed8b9e", "#7dd5ad", "#d9c187",
-    "#84b8f4", "#b8a3e4", "#6ccde1", "#c3d9ef",
+    "#84b8f4", "#b8a3e4", "#6ccde1", "#ffffff",
     "#819cb7", "#ffabc0", "#a0f0cc", "#f3dfac",
-    "#abd0ff", "#dbc1ff", "#9beaff", "#e7f4ff"
+    "#abd0ff", "#dbc1ff", "#9beaff", "#ffffff"
   ]
 }

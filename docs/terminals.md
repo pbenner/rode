@@ -14,7 +14,15 @@ Several windows may attach to the same session: their keystrokes go to the same 
 
 New terminals receive the selected Python environment. Reattachment preserves the original running environment; RODE does not send activation commands into an existing program. **Activate in current terminal** remains an explicit action.
 
-For unreadable prompt colors, open **View → Terminal colors…**. Adjust minimum contrast, foreground/background or individual ANSI colors; settings follow the selected interface theme and apply immediately without restarting the shell. See [themes](themes.md). Each attached RODE window renders with its own selected theme; the shared session's output stays unchanged.
+Prompt colors follow the selected theme's ANSI palette, including bright entries for bold PS1 segments. Open **View → Terminal colors…** to adjust these swatches or foreground/background; optional minimum contrast is separate. Settings apply immediately without restarting the shell. See [themes](themes.md). Each attached RODE window renders with its own selected theme; the shared session's output stays unchanged.
+
+## Bash prompts and colors
+
+RODE uses your shell's existing prompt configuration (`PS1` for Bash). It does not replace `.bashrc`, rewrite prompt commands or inject a different prompt. Bash expands host/path/status/Git segments as usual; RODE renders the resulting ANSI sequences with the selected theme.
+
+RODE follows [xterm's default boldColors behavior](https://www.invisible-island.net/xterm/manpage/xterm.html): a bold basic foreground uses the corresponding bright color. For example, `\[\e[1;30m\]` in PS1 uses **Bright black**, rather than ordinary black that can disappear against a dark background; `\[\e[1;34m\]` uses **Bright blue**. The `\[...\]` markers belong to Bash/readline and keep invisible escape sequences out of its cursor-width calculation. `\e[22m` clears bold, and `\e[0m` resets attributes. Backgrounds, explicit RGB and extended color indices retain their color mapping.
+
+Under **View → Terminal colors… → ANSI colors**, adjust the **Bright black** or **Bright blue** swatch if those prompt segments need a different shade for your theme. These changes immediately affect existing local/SSH terminal views without restarting commands. Minimum contrast defaults to **1:1** (off); its optional global text correction is separate from prompt escape handling. Explicit saved contrast overrides remain in effect until changed or reset to theme defaults.
 
 ## Closing RODE
 

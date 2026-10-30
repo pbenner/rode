@@ -5,9 +5,12 @@ import ctypes
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(
@@ -16,6 +19,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    ROOT,
     click,
     close_window,
     display,
@@ -44,10 +48,10 @@ def preferences(path):
     return json.loads(contents[:-1].rstrip().removesuffix(",") + "}")
 
 
-def window_for(process):
+def window_for(process, title="RODE"):
     for _ in range(150):
         tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-        match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
+        match = re.search(rf'(0x[0-9a-f]+) "{re.escape(title)}', tree)
         if match:
             window = int(match[1], 16)
             time.sleep(0.8)
@@ -90,6 +94,33 @@ def bright_pixels(filename):
     return sum(min(rgb[i : i + 3]) > 90 for i in range(0, len(rgb), 3))
 
 
+def prompt_colors(window, filename, palette, crop=None, failed=False):
+    """Check prompt ink including antialiasing against its terminal background."""
+    screenshot(window, filename)
+    command = ["convert", str(ARTIFACTS / filename)]
+    if crop:
+        command += ["-crop", crop]
+    rgb = subprocess.check_output(command + ["-depth", "8", "rgb:-"])
+    colors = Counter(tuple(rgb[i : i + 3]) for i in range(0, len(rgb), 3))
+    background = tuple(bytes.fromhex(palette["colors"]["terminal_background"].removeprefix("#")))
+    # PS1 changes blue to magenta without clearing bold, so Git is bright too.
+    for index in [8, 12, 13, 9 if failed else 10]:
+        value = palette["ansi"][index].removeprefix("#")
+        expected = tuple(bytes.fromhex(value))
+        channel = max(range(3), key=lambda c: abs(expected[c] - background[c]))
+        pixels = 0
+        for color, count in colors.items():
+            alpha = (color[channel] - background[channel]) / (
+                expected[channel] - background[channel]
+            )
+            if 0.6 <= alpha <= 1.02 and all(
+                abs(color[c] - (background[c] + alpha * (expected[c] - background[c]))) <= 2
+                for c in range(3)
+            ):
+                pixels += count
+        assert pixels > 3, f"{filename}: missing prompt ANSI {index} ({value})"
+
+
 with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
     root = Path(directory)
     shell = root / "fixture-shell"
@@ -121,9 +152,19 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                 time.sleep(1)
                 if run == "initial":
                     screenshot(window, "contrast-default.png")
-                    assert bright_pixels("contrast-default.png") > 100
+                    assert bright_pixels("contrast-default.png") < 10
                     colors()
                     screenshot(window, "settings.png")
+                    number(470, 260, "4.5")
+                    wait_for(
+                        lambda: (
+                            preferences(saved).get("terminal_color.phosphor.minimum_contrast")
+                            == "4.5"
+                        ),
+                        "Optional contrast protection was not saved",
+                    )
+                    screenshot(window, "contrast-enabled.png")
+                    assert bright_pixels("contrast-enabled.png") > 100
                     number(470, 260, "1")
                     wait_for(
                         lambda: (
@@ -140,7 +181,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.foreground")
-                            == "#f0dad8"
+                            == "#f0ffff"
                         ),
                         "Foreground edit was not saved",
                     )
@@ -192,7 +233,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     assert preferences(saved)["terminal_color.phosphor.ansi.0"] == "theme"
                     assert preferences(saved)["terminal_color.carbon.minimum_contrast"] == "7"
                     screenshot(window, "reset.png")
-                    assert bright_pixels("reset.png") > 100
+                    assert bright_pixels("reset.png") < 10
                     x11.XResizeWindow.argtypes = [
                         ctypes.c_void_p,
                         ctypes.c_ulong,
@@ -215,4 +256,90 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                 if process.poll() is None:
                     process.terminate()
                     process.wait(timeout=10)
+
+    # Reproduce a real PS1 with status command substitution, Git expansion,
+    # readline's nonprinting markers, and bold-black host/prompt plus bold blue
+    # path. Keep test startup independent of the user's own shell configuration.
+    rcfile = root / "prompt.bashrc"
+    rcfile.write_text(
+        r"""unset PROMPT_COMMAND
+__git_ps1() { printf ' branch'; }
+PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]✔"; else echo "\[\033[01;31m\]✘"; fi` \[\033[01;30m\]\h\[\033[01;34m\] \w\[\033[35m\]$(__git_ps1 " %s") \[\033[01;30m\]>\[\033[00m\] '
+"""
+    )
+    shell.write_text(
+        "#!/bin/sh\nexec /bin/bash --noprofile --rcfile " + shlex.quote(str(rcfile)) + " -i\n"
+    )
+    prompt_environment = dict(
+        environment,
+        XDG_CONFIG_HOME=str(root / "prompt-config"),
+        XDG_DATA_HOME=str(root / "prompt-data"),
+    )
+    palette = json.loads((ROOT / "themes/carbon.json").read_text())
+    with (ARTIFACTS / "bash-prompt.log").open("w") as log:
+        process = subprocess.Popen(
+            [str(BINARY), "--theme", "carbon", str(root)],
+            env=prompt_environment,
+            stdout=log,
+            stderr=log,
+        )
+        reference = None
+        try:
+            window = window_for(process)
+            key("grave", ("Control_L",))
+            time.sleep(1)
+            prompt_colors(window, "bash-prompt.png", palette, "1050x170+315+690")
+            click(600, 745)
+            text("false\n")
+            prompt_colors(
+                window, "bash-prompt-failed.png", palette, "1050x170+315+690", failed=True
+            )
+            # Compare with xterm when installed; it is a test reference, never
+            # an editor dependency. Pin its palette to compare ANSI semantics.
+            if shutil.which("xterm"):
+                command = [
+                    "xterm",
+                    "-T",
+                    "RODE-PROMPT-XTERM",
+                    "-geometry",
+                    "100x12",
+                    "-fa",
+                    "monospace",
+                    "-fs",
+                    "11",
+                    "-tn",
+                    "xterm-256color",
+                    "-bg",
+                    palette["colors"]["terminal_background"],
+                    "-fg",
+                    palette["colors"]["terminal_foreground"],
+                    "-xrm",
+                    "*boldColors: true",
+                ]
+                for index, color in enumerate(palette["ansi"]):
+                    command += ["-xrm", f"*color{index}: {color}"]
+                command += ["-e", "/bin/bash", "--noprofile", "--rcfile", str(rcfile), "-i"]
+                reference = subprocess.Popen(
+                    command,
+                    cwd=root,
+                    env=prompt_environment,
+                    stdout=log,
+                    stderr=log,
+                )
+                reference_window = window_for(reference, "RODE-PROMPT-XTERM")
+                prompt_colors(reference_window, "xterm-prompt.png", palette)
+                text("false\n")
+                prompt_colors(reference_window, "xterm-prompt-failed.png", palette, failed=True)
+                reference.terminate()
+                reference.wait(timeout=10)
+            else:
+                print("xterm reference check skipped: xterm is not installed")
+            x11.XSetInputFocus(display, window, 1, 0)
+            x11.XFlush(display)
+            close_window(window, process)
+        finally:
+            for child in (reference, process):
+                if child is not None and child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=10)
 print(f"Terminal color UI checks passed; artifacts: {ARTIFACTS}")

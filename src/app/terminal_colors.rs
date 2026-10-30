@@ -135,7 +135,7 @@ impl State {
                             settings.minimum_contrast = Some(palette.terminal_minimum_contrast);
                             self.pending.insert(key(&theme.id, "minimum_contrast"), palette.terminal_minimum_contrast.to_string());
                         }
-                        ui.small("1 = exact shell colors · 4.5 = recommended");
+                        ui.small("1 = off (default) · 4.5 = optional contrast boost");
                         ui.small("Adjusts text against its background, including RGB prompts. Keeps backgrounds and Powerline/block graphics unchanged.");
                         ui.separator();
                         egui::Grid::new("terminal-base-colors").show(ui, |ui| {
@@ -154,7 +154,7 @@ impl State {
                             }
                         });
                         ui.collapsing("ANSI colors", |ui| {
-                            ui.small("Shell colors 0–7, followed by bright colors 8–15.");
+                            ui.small("Bold ANSI / PS1 colors use bright swatches (8–15).");
                             egui::Grid::new("terminal-ansi-colors").num_columns(4).show(ui, |ui| {
                                 for i in 0..8 {
                                     for index in [i, i + 8] {

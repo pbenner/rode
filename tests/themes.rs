@@ -171,7 +171,7 @@ fn terminal_uses_theme_ansi_but_preserves_truecolor_and_extended_colors() {
 #[test]
 fn themes_can_set_terminal_contrast_without_changing_ansi_or_syntax() {
     let base = Theme::carbon();
-    assert_eq!(base.palette.terminal_minimum_contrast, 4.5);
+    assert_eq!(base.palette.terminal_minimum_contrast, 1.0);
     for minimum in [1., 3., 7., 21.] {
         let file = format!(
             r#"{{"name":"Readable","base":"carbon","terminal":{{"minimum_contrast":{minimum}}}}}"#
