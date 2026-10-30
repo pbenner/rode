@@ -564,7 +564,10 @@ impl Storage for Preferences {
         self.local.get(key).cloned()
     }
     fn set_string(&mut self, key: &str, text: String) {
-        if self.local.get(key) == Some(&text) && !matches!(key, "color_theme" | "syntax_theme") {
+        if self.local.get(key) == Some(&text)
+            && !matches!(key, "color_theme" | "syntax_theme" | "ui_scale")
+            && !key.starts_with("terminal_color.")
+        {
             return;
         }
         if structured(key) {

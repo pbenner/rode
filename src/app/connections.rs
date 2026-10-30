@@ -25,6 +25,32 @@ fn connection_key(profile: &Profile) -> String {
     .expect("SSH profile strings serialize")
 }
 impl EditorApp {
+    /// Keep the login's parsed output while the normal detach path stops its
+    /// process and clears remote bindings. This view owns no SSH resources and
+    /// can accept final reader bytes after the child-exit notification arrives.
+    pub(super) fn ssh_failed(&mut self, message: String, ctx: &egui::Context) {
+        let output = self.ssh_master.as_ref().map(|terminal| {
+            let host = self
+                .workspace
+                .as_ref()
+                .and_then(|w| w.remote.as_ref())
+                .map(|remote| remote.profile.endpoint())
+                .unwrap_or_default();
+            terminal.output_view(format!("SSH ERROR / {host}"))
+        });
+        self.detach_ssh(ctx);
+        self.status = "SSH connection failed · local mode".into();
+        if let Some(output) = output {
+            output.set_visible(true);
+            self.terminal = Some(output);
+            self.show_terminal = true;
+            self.navigation.terminal_intent();
+            self.notify(format!("{message} SSH login output is retained in the terminal. Choose New for a local shell."), true);
+        } else {
+            self.notify(message, true);
+        }
+    }
+
     pub(super) fn can_resume_ssh(&self, profile: &Profile) -> bool {
         self.workspace.is_none()
             && self.documents.iter().all(|doc| doc.path.is_none())
@@ -213,6 +239,8 @@ mod tests {
     fn failed_authentication_returns_to_local_mode_and_ignores_late_replies() {
         let (mut app, ctx) = remote_buffer();
         app.workspace.as_mut().unwrap().connected = false;
+        let (master, stream) = Terminal::stream(&ctx, "SSH login".into(), |_| {});
+        app.ssh_master = Some(master);
         let generation = app.generation;
         app.tx
             .send(Event::Connected {
@@ -221,7 +249,35 @@ mod tests {
             })
             .unwrap();
         app.poll(&ctx);
+        // Feed after cleanup, exercising the PTY-exit/read race explicitly.
+        stream
+            .feed(b"Permission denied (publickey).\r\n".to_vec())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !app
+            .terminal
+            .as_ref()
+            .unwrap()
+            .contents()
+            .contains("Permission denied")
+        {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(app.workspace.is_none());
+        assert!(app.ssh_master.is_none());
+        assert!(app.show_terminal);
+        assert!(!app.terminal.as_ref().unwrap().is_alive());
+        assert!(
+            app.terminal
+                .as_ref()
+                .unwrap()
+                .title
+                .starts_with("SSH ERROR")
+        );
+        assert_eq!(app.documents[0].text, "retained edits");
+        app.workspace_banner(&ctx);
+        assert_eq!(app.last_window_title, "RODE");
         assert!(app.documents[0].path.is_none());
         assert!(
             app.notice
@@ -239,6 +295,56 @@ mod tests {
         app.poll(&ctx);
         assert!(app.workspace.is_none());
         assert!(!app.preparing);
+    }
+
+    #[test]
+    fn a_real_fast_ssh_failure_retains_the_error_in_local_mode() {
+        if sandbox::find_program("ssh").is_none() {
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("ssh_config");
+        std::fs::write(&config, format!(
+            "Host failed-login\n HostName 127.0.0.1\n Port {port}\n BatchMode yes\n ConnectTimeout 2\n ConnectionAttempts 1\n"
+        )).unwrap();
+        drop(listener);
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.connect(
+            Profile {
+                host: "failed-login".into(),
+                config: config.to_string_lossy().into(),
+                ..Default::default()
+            },
+            &ctx,
+            false,
+        );
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while app.workspace.is_some()
+            || app
+                .terminal
+                .as_ref()
+                .is_none_or(|t| !t.contents().contains("Connection refused"))
+        {
+            app.poll(&ctx);
+            assert!(
+                Instant::now() < deadline,
+                "SSH failure was not retained: {:?}",
+                app.notice.as_ref().map(|n| &n.0)
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.ssh_master.is_none());
+        assert!(app.show_terminal);
+        assert!(!app.terminal.as_ref().unwrap().is_alive());
+        app.set_dialog(Dialog::Folder);
+        assert!(!app.folder_remote);
+        app.set_dialog(Dialog::None);
+        app.workspace_banner(&ctx);
+        assert_eq!(app.last_window_title, "RODE");
     }
 
     #[test]

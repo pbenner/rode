@@ -27,13 +27,14 @@ The entry points are `target/doc/rode/index.html` and `target/doc/rode_session/i
 | `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
 | `src/bundled.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, verified private SSH-cache deployment and release-bundle preparation |
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs` | Codex/ACP state machines, bounded chat, backend-owned history and explicit permission/question cards |
+| `src/agent/personality.rs` | Bounded response-style hints, explicit default resets and display-only history cleanup; independent of tools and execution policies |
 | `src/agent/controls.rs`, `src/app/agents/controls.rs` | Bounded backend model/capability discovery and shared native model/access selectors |
 | `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `src/remote_debugger.py` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
 | `src/images.rs`, `src/pdf.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, memory leases, retained snapshots and specialized tabs |
 | `src/app/markdown.rs` | Unsaved-source Markdown rendering and sandbox-aware linked assets |
 | `src/notebook/`, `src/notebook.rs`, `src/notebook_kernel.py`, `src/app/notebook_view.rs` | Metadata-preserving notebook model, versioned execution and native cells/outputs |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` modules and Python peers | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
-| `src/terminal.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs and view lifetimes |
+| `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs and view lifetimes |
 | `src/slurm.rs`, `src/remote_sessions.py` | Scheduler allocation snapshots and explicit, ownership-checked cancellation |
 | `src/vault.rs`, `src/remote_vault.py`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |

@@ -19,6 +19,7 @@ pub(super) struct Agents {
     config: Config,
     key: String,
     draft: String,
+    composing: bool,
     arguments: String,
     argument_error: String,
     settings: bool,
@@ -44,6 +45,7 @@ impl Agents {
             config: Config::default(),
             key: String::new(),
             draft: String::new(),
+            composing: false,
             arguments: "[]".into(),
             argument_error: String::new(),
             settings: false,
@@ -133,6 +135,7 @@ impl EditorApp {
             self.agents.chat = Chat::default();
             self.agents.completed = 0;
             self.agents.draft.clear();
+            self.agents.composing = false;
             self.agents.config = self
                 .agents
                 .preferences
@@ -154,6 +157,7 @@ impl EditorApp {
         {
             self.agents.browser = None;
             self.agents.history_open = false;
+            self.agents.composing = false;
         }
         self.agents.chat.poll();
         if let Some(browser) = &mut self.agents.browser {
@@ -265,7 +269,7 @@ impl EditorApp {
             ui.set_clip_rect(ui.clip_rect().intersect(content));
             ui.horizontal(|ui| {
                 let old = agents.config.provider;
-                let width = (ui.available_width()-160.).max(80.);
+                let width = (ui.available_width()-176.).max(80.);
                 ui.allocate_ui_with_layout(egui::vec2(width,26.), Layout::left_to_right(Align::Center), |ui| {
                     egui::ComboBox::from_id_salt("agent-provider").width(width)
                         .truncate().selected_text(agents.config.provider.label()).show_ui(ui,|ui| {
@@ -277,6 +281,7 @@ impl EditorApp {
                 if old != agents.config.provider { agents.settings = true; }
                 if icons::small(ui,Icon::Settings,"Agent settings").clicked() { agents.settings = !agents.settings; }
                 if ui.small_button("New chat").on_hover_text("Stop this agent and start a fresh conversation").clicked() { new_chat = true; }
+                controls::personality(ui, &mut agents.config, !agents.chat.busy && !offline);
             });
             ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
             ui.add(egui::Label::new(palette.tag(&root)).truncate()).on_hover_text(&root);
@@ -423,15 +428,17 @@ impl EditorApp {
                 );
             });
             let id = egui::Id::new("agent-composer");
-            let shortcut = !modal
-                && ui.memory(|m| m.has_focus(id))
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
+            let shortcut = composer_submit(ui, id, modal, &mut agents.composing);
             let response = ui.add(
                 egui::TextEdit::multiline(&mut agents.draft)
                     .id(id)
                     .desired_rows(3)
                     .desired_width(f32::INFINITY)
                     .hint_text("Message the agent…")
+                    .return_key(egui::KeyboardShortcut::new(
+                        egui::Modifiers::SHIFT,
+                        Key::Enter,
+                    ))
                     .char_limit(agent::PROMPT_LIMIT),
             );
             if agents.focus && !modal {
@@ -452,7 +459,7 @@ impl EditorApp {
                         || agents.argument_error.is_empty());
                 if ui
                     .add_enabled(enabled, egui::Button::new("Send"))
-                    .on_hover_text("Send · Ctrl+Enter")
+                    .on_hover_text("Send · Enter\nShift+Enter for a new line")
                     .clicked()
                     || (shortcut && enabled)
                 {
@@ -476,7 +483,8 @@ impl EditorApp {
                         .chat
                         .notice("Agent disconnected. The next message starts a new conversation.");
                 }
-                ui.label(palette.tag("Ctrl+Enter"));
+                ui.add(egui::Label::new(palette.tag("Enter · Shift+Enter")).truncate())
+                    .on_hover_text("Enter to send; Shift+Enter for a new line");
             });
         });
         if agents.config != before {
@@ -486,7 +494,13 @@ impl EditorApp {
                 agents.config.reasoning_effort.clear();
             }
             agents.save_config();
-            if let Err(error) = agents.chat.configure_idle(&agents.config) {
+            // A pure response-style edit must not configure operating modes or
+            // revalidate unrelated ACP controls before there is another task.
+            let mut execution_before = before;
+            execution_before.personality = agents.config.personality;
+            if execution_before != agents.config
+                && let Err(error) = agents.chat.configure_idle(&agents.config)
+            {
                 agents.chat.disconnect();
                 agents
                     .chat
@@ -623,6 +637,43 @@ impl EditorApp {
     }
 }
 
+/// Consume only a fresh, unmodified Enter in the focused composer. egui's
+/// consume_key ignores extra Shift/Alt, which would also consume newlines.
+/// IME confirmation belongs to the text editor, including a commit+Enter frame.
+fn composer_submit(ui: &mut egui::Ui, id: egui::Id, modal: bool, composing: &mut bool) -> bool {
+    if modal || !ui.memory(|m| m.has_focus(id)) {
+        *composing = false;
+        return false;
+    }
+    ui.input_mut(|input| {
+        let mut ime_frame = *composing;
+        for event in &input.events {
+            if let egui::Event::Ime(event) = event {
+                ime_frame = true;
+                *composing = matches!(event, egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_));
+            }
+        }
+        let mut send = false;
+        input.events.retain(|event| {
+            if !ime_frame
+                && let egui::Event::Key {
+                    key: Key::Enter,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                    repeat,
+                    ..
+                } = event
+            {
+                send |= !repeat;
+                false
+            } else {
+                true
+            }
+        });
+        send
+    })
+}
+
 fn render_message(ui: &mut egui::Ui, text: &str, palette: theme::Palette) {
     for (index, part) in text.split("```").enumerate() {
         if part.is_empty() {
@@ -651,6 +702,94 @@ fn render_message(ui: &mut egui::Ui, text: &str, palette: theme::Palette) {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn composer_sends_enter_preserves_multiline_text_and_confirms_ime_without_sending() {
+        let ctx = egui::Context::default();
+        let mut draft = String::new();
+        let mut composing = false;
+        let id = egui::Id::new("agent-composer");
+        let mut frame = |mut events: Vec<egui::Event>, focused: bool, modal: bool| {
+            events.push(egui::Event::Key {
+                key: Key::Enter,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            let mut send = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.memory_mut(|m| {
+                            m.request_focus(if focused { id } else { id.with("other") })
+                        });
+                        send = composer_submit(ui, id, modal, &mut composing);
+                        ui.add(egui::TextEdit::multiline(&mut draft).id(id).return_key(
+                            egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter),
+                        ));
+                    });
+                },
+            );
+            (send, draft.clone())
+        };
+        let enter = |modifiers, repeat| egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers,
+        };
+        assert!(!frame(vec![egui::Event::Text("one".into())], true, false).0);
+        assert_eq!(
+            frame(vec![enter(egui::Modifiers::SHIFT, false)], true, false),
+            (false, "one\n".into())
+        );
+        assert_eq!(
+            frame(vec![egui::Event::Paste("two\nthree".into())], true, false),
+            (false, "one\ntwo\nthree".into())
+        );
+        assert_eq!(
+            frame(vec![enter(egui::Modifiers::NONE, false)], true, false),
+            (true, "one\ntwo\nthree".into())
+        );
+        // egui derives repeat from its held-key state, not the raw event flag.
+        ctx.input_mut(|input| {
+            input.keys_down.insert(Key::Enter);
+        });
+        assert!(!frame(vec![enter(egui::Modifiers::NONE, true)], true, false).0);
+        assert!(!frame(vec![enter(egui::Modifiers::NONE, false)], true, true).0);
+        assert!(!frame(vec![enter(egui::Modifiers::NONE, false)], false, false).0);
+        assert!(!frame(vec![egui::Event::Ime(egui::ImeEvent::Enabled)], true, false).0);
+        assert!(
+            !frame(
+                vec![
+                    egui::Event::Ime(egui::ImeEvent::Preedit("候".into())),
+                    enter(egui::Modifiers::NONE, false)
+                ],
+                true,
+                false
+            )
+            .0
+        );
+        assert!(
+            !frame(
+                vec![
+                    egui::Event::Ime(egui::ImeEvent::Commit("候".into())),
+                    enter(egui::Modifiers::NONE, false)
+                ],
+                true,
+                false
+            )
+            .0
+        );
+        assert!(frame(vec![enter(egui::Modifiers::NONE, false)], true, false).0);
+    }
+
     #[derive(Default)]
     struct Storage(BTreeMap<String, String>);
     impl eframe::Storage for Storage {

@@ -12,6 +12,7 @@ use std::{
     },
     time::Duration,
 };
+mod colors;
 
 const SHELL_KEYS: egui::EventFilter = egui::EventFilter {
     tab: true,
@@ -40,6 +41,7 @@ pub struct Terminal {
     /// Interpreter selected when this shell was created, for display/activation context.
     pub python: Option<String>,
     visible: Arc<AtomicBool>,
+    contrast: colors::Contrast,
 }
 
 /// Control messages sent from a debugger terminal view to its owning coordinator.
@@ -122,6 +124,7 @@ impl Terminal {
                 persistent: Arc::new(AtomicBool::new(false)),
                 python: None,
                 visible,
+                contrast: Default::default(),
             },
             Stream { output, alive },
         )
@@ -366,12 +369,36 @@ impl Terminal {
             persistent,
             python: None,
             visible,
+            contrast: Default::default(),
         })
     }
 
     /// Return whether this view's backing stream is still alive.
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    /// Retain bounded parsed output without retaining the PTY, input writer or
+    /// process ownership. Late reader output remains visible after the original
+    /// terminal is dropped, so an SSH exit cannot race away its final error.
+    pub(crate) fn output_view(&self, title: String) -> Self {
+        let (input, closed) = mpsc::sync_channel(1);
+        drop(closed);
+        Self {
+            parser: self.parser.clone(),
+            input,
+            master: None,
+            killer: None,
+            control: None,
+            alive: Arc::new(AtomicBool::new(false)),
+            size: self.size,
+            title,
+            native: false,
+            persistent: Arc::new(AtomicBool::new(false)),
+            python: None,
+            visible: self.visible.clone(),
+            contrast: Default::default(),
+        }
     }
 
     /// Return whether the native window and terminal input widget have focus. Do not call
@@ -590,6 +617,12 @@ impl Terminal {
                         );
                     }
                     if cell.has_contents() {
+                        fg = self.contrast.foreground(
+                            fg,
+                            bg,
+                            cell.contents(),
+                            palette.terminal_minimum_contrast,
+                        );
                         painter.text(
                             pos,
                             egui::Align2::LEFT_TOP,
@@ -744,6 +777,74 @@ mod lifecycle_tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
+    #[test]
+    fn rendering_protects_ansi_extended_rgb_and_inverse_without_changing_output() {
+        fn glyph_color(shapes: &[egui::epaint::ClippedShape], text: &str) -> Color32 {
+            shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == text => {
+                        Some(t.galley.job.sections[0].format.color)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Missing rendered glyph {text}"))
+        }
+        let ctx = egui::Context::default();
+        let (mut terminal, stream) = Terminal::stream(&ctx, "Colors".into(), |_| {});
+        stream.end();
+        terminal.parser.lock().unwrap().process(
+            "\x1b[30mA\x1b[38;5;17mB\x1b[38;2;9;10;11mC\x1b[7mD\x1b[0m\x1b[97mE\x1b[38;2;9;10;11m█"
+                .as_bytes(),
+        );
+        let original = terminal.contents();
+        for minimum in [1., 4.5, 1.] {
+            let palette = Palette {
+                terminal_minimum_contrast: minimum,
+                ..Default::default()
+            };
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 240.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        terminal.ui(ui, 14., palette);
+                    });
+                },
+            );
+            for (letter, raw) in [
+                ("A", palette.ansi[0]),
+                ("B", Color32::from_rgb(0, 0, 95)),
+                ("C", Color32::from_rgb(9, 10, 11)),
+                ("D", palette.terminal_background),
+            ] {
+                let actual = glyph_color(&output.shapes, letter);
+                if minimum == 1. {
+                    assert_eq!(actual, raw);
+                } else {
+                    assert_ne!(actual, raw);
+                }
+            }
+            assert_eq!(glyph_color(&output.shapes, "E"), palette.ansi[15]);
+            assert_eq!(
+                glyph_color(&output.shapes, "█"),
+                Color32::from_rgb(9, 10, 11)
+            );
+            assert_eq!(terminal.contents(), original);
+            let parser = terminal.parser.lock().unwrap();
+            assert_eq!(
+                parser.screen().cell(0, 2).unwrap().fgcolor(),
+                vt100::Color::Rgb(9, 10, 11)
+            );
+            assert!(parser.screen().cell(0, 3).unwrap().inverse());
+        }
+    }
+
     #[derive(Debug)]
     struct CountSignals(Arc<AtomicUsize>);
     impl portable_pty::ChildKiller for CountSignals {
@@ -768,5 +869,38 @@ mod lifecycle_tests {
             drop(terminal);
             assert_eq!(signals.load(Ordering::Acquire), usize::from(!finished));
         }
+    }
+
+    #[test]
+    fn output_view_keeps_late_error_bytes_without_input_or_process_ownership() {
+        let signals = Arc::new(AtomicUsize::new(0));
+        let (mut terminal, stream) =
+            Terminal::stream(&egui::Context::default(), "SSH fixture".into(), |_| {});
+        terminal.killer = Some(Box::new(CountSignals(signals.clone())));
+        let output = terminal.output_view("SSH ERROR / fixture".into());
+        drop(terminal);
+        assert_eq!(signals.load(Ordering::Acquire), 1);
+        assert!(!output.is_alive());
+        assert!(!output.persistent());
+        assert!(output.send(b"must not reach SSH\n".to_vec()).is_err());
+        // Child exit can arrive before the PTY reader's final stderr bytes.
+        stream
+            .feed(b"\x1b[31mPermission denied (publickey).\x1b[0m\r\n".to_vec())
+            .unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(3);
+        while !output.contents().contains("Permission denied (publickey).") {
+            assert!(
+                std::time::Instant::now() < until,
+                "Late diagnostic output was lost"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!output.contents().contains('\x1b'));
+        drop(output);
+        assert_eq!(
+            signals.load(Ordering::Acquire),
+            1,
+            "The output view must never signal the old process"
+        );
     }
 }

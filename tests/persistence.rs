@@ -32,6 +32,60 @@ fn values(path: &Path) -> BTreeMap<String, String> {
 fn open(path: &Path) -> Preferences {
     Preferences::open(path.into(), Arc::new(|| {}))
 }
+
+#[test]
+fn terminal_color_edits_merge_and_explicit_stale_reset_wins() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let initial = BTreeMap::from([
+        ("terminal_color.carbon.foreground", "theme"),
+        ("color_theme", "carbon"),
+    ]);
+    fs::write(&path, ron::ser::to_string(&initial).unwrap()).unwrap();
+    let mut foreground = open(&path);
+    let mut background = open(&path);
+    let idle = open(&path);
+    let mut stale_reset = open(&path);
+    foreground.set_string("terminal_color.carbon.foreground", "#eeeeee".into());
+    background.set_string("terminal_color.carbon.background", "#001122".into());
+    background.set_string("terminal_color.carbon.ansi.4", "#99aaff".into());
+    background.set_string("terminal_color.ice.minimum_contrast", "7".into());
+    drop(foreground);
+    drop(background);
+    drop(idle);
+    assert_eq!(values(&path)["terminal_color.carbon.foreground"], "#eeeeee");
+    stale_reset.set_string("terminal_color.carbon.foreground", "theme".into());
+    drop(stale_reset);
+    let saved = values(&path);
+    assert_eq!(saved["terminal_color.carbon.foreground"], "theme");
+    assert_eq!(saved["terminal_color.carbon.background"], "#001122");
+    assert_eq!(saved["terminal_color.carbon.ansi.4"], "#99aaff");
+    assert_eq!(saved["terminal_color.ice.minimum_contrast"], "7");
+    assert_eq!(saved["color_theme"], "carbon");
+}
+
+#[test]
+fn explicit_scale_reset_overrides_another_window_without_reverting_its_font() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let initial = BTreeMap::from([("ui_scale", "1"), ("font_size", "14")]);
+    fs::write(&path, ron::ser::to_string(&initial).unwrap()).unwrap();
+    let mut first = open(&path);
+    let mut second = open(&path);
+    second.set_string("ui_scale", "0.75".into());
+    second.set_string("font_size", "19".into());
+    second.flush();
+    wait(|| values(&path)["ui_scale"] == "0.75");
+    // This window still displays 100%. Reset is an explicit change, despite
+    // matching its local baseline, and must survive the scalar no-change guard.
+    first.set_string("ui_scale", "1".into());
+    first.flush();
+    wait(|| values(&path)["ui_scale"] == "1");
+    assert_eq!(values(&path)["font_size"], "19");
+    drop(second);
+    assert_eq!(values(&path)["ui_scale"], "1");
+}
+
 fn child(root: &Path, role: &str, scenario: &str) -> Child {
     Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", "preference_child", "--nocapture"])
@@ -125,6 +179,7 @@ fn preference_child() {
             project["same"]["latex"]["program"] = "custom-tex".into();
             project["same"]["debugger"]["config"]["adapter"] = "custom-dap".into();
             agent["same"]["model"] = "model-a".into();
+            agent["same"]["personality"] = "jackson_lamb".into();
         } else {
             store.set_string("font_size", "19".into());
             project["same"]["ruff"] = "/tools/ruff".into();
@@ -188,6 +243,7 @@ fn processes_merge_independent_fields_projects_and_manual_changes() {
     assert!(project.get("other").is_some());
     let agent: Value = serde_json::from_str(&values["agent_preferences"]).unwrap();
     assert_eq!(agent["same"]["model"], "model-a");
+    assert_eq!(agent["same"]["personality"], "jackson_lamb");
     assert_eq!(agent["same"]["local_url"], "http://localhost:11434/v1");
     assert_eq!(agent["same"]["future"]["setting"], true);
     assert!(agent.get("other").is_some());

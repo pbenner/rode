@@ -211,6 +211,7 @@ fn codex_turn(program: &str, isolated: bool) {
             access: rode::agent::Access::Full,
             approval: rode::agent::Approval::Never,
             reasoning_effort: "high".into(),
+            personality: rode::agent::Personality::JacksonLamb,
             ..Default::default()
         },
         plan: sandbox::prepare(
@@ -265,6 +266,7 @@ fn codex_turn(program: &str, isolated: bool) {
             .unwrap();
     assert_eq!(request["model"], "fixture-local-model");
     assert_eq!(request["stream"], true);
+    assert!(request["input"].to_string().contains("rode_response_style"));
     // History discovery and replay use the real on-disk app-server rollouts,
     // including threads created with source appServer, without another model call.
     drop(chat);
@@ -276,6 +278,16 @@ fn codex_turn(program: &str, isolated: bool) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(browser.entries.len(), 1, "{}", browser.status);
+    assert!(
+        !browser.entries[0].preview.contains("rode_response_style"),
+        "{}",
+        browser.entries[0].preview
+    );
+    assert!(
+        !browser.entries[0].title.contains("rode_response_style"),
+        "{}",
+        browser.entries[0].title
+    );
     let id = browser.entries[0].id.clone();
     browser.resume(&id).unwrap();
     while browser.busy {

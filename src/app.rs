@@ -44,6 +44,7 @@ mod navigation;
 mod notebook_view;
 mod pdf_view;
 mod sessions;
+mod terminal_colors;
 mod vaults;
 mod workbench;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
@@ -388,7 +389,10 @@ pub struct EditorApp {
     notice: Option<(String, bool, Instant)>,
     status: String,
     font_size: f32,
+    ui_scale: f32,
+    ui_scale_save_pending: bool,
     themes: theme::Themes,
+    terminal_colors: terminal_colors::State,
     theme_save_pending: bool,
     syntax_save_pending: bool,
     show_find: bool,
@@ -440,6 +444,16 @@ impl EditorApp {
             ));
         }
         theme::install(&cc.egui_ctx, themes.active().palette);
+        // Keep a display-relative scale separate from editor text and private
+        // egui window state, which another RODE process may save independently.
+        let ui_scale = storage
+            .and_then(|s| s.get_string("ui_scale"))
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|scale| scale.is_finite() && (0.5..=2.0).contains(scale))
+            .unwrap_or(1.0);
+        cc.egui_ctx
+            .options_mut(|options| options.zoom_with_keyboard = false);
+        cc.egui_ctx.set_zoom_factor(ui_scale);
         let markdown_images = Arc::new(markdown::Images::default());
         cc.egui_ctx.add_texture_loader(markdown_images.clone());
         let (tx, rx) = mpsc::channel();
@@ -517,6 +531,9 @@ impl EditorApp {
                 .and_then(|s| s.parse::<f32>().ok())
                 .unwrap_or(14.0)
                 .clamp(10.0, 26.0),
+            ui_scale,
+            ui_scale_save_pending: false,
+            terminal_colors: terminal_colors::State::load(storage, &themes),
             themes,
             theme_save_pending: startup.theme.is_some(),
             syntax_save_pending: startup.syntax_theme.is_some(),
@@ -602,10 +619,12 @@ impl EditorApp {
             return;
         };
         self.persist_theme_choice(Some(&mut storage));
+        self.persist_ui_scale(Some(&mut storage));
         self.persist_project_preferences(Some(&mut storage));
         self.persist_agent_preferences(Some(&mut storage));
         self.persist_extensions(Some(&mut storage));
         self.navigation.bindings.store(&mut storage);
+        self.terminal_colors.store(&mut storage);
         if self.font_save_pending {
             self.font_save_pending = false;
             storage.set_string("font_size", self.font_size.to_string());
@@ -622,6 +641,86 @@ impl EditorApp {
             self.notify(error, true);
         }
         self.persistence = Some(storage);
+    }
+
+    /// Scale the whole interface relative to the monitor DPI, preserving text
+    /// sizes in points and document/terminal state. An explicit reset is an edit
+    /// even when this window already displays 100%: another window may differ.
+    fn set_ui_scale(&mut self, scale: f32, ctx: &egui::Context) {
+        self.ui_scale = if scale.is_finite() {
+            (scale.clamp(0.5, 2.0) * 100.).round() / 100.
+        } else {
+            1.0
+        };
+        ctx.set_zoom_factor(self.ui_scale);
+        self.ui_scale_save_pending = true;
+    }
+
+    fn persist_ui_scale(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
+        if !std::mem::take(&mut self.ui_scale_save_pending) {
+            return;
+        }
+        if let Some(storage) = storage {
+            storage.set_string("ui_scale", self.ui_scale.to_string());
+            storage.flush();
+        } else {
+            self.notify("Interface scale changed, but could not be saved.", true);
+        }
+    }
+
+    fn ui_scale_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let percent = (self.ui_scale * 100.).round() as u16;
+        // Scaling moves every widget. Use completed clicks and close the menu
+        // before the next frame applies the zoom, rather than dragging a
+        // control whose geometry changes underneath the pointer.
+        icons::submenu(
+            ui,
+            Icon::Settings,
+            &format!("Interface scale: {percent}%"),
+            |ui| {
+                ui.small("Relative to system display scaling");
+                for (icon, label, step, enabled) in [
+                    (
+                        Icon::ChevronLeft,
+                        "Smaller (5%)",
+                        -0.05,
+                        self.ui_scale > 0.5,
+                    ),
+                    (Icon::ChevronRight, "Larger (5%)", 0.05, self.ui_scale < 2.0),
+                ] {
+                    if ui
+                        .add_enabled(enabled, IconButton::new(icon, label))
+                        .clicked()
+                    {
+                        self.set_ui_scale(self.ui_scale + step, ctx);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(260.)
+                    .show(ui, |ui| {
+                        for preset in [50, 75, 90, 100, 110, 125, 150, 175, 200] {
+                            let label = if preset == 100 {
+                                "100% (system default)".into()
+                            } else {
+                                format!("{preset}%")
+                            };
+                            if ui.selectable_label(percent == preset, label).clicked() {
+                                self.set_ui_scale(f32::from(preset) / 100., ctx);
+                                ui.close();
+                            }
+                        }
+                    });
+            },
+        );
+        if ui
+            .add(IconButton::new(Icon::Refresh, "Reset interface scale (100%)").shortcut("Ctrl+0"))
+            .clicked()
+        {
+            self.set_ui_scale(1., ctx);
+            ui.close();
+        }
     }
 
     fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1040,9 +1139,7 @@ impl EditorApp {
                             }
                         }
                         Err(error) => {
-                            self.detach_ssh(ctx);
-                            self.status = "SSH connection failed · local mode".into();
-                            self.notify(error, true);
+                            self.ssh_failed(error, ctx);
                         }
                     }
                 }
@@ -1315,8 +1412,7 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(|w| w.remote.is_some() && w.connected)
         {
-            self.detach_ssh(ctx);
-            self.notify("SSH connection ended. Remote tabs were retained as disconnected buffers; local files and folders are available.",true);
+            self.ssh_failed("SSH connection ended. Remote tabs are retained as disconnected buffers; local files and folders are available.".into(),ctx);
         }
     }
 
@@ -1658,13 +1754,16 @@ impl EditorApp {
                             return;
                         }
                         if !alive.load(Ordering::Acquire) {
-                            break Err("SSH exited. See the terminal for the authentication or connection error.".into());
+                            break Err("SSH login failed.".into());
                         }
                         if remote.connected() {
                             break Ok(());
                         }
                         if start.elapsed() > Duration::from_secs(300) {
-                            break Err("SSH authentication is still pending. Complete the terminal prompts, then reconnect.".into());
+                            break Err(
+                                "SSH login timed out after five minutes. Reconnect to try again."
+                                    .into(),
+                            );
                         }
                         std::thread::sleep(Duration::from_millis(200));
                     };
@@ -1674,8 +1773,7 @@ impl EditorApp {
                 Terminal::focus(ctx);
             }
             Err(error) => {
-                self.detach_ssh(ctx);
-                self.notify(format!("{error:#}"), true);
+                self.ssh_failed(format!("{error:#}"), ctx);
             }
         }
     }
@@ -2104,6 +2202,9 @@ impl EditorApp {
                 self.font_size = (self.font_size - 1.0).max(10.0);
                 self.font_save_pending = true;
             }
+            if consume(egui::Modifiers::COMMAND, Key::Num0) {
+                self.set_ui_scale(1., ctx);
+            }
         }
         if !terminal_focus && self.show_find && consume(egui::Modifiers::NONE, Key::Escape) {
             self.show_find = false;
@@ -2146,6 +2247,9 @@ impl EditorApp {
                         self.theme_menu(ui, ctx);
                     });
                     icons::submenu(ui, Icon::Palette, "Syntax highlighting", |ui| self.syntax_theme_menu(ui, ctx));
+                    // Keep display sizing reachable even when system DPI makes menus large.
+                    self.ui_scale_menu(ui, ctx);
+                    if ui.add(IconButton::new(Icon::Palette, "Terminal colors…")).clicked() { self.terminal_colors.open = true; ui.close(); }
                     ui.separator();
                     for (panel,icon,label,shortcut) in [(Panel::Git,Icon::Git,"Source control","Ctrl+Shift+G"),(Panel::Monitor,Icon::Monitor,"System monitor",""),(Panel::Problems,Icon::Problems,"Problems","Ctrl+Shift+M"),(Panel::Python,Icon::Python,"Python environment",""),(Panel::Settings,Icon::Settings,"Project settings / sandbox access",""),(Panel::Agent,Icon::Chat,"Agent chat","Ctrl+Shift+A"),(Panel::Debug,Icon::Debug,"Debugger","F5")] {
                         if ui.add(IconButton::new(icon,label).shortcut(shortcut)).clicked() { self.toggle_panel(panel, ctx); ui.close(); }
@@ -2160,7 +2264,7 @@ impl EditorApp {
                     if ui.add(IconButton::new(Icon::Play, "Marp slide preview")).clicked() { self.toggle_marp(ctx); ui.close(); }
                     if ui.add(IconButton::new(Icon::Search, "Find / replace").shortcut(self.editing_hint("Ctrl+F"))).clicked() { self.markdown_source(); self.show_find = true; self.find_focus = true; ui.close(); }
                     if ui.checkbox(&mut self.show_hidden, "Show hidden files").changed() { self.tree_dirty = true; }
-                    self.font_save_pending |= ui.add(egui::Slider::new(&mut self.font_size, 10.0..=26.0).text("Font size")).changed();
+                    self.font_save_pending |= ui.add(egui::Slider::new(&mut self.font_size, 10.0..=26.0).text("Editor font size")).changed();
                 });
                 ui.menu_button("Code", |ui| {
                     if ui.add(IconButton::new(Icon::Format, "Format document").shortcut("Shift+Alt+F")).clicked() { self.format_active(true,false,ctx); ui.close(); }
@@ -2687,7 +2791,7 @@ impl EditorApp {
     }
 
     fn terminal_panel(&mut self, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
+        let palette = self.terminal_colors.palette(self.themes.active());
         if !self.show_terminal || !self.navigation.visible(navigation::Pane::Terminal) {
             return;
         }
@@ -3808,6 +3912,7 @@ impl eframe::App for EditorApp {
         self.workbench_windows(ctx);
         self.extension_windows(ctx);
         self.latex_window(ctx);
+        self.terminal_colors.show(ctx, self.themes.active());
         self.notice_ui(ctx);
         self.navigation_finish(ctx);
         if self.profiles_loading.is_some() {
@@ -3816,12 +3921,14 @@ impl eframe::App for EditorApp {
         if self.persistence.is_some() {
             self.persist_native(None);
         } else {
+            self.persist_ui_scale(frame.storage_mut());
             self.persist_theme_choice(frame.storage_mut());
             self.persist_project_preferences(frame.storage_mut());
             self.persist_agent_preferences(frame.storage_mut());
             self.persist_extensions(frame.storage_mut());
             if let Some(storage) = frame.storage_mut() {
                 self.navigation.bindings.store(storage);
+                self.terminal_colors.store(storage);
             }
         }
         // Optional automation hook for a bounded native-window smoke test.
@@ -3841,10 +3948,12 @@ impl eframe::App for EditorApp {
             return;
         }
         self.navigation.bindings.store(storage);
+        self.terminal_colors.store(storage);
         self.workbench.store(storage);
         self.agents.store(storage);
         self.persist_extensions(Some(storage));
         storage.set_string("font_size", self.font_size.to_string());
+        storage.set_string("ui_scale", self.ui_scale.to_string());
         if let Ok(options) = serde_json::to_string(&self.sandbox_defaults) {
             storage.set_string("sandbox_defaults", options);
         }
@@ -4367,6 +4476,63 @@ mod tests {
         }
         fn flush(&mut self) {
             self.1 += 1;
+        }
+    }
+
+    #[test]
+    fn interface_scale_tracks_monitor_dpi_and_preserves_editor_state() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        app.documents[0].text = "unsaved work".into();
+        app.font_size = 19.;
+        app.set_ui_scale(0.75, &ctx);
+        let mut storage = MemoryStorage::default();
+        app.persist_ui_scale(Some(&mut storage));
+        assert_eq!(storage.0["ui_scale"], "0.75");
+        assert_eq!(storage.1, 1);
+        app.persist_ui_scale(Some(&mut storage));
+        assert_eq!(storage.1, 1, "Idle frames must not save scale repeatedly");
+        for native_dpi in [1., 2.] {
+            let mut input = egui::RawInput::default();
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .native_pixels_per_point = Some(native_dpi);
+            let _ = ctx.run(input, |ctx| {
+                assert_eq!(ctx.pixels_per_point(), native_dpi * 0.75);
+            });
+        }
+        app.select_theme("carbon", &ctx);
+        assert_eq!(ctx.zoom_factor(), 0.75);
+        assert_eq!(app.font_size, 19.);
+        assert_eq!(app.documents[0].text, "unsaved work");
+        assert!(app.documents[0].dirty());
+        let restored_ctx = egui::Context::default();
+        let mut cc = eframe::CreationContext::_new_kittest(restored_ctx.clone());
+        // Ignore stale scale in egui's private GUI snapshot on restart.
+        restored_ctx.options_mut(|options| options.zoom_factor = 2.);
+        cc.storage = Some(&storage);
+        let restored = EditorApp::new(&cc, Startup::default());
+        assert_eq!(restored.ui_scale, 0.75);
+        let _ = restored_ctx.run(Default::default(), |ctx| {
+            assert_eq!(ctx.zoom_factor(), 0.75);
+            assert!(!ctx.options(|options| options.zoom_with_keyboard));
+        });
+        assert!(!restored.ui_scale_save_pending);
+    }
+
+    #[test]
+    fn invalid_interface_scale_uses_system_display_scaling() {
+        for invalid in ["NaN", "inf", "bad", "0", "-1", "5"] {
+            let mut storage = MemoryStorage::default();
+            storage.0.insert("ui_scale".into(), invalid.into());
+            let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+            cc.storage = Some(&storage);
+            let app = EditorApp::new(&cc, Startup::default());
+            assert_eq!(app.ui_scale, 1., "{invalid}");
         }
     }
 

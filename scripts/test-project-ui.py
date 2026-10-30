@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -343,7 +344,83 @@ def run(remote=False, fallback=False):
                         pass
 
 
+def failed_connection():
+    """A real refused SSH login must leave copyable diagnostics, not a local shell."""
+    with tempfile.TemporaryDirectory(prefix="rode-ssh-failure-ui-") as directory:
+        base = Path(directory)
+        # Reserve a loopback port without listening; no real host/account is contacted.
+        with socket.socket() as reserved:
+            reserved.bind(("127.0.0.1", 0))
+            port = reserved.getsockname()[1]
+            config = base / "ssh_config"
+            config.write_text(
+                f"Host rode-failure\n HostName 127.0.0.1\n Port {port}\n"
+                " BatchMode yes\n ConnectTimeout 2\n ConnectionAttempts 1\n"
+            )
+            environment = dict(
+                os.environ,
+                XDG_CONFIG_HOME=str(base / "config"),
+                XDG_DATA_HOME=str(base / "data"),
+                RODE_SESSION_DIR=str(base / "sessions"),
+            )
+            with (ARTIFACTS / "ssh-login-failure.log").open("w") as log:
+                process = subprocess.Popen(
+                    [str(BINARY), "--ssh", "rode-failure", "--ssh-config", str(config)],
+                    cwd=base,
+                    env=environment,
+                    stdout=log,
+                    stderr=log,
+                )
+                window = None
+                try:
+                    window = window_for(process)
+                    time.sleep(0.6)
+                    wait_for(
+                        lambda: '"RODE"' in title(window), "Failed SSH retained the host title"
+                    )
+                    screenshot(window, "ssh-login-error-output.png")
+                    click(600, 740)
+                    text("echo should-not-run\n")  # The failed-login view accepts no input.
+                    click(1218, 659)  # Copy the retained, read-only terminal output.
+                    time.sleep(0.2)
+                    key("p", ("Control_L", "Shift_L"))
+                    text("New file")
+                    key("Return")
+                    time.sleep(0.2)
+                    key("v", ("Control_L",))
+                    key("s", ("Control_L",))
+                    time.sleep(0.25)
+                    key("a", ("Control_L",))
+                    copied = base / "copied-ssh-error.txt"
+                    text(str(copied))
+                    key("Return")
+                    wait_for(copied.exists, "Could not save copied login output locally")
+                    output = copied.read_text()
+                    assert "Connection refused" in output, output
+                    assert "should-not-run" not in output, output
+                    screenshot(window, "ssh-login-error-copied.png")
+                    key("o", ("Control_L", "Shift_L"))
+                    time.sleep(0.3)
+                    screenshot(window, "ssh-login-error-local-picker.png")
+                    key("Escape")
+                    assert "SSH" not in title(window), title(window)
+                    close_window(window, process)
+                    print(
+                        "SSH failure: retained read-only OpenSSH error, Copy and local opening passed."
+                    )
+                except Exception:
+                    if window is not None and process.poll() is None:
+                        screenshot(window, "ssh-login-failure.png")
+                    raise
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        process.wait(timeout=5)
+
+
 case = os.environ.get("RODE_PROJECT_UI_CASE", "all")
+if case in ("all", "failure"):
+    failed_connection()
 if case in ("all", "sandbox"):
     run()
 if case in ("all", "fallback"):

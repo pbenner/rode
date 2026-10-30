@@ -1,10 +1,34 @@
 //! Compact native model/permission popovers shared by the chat providers.
 //! Provider metadata is read from the already-started chat; drawing these
 //! controls never probes an executable, a remote host or a model server.
+//! Child choices use native submenus: a ComboBox would replace the parent in
+//! egui's single remembered-popup slot and disappear before selection.
 
-use crate::agent::{Access, Approval, Config, Provider, controls::Control, protocol::Chat};
+use crate::agent::{
+    Access, Approval, Config, Personality, Provider, controls::Control, protocol::Chat,
+};
 use eframe::egui;
 use serde_json::Value;
+
+/// Presentation control only: opening/selecting this menu never starts a backend
+/// or changes model, reasoning, approval or tool settings.
+pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool) {
+    let selected = config.personality;
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::containers::menu::MenuButton::from_button(
+            egui::Button::new(selected.button()).small().selected(selected != Personality::Default),
+        ).ui(ui, |ui| {
+            ui.set_max_width(270.);
+            ui.strong("Response personality");
+            for choice in Personality::ALL {
+                ui.selectable_value(&mut config.personality, choice, choice.label())
+                    .on_hover_text(choice.description());
+            }
+            ui.separator();
+            ui.add(egui::Label::new("Reply-style hint. Model, tools, permissions and project settings stay unchanged. Applies to the next message.").wrap());
+        }).0.on_hover_text(format!("Response personality: {}\n{}", selected.label(), selected.description()));
+    });
+}
 
 pub(super) fn buttons(
     ui: &mut egui::Ui,
@@ -86,38 +110,37 @@ pub(super) fn buttons(
                         && !m.efforts.is_empty()
                 });
             if advertised {
-                egui::ComboBox::from_id_salt("agent-reasoning")
-                    .selected_text(if config.reasoning_effort.is_empty() {
-                        "Default"
-                    } else {
-                        &config.reasoning_effort
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut config.reasoning_effort, String::new(), "Default");
-                        if chat.controls_match(config) {
-                            let model = chat
-                                .models
-                                .iter()
-                                .find(|m| m.value.id == config.model())
-                                .or_else(|| {
-                                    config
-                                        .model()
-                                        .is_empty()
-                                        .then(|| chat.models.iter().find(|m| m.default))
-                                        .flatten()
-                                });
-                            if let Some(model) = model {
-                                for effort in &model.efforts {
-                                    ui.selectable_value(
-                                        &mut config.reasoning_effort,
-                                        effort.id.clone(),
-                                        &effort.name,
-                                    )
-                                    .on_hover_text(&effort.description);
-                                }
+                let selected = if config.reasoning_effort.is_empty() {
+                    "Default".to_owned()
+                } else {
+                    config.reasoning_effort.clone()
+                };
+                choices(ui, selected, |ui| {
+                    ui.selectable_value(&mut config.reasoning_effort, String::new(), "Default");
+                    if chat.controls_match(config) {
+                        let model = chat
+                            .models
+                            .iter()
+                            .find(|m| m.value.id == config.model())
+                            .or_else(|| {
+                                config
+                                    .model()
+                                    .is_empty()
+                                    .then(|| chat.models.iter().find(|m| m.default))
+                                    .flatten()
+                            });
+                        if let Some(model) = model {
+                            for effort in &model.efforts {
+                                ui.selectable_value(
+                                    &mut config.reasoning_effort,
+                                    effort.id.clone(),
+                                    &effort.name,
+                                )
+                                .on_hover_text(&effort.description);
                             }
                         }
-                    });
+                    }
+                });
             } else {
                 ui.add(
                     egui::TextEdit::singleline(&mut config.reasoning_effort)
@@ -205,6 +228,15 @@ fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::
     );
 }
 
+/// Keep large backend-defined lists scrollable without replacing their parent
+/// popup. A bounded initial width leaves room for the editor on small displays.
+fn choices(ui: &mut egui::Ui, label: String, add: impl FnOnce(&mut egui::Ui)) {
+    egui::containers::menu::SubMenuButton::new(label).ui(ui, |ui| {
+        ui.set_width(200.);
+        egui::ScrollArea::vertical().max_height(230.).show(ui, add);
+    });
+}
+
 fn acp(ui: &mut egui::Ui, config: &mut Config, chat: &Chat, permissions: bool) {
     if !chat.controls_match(config) || chat.controls.is_empty() {
         ui.label("This agent has not advertised model or mode selectors. Available controls appear after the first message.");
@@ -257,15 +289,12 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
             .find(|o| o.id == selected)
             .map(|o| o.name.as_str())
             .unwrap_or(&selected);
-        egui::ComboBox::from_id_salt("option")
-            .width(240.)
-            .selected_text(name)
-            .show_ui(ui, |ui| {
-                for item in &control.options {
-                    ui.selectable_value(&mut selected, item.id.clone(), &item.name)
-                        .on_hover_text(&item.description);
-                }
-            });
+        choices(ui, name.to_owned(), |ui| {
+            for item in &control.options {
+                ui.selectable_value(&mut selected, item.id.clone(), &item.name)
+                    .on_hover_text(&item.description);
+            }
+        });
         if value.as_str() != Some(selected.as_str()) {
             config
                 .acp_options

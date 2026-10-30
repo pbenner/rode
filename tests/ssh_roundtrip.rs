@@ -1085,6 +1085,7 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
                 provider,
                 codex: program.to_string_lossy().into(),
                 acp_program: program.to_string_lossy().into(),
+                personality: rode::agent::Personality::JacksonLamb,
                 ..Default::default()
             },
             plan: plan.clone(),
@@ -1095,6 +1096,25 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
         chat.submit(launch.clone(), "remote".into(), Arc::new(|| {}))
             .unwrap();
         wait_agent(&mut chat, |c| c.completed == 1);
+        let calls = std::fs::read_to_string(root.join("agent-rpc.jsonl")).unwrap();
+        let prompt: serde_json::Value = calls
+            .lines()
+            .rev()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|r| matches!(r["method"].as_str(), Some("turn/start" | "session/prompt")))
+            .unwrap();
+        let field = if provider == Provider::Acp {
+            "prompt"
+        } else {
+            "input"
+        };
+        assert_eq!(prompt["params"][field][0]["text"], "remote");
+        assert!(
+            prompt["params"][field][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("jackson_lamb")
+        );
         let scope: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(root.join("agent-scope.json")).unwrap())
                 .unwrap();

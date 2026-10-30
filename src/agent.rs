@@ -2,7 +2,9 @@
 //! the full process tree is launched inside the already-probed project sandbox.
 pub mod controls;
 pub mod history;
+pub mod personality;
 pub mod protocol;
+pub use personality::Personality;
 
 use crate::{sandbox, ssh};
 use anyhow::{Result, ensure};
@@ -122,6 +124,8 @@ pub struct Config {
     pub reasoning_effort: String,
     /// Explicit ACP selector overrides, keyed by advertised option ID.
     pub acp_options: BTreeMap<String, Value>,
+    /// Chat response tone only; does not change tools, execution or permission settings.
+    pub personality: Personality,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -138,6 +142,7 @@ impl Default for Config {
             approval: Approval::default(),
             reasoning_effort: String::new(),
             acp_options: BTreeMap::new(),
+            personality: Personality::Default,
         }
     }
 }

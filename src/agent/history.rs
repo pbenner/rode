@@ -336,16 +336,23 @@ impl Browser {
                     if self.entries.iter().any(|e| e.id == id) {
                         continue;
                     }
-                    let preview = clip(row["preview"].as_str().unwrap_or_default(), 512);
+                    let preview = clip(
+                        super::personality::preview_text(
+                            row["preview"].as_str().unwrap_or_default(),
+                        ),
+                        512,
+                    );
                     let title = clip(
-                        row[if acp { "title" } else { "name" }]
-                            .as_str()
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(if preview.is_empty() {
-                                "Untitled conversation"
-                            } else {
-                                &preview
-                            }),
+                        super::personality::preview_text(
+                            row[if acp { "title" } else { "name" }]
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(if preview.is_empty() {
+                                    "Untitled conversation"
+                                } else {
+                                    &preview
+                                }),
+                        ),
                         256,
                     );
                     self.entries.push(Entry {
@@ -463,6 +470,16 @@ impl Browser {
         } else if controls.is_empty() {
             controls = std::mem::take(&mut self.replay_controls);
         }
+        self.replay.retain_mut(|message| {
+            if message.role == Role::User {
+                let task = super::personality::visible_text(&message.text);
+                if task.len() != message.text.len() {
+                    message.text = task.to_owned();
+                }
+                return !message.text.is_empty();
+            }
+            true
+        });
         self.limited |= trim(&mut self.replay);
         self.restored = Some(Restored {
             session: self.session.take().context("History connection closed")?,
@@ -564,6 +581,7 @@ fn codex_messages(turn: &Value) -> Vec<Message> {
                         .flatten()
                         .take(32)
                         .filter_map(|c| c["text"].as_str())
+                        .filter(|text| !super::personality::visible_text(text).is_empty())
                         .map(|s| clip(s, 65536))
                         .collect::<Vec<_>>()
                         .join("\n");

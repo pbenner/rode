@@ -21,6 +21,9 @@ Put UTF-8 JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/` and restart
   },
   "syntax": {
     "comment": "#a08bb4"
+  },
+  "terminal": {
+    "minimum_contrast": 4.5
   }
 }
 ```
@@ -59,7 +62,11 @@ The `colors` object accepts:
 
 The `syntax` object accepts `comment`, `keyword`, `type`, `function`, `string`, `number`, `constant`, `variable`, `operator`, `punctuation`, `builtin`, and `attribute`. These map to the existing parser's scopes; this is syntax coloring, not semantic analysis. Unmodified Phosphor retains the original syntax theme. A Phosphor theme with syntax overrides uses a matching token palette for the remaining categories.
 
-The optional `ansi` array overrides the terminal's first 16 indexed colors in standard order: black, red, green, yellow, blue, magenta, cyan, white, followed by their bright variants. All 16 entries are required if the array is supplied. Extended 256-color indices and explicit RGB colors emitted by terminal programs retain their standard values.
+The optional `ansi` array overrides the terminal's first 16 indexed colors in standard order: black, red, green, yellow, blue, magenta, cyan, white, followed by their bright variants. All 16 entries are required if the array is supplied. Extended 256-color indices and explicit RGB colors use their standard values before contrast correction.
+
+The optional `terminal.minimum_contrast` is a number from **1** to **21**, inherited from the base theme when omitted. Built-in themes default to **4.5**. Rendered text below this ratio is mixed toward white or black against its actual cell background, including inverted cells and RGB/256-color prompts. Backgrounds, spaces, Powerline separators and box/block glyphs are preserved. Unattainable ratios use whichever of black/white has the best contrast. **1** disables correction for exact terminal colors.
+
+**View → Terminal colors…** also lets users override foreground/background, individual ANSI colors and minimum contrast without editing JSON. These desktop preferences are saved immediately per theme ID; they take precedence over theme files. **Reset to theme defaults** restores the file/base values. Switching palettes or adjusting terminal colors does not restart a shell or change its prompt/environment.
 
 ## Built-in definitions
 

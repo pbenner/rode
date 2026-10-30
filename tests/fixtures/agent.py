@@ -238,17 +238,24 @@ try:
                     ("user_message_chunk", f"Earlier question {n}"),
                     ("agent_message_chunk", f"Earlier answer {n}"),
                 ):
-                    notify(
-                        "session/update",
-                        {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": kind,
-                                "messageId": f"{kind}-{n}",
-                                "content": {"type": "text", "text": content},
+                    chunks = [content]
+                    style = root / "saved-response-style.txt"
+                    if kind == "user_message_chunk" and style.exists():
+                        hint = style.read_text()
+                        # Replayed text blocks can be coalesced and fragmented by ACP peers.
+                        chunks += ["\n" + hint[: len(hint) // 2], hint[len(hint) // 2 :]]
+                    for chunk in chunks:
+                        notify(
+                            "session/update",
+                            {
+                                "sessionId": session_id,
+                                "update": {
+                                    "sessionUpdate": kind,
+                                    "messageId": f"{kind}-{n}",
+                                    "content": {"type": "text", "text": chunk},
+                                },
                             },
-                        },
-                    )
+                        )
             response(request, {"configOptions": controls()})
         elif method == "model/list":
             models = (

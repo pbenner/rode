@@ -25,6 +25,9 @@ enum PaletteAction {
     Explorer,
     Find,
     Shortcuts,
+    UiScaleStep(f32),
+    UiScaleReset,
+    TerminalColors,
     Git,
     Monitor,
     Problems,
@@ -99,6 +102,18 @@ impl EditorApp {
             (PaletteAction::Explorer, "Toggle explorer", "Ctrl+B"),
             (PaletteAction::Find, "Find / replace in file", "Ctrl+F"),
             (PaletteAction::Shortcuts, "Keyboard shortcuts", ""),
+            (
+                PaletteAction::TerminalColors,
+                "Terminal: Colors and contrast",
+                "",
+            ),
+            (PaletteAction::UiScaleStep(-0.05), "Interface: Zoom out", ""),
+            (PaletteAction::UiScaleStep(0.05), "Interface: Zoom in", ""),
+            (
+                PaletteAction::UiScaleReset,
+                "Interface: Reset scale",
+                "Ctrl+0",
+            ),
             (PaletteAction::Git, "Git: Source control", "Ctrl+Shift+G"),
             (PaletteAction::Monitor, "System: Monitor", ""),
             (PaletteAction::Problems, "Code: Problems", "Ctrl+Shift+M"),
@@ -296,6 +311,9 @@ impl EditorApp {
                 PaletteAction::Style(style) => self.navigation.bindings.select_style(style),
                 PaletteAction::Theme(id) => self.select_theme(&id, ctx),
                 PaletteAction::Syntax(id) => self.select_syntax_theme(&id, ctx),
+                PaletteAction::UiScaleStep(step) => self.set_ui_scale(self.ui_scale + step, ctx),
+                PaletteAction::UiScaleReset => self.set_ui_scale(1., ctx),
+                PaletteAction::TerminalColors => self.terminal_colors.open = true,
                 PaletteAction::Extension(extension, command) => {
                     self.extension_command(&extension, &command, ctx)
                 }

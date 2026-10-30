@@ -248,3 +248,55 @@ fn local_history_does_not_require_a_model_and_read_only_wins_over_saved_access()
     assert_eq!(resume["params"]["approvalPolicy"], "never");
     assert_eq!(resume["params"]["modelProvider"], "rode_local");
 }
+
+#[test]
+fn acp_replay_hides_fragmented_style_hints_and_default_resets_a_restored_chat() {
+    let (temp, mut launch) = fixture(Provider::Acp, false);
+    launch.config.personality = rode::agent::Personality::JacksonLamb;
+    let mut chat = Chat::default();
+    chat.submit(launch.clone(), "first".into(), Arc::new(|| {}))
+        .unwrap();
+    wait_chat(&mut chat);
+    let calls = log(temp.path());
+    let hint = calls
+        .iter()
+        .find(|r| r["method"] == "session/prompt")
+        .unwrap()["params"]["prompt"][1]["text"]
+        .as_str()
+        .unwrap();
+    fs::write(temp.path().join("saved-response-style.txt"), hint).unwrap();
+    launch.config.personality = rode::agent::Personality::Default;
+    let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+    wait(&mut browser);
+    browser.resume("saved-1").unwrap();
+    wait(&mut browser);
+    chat.restore(
+        browser
+            .take_restored()
+            .unwrap_or_else(|| panic!("{}", browser.status)),
+    );
+    assert_eq!(
+        chat.messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Earlier question 1", "Earlier question 2"]
+    );
+    chat.submit(launch, "normal tone".into(), Arc::new(|| {}))
+        .unwrap();
+    wait_chat(&mut chat);
+    let calls = log(temp.path());
+    let prompt = calls
+        .iter()
+        .rev()
+        .find(|r| r["method"] == "session/prompt")
+        .unwrap();
+    assert_eq!(prompt["params"]["sessionId"], "saved-1");
+    assert!(
+        prompt["params"]["prompt"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("name=\"default\"")
+    );
+}

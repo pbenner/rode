@@ -14,6 +14,8 @@ Several windows may attach to the same session: their keystrokes go to the same 
 
 New terminals receive the selected Python environment. Reattachment preserves the original running environment; RODE does not send activation commands into an existing program. **Activate in current terminal** remains an explicit action.
 
+For unreadable prompt colors, open **View → Terminal colors…**. Adjust minimum contrast, foreground/background or individual ANSI colors; settings follow the selected interface theme and apply immediately without restarting the shell. See [themes](themes.md). Each attached RODE window renders with its own selected theme; the shared session's output stays unchanged.
+
 ## Closing RODE
 
 RODE protects unsaved source buffers, then closes without asking about terminals:

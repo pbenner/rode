@@ -169,6 +169,35 @@ fn terminal_uses_theme_ansi_but_preserves_truecolor_and_extended_colors() {
 }
 
 #[test]
+fn themes_can_set_terminal_contrast_without_changing_ansi_or_syntax() {
+    let base = Theme::carbon();
+    assert_eq!(base.palette.terminal_minimum_contrast, 4.5);
+    for minimum in [1., 3., 7., 21.] {
+        let file = format!(
+            r#"{{"name":"Readable","base":"carbon","terminal":{{"minimum_contrast":{minimum}}}}}"#
+        );
+        let theme = Theme::from_json("custom:readable", &file).unwrap();
+        assert_eq!(theme.palette.terminal_minimum_contrast, minimum);
+        assert_eq!(theme.palette.ansi, base.palette.ansi);
+        assert_eq!(
+            theme.palette.terminal_background,
+            base.palette.terminal_background
+        );
+    }
+    for value in ["0.9", "21.1", "null", "\"4.5\"", "1e999"] {
+        let file = format!(r#"{{"name":"Invalid","terminal":{{"minimum_contrast":{value}}}}}"#);
+        assert!(Theme::from_json("custom:invalid", &file).is_err());
+    }
+    assert!(
+        Theme::from_json(
+            "custom:invalid",
+            r#"{"name":"Invalid","terminal":{"minimum_contrast":4.5,"unknown":1}}"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn unknown_extensions_use_custom_default_text_color() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(

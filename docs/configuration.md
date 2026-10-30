@@ -6,7 +6,7 @@ Shared configuration stays in the existing locations:
 
 | File on Linux | Contents |
 | --- | --- |
-| `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron` | Theme/font, project and agent preferences, sandbox defaults, and the last saved window/layout state |
+| `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron` | Theme/font/interface scale, project and agent preferences, sandbox defaults, and the last saved window/layout state |
 | `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json` | Named SSH connection profiles |
 | `${XDG_CONFIG_HOME:-~/.config}/rode/themes/` | Custom theme JSON files, read at startup |
 
@@ -28,6 +28,12 @@ The validated platform is Linux. The filesystem must support POSIX advisory file
 
 Interface color selection (`color_theme`) and syntax selection (`syntax_theme`) are independent preferences. Each UI action saves only its own changed choice, so different windows can adjust them without reverting one another. See [syntax themes](syntax-themes.md).
 
+Terminal color overrides use independent `terminal_color.<theme-id>.foreground`, `.background`, `.ansi.0`–`.ansi.15` and `.minimum_contrast` scalar keys in the same preferences file. Colors are opaque `#RRGGBB`; contrast is 1–21. The `theme` sentinel restores the corresponding theme default. Only explicit edits are submitted; resetting a theme explicitly restores its 19 fields, while idle/closing windows leave newer edits alone. Overrides load at startup and stay local to the desktop; theme switches select the matching overrides without restarting or modifying a local/SSH shell. See [terminal colors](themes.md).
+
 [Keyboard navigation](editing.md#keyboard-pane-navigation) stores the leader in `keyboard.leader` and each action in its own `keyboard.<action>` scalar setting, such as `keyboard.left` or `keyboard.terminal`. Applying bindings writes only changed fields; unrelated edits in other windows remain intact. Bindings reload on startup and invalid saved combinations activate the documented defaults with an explanation in the bindings dialog. Layout, pane focus and pending leader sequences are private to each window.
 
 Shortcut presets use `keyboard.style` (`standard`, `emacs`, `vim`). Standard bindings retain the original `keyboard.leader` and `keyboard.<action>` keys. Emacs and Vim use `keyboard.emacs.leader` / `keyboard.emacs.<action>` and `keyboard.vim.leader` / `keyboard.vim.<action>`. A style change writes only the style key; applying edits writes only changed fields in that profile. Mode, mark, operator counts, last-kill text and queued keystrokes stay in memory and are never saved to shared configuration.
+
+Interface size uses a separate `ui_scale` string preference (`"1"` for 100%, `"0.75"` for 75%, supported range 0.5–2). It multiplies the monitor's native DPI scale, while `font_size` remains the editor/terminal font size in points. The View control saves only `ui_scale`; closing an unchanged older window cannot revert it. An explicit reset to 100% is saved even if that window already displayed 100%. Invalid/nonfinite/out-of-range values fall back to system scaling. This explicit preference takes precedence over scale saved in the GUI framework's private layout snapshot. See [interface sizing](editing.md).
+
+Agent reply personality uses `agent_preferences[workspace].personality` (`default` or `jackson_lamb`). Changes merge as one project-scoped scalar, independently of model, permission and other windows' settings. Missing or unknown personality IDs use Default. This preference controls a chat presentation hint; it never selects a new executable or operating mode. See [response personalities](agents.md#response-personalities).

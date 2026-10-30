@@ -11,7 +11,7 @@
 - New files, Save, Save As, Save All, unsaved-change confirmation
 - Literal find/replace, case-sensitive or Unicode-aware case-insensitive matching
 - [Multiple persistent PTY terminals](terminals.md) with reattachment, shared views, ANSI colors, resizing, scrollback, bracketed paste, shell control keys, and a copy-output button
-- Command palette, adjustable font size, and persistent configurable themes
+- Command palette, separate editor font size and interface scale, and persistent configurable themes
 - Optional local/remote bubblewrap project mode with explicit normal-mode fallback
 - Configurable sandbox access table, Git source control/worktrees, Python environments, Ruff diagnostics/formatting, and on-demand system/GPU monitoring
 
@@ -35,15 +35,21 @@ Open File, Open as hex, and Save As share the project-folder browser's directory
 | Ctrl+Shift+M | Problems |
 | Ctrl+Shift+A | Agent chat |
 | Ctrl+Shift+X | Manage extensions |
-| Ctrl+Enter in agent chat | Send message |
+| Enter in agent chat | Send message |
+| Shift+Enter in agent chat | Insert a newline |
 | Shift+Alt+F | Format document |
 | F5 / Shift+F5 | [Start/continue debugging / stop or detach](debugger.md) |
 | F6 / F9 | Pause debugger / toggle source breakpoint |
 | F10 / F11 / Shift+F11 | Step over / into / out |
 | Ctrl+` | Toggle / focus terminal |
-| Ctrl+Plus / Minus | Font size, or image zoom when the image canvas has focus |
+| Ctrl+Plus / Minus | Editor/terminal font size, or image zoom when the image canvas has focus |
+| Ctrl+0 | Reset interface scale to 100% (outside the terminal) |
 
 Use Command for editor shortcuts on macOS; tab cycling with Control+Tab remains available. When the terminal has focus, Tab/Shift+Tab, arrows, Escape, and normal control keys go to the shell; the command palette, project/tools shortcuts, tab switching, and terminal toggle remain editor shortcuts. Escape closes find and returns to the editor; Escape in the terminal belongs to the shell.
+
+Choose a percentage in **View → Interface scale** to resize the entire GUI, including menu text, icons, buttons, side panels and editor/terminal text. **Smaller (5%)** and **Larger (5%)** provide fine adjustments. Each action applies after a completed click and closes the menu; there is no slider to chase as the interface resizes. The 50–200% scale is relative to the operating system's monitor scaling: **100%** follows the system, **75%** makes the interface smaller, and **50%** compensates for a 2x display scale when you want a more compact layout. Changes apply immediately and are saved on the desktop computer, independently of the project or SSH host.
+
+**View → Editor font size** adjusts source/terminal text without resizing the menus and icons. **Ctrl+0** or **View → Reset interface scale (100%)** resets the whole-interface scale. The command palette offers **Interface: Zoom in**, **Interface: Zoom out**, and **Interface: Reset scale**. Interface scaling leaves buffers, terminal sessions, source font preferences and theme choices intact; it continues to follow monitor DPI when moving the window between displays.
 
 Side panels narrow to preserve a usable editor at the minimum 850×560 window size. Paths and status text stay on one line with full hover text, find/replace uses two rows when space is tight, and terminal/header controls stay accessible. Opening or switching a file focuses its editor, with cursor/undo state retained across tab switches and reordering. Unsaved tabs still require a discard decision when closed.
 

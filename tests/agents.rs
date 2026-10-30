@@ -3,7 +3,7 @@
 
 use rode::{
     agent::{
-        Access, Approval, Config, Launch, Provider,
+        Access, Approval, Config, Launch, Personality, Provider,
         protocol::{Chat, Role},
     },
     sandbox,
@@ -77,6 +77,112 @@ fn log(root: &Path) -> Vec<Value> {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+#[test]
+fn personalities_change_only_reply_hints_without_restarting_or_changing_permissions() {
+    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+        for isolated in [false, true] {
+            let (_temp, root, program) = fixture();
+            let mut launch = launch(&root, &program, provider, isolated);
+            launch.config.local_model = "fixture-local".into();
+            let argv = launch.config.argv().unwrap();
+            let original = launch.config.clone();
+            let mut chat = Chat::default();
+            submit(&mut chat, launch.clone(), "first");
+            wait(&mut chat, |c| c.completed == 1);
+            let calls = log(&root);
+            let first = calls
+                .iter()
+                .find(|v| matches!(v["method"].as_str(), Some("turn/start" | "session/prompt")))
+                .unwrap();
+            let field = if provider == Provider::Acp {
+                "prompt"
+            } else {
+                "input"
+            };
+            assert_eq!(
+                first["params"][field].as_array().unwrap().len(),
+                1,
+                "Fresh Default is unmodified"
+            );
+
+            launch.config.personality = Personality::JacksonLamb;
+            assert!(original.same_process(&launch.config));
+            assert_eq!(launch.config.argv().unwrap(), argv);
+            submit(&mut chat, launch.clone(), "approve");
+            wait(&mut chat, |c| !c.prompts.is_empty());
+            assert!(!root.join("approved.txt").exists());
+            chat.answer(chat.prompts[0].choices[1].result.clone())
+                .unwrap();
+            wait(&mut chat, |c| c.completed == 2);
+            assert!(!root.join("approved.txt").exists());
+            let calls = log(&root);
+            let styled = calls
+                .iter()
+                .rev()
+                .find(|v| v["method"] == first["method"])
+                .unwrap();
+            assert_eq!(styled["params"][field][0]["text"], "approve");
+            let hint = styled["params"][field][1]["text"].as_str().unwrap();
+            assert!(hint.contains("jackson_lamb"));
+            assert!(hint.contains("presentation guidance only"));
+            for key in [
+                "model",
+                "effort",
+                "approvalPolicy",
+                "sandboxPolicy",
+                "threadId",
+                "sessionId",
+            ] {
+                assert_eq!(
+                    styled["params"][key], first["params"][key],
+                    "{provider:?}: {key}"
+                );
+            }
+            assert!(
+                styled["params"].get("personality").is_none(),
+                "Do not alter a vendor operating-mode selector"
+            );
+            launch.config.personality = Personality::Default;
+            submit(&mut chat, launch.clone(), "normal again");
+            wait(&mut chat, |c| c.completed == 3);
+            let calls = log(&root);
+            let reset = calls
+                .iter()
+                .rev()
+                .find(|v| v["method"] == first["method"])
+                .unwrap();
+            assert!(
+                reset["params"][field][1]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("name=\"default\"")
+            );
+            assert_eq!(
+                calls.iter().filter(|v| v["method"] == "initialize").count(),
+                1
+            );
+            assert_eq!(
+                chat.messages
+                    .iter()
+                    .filter(|m| m.role == Role::User)
+                    .map(|m| m.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["first", "approve", "normal again"]
+            );
+            chat.disconnect();
+            submit(&mut chat, launch, "fresh");
+            wait(&mut chat, |c| c.completed == 4);
+            let calls = log(&root);
+            let fresh = calls
+                .iter()
+                .rev()
+                .find(|v| v["method"] == first["method"])
+                .unwrap();
+            assert_eq!(fresh["params"][field].as_array().unwrap().len(), 1);
+        }
+    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Agent chat
 
-Open **View → Agent chat**, use the speech-bubble activity icon, or press **Ctrl+Shift+A**. Choose a provider and open its settings button. Send a message with **Send** or **Ctrl+Enter**; Enter inserts a newline. Replies stream into the chat, with selectable text, copy buttons, code blocks, and expandable tool results. Permission requests and questions appear above the conversation.
+Open **View → Agent chat**, use the speech-bubble activity icon, or press **Ctrl+Shift+A**. Choose a provider and open its settings button. Send a message with **Send** or **Enter**; **Shift+Enter** inserts a newline. Replies stream into the chat, with selectable text, copy buttons, code blocks, and expandable tool results. Permission requests and questions appear above the conversation.
 
 The agent starts in the opened project folder, on the computer hosting that project. The panel identifies **LOCAL** or **SSH**, the folder, and the actual sandbox mode. Without an opened folder, it uses RODE's startup working directory. Opening the panel starts no process. Sending a message or explicitly opening **History** starts the selected agent; history browsing sends no model prompt.
 
@@ -8,7 +8,7 @@ The agent starts in the opened project folder, on the computer hosting that proj
 
 Use **Model** and **Access** / **Permissions** above the message field. Choices are saved per host/project through the shared preference locks; opening a menu starts no process. Controls are disabled during active work. Stop the current turn before changing them.
 
-For **Codex**, Model accepts an explicit model ID or the agent default. After the first message or restoring a conversation, the picker loads the running agent's model catalog and advertised reasoning efforts. Catalog entries describe available choices, not an account-entitlement guarantee. Custom model/effort IDs remain available when discovery is unsupported. For **Codex · local model**, enter the installed server model ID and an optional supported reasoning effort. Codex's cloud-oriented catalog is not used as an inventory of installed Ollama models.
+For **Codex**, Model accepts an explicit model ID or the agent default. After the first message or restoring a conversation, the picker loads the running agent's model catalog and advertised reasoning efforts. Open **Reasoning effort** and choose **Default** or one of the model's advertised levels from its submenu. The choice is saved immediately and applies to the next message. Catalog entries describe available choices, not an account-entitlement guarantee. Custom model/effort IDs remain available when discovery is unsupported. For **Codex · local model**, enter the installed server model ID and an optional supported reasoning effort. Codex's cloud-oriented catalog is not used as an inventory of installed Ollama models.
 
 Codex tool access offers **Read only**, **Project access** (default), and **Full access**. Read only prevents approval-based tool escalation. Project access allows workspace writes and can request additional access. Full access uses the host permissions left inside the active project sandbox; in normal mode it uses the user's host permissions. The project's actual read-only restriction always takes precedence. These are agent tool policies, separate from the enclosing filesystem sandbox.
 
@@ -20,6 +20,16 @@ The common permission-request choices are:
 For **Other agent · ACP**, RODE renders the select/boolean options advertised by that session, including model, reasoning and operating modes. Modern session configuration is preferred, with a legacy mode fallback. Unsupported option types are omitted. Model-related choices appear under Model; modes and other options appear under Permissions. Idle changes wait for acknowledgement and refresh dependent choices without sending a message. Unavailable or rejected saved settings stop submission with an explanation; **Agent settings → Reset saved agent controls** restores a fresh session's defaults. RODE does not invent a universal read-only/full-access switch for ACP agents that expose no such mode.
 
 Codex changes apply to the next turn while retaining the conversation. Returning an explicit model/effort override to its default starts a fresh conversation so old overrides cannot remain active. Executable/provider changes also start a fresh conversation. Transcripts stay in memory; they are never written to preferences. No selector or approval can widen the outer project sandbox's filesystem or network grants.
+
+## Response personalities
+
+Use **Tone**, beside **New chat**, to choose **Default** or **Jackson Lamb**. The latter is inspired by the [Slow Horses boss](https://www.apple.com/tv-pr/originals/slow-horses/): dry British wit, blunt understatement and sardonic commentary, using original wording. The selected custom style appears as **Lamb** in the header. Default uses the agent's own configured tone.
+
+The choice is saved per host/project and applies to the next message, including in an existing or restored chat. It works through Codex, Codex local-model mode and ACP. Choosing a style starts no process, sends no message and does not discard conversation context. Stop an active turn before changing it.
+
+RODE sends a small, turn-scoped response-style hint alongside the unchanged user task. It does not change the executable, model, reasoning effort, tools, approval settings, sandbox or project environment. The hint asks for normal task-appropriate code, comments, documentation and other artifacts; only explanatory chat replies should adopt the voice unless explicitly requested otherwise. Explicit output formats and user instructions take precedence. There is no second model call or response-rewriting service.
+
+This is model guidance, so delivery varies by agent/model; prompting cannot guarantee identical model decisions apart from wording. Execution restrictions continue to be enforced independently. Returning to Default explicitly clears earlier RODE tone preferences, without creating a new chat. Recognized style hints are hidden in RODE's displayed history, although the backend may retain them in its own saved conversation. No transcript or custom system-prompt file is added to the project.
 
 ## Chat history
 

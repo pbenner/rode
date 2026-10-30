@@ -68,6 +68,8 @@ pub struct Palette {
     pub terminal_background: Color32,
     /// Default terminal foreground.
     pub terminal_foreground: Color32,
+    /// Minimum rendered terminal text contrast, from 1 (unchanged) to 21.
+    pub terminal_minimum_contrast: f32,
     /// Normal eight ANSI colors followed by their bright variants.
     pub ansi: [Color32; 16],
 }
@@ -90,6 +92,7 @@ impl Default for Palette {
             gutter: Color32::from_rgb(64, 76, 78),
             terminal_background: Color32::from_rgb(13, 18, 20),
             terminal_foreground: Color32::from_rgb(205, 218, 216),
+            terminal_minimum_contrast: 4.5,
             ansi: [
                 Color32::from_rgb(25, 34, 36),
                 Color32::from_rgb(231, 123, 129),
@@ -177,6 +180,13 @@ struct ThemeFile {
     #[serde(default)]
     syntax: BTreeMap<String, String>,
     ansi: Option<[String; 16]>,
+    terminal: Option<TerminalSettings>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalSettings {
+    minimum_contrast: f32,
 }
 
 fn default_base() -> String {
@@ -235,6 +245,14 @@ impl Theme {
         let mut theme = base.clone();
         theme.id = id.into();
         theme.name = name.into();
+        if let Some(terminal) = file.terminal {
+            if !terminal.minimum_contrast.is_finite()
+                || !(1.0..=21.0).contains(&terminal.minimum_contrast)
+            {
+                bail!("Terminal minimum_contrast must be between 1 and 21");
+            }
+            theme.palette.terminal_minimum_contrast = terminal.minimum_contrast;
+        }
         for (key, value) in file.colors {
             theme.palette.override_color(
                 &key,

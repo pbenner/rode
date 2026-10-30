@@ -118,6 +118,8 @@ pub struct Chat {
     serial: u64,
     model_cursors: Vec<String>,
     settings_attempts: usize,
+    /// A restored/styled context needs an explicit normal-tone hint when Default is selected.
+    response_style_context: bool,
 }
 
 impl Chat {
@@ -141,6 +143,7 @@ impl Chat {
         self.controls = restored.controls;
         self.next_id = restored.next_id;
         self.session = Some(restored.session);
+        self.response_style_context = true;
         self.status = "Ready · restored conversation".into();
         self.changed = true;
         if restored.limited {
@@ -384,6 +387,7 @@ impl Chat {
         self.models.clear();
         self.controls.clear();
         self.model_cursors.clear();
+        self.response_style_context = false;
     }
 
     fn initialize(&mut self) -> Result<()> {
@@ -466,15 +470,19 @@ impl Chat {
         self.status = "Working…".into();
         self.deadline = None;
         self.turn.clear();
+        let mut input = vec![json!({"type":"text","text":text})];
+        if let Some(hint) = self.config.personality.hint(self.response_style_context) {
+            input.push(json!({"type":"text","text":format!("\n\n{hint}")}));
+            self.response_style_context = true;
+        }
         if self.config.provider == Provider::Acp {
             self.call(
                 "session/prompt",
-                json!({"sessionId":self.conversation,"prompt":[{"type":"text","text":text}]}),
+                json!({"sessionId":self.conversation,"prompt":input}),
                 Call::Turn,
             )
         } else {
-            let mut params =
-                json!({"threadId":self.conversation,"input":[{"type":"text","text":text}]});
+            let mut params = json!({"threadId":self.conversation,"input":input});
             params["approvalPolicy"] = if self.read_only {
                 "never"
             } else {

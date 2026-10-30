@@ -325,7 +325,7 @@ impl EditorApp {
             host: &host,
             ready: self.project_ready(),
             sandbox: self.workspace.as_ref().is_some_and(|w| w.plan.active),
-            palette: self.themes.active().palette,
+            palette: self.terminal_colors.palette(self.themes.active()),
         };
         let drawn_epoch = self.debugger.client.as_ref().map(Client::inspection_epoch);
         let actions = ui::show(
