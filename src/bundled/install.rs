@@ -2,8 +2,8 @@
 //! project sandbox; executing Codex still uses the normal project-host launcher.
 //!
 //! Only the editor's embedded release pin supplies download URLs and checksums.
-//! Stream into private temporary files, verify before extracting a single regular
-//! file, then verify the complete bundle before publishing its protected selector.
+//! Stream into private temporary files, verify before extracting pinned regular
+//! executables, then verify the complete bundle before publishing its protected selector.
 //! A shared flock also coordinates the optional Python preparation script. Jobs
 //! coalesce progress in memory, cancel on drop and never wait on the GUI thread.
 
@@ -47,6 +47,8 @@ struct Download {
     archive_sha256: String,
     archive_size: u64,
     member: String,
+    #[serde(default)]
+    helpers: BTreeMap<String, Download>,
 }
 
 struct Package<'a> {
@@ -116,7 +118,7 @@ impl Job {
                 };
                 let package = pinned(&architecture)?;
                 let base = directory().context("Set HOME or an absolute XDG_DATA_HOME to install Codex")?;
-                let path = install_to(&base, &package, &cancel, &mut progress, || fetch(&package.download))?;
+                let path = install_to(&base, &package, &cancel, &mut progress, fetch)?;
                 Ok(Installed {directory: path, architecture})
             })();
             *state.lock().unwrap() = State::Finished(result.map_err(|e: anyhow::Error| {
@@ -172,17 +174,26 @@ fn pinned(architecture: &str) -> Result<Package<'static>> {
     );
     let raw: serde_json::Value = serde_json::from_str(PIN)?;
     let download: Download = serde_json::from_value(raw["targets"][architecture].clone())?;
+    for artifact in std::iter::once(&download).chain(download.helpers.values()) {
+        ensure!(
+            artifact
+                .url
+                .starts_with("https://github.com/openai/codex/releases/download/")
+                && (1..=512 * 1024 * 1024).contains(&artifact.archive_size)
+                && artifact.archive_sha256.len() == 64
+                && Path::new(&artifact.member)
+                    .file_name()
+                    .and_then(|p| p.to_str())
+                    == Some(artifact.member.as_str()),
+            "Invalid embedded Codex download pin"
+        );
+    }
     ensure!(
         download
-            .url
-            .starts_with("https://github.com/openai/codex/releases/download/")
-            && (1..=512 * 1024 * 1024).contains(&download.archive_size)
-            && download.archive_sha256.len() == 64
-            && Path::new(&download.member)
-                .file_name()
-                .and_then(|p| p.to_str())
-                == Some(download.member.as_str()),
-        "Invalid embedded Codex download pin"
+            .helpers
+            .keys()
+            .eq(embedded().manifest.targets[architecture].helpers.keys()),
+        "Codex helper download pins do not match the runtime"
     );
     // Borrow the matching embedded key so the package owns no caller/UI references.
     Ok(Package {
@@ -348,7 +359,7 @@ fn install_to(
     package: &Package<'_>,
     cancel: &AtomicBool,
     progress: &mut impl FnMut(&'static str, u64, u64),
-    fetch: impl FnOnce() -> Result<Box<dyn Read>>,
+    mut fetch: impl FnMut(&Download) -> Result<Box<dyn Read>>,
 ) -> Result<PathBuf> {
     cancelled(cancel)?;
     application_directory(base.parent().context("Missing user-data directory")?)?;
@@ -359,71 +370,80 @@ fn install_to(
     private_directory(&version)?;
     let destination = version.join(package.architecture);
     let target = &package.release.manifest.targets[package.architecture];
-    if destination.try_exists()? || fs::symlink_metadata(&destination).is_ok() {
+    let exists = fs::symlink_metadata(&destination).is_ok();
+    if exists {
         progress("Verifying installed Codex…", 0, 0);
-        verify(&destination, package.release, target, cancel)
+        verify_files(&destination, package.release, target, cancel, true)
             .with_context(|| format!("Existing runtime is damaged or differs from this pin: {}. Choose another executable or remove that runtime before reinstalling", destination.display()))?;
-    } else {
-        let mut archive = tempfile::NamedTempFile::new_in(base)?;
-        progress("Downloading Codex…", 0, package.download.archive_size);
-        cancelled(cancel)?;
-        copy_pinned(
-            fetch()?,
-            &mut archive,
-            package.download.archive_size,
-            &package.download.archive_sha256,
-            cancel,
-            |done| progress("Downloading Codex…", done, package.download.archive_size),
-        )?;
-        archive.seek(SeekFrom::Start(0))?;
+    }
+    if !exists || verify(&destination, package.release, target, cancel).is_err() {
         let stage = tempfile::Builder::new()
             .prefix(".codex-")
             .tempdir_in(&version)?;
         fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o700))?;
-        progress("Extracting Codex…", 0, target.size);
-        let decoded = GzDecoder::new(archive).take(target.size + 64 * 1024 + 1);
-        let mut tar = tar::Archive::new(decoded);
-        {
-            let mut entries = tar.entries()?.raw(true);
-            let mut entry = entries.next().context("Empty Codex archive")??;
-            ensure!(
-                entry.header().entry_type().is_file()
-                    && entry.path()?.as_ref() == Path::new(&package.download.member)
-                    && entry.size() == target.size,
-                "Unexpected Codex archive member"
-            );
-            let mut binary = fs::File::create(stage.path().join("codex"))?;
-            copy_pinned(
-                &mut entry,
-                &mut binary,
-                target.size,
-                &target.sha256,
-                cancel,
-                |done| progress("Extracting Codex…", done, target.size),
-            )?;
-            binary.sync_all()?;
-            drop(entry);
-            ensure!(
-                entries.next().is_none(),
-                "Unexpected extra Codex archive member"
-            );
-        }
-        let mut decoded = tar.into_inner();
-        let mut block = [0; 64 * 1024];
-        loop {
-            cancelled(cancel)?;
-            if decoded.read(&mut block)? == 0 {
-                break;
+        for (name, size, digest) in target.artifacts() {
+            if exists && destination.join(name).try_exists()? {
+                fs::copy(destination.join(name), stage.path().join(name))?;
+                continue;
             }
+            let download = if name == "codex" {
+                &package.download
+            } else {
+                package
+                    .download
+                    .helpers
+                    .get(name)
+                    .context("Missing Codex helper download pin")?
+            };
+            let mut archive = tempfile::NamedTempFile::new_in(base)?;
+            progress("Downloading Codex…", 0, download.archive_size);
+            cancelled(cancel)?;
+            copy_pinned(
+                fetch(download)?,
+                &mut archive,
+                download.archive_size,
+                &download.archive_sha256,
+                cancel,
+                |done| progress("Downloading Codex…", done, download.archive_size),
+            )?;
+            archive.seek(SeekFrom::Start(0))?;
+            progress("Extracting Codex…", 0, size);
+            let decoded = GzDecoder::new(archive).take(size + 64 * 1024 + 1);
+            let mut tar = tar::Archive::new(decoded);
+            {
+                let mut entries = tar.entries()?.raw(true);
+                let mut entry = entries.next().context("Empty Codex archive")??;
+                ensure!(
+                    entry.header().entry_type().is_file()
+                        && entry.path()?.as_ref() == Path::new(&download.member)
+                        && entry.size() == size,
+                    "Unexpected Codex archive member"
+                );
+                let mut binary = fs::File::create(stage.path().join(name))?;
+                copy_pinned(&mut entry, &mut binary, size, digest, cancel, |done| {
+                    progress("Extracting Codex…", done, size)
+                })?;
+                binary.sync_all()?;
+                drop(entry);
+                ensure!(
+                    entries.next().is_none(),
+                    "Unexpected extra Codex archive member"
+                );
+            }
+            let mut decoded = tar.into_inner();
+            let mut block = [0; 64 * 1024];
+            loop {
+                cancelled(cancel)?;
+                if decoded.read(&mut block)? == 0 {
+                    break;
+                }
+            }
+            ensure!(
+                decoded.limit() > 0,
+                "Codex archive exceeds its decoded size limit"
+            );
+            fs::set_permissions(stage.path().join(name), fs::Permissions::from_mode(0o755))?;
         }
-        ensure!(
-            decoded.limit() > 0,
-            "Codex archive exceeds its decoded size limit"
-        );
-        fs::set_permissions(
-            stage.path().join("codex"),
-            fs::Permissions::from_mode(0o755),
-        )?;
         fs::write(stage.path().join("manifest.json"), &package.release.raw)?;
         fs::set_permissions(
             stage.path().join("manifest.json"),
@@ -449,7 +469,25 @@ fn install_to(
         progress("Verifying Codex…", 0, 0);
         verify(stage.path(), package.release, target, cancel)?;
         cancelled(cancel)?;
-        fs::rename(stage.path(), &destination)?;
+        if exists {
+            // Publish missing helpers without replacing a running executable.
+            // Retry can finish a partial publication; every existing file was
+            // reverified under the shared installer lock above.
+            for (name, _, _) in target.artifacts() {
+                if !destination.join(name).try_exists()? {
+                    fs::hard_link(stage.path().join(name), destination.join(name))?;
+                }
+            }
+            let mut manifest = tempfile::NamedTempFile::new_in(&destination)?;
+            manifest.write_all(package.release.raw.as_bytes())?;
+            manifest
+                .as_file()
+                .set_permissions(fs::Permissions::from_mode(0o644))?;
+            manifest.as_file().sync_all()?;
+            manifest.persist(destination.join("manifest.json"))?;
+        } else {
+            fs::rename(stage.path(), &destination)?;
+        }
     }
     cancelled(cancel)?;
     progress("Selecting verified Codex runtime…", 0, 0);
@@ -501,7 +539,7 @@ mod tests {
             "notices":[{"file":"LICENSE","sha256":files::digest(b"fixture license")}]
         }).to_string()).unwrap(), Download {
             url:"https://github.com/openai/codex/releases/download/fixture/codex.tar.gz".into(),
-            archive_size: archive.len() as u64, archive_sha256:files::digest(archive), member:"codex-fixture".into(),
+            archive_size: archive.len() as u64, archive_sha256:files::digest(archive), member:"codex-fixture".into(), helpers:BTreeMap::new(),
         })
     }
 
@@ -519,6 +557,97 @@ mod tests {
             }
         }
         assert!(pinned("unavailable-fixture").is_err());
+    }
+
+    #[test]
+    fn missing_helpers_are_repaired_without_replacing_the_running_binary_or_an_old_selector_on_failure()
+     {
+        for corrupt in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let base = root.path().join("rode/codex");
+            let bytes = archive(&[("codex-fixture", tar::EntryType::Regular)]);
+            let (old, download) = fixture(&bytes);
+            let old_package = Package {
+                release: &old,
+                architecture: "fixture",
+                download: download.clone(),
+                notices: LICENSES,
+            };
+            let destination = install_to(
+                &base,
+                &old_package,
+                &AtomicBool::new(false),
+                &mut |_, _, _| {},
+                |_| Ok(Box::new(Cursor::new(bytes.clone()))),
+            )
+            .unwrap();
+            let inode = fs::metadata(destination.join("codex")).unwrap().ino();
+            let helper = archive(&[("codex-helper-fixture", tar::EntryType::Regular)]);
+            let mut value: serde_json::Value = serde_json::from_str(&old.raw).unwrap();
+            value["targets"]["fixture"]["helpers"] = serde_json::json!({"codex-code-mode-host": {"size": BINARY.len(), "sha256": files::digest(BINARY)}});
+            let release = Release::parse(value.to_string()).unwrap();
+            let mut helper_download = download.clone();
+            helper_download.member = "codex-helper-fixture".into();
+            helper_download.archive_size = helper.len() as u64;
+            helper_download.archive_sha256 = files::digest(&helper);
+            let mut download = download;
+            download
+                .helpers
+                .insert("codex-code-mode-host".into(), helper_download);
+            let package = Package {
+                release: &release,
+                architecture: "fixture",
+                download,
+                notices: LICENSES,
+            };
+            let mut fetched = 0;
+            let result = install_to(
+                &base,
+                &package,
+                &AtomicBool::new(false),
+                &mut |_, _, _| {},
+                |spec| {
+                    assert_eq!(
+                        spec.member, "codex-helper-fixture",
+                        "Repair must reuse the verified main executable"
+                    );
+                    fetched += 1;
+                    Ok(Box::new(Cursor::new(if corrupt {
+                        vec![0; helper.len()]
+                    } else {
+                        helper.clone()
+                    })))
+                },
+            );
+            assert_eq!(fetched, 1);
+            assert_eq!(
+                fs::metadata(destination.join("codex")).unwrap().ino(),
+                inode
+            );
+            if corrupt {
+                assert!(result.is_err());
+                assert_eq!(read_release(&base).unwrap().raw, old.raw);
+                assert!(!destination.join("codex-code-mode-host").exists());
+            } else {
+                result.unwrap();
+                verify(
+                    &destination,
+                    &release,
+                    &release.manifest.targets["fixture"],
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+                assert_eq!(read_release(&base).unwrap().raw, release.raw);
+                install_to(
+                    &base,
+                    &package,
+                    &AtomicBool::new(false),
+                    &mut |_, _, _| {},
+                    |_| panic!("Complete runtime must be reused"),
+                )
+                .unwrap();
+            }
+        }
     }
 
     #[test]
@@ -550,7 +679,7 @@ mod tests {
                             &package,
                             &AtomicBool::new(false),
                             &mut |_, _, _| {},
-                            || {
+                            |_| {
                                 downloads.fetch_add(1, Ordering::Relaxed);
                                 Ok(Box::new(Cursor::new(bytes.clone())))
                             },
@@ -644,7 +773,7 @@ mod tests {
                 &package,
                 &AtomicBool::new(false),
                 &mut |_, _, _| {},
-                || Ok(Box::new(Cursor::new(bytes))),
+                |_| Ok(Box::new(Cursor::new(bytes.clone()))),
             );
             assert!(result.is_err(), "{problem}");
             assert_eq!(
@@ -687,7 +816,7 @@ mod tests {
                         cancel.store(true, Ordering::Release);
                     }
                 },
-                || Ok(Box::new(Cursor::new(bytes))),
+                |_| Ok(Box::new(Cursor::new(bytes.clone()))),
             );
             assert!(result.unwrap_err().to_string().contains("cancelled"));
             assert_eq!(
@@ -745,7 +874,7 @@ mod tests {
                     &package,
                     &AtomicBool::new(false),
                     &mut |_, _, _| {},
-                    || panic!("Unsafe install must not download")
+                    |_| panic!("Unsafe install must not download")
                 )
                 .is_err(),
                 "{problem}"
@@ -786,7 +915,7 @@ mod tests {
             &package,
             &AtomicBool::new(false),
             &mut |_, _, _| {},
-            || fetch(&package.download),
+            fetch,
         )
         .unwrap();
         let output = Command::new(installed.join("codex"))

@@ -8,7 +8,25 @@
       "archive_size": 121764138,
       "member": "codex-x86_64-unknown-linux-musl",
       "size": 319346888,
-      "sha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8"
+      "sha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+      "helpers": {
+        "codex-code-mode-host": {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz",
+          "archive_sha256": "7588334fd47bc4003d970b70dfd4d1e4578491b1e9baa72976a4c2d7e97590da",
+          "archive_size": 28565521,
+          "member": "codex-code-mode-host-x86_64-unknown-linux-musl",
+          "size": 77997328,
+          "sha256": "657f4e902726e05867c937b583049d5997e057f8cd0ab40450633c9c9ef8d630"
+        },
+        "codex-exec-server": {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-exec-server-x86_64-unknown-linux-musl.tar.gz",
+          "archive_sha256": "16f698d576fcd1d94e5e38b5c6ce48168afad1d95737b1eb2d84b3f0219ea6e3",
+          "archive_size": 30182064,
+          "member": "codex-exec-server-x86_64-unknown-linux-musl",
+          "size": 84922184,
+          "sha256": "79e4b41b564bc3190146389ecc95d6c05ba2a20d6503e025e5fcafb47db05849"
+        }
+      }
     },
     "aarch64": {
       "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-aarch64-unknown-linux-musl.tar.gz",
@@ -16,7 +34,25 @@
       "archive_size": 113382496,
       "member": "codex-aarch64-unknown-linux-musl",
       "size": 277549176,
-      "sha256": "f2e6c980c937e734644bed1b4a9a018d3e63a0ccbe71aafc85c86a8c6e4b462a"
+      "sha256": "f2e6c980c937e734644bed1b4a9a018d3e63a0ccbe71aafc85c86a8c6e4b462a",
+      "helpers": {
+        "codex-code-mode-host": {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
+          "archive_sha256": "ac98d1f878e353a16cba711fd47bfef2f6c814109bdd819ee2b6b6d6a19701e7",
+          "archive_size": 27023046,
+          "member": "codex-code-mode-host-aarch64-unknown-linux-musl",
+          "size": 70838624,
+          "sha256": "587436a943a59c18cabdbe83f07800d237b60ddd2e0f54d05b23d8b37a0b36f4"
+        },
+        "codex-exec-server": {
+          "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-exec-server-aarch64-unknown-linux-musl.tar.gz",
+          "archive_sha256": "eeaa137b0e438843ef22a1406236ee6cb6e315ec7871b848db428de50a7ac2e5",
+          "archive_size": 28208812,
+          "member": "codex-exec-server-aarch64-unknown-linux-musl",
+          "size": 72132456,
+          "sha256": "58625693605c66abb56a17a47b9ae880b66d15fe994d115bc1249b9301ba2070"
+        }
+      }
     }
   },
   "notices": [

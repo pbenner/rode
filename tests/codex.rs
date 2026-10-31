@@ -215,6 +215,7 @@ fn codex_turn(program: &str, isolated: bool) {
     fs::create_dir(&root).unwrap();
     let home = root.join("codex-home");
     fs::create_dir(&home).unwrap();
+    fs::write(home.join("config.toml"), "[features]\ncode_mode = true\n").unwrap();
     let wrapper = root.join("codex-wrapper");
     fs::write(
         &wrapper,
@@ -266,7 +267,13 @@ fn codex_turn(program: &str, isolated: bool) {
             root.to_str().unwrap(),
             &sandbox::Options {
                 enabled: isolated,
-                read_only: vec![program.into()],
+                read_only: vec![
+                    std::path::Path::new(program)
+                        .parent()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into(),
+                ],
                 overrides: std::collections::BTreeMap::from([(
                     "~/.codex".into(),
                     sandbox::Access::Hidden,
@@ -300,6 +307,26 @@ fn codex_turn(program: &str, isolated: bool) {
         finish_turn(&mut chat);
         check_latest_prompt(temp.path(), task);
     }
+    fs::write(temp.path().join("tool-mode"), "run one tool").unwrap();
+    chat.submit(
+        launch.clone(),
+        "Run the fixture command.".into(),
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    finish_turn(&mut chat);
+    assert_eq!(
+        fs::read_to_string(root.join("rode-tool-result.txt")).unwrap_or_else(|error| panic!(
+            "Tool execution failed: {error}; {:?}",
+            chat.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        )),
+        "RODE_TOOL_OK"
+    );
+    let tool_request = fs::read_to_string(temp.path().join("request.json")).unwrap();
+    assert!(
+        tool_request.contains("RODE_TOOL_OK"),
+        "Tool output was not returned to the model"
+    );
     // History discovery and replay use the real on-disk app-server rollouts,
     // including threads created with source appServer, without another model call.
     drop(chat);

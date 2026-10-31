@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native language highlighting, Go run/build, and Prettier buffer checks."""
 
+import json
 import os
 import re
 import shutil
@@ -45,7 +46,9 @@ def run():
         base = Path(directory)
         root = base / "project"
         root.mkdir()
-        (root / "go.mod").write_text("module example.test/rode-languages\n\ngo 1.24\n")
+        # os.WriteFile needs Go 1.16. A newer minimum makes older CI Go
+        # installations fetch a toolchain instead of exercising the editor.
+        (root / "go.mod").write_text("module example.test/rode-languages\n\ngo 1.16\n")
         go = root / "main.go"
         go.write_text(
             'package main\nimport "os"\nfunc main(){os.WriteFile("ran.ok",[]byte("ok"),0600)}\n'
@@ -64,7 +67,32 @@ def run():
             XDG_DATA_HOME=str(base / "data"),
             SHELL=str(shell),
             GOROOT=str(Path(shutil.which("go")).resolve().parent.parent),
+            # This stdlib-only fixture must use installed tools and private
+            # caches, independently of user settings or network availability.
+            GOTOOLCHAIN="local",
+            GOPROXY="off",
+            GOWORK="off",
+            GOENV="off",
+            GOFLAGS="",
+            GOCACHE=str(base / "go-cache"),
+            GOPATH=str(base / "go-path"),
         )
+        toolchain = subprocess.run(
+            ["go", "version"],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        toolchain_log = json.dumps(
+            {"version": toolchain.stdout.strip()}
+            | {name: environment[name] for name in ("GOROOT", "GOTOOLCHAIN", "GOCACHE", "GOPROXY")},
+            indent=2,
+        )
+        (ARTIFACTS / "toolchain.json").write_text(toolchain_log + "\n")
+        print(toolchain_log, flush=True)
         with (ARTIFACTS / "native.log").open("w") as log:
             process = subprocess.Popen(
                 [str(BINARY), str(root)], env=environment, stdout=log, stderr=log

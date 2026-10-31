@@ -49,62 +49,93 @@ def prepare(architecture=None, destination=None):
     destination.parent.mkdir(parents=True, exist_ok=True)
     with (destination.parent / (destination.name + ".lock")).open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if destination.exists():
-            expected = {"codex", "manifest.json"} | {n["file"] for n in manifest["notices"]}
+        payload = {"codex": spec} | spec.get("helpers", {})
+        if any(
+            name not in ("codex", "codex-code-mode-host", "codex-exec-server") for name in payload
+        ):
+            raise ValueError("Unexpected Codex helper pin")
+        existing = destination.exists()
+        if existing:
+            expected = set(payload) | {"manifest.json"} | {n["file"] for n in manifest["notices"]}
             if any(
                 p.name not in expected or p.is_symlink() or not p.is_file()
                 for p in destination.iterdir()
             ):
                 raise ValueError("Unexpected files in Codex bundle; refusing to replace it")
-            if digest(destination / "codex") != spec["sha256"]:
-                raise ValueError(f"Codex bundle has changed: {destination}; remove it and rebuild")
+            previous = json.loads((destination / "manifest.json").read_text())
+            old = previous["targets"].get(architecture, {})
+            if (
+                previous["version"] != manifest["version"]
+                or any(old.get(k) != spec[k] for k in ("size", "sha256"))
+                or previous["notices"] != manifest["notices"]
+            ):
+                raise ValueError("Existing Codex bundle differs from this release")
+            for name, pin in payload.items():
+                path = destination / name
+                if name != "codex" and not path.exists():
+                    continue
+                if path.stat().st_size != pin["size"] or digest(path) != pin["sha256"]:
+                    raise ValueError(f"Codex bundle has changed: {name}; refusing to replace it")
+            if any(digest(destination / n["file"]) != n["sha256"] for n in manifest["notices"]):
+                raise ValueError("Existing Codex license notices have changed")
             if (destination / "manifest.json").read_bytes() == MANIFEST.read_bytes() and all(
-                digest(destination / n["file"]) == n["sha256"] for n in manifest["notices"]
+                (destination / name).is_file() for name in payload
             ):
                 destination.chmod(0o755)
                 for path in destination.iterdir():
-                    path.chmod(0o755 if path.name == "codex" else 0o644)
+                    path.chmod(0o755 if path.name in payload else 0o644)
                 return destination
-            # License-only updates can replace an otherwise unchanged bundle.
-            shutil.rmtree(destination)
-        cache = ROOT / "target/codex-downloads"
-        cache.mkdir(parents=True, exist_ok=True)
-        archive = cache / (spec["archive_sha256"] + ".tar.gz")
-        if not archive.exists() or digest(archive) != spec["archive_sha256"]:
-            with tempfile.NamedTemporaryFile(dir=cache, delete=False) as out:
-                temporary = Path(out.name)
-                try:
-                    with urllib.request.urlopen(spec["url"], timeout=60) as response:
-                        total = 0
-                        while block := response.read(1024 * 1024):
-                            total += len(block)
-                            if total > spec["archive_size"]:
-                                raise ValueError("Codex archive exceeds its pinned size")
-                            out.write(block)
-                    out.flush()
-                    if total != spec["archive_size"] or digest(temporary) != spec["archive_sha256"]:
-                        raise ValueError("Codex archive failed its pinned size/SHA-256 check")
-                    os.replace(temporary, archive)
-                finally:
-                    temporary.unlink(missing_ok=True)
         with tempfile.TemporaryDirectory(prefix=".codex-", dir=destination.parent) as work:
             stage = Path(work) / "bundle"
             stage.mkdir(mode=0o755)
-            with tarfile.open(archive) as package:
-                members = package.getmembers()
-                if (
-                    len(members) != 1
-                    or not members[0].isfile()
-                    or members[0].name != spec["member"]
-                ):
-                    raise ValueError("Unexpected Codex archive contents")
-                if members[0].size != spec["size"]:
-                    raise ValueError("Codex executable exceeds its pinned size")
-                with package.extractfile(members[0]) as source, (stage / "codex").open("wb") as out:
-                    shutil.copyfileobj(source, out, 1024 * 1024)
-            if digest(stage / "codex") != spec["sha256"]:
-                raise ValueError("Codex executable failed its pinned SHA-256 check")
-            (stage / "codex").chmod(0o755)
+            for name, spec in payload.items():
+                if existing and (destination / name).exists():
+                    shutil.copyfile(destination / name, stage / name)
+                    (stage / name).chmod(0o755)
+                    continue
+                cache = ROOT / "target/codex-downloads"
+                cache.mkdir(parents=True, exist_ok=True)
+                archive = cache / (spec["archive_sha256"] + ".tar.gz")
+                if not archive.exists() or digest(archive) != spec["archive_sha256"]:
+                    with tempfile.NamedTemporaryFile(dir=cache, delete=False) as out:
+                        temporary = Path(out.name)
+                        try:
+                            with urllib.request.urlopen(spec["url"], timeout=60) as response:
+                                total = 0
+                                while block := response.read(1024 * 1024):
+                                    total += len(block)
+                                    if total > spec["archive_size"]:
+                                        raise ValueError("Codex archive exceeds its pinned size")
+                                    out.write(block)
+                            out.flush()
+                            if (
+                                total != spec["archive_size"]
+                                or digest(temporary) != spec["archive_sha256"]
+                            ):
+                                raise ValueError(
+                                    "Codex archive failed its pinned size/SHA-256 check"
+                                )
+                            os.replace(temporary, archive)
+                        finally:
+                            temporary.unlink(missing_ok=True)
+                with tarfile.open(archive) as package:
+                    members = package.getmembers()
+                    if (
+                        len(members) != 1
+                        or not members[0].isfile()
+                        or members[0].name != spec["member"]
+                    ):
+                        raise ValueError("Unexpected Codex archive contents")
+                    if members[0].size != spec["size"]:
+                        raise ValueError("Codex executable exceeds its pinned size")
+                    with (
+                        package.extractfile(members[0]) as source,
+                        (stage / name).open("wb") as out,
+                    ):
+                        shutil.copyfileobj(source, out, 1024 * 1024)
+                if digest(stage / name) != spec["sha256"]:
+                    raise ValueError("Codex executable failed its pinned SHA-256 check")
+                (stage / name).chmod(0o755)
             shutil.copyfile(MANIFEST, stage / "manifest.json")
             (stage / "manifest.json").chmod(0o644)
             for notice in manifest["notices"]:
@@ -113,7 +144,13 @@ def prepare(architecture=None, destination=None):
                     raise ValueError(f"Codex license snapshot changed: {source.name}")
                 shutil.copyfile(source, stage / source.name)
                 (stage / source.name).chmod(0o644)
-            os.replace(stage, destination)
+            if existing:
+                for name in payload:
+                    if not (destination / name).exists():
+                        os.link(stage / name, destination / name)
+                os.replace(stage / "manifest.json", destination / "manifest.json")
+            else:
+                os.replace(stage, destination)
     return destination
 
 

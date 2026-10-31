@@ -58,6 +58,24 @@ def verified(path, size, digest):
     return True
 
 
+def artifacts(target):
+    """A stable, bounded transfer order shared with the Rust launcher."""
+    helpers = target.get("helpers", {})
+    if len(helpers) > 8 or any(
+        name not in ("codex-code-mode-host", "codex-exec-server") for name in helpers
+    ):
+        raise ValueError("Invalid Codex helper pin")
+    return [("codex", target)] + sorted(helpers.items())
+
+
+def cache_key(target):
+    """Old main-only cache entries cannot satisfy a complete runtime pin."""
+    if not target.get("helpers"):
+        return target["sha256"]
+    pins = [(name, pin["size"], pin["sha256"]) for name, pin in artifacts(target)]
+    return hashlib.sha256(json.dumps(pins, separators=(",", ":")).encode()).hexdigest()
+
+
 def cached_runtime(base, version, architecture, runtime, target, notices):
     """A sandbox grant must expose only owned, verified runtime files, never a symlinked tree."""
     for path in [base, base / version, base / version / architecture, runtime]:
@@ -67,13 +85,14 @@ def cached_runtime(base, version, architecture, runtime, target, notices):
             return False
         if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.geteuid() or meta.st_mode & 0o077:
             raise ValueError("Unsafe Codex cache directory")
-    expected = {notice["file"] for notice in notices} | {"codex"}
+    expected = {notice["file"] for notice in notices} | {name for name, _ in artifacts(target)}
     if {path.name for path in runtime.iterdir()} != expected:
         raise ValueError("Unexpected Codex runtime files")
-    if not verified(runtime / "codex", target["size"], target["sha256"]):
-        raise ValueError("Missing cached Codex executable")
-    if not os.access(runtime / "codex", os.X_OK):
-        raise ValueError("Cached Codex is not executable")
+    for name, pin in artifacts(target):
+        if not verified(runtime / name, pin["size"], pin["sha256"]):
+            raise ValueError("Missing cached Codex executable: " + name)
+        if not os.access(runtime / name, os.X_OK):
+            raise ValueError("Cached Codex is not executable: " + name)
     for notice in notices:
         path = runtime / notice["file"]
         # Exact sizes come from the bounded, trusted notice contents on install;
@@ -103,9 +122,12 @@ def run(spec):
         raise ValueError("This host needs a configured Codex executable for its architecture")
     if not re.fullmatch(r"[0-9][0-9A-Za-z.+-]{0,63}", version):
         raise ValueError("Invalid Codex runtime version")
-    size, digest = target["size"], target["sha256"]
-    if not 0 < size <= 512 * 1024 * 1024 or not re.fullmatch(r"[a-f0-9]{64}", digest):
-        raise ValueError("Invalid Codex runtime pin")
+    for _, pin in artifacts(target):
+        if not 0 < pin["size"] <= 512 * 1024 * 1024 or not re.fullmatch(
+            r"[a-f0-9]{64}", pin["sha256"]
+        ):
+            raise ValueError("Invalid Codex runtime pin")
+    digest = cache_key(target)
     base = Path(os.environ.get("RODE_CODEX_CACHE", "~/.cache/rode/codex")).expanduser()
     if not base.is_absolute():
         raise ValueError("Codex cache path must be absolute")
@@ -115,7 +137,11 @@ def run(spec):
     notices = spec["notices"]
     for notice in notices:
         name = notice["file"]
-        if Path(name).name != name or name in ("", ".", "..", "codex"):
+        if (
+            Path(name).name != name
+            or name in ("", ".", "..", "manifest.json")
+            or name in dict(artifacts(target))
+        ):
             raise ValueError("Invalid Codex notice filename")
     cached = cached_runtime(base, version, architecture, runtime, target, notices)
     if spec["action"] == "probe":
@@ -161,23 +187,24 @@ def run(spec):
         with tempfile.TemporaryDirectory(prefix=".incoming-", dir=folder) as work:
             stage = Path(work) / "runtime"
             stage.mkdir(mode=0o700)
-            result = hashlib.sha256()
-            total = 0
-            with (stage / "codex").open("wb") as out:
-                while True:
-                    block = sys.stdin.buffer.read(min(1024 * 1024, size - total + 1))
-                    if not block:
-                        break
-                    total += len(block)
-                    if total > size:
-                        raise ValueError("Codex transfer exceeds its pinned size")
-                    result.update(block)
-                    out.write(block)
-                out.flush()
-                os.fsync(out.fileno())
-            if total != size or result.hexdigest() != digest:
-                raise ValueError("Codex transfer failed its pinned size/SHA-256 check")
-            (stage / "codex").chmod(0o755)
+            for name, pin in artifacts(target):
+                result = hashlib.sha256()
+                total, size = 0, pin["size"]
+                with (stage / name).open("wb") as out:
+                    while total < size:
+                        block = sys.stdin.buffer.read(min(1024 * 1024, size - total))
+                        if not block:
+                            break
+                        total += len(block)
+                        result.update(block)
+                        out.write(block)
+                    out.flush()
+                    os.fsync(out.fileno())
+                if total != size or result.hexdigest() != pin["sha256"]:
+                    raise ValueError("Codex transfer failed its pinned size/SHA-256 check: " + name)
+                (stage / name).chmod(0o755)
+            if sys.stdin.buffer.read(1):
+                raise ValueError("Codex transfer exceeds its pinned size")
             for notice in notices:
                 name = notice["file"]
                 content = spec["notice_data"][name].encode("utf-8")

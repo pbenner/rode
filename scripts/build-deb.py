@@ -396,7 +396,9 @@ def package_codex(args):
     bundle = runpy.run_path(str(ROOT / "scripts/bundle-codex.py"))["prepare"](
         codex_arch, target / "codex" / suffix
     )
-    check_elf(bundle / "codex", architecture, static=True)
+    executables = {"codex"} | set(manifest["targets"][codex_arch].get("helpers", {}))
+    for name in executables:
+        check_elf(bundle / name, architecture, static=True)
     files = {str(Path("usr/lib/rode/codex") / suffix / p.name): p for p in bundle.iterdir()}
     # A small selector lets the optional package choose its own pinned version;
     # the launcher verifies both this manifest and the versioned payload.
@@ -414,7 +416,7 @@ def package_codex(args):
             architecture,
             args.output or target / "debian",
             files,
-            {str(Path("usr/lib/rode/codex") / suffix / "codex")},
+            {str(Path("usr/lib/rode/codex") / suffix / name) for name in executables},
             {"CODEX-NOTICES.gz": "".join(notices).encode()},
         )
     )

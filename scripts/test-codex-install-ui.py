@@ -148,7 +148,12 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
                 destination = base / manifest["version"] / platform.machine()
                 destination.mkdir(mode=0o700, parents=True, exist_ok=True)
                 destination.chmod(0o700)
-                for name in ["codex", "manifest.json"] + [n["file"] for n in manifest["notices"]]:
+                executables = {"codex"} | set(
+                    manifest["targets"][platform.machine()].get("helpers", {})
+                )
+                for name in (
+                    list(executables) + ["manifest.json"] + [n["file"] for n in manifest["notices"]]
+                ):
                     try:
                         os.link(source / name, destination / name)
                     except OSError:

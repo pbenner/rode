@@ -1,8 +1,8 @@
 RODE optional Codex runtime
 ==========================
 
-This package supplies a pinned upstream native Codex executable and its license
-notices. Install it alongside rode to enable automatic runtime discovery, or
+This package supplies a pinned upstream native Codex executable, its code-mode/execution
+helpers, and their license notices. Install it alongside rode to enable automatic runtime discovery, or
 configure your own executable in RODE's agent settings. No Node.js/npm is needed.
 
 Use `rode --codex login` to authenticate and `rode --codex --version` to inspect

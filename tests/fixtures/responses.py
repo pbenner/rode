@@ -30,6 +30,18 @@ class Handler(BaseHTTPRequestHandler):
             "status": "completed",
             "content": [{"type": "output_text", "text": "Local Responses fixture reply."}],
         }
+        # Opt-in real-tool regression: one code-mode call, then a normal reply.
+        # No model/account is used; the actual Codex runtime must execute it.
+        tool = (root / "tool-mode").exists() and not (root / "tool-replied").exists()
+        if tool:
+            (root / "tool-replied").touch()
+            item = dict(
+                id="tool_fixture",
+                type="custom_tool_call",
+                name="exec",
+                call_id="call_fixture",
+                input='const r = await tools.exec_command({cmd: "printf RODE_TOOL_OK > rode-tool-result.txt; cat rode-tool-result.txt", max_output_tokens: 1000}); text(r);',
+            )
         response = {
             "id": f"resp_fixture_{Handler.sequence}",
             "object": "response",
@@ -39,7 +51,7 @@ class Handler(BaseHTTPRequestHandler):
             "output": [item],
             "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         }
-        for event in [
+        events = [
             {
                 "type": "response.created",
                 "response": dict(response, status="in_progress", output=[]),
@@ -54,7 +66,10 @@ class Handler(BaseHTTPRequestHandler):
             },
             {"type": "response.output_item.done", "output_index": 0, "item": item},
             {"type": "response.completed", "response": response},
-        ]:
+        ]
+        if tool:
+            events = [event for event in events if event["type"] != "response.output_text.delta"]
+        for event in events:
             self.wfile.write(
                 ("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n").encode()
             )

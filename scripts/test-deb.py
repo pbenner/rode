@@ -62,12 +62,16 @@ def test_codex_package(package, extracted, binary, environment, architecture):
     architecture = {"amd64": "x86_64", "arm64": "aarch64"}[field(package, "Architecture")]
     directory = manifest.parent / pin["version"] / architecture
     assert (directory / "manifest.json").read_bytes() == manifest.read_bytes()
-    with (directory / "codex").open("rb") as source:
-        digest = hashlib.file_digest(source, "sha256").hexdigest()
-    assert digest == pin["targets"][architecture]["sha256"]
-    assert "INTERP" not in subprocess.check_output(
-        ["readelf", "-lW", str(directory / "codex")], text=True
-    )
+    target = pin["targets"][architecture]
+    for name, spec in ({"codex": target} | target.get("helpers", {})).items():
+        executable = directory / name
+        assert executable.stat().st_size == spec["size"] and os.access(executable, os.X_OK), name
+        with executable.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        assert digest == spec["sha256"], name
+        assert "INTERP" not in subprocess.check_output(
+            ["readelf", "-lW", str(executable)], text=True
+        )
     assert "--listen" in subprocess.check_output(
         [str(binary), "--codex", "app-server", "--help"], text=True, env=environment
     )

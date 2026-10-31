@@ -70,6 +70,38 @@ def runtime_fixture():
 
 
 class UserRuntime(unittest.TestCase):
+    def test_install_repairs_missing_helpers_without_replacing_the_main_executable(self):
+        with runtime_fixture() as (root, manifest):
+            destination = BUNDLER["install"]("x86_64")
+            inode = (destination / "codex").stat().st_ino
+            pin = json.loads(manifest.read_text())
+            body = b"#!/bin/sh\necho helper-fixture\n"
+            archive = io.BytesIO()
+            with tarfile.open(fileobj=archive, mode="w:gz") as package:
+                member = tarfile.TarInfo("helper")
+                member.size = len(body)
+                package.addfile(member, io.BytesIO(body))
+            data = archive.getvalue()
+            digest = hashlib.sha256(data).hexdigest()
+            (root / "target/codex-downloads" / (digest + ".tar.gz")).write_bytes(data)
+            pin["targets"]["x86_64"]["helpers"] = {
+                "codex-code-mode-host": dict(
+                    member="helper",
+                    url="https://invalid.example/helper",
+                    size=len(body),
+                    sha256=hashlib.sha256(body).hexdigest(),
+                    archive_size=len(data),
+                    archive_sha256=digest,
+                )
+            }
+            manifest.write_text(json.dumps(pin))
+            BUNDLER["install"]("x86_64")
+            self.assertEqual((destination / "codex").stat().st_ino, inode)
+            self.assertEqual((destination / "codex-code-mode-host").read_bytes(), body)
+            self.assertTrue((destination / "codex-code-mode-host").stat().st_mode & 0o111)
+            self.assertEqual(json.loads((destination / "manifest.json").read_text()), pin)
+            BUNDLER["install"]("x86_64")
+
     def test_user_data_lookup_ignores_empty_or_relative_xdg_paths(self):
         with runtime_fixture() as (root, _manifest):
             self.assertEqual(BUNDLER["user_runtime_root"](), root / "user data/rode/codex")

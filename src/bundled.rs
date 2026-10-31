@@ -49,6 +49,33 @@ struct Manifest {
 struct Target {
     size: u64,
     sha256: String,
+    #[serde(default)]
+    helpers: BTreeMap<String, Artifact>,
+}
+#[derive(Deserialize)]
+struct Artifact {
+    size: u64,
+    sha256: String,
+}
+impl Target {
+    fn artifacts(&self) -> Vec<(&str, u64, &str)> {
+        std::iter::once(("codex", self.size, self.sha256.as_str()))
+            .chain(
+                self.helpers
+                    .iter()
+                    .map(|(name, pin)| (name.as_str(), pin.size, pin.sha256.as_str())),
+            )
+            .collect()
+    }
+    // An old main-only deployment must not conceal missing helpers. Include all
+    // pinned executables in the immutable remote cache identity.
+    fn cache_key(&self) -> String {
+        if self.helpers.is_empty() {
+            self.sha256.clone()
+        } else {
+            files::digest(&serde_json::to_vec(&self.artifacts()).expect("runtime pins"))
+        }
+    }
 }
 #[derive(Deserialize)]
 struct Notice {
@@ -105,6 +132,18 @@ impl Release {
                 (1..=512 * 1024 * 1024).contains(&target.size) && valid_hash(&target.sha256),
                 "Invalid Codex executable pin"
             );
+            ensure!(
+                target.helpers.len() <= 8,
+                "Too many Codex helper executables"
+            );
+            for (name, pin) in &target.helpers {
+                ensure!(
+                    matches!(name.as_str(), "codex-code-mode-host" | "codex-exec-server")
+                        && (1..=512 * 1024 * 1024).contains(&pin.size)
+                        && valid_hash(&pin.sha256),
+                    "Invalid Codex helper pin"
+                );
+            }
         }
         ensure!(
             !manifest.notices.is_empty() && manifest.notices.len() <= 32,
@@ -116,7 +155,15 @@ impl Release {
                 notice.file.len() <= 128
                     && Path::new(&notice.file).file_name().and_then(|n| n.to_str())
                         == Some(notice.file.as_str())
-                    && !matches!(notice.file.as_str(), "codex" | "manifest.json" | "." | "..")
+                    && !matches!(
+                        notice.file.as_str(),
+                        "codex"
+                            | "codex-code-mode-host"
+                            | "codex-exec-server"
+                            | "manifest.json"
+                            | "."
+                            | ".."
+                    )
                     && names.insert(&notice.file)
                     && valid_hash(&notice.sha256),
                 "Invalid Codex notice pin"
@@ -194,7 +241,33 @@ fn hash(path: &Path, limit: u64, cancel: &AtomicBool) -> Result<String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+fn incomplete_pin(release: &Release, target: &Target) -> bool {
+    release.manifest.version == embedded().manifest.version
+        && embedded().manifest.targets.values().any(|pin| {
+            pin.sha256 == target.sha256
+                && !pin
+                    .helpers
+                    .keys()
+                    .all(|name| target.helpers.contains_key(name))
+        })
+}
 fn verify(directory: &Path, release: &Release, target: &Target, cancel: &AtomicBool) -> Result<()> {
+    ensure!(
+        !incomplete_pin(release, target),
+        "This Codex runtime is missing required helper executables. Click Install Codex to repair it, then start a new chat"
+    );
+    verify_files(directory, release, target, cancel, false)
+}
+
+/// Explicit repair may fill missing helpers, but must preserve every existing
+/// verified executable. Unknown, changed or unsafe files remain a hard error.
+fn verify_files(
+    directory: &Path,
+    release: &Release,
+    target: &Target,
+    cancel: &AtomicBool,
+    repair: bool,
+) -> Result<()> {
     let metadata = fs::symlink_metadata(directory)?;
     ensure!(
         metadata.is_dir() && protected(&metadata),
@@ -206,6 +279,7 @@ fn verify(directory: &Path, release: &Release, target: &Target, cancel: &AtomicB
         .iter()
         .map(|n| n.file.as_str())
         .chain(["codex", "manifest.json"])
+        .chain(target.helpers.keys().map(String::as_str))
         .collect();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
@@ -219,21 +293,63 @@ fn verify(directory: &Path, release: &Release, target: &Target, cancel: &AtomicB
             "Codex bundle contains an unsafe file"
         );
     }
-    let binary = directory.join("codex");
-    ensure!(
-        crate::persistence::read(&directory.join("manifest.json"), release.raw.len())?.as_deref()
-            == Some(release.raw.as_bytes()),
-        "Codex bundle manifest does not match its runtime selector"
-    );
-    ensure!(
-        binary.metadata()?.permissions().mode() & 0o111 != 0,
-        "Bundled Codex is not executable"
-    );
-    ensure!(
-        binary.metadata()?.len() == target.size
-            && hash(&binary, target.size, cancel)? == target.sha256,
-        "Bundled Codex failed its pinned size/SHA-256 check"
-    );
+    if repair {
+        let previous = read_release(directory)?;
+        ensure!(
+            previous.manifest.version == release.manifest.version
+                && previous
+                    .manifest
+                    .targets
+                    .values()
+                    .any(|pin| pin.size == target.size && pin.sha256 == target.sha256)
+                && previous
+                    .manifest
+                    .notices
+                    .iter()
+                    .map(|n| (&n.file, &n.sha256))
+                    .collect::<BTreeSet<_>>()
+                    == release
+                        .manifest
+                        .notices
+                        .iter()
+                        .map(|n| (&n.file, &n.sha256))
+                        .collect(),
+            "Existing Codex runtime differs from this release; refusing to replace it"
+        );
+    } else {
+        ensure!(
+            crate::persistence::read(&directory.join("manifest.json"), release.raw.len())?
+                .as_deref()
+                == Some(release.raw.as_bytes()),
+            "Codex bundle manifest does not match its runtime selector"
+        );
+    }
+    for (name, size, digest) in target.artifacts() {
+        let binary = directory.join(name);
+        if repair
+            && name != "codex"
+            && fs::symlink_metadata(&binary)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            continue;
+        }
+        ensure!(
+            binary
+                .metadata()
+                .with_context(|| format!(
+                    "Missing Codex executable {name}. Click Install Codex to repair the runtime"
+                ))?
+                .permissions()
+                .mode()
+                & 0o111
+                != 0,
+            "Bundled Codex executable is not executable: {name}"
+        );
+        ensure!(
+            binary.metadata()?.len() == size && hash(&binary, size, cancel)? == digest,
+            "Bundled Codex failed its pinned size/SHA-256 check: {name}"
+        );
+    }
     for notice in &release.manifest.notices {
         ensure!(
             hash(&directory.join(&notice.file), 1024 * 1024, cancel)? == notice.sha256,
@@ -293,6 +409,7 @@ fn find(architecture: &str, cancel: &AtomicBool) -> Result<Option<Bundle>> {
     }
     let data_home = std::env::var_os("XDG_DATA_HOME");
     let home = std::env::var_os("HOME");
+    let mut incomplete = None;
     for base in runtime_roots(
         bin,
         data_home.as_deref().map(Path::new),
@@ -310,6 +427,13 @@ fn find(architecture: &str, cancel: &AtomicBool) -> Result<Option<Bundle>> {
         };
         let path = base.join(&release.manifest.version).join(architecture);
         if path.try_exists()? {
+            // A verified user repair must remain reachable when an older
+            // portable/package selector still describes the main-only layout.
+            // All other verification failures retain their fail-closed behavior.
+            if incomplete_pin(&release, target) {
+                incomplete = Some(path);
+                continue;
+            }
             verify(&path, &release, target, cancel)
                 .with_context(|| format!("Cannot use Codex bundle {}", path.display()))?;
             return Ok(Some(Bundle {
@@ -317,6 +441,12 @@ fn find(architecture: &str, cancel: &AtomicBool) -> Result<Option<Bundle>> {
                 release,
             }));
         }
+    }
+    if let Some(path) = incomplete {
+        bail!(
+            "Codex runtime {} is missing required helper executables. Click Install Codex to repair it, then start a new chat",
+            path.display()
+        );
     }
     Ok(None)
 }
@@ -344,6 +474,25 @@ fn mounted_program(directory: &Path, plan: &sandbox::Plan) -> Result<(String, Ve
         "--".into(),
     ]);
     Ok(("/rode-codex/codex".into(), prefix))
+}
+
+// The complete verified runtime is streamed under pipe backpressure; no archive
+// parser or desktop credentials are sent to the SSH host.
+struct RuntimeInput(std::collections::VecDeque<fs::File>);
+impl Read for RuntimeInput {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        while let Some(file) = self.0.front_mut() {
+            let count = file.read(buffer)?;
+            if count != 0 {
+                return Ok(count);
+            }
+            self.0.pop_front();
+        }
+        Ok(0)
+    }
 }
 
 fn remote_call(
@@ -425,7 +574,7 @@ pub(crate) fn prepare(
             .to_owned();
         let suffix = Path::new(&release.manifest.version)
             .join(&architecture)
-            .join(&target.sha256)
+            .join(target.cache_key())
             .join("codex");
         ensure!(
             Path::new(&path).is_absolute() && Path::new(&path).ends_with(suffix),
@@ -452,7 +601,15 @@ pub(crate) fn prepare(
             remote_call(
                 remote,
                 &spec,
-                crate::persistence::open_regular(&bundle.directory.join("codex"), false)?,
+                RuntimeInput(
+                    target
+                        .artifacts()
+                        .into_iter()
+                        .map(|(name, _, _)| {
+                            crate::persistence::open_regular(&bundle.directory.join(name), false)
+                        })
+                        .collect::<std::io::Result<_>>()?,
+                ),
                 cancel,
             )?;
         }
@@ -486,6 +643,31 @@ pub fn codex(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_only_or_partial_pins_cannot_claim_a_complete_current_runtime() {
+        let mut value: serde_json::Value = serde_json::from_str(PIN).unwrap();
+        let arch = std::env::consts::ARCH;
+        value["targets"][arch]
+            .as_object_mut()
+            .unwrap()
+            .remove("helpers");
+        let old = Release::parse(value.to_string()).unwrap();
+        assert!(incomplete_pin(&old, &old.manifest.targets[arch]));
+        assert!(!incomplete_pin(
+            embedded(),
+            &embedded().manifest.targets[arch]
+        ));
+        value["targets"][arch]["helpers"] = serde_json::from_str::<serde_json::Value>(PIN).unwrap()
+            ["targets"][arch]["helpers"]
+            .clone();
+        value["targets"][arch]["helpers"]
+            .as_object_mut()
+            .unwrap()
+            .remove("codex-exec-server");
+        let partial = Release::parse(value.to_string()).unwrap();
+        assert!(incomplete_pin(&partial, &partial.manifest.targets[arch]));
+    }
 
     #[test]
     fn runtime_search_preserves_portable_roots_and_finds_user_and_system_installs() {

@@ -31,6 +31,67 @@ fn fixture() -> (tempfile::TempDir, Vec<u8>, Value) {
 }
 
 #[test]
+fn complete_runtime_transfer_includes_helpers_and_does_not_reuse_a_main_only_cache() {
+    let (root, bytes, old) = fixture();
+    let cache = root.path().join("cache");
+    let previous: Value =
+        serde_json::from_str(&call(&cache, &old, bytes.clone()).checked().unwrap()).unwrap();
+    let helper = b"#!/bin/sh\necho code-mode-fixture\n";
+    let executor = b"#!/bin/sh\necho executor-fixture\n";
+    let mut spec = old.clone();
+    for arch in ["x86_64", "aarch64"] {
+        spec["targets"][arch]["helpers"] = json!({
+            "codex-code-mode-host": {"size":helper.len(), "sha256":files::digest(helper)},
+            "codex-exec-server": {"size":executor.len(), "sha256":files::digest(executor)}
+        });
+    }
+    let payload = [bytes.as_slice(), helper, executor].concat();
+    let complete: Value =
+        serde_json::from_str(&call(&cache, &spec, payload.clone()).checked().unwrap()).unwrap();
+    assert_ne!(previous["executable"], complete["executable"]);
+    let directory = Path::new(complete["executable"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    for (name, expected) in [
+        ("codex-code-mode-host", helper.as_slice()),
+        ("codex-exec-server", executor.as_slice()),
+    ] {
+        assert_eq!(fs::read(directory.join(name)).unwrap(), expected);
+        assert!(
+            fs::metadata(directory.join(name))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111
+                != 0
+        );
+    }
+    let mut probe = spec.clone();
+    probe["action"] = "probe".into();
+    assert_eq!(
+        serde_json::from_str::<Value>(&call(&cache, &probe, vec![]).checked().unwrap()).unwrap()["cached"],
+        true
+    );
+    for corrupt in [
+        payload[..payload.len() - 1].to_vec(),
+        [payload.as_slice(), b"extra"].concat(),
+    ] {
+        let other = root.path().join("incomplete");
+        assert!(!call(&other, &spec, corrupt).success());
+        assert!(
+            !other
+                .join("0-fixture")
+                .join(std::env::consts::ARCH)
+                .join(directory.file_name().unwrap())
+                .exists()
+        );
+    }
+    fs::write(directory.join("codex-code-mode-host"), "changed").unwrap();
+    assert!(!call(&cache, &probe, vec![]).success());
+    assert!(Path::new(previous["executable"].as_str().unwrap()).is_file());
+}
+
+#[test]
 fn defaults_and_old_preferences_select_bundled_codex_but_overrides_remain_literal() {
     for provider in [Provider::Codex, Provider::Local] {
         for program in ["auto", "codex", ""] {
