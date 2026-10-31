@@ -120,6 +120,39 @@ def assert_running(process, log_path):
     )
 
 
+def wait_for_window(process, log_path, timeout=20):
+    """Wait for a viewable RODE window, not merely its creation in the X tree."""
+    deadline = time.monotonic() + timeout
+    environment = dict(os.environ, LC_ALL="C.UTF-8")
+    states = {}
+    while time.monotonic() < deadline:
+        assert_running(process, log_path)
+        tree = subprocess.check_output(
+            ["xwininfo", "-root", "-tree"], text=True, env=environment, timeout=3
+        )
+        states = {}
+        for window in re.findall(r'(0x[0-9a-f]+) "RODE', tree):
+            attributes = subprocess.run(
+                ["xwininfo", "-id", window],
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=3,
+            )
+            # A window may disappear between the tree and attribute queries.
+            if attributes.returncode:
+                states[window] = "disappeared"
+                continue
+            state = re.search(r"Map State:\s*(\w+)", attributes.stdout)
+            states[window] = state[1] if state else "unknown"
+            if states[window] == "IsViewable":
+                return int(window, 16)
+        time.sleep(0.05)
+    raise AssertionError(
+        f"No viewable RODE window within {timeout}s. Map states: {states}. Startup log: {log_path}"
+    )
+
+
 def screenshot(window, name):
     """Capture this test window after a render opportunity into its artifact directory."""
     time.sleep(0.25)

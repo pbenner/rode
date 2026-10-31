@@ -792,34 +792,237 @@ fn composer_submit(ui: &mut egui::Ui, id: egui::Id, modal: bool, composing: &mut
     })
 }
 
-fn render_message(ui: &mut egui::Ui, text: &str, palette: theme::Palette) {
+/// Use one immutable text buffer so selection can span prose and fenced code.
+fn render_message(
+    ui: &mut egui::Ui,
+    text: &str,
+    palette: theme::Palette,
+) -> egui::text_edit::TextEditOutput {
+    let mut job = egui::text::LayoutJob::default();
     for (index, part) in text.split("```").enumerate() {
+        let code = index % 2 != 0;
+        let part = if code {
+            part.split_once('\n')
+                .map(|(_, code)| code)
+                .unwrap_or(part)
+                .trim_end()
+        } else {
+            part.trim()
+        };
         if part.is_empty() {
             continue;
         }
-        if index % 2 == 0 {
-            ui.add(egui::Label::new(part.trim()).wrap().selectable(true));
-        } else {
-            let code = part.split_once('\n').map(|(_, code)| code).unwrap_or(part);
-            egui::Frame::new()
-                .fill(palette.raised)
-                .inner_margin(6)
-                .corner_radius(3)
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(RichText::new(code.trim_end()).monospace().size(12.))
-                            .wrap()
-                            .selectable(true),
-                    );
-                });
+        let format = egui::TextFormat {
+            font_id: if code {
+                egui::FontId::monospace(12.)
+            } else {
+                egui::TextStyle::Body.resolve(ui.style())
+            },
+            color: palette.text,
+            background: if code {
+                palette.raised
+            } else {
+                egui::Color32::TRANSPARENT
+            },
+            ..Default::default()
+        };
+        if !job.text.is_empty() {
+            job.append("\n\n", 0., format.clone());
         }
+        job.append(part, 0., format);
     }
+    let mut display = job.text.as_str();
+    let mut layouter = |ui: &egui::Ui, _: &dyn egui::TextBuffer, width: f32| {
+        let mut job = job.clone();
+        job.wrap.max_width = width;
+        ui.fonts_mut(|fonts| fonts.layout_job(job))
+    };
+    let id = ui.make_persistent_id("message-text");
+    let previous_selection =
+        if ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary)) {
+            egui::TextEdit::load_state(ui.ctx(), id)
+                .and_then(|state| state.cursor.char_range())
+                .filter(|range| !range.is_empty())
+        } else {
+            None
+        };
+    let mut output = egui::TextEdit::multiline(&mut display)
+        .id(id)
+        .frame(false)
+        .margin(egui::Vec2::ZERO)
+        .desired_width(f32::INFINITY)
+        .desired_rows(1)
+        .layouter(&mut layouter)
+        .show(ui);
+    // TextEdit moves the caret on any pointer press, including a context-menu click.
+    if output.response.contains_pointer()
+        && let Some(selection) = previous_selection
+    {
+        output.state.cursor.set_char_range(Some(selection));
+        output.cursor_range = output.state.cursor.range(&output.galley);
+        output.state.clone().store(ui.ctx(), id);
+    }
+    output.response.context_menu(|ui| {
+        // The popup can take keyboard focus; use the stored, clamped selection.
+        let selection = output
+            .state
+            .cursor
+            .range(&output.galley)
+            .filter(|range| !range.is_empty());
+        if ui
+            .add_enabled(selection.is_some(), egui::Button::new("Copy selection"))
+            .clicked()
+        {
+            if let Some(selection) = selection {
+                ui.ctx().copy_text(selection.slice_str(display).to_owned());
+            }
+            ui.close();
+        }
+    });
+    output
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn response_selection_copies_across_prose_and_code_without_editing() {
+        let ctx = egui::Context::default();
+        let source = "Alpha βeta\n\n```rust\nlet value = 1;\n```\n\nOmega end";
+        let frame = |events| {
+            let mut output = None;
+            let full = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        output = Some(render_message(ui, source, theme::Palette::default()));
+                    });
+                },
+            );
+            (full, output.unwrap())
+        };
+        let (_, output) = frame(vec![]);
+        let display = output.galley.text().to_owned();
+        assert_eq!(display, "Alpha βeta\n\nlet value = 1;\n\nOmega end");
+        let start = 6;
+        let end = display.chars().count() - 4;
+        let position = |index| {
+            output.galley_pos
+                + output
+                    .galley
+                    .pos_from_cursor(egui::text::CCursor::new(index))
+                    .center()
+                    .to_vec2()
+        };
+        let from = position(start);
+        let to = position(end);
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(from), pointer(from, true)]);
+        frame(vec![egui::Event::PointerMoved(to)]);
+        let (_, output) = frame(vec![pointer(to, false)]);
+        assert!(output.response.has_focus());
+        assert_eq!(
+            output.cursor_range.unwrap().as_sorted_char_range(),
+            start..end
+        );
+        let (full, _) = frame(vec![egui::Event::Copy]);
+        let expected: String = display.chars().skip(start).take(end - start).collect();
+        assert!(full.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == &expected)
+        ));
+        let secondary = |pressed| egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![secondary(true)]);
+        frame(vec![secondary(false)]);
+        let (full, output) = frame(vec![]);
+        assert_eq!(
+            output
+                .state
+                .cursor
+                .range(&output.galley)
+                .unwrap()
+                .as_sorted_char_range(),
+            start..end
+        );
+        let copy_position = full
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Copy selection" => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+            .expect("copy selection menu item");
+        frame(vec![
+            egui::Event::PointerMoved(copy_position),
+            pointer(copy_position, true),
+        ]);
+        let (full, _) = frame(vec![pointer(copy_position, false)]);
+        assert!(full.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == &expected)
+        ));
+        output.response.request_focus();
+        let (_, output) = frame(vec![
+            egui::Event::Text("replacement".into()),
+            egui::Event::Paste("injected".into()),
+            egui::Event::Cut,
+        ]);
+        assert!(output.response.has_focus());
+        assert_eq!(output.galley.text(), display);
+    }
+
+    #[test]
+    fn response_selection_survives_streaming_updates() {
+        let ctx = egui::Context::default();
+        let frame = |text: &str, events| {
+            let mut output = None;
+            let full = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        output = Some(render_message(ui, text, theme::Palette::default()));
+                    });
+                },
+            );
+            (full, output.unwrap())
+        };
+        let (_, mut output) = frame("Alpha βeta", vec![]);
+        output
+            .state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(6),
+                egui::text::CCursor::new(10),
+            )));
+        output.state.store(&ctx, output.response.id);
+        output.response.request_focus();
+        let (full, output) = frame(
+            "Alpha βeta\n\n```rust\nlet value = 1;\n```",
+            vec![egui::Event::Copy],
+        );
+        assert_eq!(output.cursor_range.unwrap().as_sorted_char_range(), 6..10);
+        assert!(full.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "βeta")
+        ));
+    }
 
     #[test]
     fn composer_sends_enter_preserves_multiline_text_and_confirms_ime_without_sending() {

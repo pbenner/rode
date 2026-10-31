@@ -63,6 +63,7 @@ jobs:
       - run: scripts/build-sessiond.sh
       - run: bash scripts/test-ssh.sh
       - run: cargo build --locked --release
+      - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-ui-harness.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-debugger-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-terminal-keys-ui.py

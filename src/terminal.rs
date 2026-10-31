@@ -523,7 +523,21 @@ impl Terminal {
                 }
             }
             if response.has_focus() && self.is_alive() {
-                for event in ui.input(|i| i.events.clone()) {
+                let events = ui.input(|input| input.events.clone());
+                // Native clipboard shortcuts replace their key press. A release can
+                // retain modifiers after they have already been released this frame.
+                let copy_modifiers = events
+                    .iter()
+                    .find_map(|event| match event {
+                        egui::Event::Key {
+                            key: Key::C,
+                            modifiers,
+                            ..
+                        } => Some(*modifiers),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| ui.input(|input| input.modifiers));
+                for event in events {
                     match event {
                         egui::Event::Text(text) => {
                             if ui.input(|i| i.modifiers.alt && !i.modifiers.ctrl) {
@@ -546,11 +560,19 @@ impl Terminal {
                                 bytes_to_send.extend(b"\x1b[201~");
                             }
                         }
-                        egui::Event::Copy
-                            if ui.input(|i| i.modifiers.shift || i.modifiers.mac_cmd) =>
-                        {
-                            ui.ctx().copy_text(parser.screen().contents())
+                        egui::Event::Copy => {
+                            if copy_modifiers.shift
+                                || copy_modifiers.mac_cmd
+                                || cfg!(target_os = "macos")
+                            {
+                                ui.ctx().copy_text(parser.screen().contents());
+                            } else {
+                                bytes_to_send.push(0x03);
+                            }
                         }
+                        // On macOS Command+X is a clipboard action; Control+X
+                        // arrives as an ordinary key event and is encoded below.
+                        egui::Event::Cut if !cfg!(target_os = "macos") => bytes_to_send.push(0x18),
                         egui::Event::Key {
                             key,
                             pressed: true,
@@ -790,6 +812,62 @@ pub fn ansi_color(color: vt100::Color, default: Color32, ansi: &[Color32; 16]) -
 mod lifecycle_tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn native_clipboard_events_preserve_terminal_exit_interrupt_and_copy() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
+        let (mut terminal, _stream) = Terminal::stream(&ctx, "Keys".into(), move |event| {
+            if let StreamControl::Input(bytes) = event {
+                tx.send(bytes).unwrap();
+            }
+        });
+        terminal.parser.lock().unwrap().process(b"visible output");
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        Terminal::focus(ctx);
+                        assert!(terminal.ui(ui, 14., Palette::default()).is_none());
+                    });
+                },
+            )
+        };
+        frame(vec![]);
+        // This is what egui-winit emits when Control and the letter are both
+        // pressed and released between redraws: clipboard events, not key presses.
+        frame(vec![egui::Event::Cut, egui::Event::Copy]);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            [0x18, 0x03]
+        );
+        let output = frame(vec![
+            egui::Event::Copy,
+            egui::Event::Key {
+                key: Key::C,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+            },
+            egui::Event::Key {
+                key: Key::D,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ]);
+        assert!(output.platform_output.commands.iter().any(|command|
+            matches!(command, egui::OutputCommand::CopyText(text) if text == "visible output")
+        ));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), [0x04]);
+    }
 
     fn glyph_color(shapes: &[egui::epaint::ClippedShape], text: &str) -> Color32 {
         shapes

@@ -4,7 +4,6 @@
 import ctypes
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -16,13 +15,13 @@ os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/debugger-ui")
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    assert_running,
     close_window,
     display,
     key,
     screenshot,
     text,
     theme,
+    wait_for_window,
     x11,
 )
 
@@ -119,22 +118,10 @@ def run(remote=False, isolated=False):
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
-
-                def mapped():
-                    nonlocal window
-                    assert_running(process, log_path)
-                    match = re.search(
-                        r'(0x[0-9a-f]+) "RODE',
-                        subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                    )
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No debugger window")
-                time.sleep(1.5)
+                window = wait_for_window(process, log_path)
                 x11.XSetInputFocus(display, window, 1, 0)
                 x11.XFlush(display)
+                time.sleep(1.5)
                 command("Open file by path")
                 text("main.py")
                 key("Return")
