@@ -522,7 +522,7 @@ impl Terminal {
                     );
                 }
             }
-            if response.has_focus() && self.is_alive() {
+            if response.has_focus() && self.is_alive() && ui.is_enabled() {
                 let events = ui.input(|input| input.events.clone());
                 // Native clipboard shortcuts replace their key press. A release can
                 // retain modifiers after they have already been released this frame.

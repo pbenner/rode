@@ -126,18 +126,18 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
             time.sleep(0.3)
             screenshot(window, "before-install.png")
             assert Proxy.requests == 0 and not base.exists(), "Opening chat initiated setup"
-            click(1030, 239)
+            click(360, 211)
             wait_for(
                 lambda: Proxy.requests == 1, "Install Codex did not start the explicit request"
             )
             screenshot(window, "downloading.png")
-            click(1110, 239)  # Cancel the held request.
+            click(440, 211)  # Cancel the held request.
             Proxy.release.set()
             wait_for(lambda: idle(base), "Cancelled installation did not release its lock")
             time.sleep(0.2)
             assert not (base / "manifest.json").exists(), "Cancelled install selected a runtime"
             screenshot(window, "cancelled.png")
-            click(1030, 239)
+            click(360, 211)
             wait_for(lambda: Proxy.requests == 2, "Failed/cancelled setup could not be retried")
             wait_for(lambda: idle(base), "Rejected download did not finish")
             screenshot(window, "download-error.png")
@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
                         os.link(source / name, destination / name)
                     except OSError:
                         shutil.copy2(source / name, destination / name)
-                click(1030, 239)
+                click(360, 211)
                 wait_for(
                     lambda: (base / "manifest.json").exists(),
                     "Install action did not publish the verified cached runtime",
@@ -183,7 +183,7 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
                 x11.XFlush(display)
                 time.sleep(0.2)
                 Proxy.release.clear()
-                click(1150, 239)  # The compact-width tools pane remains narrow after resizing.
+                click(360, 211)
                 wait_for(lambda: Proxy.requests == 3, "Close-during-install fixture did not start")
             close_window(window, process)
             window = None

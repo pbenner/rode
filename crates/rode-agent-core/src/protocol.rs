@@ -100,6 +100,8 @@ pub struct Chat {
     pub busy: bool,
     /// Completed-turn counter used to trigger clean-buffer refresh.
     pub completed: u64,
+    /// Whether the last turn finished successfully, without cancellation.
+    pub last_turn_succeeded: bool,
     /// Whether displayed chat content changed since the UI last observed it.
     pub changed: bool,
     /// Models advertised by the current Codex process; empty before the first message.
@@ -136,6 +138,7 @@ impl Chat {
             status: self.status.clone(),
             busy: self.busy,
             completed: self.completed,
+            last_turn_succeeded: self.last_turn_succeeded,
             models: self.models.clone(),
             controls: self.controls.clone(),
             connected: self.connected(),
@@ -160,6 +163,7 @@ impl Chat {
         self.status = view.status;
         self.busy = view.busy;
         self.completed = view.completed;
+        self.last_turn_succeeded = view.last_turn_succeeded;
         self.models = view.models;
         self.controls = view.controls;
         self.config = view.config;
@@ -301,6 +305,7 @@ impl Chat {
         self.settings_attempts = 0;
         self.busy = true;
         self.cancelling = false;
+        self.last_turn_succeeded = false;
         if !self.conversation.is_empty()
             && let Err(error) = self.begin_turn()
         {
@@ -418,6 +423,7 @@ impl Chat {
     pub fn disconnect(&mut self) {
         self.session = None;
         self.busy = false;
+        self.last_turn_succeeded = false;
         self.conversation.clear();
         self.turn.clear();
         self.calls.clear();
@@ -1018,6 +1024,7 @@ impl Chat {
             return;
         }
         self.busy = false;
+        self.last_turn_succeeded = success && !self.cancelling;
         self.pending = None;
         self.turn.clear();
         self.prompts.clear();
@@ -1152,6 +1159,36 @@ fn append_bounded(target: &mut String, text: &str, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_successful_uninterrupted_turns_allow_follow_ups() {
+        let mut chat = Chat::default();
+        for (success, cancelling, expected) in [
+            (true, false, true),
+            (false, false, false),
+            (true, true, false),
+        ] {
+            chat.busy = true;
+            chat.cancelling = cancelling;
+            chat.finish(success, None);
+            assert_eq!(chat.last_turn_succeeded, expected);
+            let mut attached = Chat::default();
+            attached.apply_view(chat.view());
+            assert_eq!(attached.last_turn_succeeded, expected);
+        }
+        chat.busy = true;
+        chat.finish(true, None);
+        chat.disconnect();
+        assert!(!chat.last_turn_succeeded);
+        let mut old_view = serde_json::to_value(chat.view()).unwrap();
+        old_view
+            .as_object_mut()
+            .unwrap()
+            .remove("last_turn_succeeded");
+        let view: crate::service::ChatView = serde_json::from_value(old_view).unwrap();
+        assert!(!view.last_turn_succeeded);
+    }
+
     #[test]
     fn streamed_unicode_is_bounded_even_at_small_remaining_limits() {
         let text = "🦀é界".repeat(100);

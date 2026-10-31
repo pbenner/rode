@@ -71,6 +71,7 @@ impl EditorApp {
             return;
         }
         self.workbench.panel = Some(Panel::Debug);
+        self.workbench.surface = workbench::Surface::Tools;
         if self
             .debugger
             .client

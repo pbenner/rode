@@ -89,6 +89,7 @@ impl EditorApp {
             return;
         }
         self.show_terminal = true;
+        self.terminal_intent();
         if self.session_busy()
             || self
                 .terminal

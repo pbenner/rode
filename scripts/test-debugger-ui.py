@@ -134,7 +134,9 @@ def run(remote=False, isolated=False):
                 assert not rpc.exists(), "Dirty source launched a debugger"
                 key("s", ("Control_L",))
                 wait_for(lambda: "unsaved" in source.read_text(), "Source save failed")
-                # Return to source after the guard; F9 must persist immediately.
+                # Code and debugger tools share the workspace; return to source.
+                key("space", ("Control_L",))
+                key("e")
                 key("Home", ("Control_L",))
                 key("F9")
                 key("F5")
@@ -152,8 +154,8 @@ def run(remote=False, isolated=False):
                 key("F10")
                 wait_for(lambda: '"command": "next"' in rpc.read_text(), "F10 did not step")
                 time.sleep(0.5)
-                command("Toggle terminal")
-                command("Toggle terminal")
+                key("space", ("Control_L",))
+                key("t")
                 text("RODE\n")
                 wait_for(
                     lambda: (project / "input-result").exists(), "Debug PTY input was not delivered"

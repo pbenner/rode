@@ -56,6 +56,10 @@ def window_for(process):
                 return "project" in info and "[Opening project]" not in info
 
             wait_for(project_ready, "Project did not finish preparing before chat input")
+            if "[Sandbox]" not in subprocess.check_output(
+                ["xwininfo", "-id", hex(window)], text=True
+            ):
+                click(1331, 820)  # Dismiss this host's sandbox-unavailable notification.
             return window
         assert process.poll() is None, "RODE exited before opening a window"
         time.sleep(0.05)
@@ -82,7 +86,22 @@ def sent(root, message):
     )
 
 
+def show_tools():
+    key("space", ("Control_L",))
+    key("p")
+
+
+def header_click(x, offset):
+    info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+    # The sandbox-status strip and wrapping workspace tabs determine the header.
+    y = 157 if "[Sandbox]" in info else 187
+    if int(re.search(r"Width: (\d+)", info)[1]) < 1000:
+        y += 26
+    click(x, y + offset)
+
+
 def send(root, message, first=False):
+    show_tools()
     click(1280, 785)
     for index, line in enumerate(message.split("\n")):
         if index:
@@ -107,6 +126,7 @@ def long_composer(root, window, prompt):
     click(500, 220)
     key("a", ("Control_L",))
     key("c", ("Control_L",))
+    show_tools()
     click(1280, 785)
     key("v", ("Control_L",))
     screenshot(window, "long-composer-end.png")
@@ -156,6 +176,7 @@ def long_composer(root, window, prompt):
     assert (root / "composed.txt").read_text() == prompt + " visible-tail"
     assert (root / "prompt.txt").read_text() == prompt
     assert not (root / "agent-rpc.jsonl").exists(), "Composing or resizing started an agent"
+    show_tools()
     click(1280, 785)
     key("a", ("Control_L",))
     key("BackSpace")
@@ -191,25 +212,25 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             key("a", ("Control_L", "Shift_L"))
             time.sleep(0.3)
             assert not (root / "agent-rpc.jsonl").exists(), "Opening chat started a process"
-            click(1213, 183)  # Settings in the default-width chat panel.
-            click(1110, 277)
+            header_click(1213, 0)  # Settings in the default-width chat panel.
+            header_click(1110, 94)
             key("a", ("Control_L",))
             text("./agent.py")
             wait_for(
                 lambda: preferences.exists() and "./agent.py" in preferences.read_text(),
                 "Agent executable preference was not saved immediately",
             )
-            click(1213, 183)
-            click(1346, 183)  # Tone menu: choices alone must not start an agent.
+            header_click(1213, 0)
+            header_click(1346, 0)  # Tone menu: choices alone must not start an agent.
             screenshot(window, "personality-menu.png")
-            click(1180, 248)
+            header_click(1180, 65)
             wait_for(
                 lambda: agent_preferences(preferences).get("personality") == "jackson_lamb",
                 "Personality choice was not saved",
             )
             assert not (root / "agent-rpc.jsonl").exists()
-            click(1346, 183)
-            click(1180, 229)  # Default before the first turn leaves the task unmodified.
+            header_click(1346, 0)
+            header_click(1180, 46)  # Default before the first turn leaves the task unmodified.
             wait_for(
                 lambda: agent_preferences(preferences).get("personality") == "default",
                 "Default personality was not saved",
@@ -221,13 +242,67 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
             if "[Sandbox]" in info:
                 assert not scope["private_visible"]
-            click(1346, 183)
-            click(1180, 248)
+            header_click(1346, 0)
+            header_click(1180, 65)
             send(root, "second")
             styled = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert styled["params"]["input"][0]["text"] == "second"
             assert 'name="jackson_lamb"' in styled["params"]["input"][1]["text"]
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == 1
+            # Recall is local editing: preserve a draft while browsing both ways,
+            # then modify an older prompt and submit it only after explicit Enter.
+            click(1280, 785)
+            text("saved draft")
+            key("Home", ("Control_L",))
+            before_recall = len(rpc(root))
+            key("Up")
+            key("Up")
+            key("Down")
+            key("Down")
+            assert len(rpc(root)) == before_recall, "History browsing sent an agent request"
+            key("End", ("Control_L",))
+            text(" restored")
+            key("Return")
+            wait_for(lambda: sent(root, "saved draft restored"), "Recall did not restore the draft")
+            time.sleep(0.3)
+            key("Up")
+            key("Up")
+            key("End", ("Control_L",))
+            text(" recalled")
+            key("Return")
+            wait_for(lambda: sent(root, "second recalled"), "Recalled message could not be edited")
+            time.sleep(0.3)
+            # Tool output may evict user messages from the display transcript;
+            # recall must still traverse every sent prompt, in both directions.
+            send(root, "history-burst")
+            send(root, "newest after burst")
+            click(1280, 785)
+            text("draft after burst")
+            key("Home", ("Control_L",))
+            before_recall = len(rpc(root))
+            for _ in range(6):
+                key("Up")
+            for _ in range(6):
+                key("Down")
+            assert len(rpc(root)) == before_recall, "Browsing retained prompts sent a request"
+            key("End", ("Control_L",))
+            text(" restored")
+            key("Return")
+            wait_for(
+                lambda: sent(root, "draft after burst restored"),
+                "Browsing the full prompt history did not restore the unsent draft",
+            )
+            time.sleep(0.3)
+            for _ in range(7):
+                key("Up")
+            key("End", ("Control_L",))
+            text(" from retained history")
+            key("Return")
+            wait_for(
+                lambda: sent(root, "first\nsecond line from retained history"),
+                "Tool output discarded older prompts from input history",
+            )
+            time.sleep(0.3)
             screenshot(window, "conversation-phosphor.png")
             theme("carbon")
             screenshot(window, "conversation-carbon.png")
@@ -260,14 +335,14 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert selected_turn["params"]["input"][1] == styled["params"]["input"][1]
             assert not (root / "approved.txt").exists()
             screenshot(window, "permission.png")
-            click(1047, 371)  # Allow once, after the visible command and Details.
+            header_click(350, 188)  # Allow once, after the visible command and Details.
             wait_for(lambda: (root / "approved.txt").exists(), "Approval was not delivered")
             time.sleep(0.3)
             send(root, "wait")
             follow_up = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert follow_up["params"]["input"][1] == styled["params"]["input"][1]
             wait_for(lambda: (root / "agent-child.pid").exists(), "Long task did not start")
-            click(1070, 840)  # Stop, without interrupting the project terminal.
+            click(380, 840)  # Stop, without interrupting the project terminal.
             wait_for(
                 lambda: any(m.get("method") == "turn/interrupt" for m in rpc(root)),
                 "Stop did not interrupt the turn",
@@ -286,7 +361,8 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             send(root, "rewrite")
             wait_for(lambda: source.read_text() == "# written by the agent\n", "Agent did not edit")
             screenshot(window, "unsaved-buffer.png")
-            click(500, 220)
+            key("space", ("Control_L",))
+            key("e")
             key("s", ("Control_L", "Shift_L"))
             time.sleep(0.2)
             key("a", ("Control_L",))
@@ -318,15 +394,15 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert selected_turn["params"]["effort"] == "high"
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
             assert "keep my unsaved change" not in preferences.read_text()
-            click(1150, 183)
-            click(1160, 251)  # Local model provider opens its settings.
-            click(1280, 376)
+            header_click(1150, 0)
+            header_click(340, 68)  # Local model provider opens its settings.
+            header_click(1280, 193)
             text("fixture-local-model")
             wait_for(
                 lambda: "fixture-local-model" in preferences.read_text(), "Model was not saved"
             )
             screenshot(window, "local-model-settings.png")
-            click(1213, 183)
+            header_click(1213, 0)
             send(root, "local-provider")
             scope = json.loads((root / "agent-scope.json").read_text())
             assert 'model_provider="rode_local"' in scope["argv"]
@@ -337,33 +413,33 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.3)
-            click(1150, 183)
-            click(1160, 285)  # ACP, with the same deterministic executable.
-            click(1280, 277)
+            header_click(1150, 0)
+            header_click(340, 102)  # ACP, with the same deterministic executable.
+            header_click(1280, 94)
             text("./agent.py")
-            click(1213, 183)
+            header_click(1213, 0)
             send(root, "acp-provider")
             assert any(m.get("method") == "session/new" for m in rpc(root))
             calls_before_tone = len(rpc(root))
-            click(1346, 183)
-            click(1180, 229)
+            header_click(1346, 0)
+            header_click(1180, 46)
             wait_for(
                 lambda: agent_preferences(preferences).get("personality") == "default",
                 "ACP Default personality was not saved",
             )
             assert len(rpc(root)) == calls_before_tone, "Tone configured the idle ACP agent"
-            click(1346, 183)
-            click(1180, 248)
+            header_click(1346, 0)
+            header_click(1180, 65)
             wait_for(
                 lambda: agent_preferences(preferences).get("personality") == "jackson_lamb",
                 "ACP personality was not saved",
             )
             assert len(rpc(root)) == calls_before_tone
-            click(1180, 752)
+            click(1090, 752)
             screenshot(window, "acp-model-controls.png")
             click(1000, 645)
             screenshot(window, "acp-model-submenu.png")
-            click(750, 670)
+            click(820, 670)
             wait_for(
                 lambda: (
                     agent_preferences(preferences).get("acp_options", {}).get("model")
@@ -372,10 +448,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 "ACP model submenu did not save its selection",
             )
             key("Escape")
-            click(1180, 752)
+            click(1090, 752)
             click(1000, 693)
             screenshot(window, "acp-effort-submenu.png")
-            click(750, 718)
+            click(820, 718)
             wait_for(
                 lambda: (
                     agent_preferences(preferences).get("acp_options", {}).get("effort") == "high"
@@ -416,7 +492,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             time.sleep(0.4)
             screenshot(window, "minimum-acp-chat.png")
             before = sum(m.get("method") == "initialize" for m in rpc(root))
-            click(760, 183)  # New chat remains accessible beside the long provider label.
+            header_click(760, 0)  # New chat remains accessible beside the long provider label.
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.3)
@@ -424,9 +500,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
             # The native permission selectors persist choices and affect the
             # next Codex turn while the existing outer sandbox remains active.
-            click(1150, 183)
-            click(1160, 218)
-            click(1213, 183)  # Hide the automatically opened provider settings.
+            header_click(1150, 0)
+            header_click(340, 35)
+            header_click(1213, 0)  # Hide the automatically opened provider settings.
             click(1280, 752)
             click(1090, 645)  # Never ask.
             wait_for(
@@ -458,7 +534,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 assert last["params"]["sandboxPolicy"]["type"] == "externalSandbox"
             # History is explicit host work; opening it must not send a model prompt.
             prompts_before = sum(m.get("method") == "turn/start" for m in rpc(root))
-            click(1340, 257)
+            header_click(1340, 74)
             wait_for(
                 lambda: any(m.get("method") == "thread/list" for m in rpc(root)),
                 "History did not list saved conversations",
@@ -473,22 +549,34 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.3)
-            click(1200, 425)  # Load older metadata without prompting the model.
+            header_click(1200, 242)  # Load older metadata without prompting the model.
             wait_for(
                 lambda: sum(m.get("method") == "thread/list" for m in rpc(root)) == 2,
                 "History did not load another page",
             )
-            click(1200, 308)
+            header_click(1200, 125)
             text("saved-2")
             time.sleep(0.2)
             screenshot(window, "history-filtered.png")
-            click(1200, 363)  # The filter exposes the older conversation first.
+            header_click(1200, 180)  # The filter exposes the older conversation first.
             wait_for(
                 lambda: any(m.get("method") == "thread/resume" for m in rpc(root)),
                 "History did not restore the selected conversation",
             )
             time.sleep(0.3)
             screenshot(window, "history-restored.png")
+            click(1280, 785)
+            key("Home", ("Control_L",))
+            key("Up")
+            key("Up")
+            key("End", ("Control_L",))
+            text(" reused")
+            key("Return")
+            wait_for(
+                lambda: sent(root, "Earlier question 1 reused"),
+                "Restoring a conversation did not seed its input history",
+            )
+            time.sleep(0.3)
             send(root, "continue-saved-work")
             last = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert last["params"]["threadId"] == "saved-2"

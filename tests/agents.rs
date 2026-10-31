@@ -227,6 +227,7 @@ fn both_protocols_stream_keep_context_and_relay_explicit_approvals() {
         wait(&mut chat, |c| c.completed == 1);
         submit(&mut chat, launch.clone(), "second");
         wait(&mut chat, |c| c.completed == 2);
+        assert!(chat.last_turn_succeeded);
         assert!(
             chat.messages
                 .iter()
@@ -508,6 +509,7 @@ fn questions_interrupts_and_final_output_survive_process_exit() {
     });
     chat.cancel();
     wait(&mut chat, |c| !c.busy);
+    assert!(!chat.last_turn_succeeded);
     assert!(chat.connected());
     submit(&mut chat, launch, "exit");
     wait(&mut chat, |c| !c.busy);
@@ -587,6 +589,7 @@ fn malformed_or_oversized_output_stops_the_process_and_reports_an_error() {
         submit(&mut chat, launch, input);
         wait(&mut chat, |c| !c.busy);
         assert!(!chat.connected());
+        assert!(!chat.last_turn_succeeded);
         assert!(chat.messages.iter().any(|m| m.role == Role::Notice));
     }
 }

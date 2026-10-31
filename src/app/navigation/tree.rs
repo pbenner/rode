@@ -151,7 +151,7 @@ impl EditorApp {
                 }
             }
         } else if open {
-            self.navigation.editor_intent();
+            self.editor_intent();
             self.open_file(entry.path, ctx);
         }
         if self.navigation.tree.path.is_none() {

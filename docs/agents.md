@@ -2,9 +2,21 @@
 
 Open **View → Agent chat**, use the speech-bubble activity icon, or press **Ctrl+Shift+A**. Choose a provider and open its settings button. Send a message with **Send** or **Enter**; **Shift+Enter** inserts a newline. Replies stream into the chat, with selectable text, copy buttons, code blocks, and expandable tool results. Permission requests and questions appear above the conversation.
 
+**Copy response** copies the displayed message text, including code contents but excluding Markdown code fences and their language labels.
+
 Drag the divider above **Model** and **Access** to resize the message input; double-click it to reset the height. Tab to the divider and use **Up/Down** to resize or **Home** to reset with the keyboard. Long drafts scroll independently using the mouse wheel, trackpad or scrollbar. Typing and cursor movement keep the caret visible, while Send/Stop stay outside the scrolling text. The preferred height is kept for the current window and adapts when the window gets smaller; history temporarily hides the input without clearing it.
 
+At the start of the message box (**Ctrl+Home**), press **Up** repeatedly to browse older sent prompts and **Down** for newer ones. Down past the newest restores your unsent draft. RODE keeps all prompts submitted in the current conversation independently of the rolling display transcript, so long replies and tool output do not remove them from input history. This history stays in memory until you change conversations; restoring or reattaching a chat seeds it with the prompts included in the loaded transcript.
+
 The agent starts in the opened project folder, on the computer hosting that project. The panel identifies **LOCAL** or **SSH**, the folder, and the actual sandbox mode. Without an opened folder, it uses RODE's startup working directory. Opening the panel starts no process. Sending a message or explicitly opening **History** starts the selected agent; history browsing sends no model prompt.
+
+## Queued follow-ups
+
+While the agent is working, **Enter** or **Queue** adds your message to the queue above the composer. Follow-ups run one at a time, in order, after a successful reply. They do not interrupt the current task. **Shift+Enter** still inserts a newline.
+
+Use **↑ / ↓** to reorder prompts, **Edit** to change one, or **Delete** to remove it. Editing waits for **Save prompt** or **Cancel edit** before dispatch continues, without changing the draft in your main message box. **Pause queue / Resume queue** controls automatic sending. **Stop**, a failed turn or a lost agent connection pauses remaining prompts; resume them explicitly when ready. Queued prompts use the selected model and permissions when they run.
+
+The queue holds up to 16 messages for the current conversation. It continues when you switch to code or detach the tools window. New chat, switching projects/conversations/providers, or disconnecting the chat clears it. Pending prompts stay in this RODE window and are not saved or sent by background agents after the window closes; **Persist** retains the active agent task, not this queue.
 
 ## Background agents
 

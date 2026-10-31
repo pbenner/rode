@@ -37,8 +37,8 @@ pub(super) struct State {
     leader: Option<Instant>,
     pub zoom: Option<Pane>,
     pub widths: [Option<f32>; 2],
-    pub height: Option<f32>,
     rects: [Option<egui::Rect>; 5],
+    viewports: [Option<egui::ViewportId>; 5],
     remembered: [Option<egui::Id>; 5],
     pub tree: tree::Selection,
     pub list: List,
@@ -55,13 +55,20 @@ impl State {
             leader: None,
             zoom: None,
             widths: [None; 2],
-            height: None,
             rects: [None; 5],
+            viewports: [None; 5],
             remembered: [None; 5],
             tree: Default::default(),
             list: Default::default(),
             modal: false,
         }
+    }
+    pub fn begin_layout(&mut self) {
+        self.rects = [None; 5];
+        self.viewports = [None; 5];
+    }
+    pub fn rect(&self, pane: Pane) -> Option<egui::Rect> {
+        self.rects[pane.index()]
     }
     pub fn visible(&self, pane: Pane) -> bool {
         self.zoom.is_none_or(|zoom| zoom == pane)
@@ -215,6 +222,10 @@ impl EditorApp {
                     let next = [Pane::Explorer, Pane::Editor, Pane::Terminal, Pane::Tools]
                         .into_iter()
                         .filter(|p| *p != current && self.pane_exists(*p))
+                        .filter(|p| {
+                            self.navigation.viewports[p.index()]
+                                .is_none_or(|viewport| viewport == ctx.viewport_id())
+                        })
                         .filter_map(|p| self.navigation.rects[p.index()].map(|other| (p, other)))
                         .filter(|(_, other)| {
                             (other.center()[axis] - rect.center()[axis]) * sign > 1.
@@ -251,26 +262,63 @@ impl EditorApp {
             Terminal => self.focus_pane(Pane::Terminal, ctx),
             Tools => self.focus_pane(Pane::Tools, ctx),
             Menus => self.focus_pane(Pane::Menus, ctx),
-            Narrower | Wider => {
+            Narrower | Wider | Shorter | Taller => {
                 self.navigation.zoom = None;
-                let pane = if self.navigation.active == Pane::Tools {
-                    Pane::Tools
-                } else {
-                    Pane::Explorer
-                };
-                let width = self.navigation.rects[pane.index()].map_or(250., |r| r.width());
-                let slot = usize::from(pane == Pane::Tools);
-                self.navigation.widths[slot] =
-                    Some(width + if action == Wider { 32. } else { -32. });
-            }
-            Shorter | Taller => {
-                self.navigation.zoom = None;
-                self.show_terminal = true;
-                let height =
-                    self.navigation.rects[Pane::Terminal.index()].map_or(230., |r| r.height());
-                self.navigation.height = Some(height + if action == Taller { 32. } else { -32. });
+                if self.workbench.detached
+                    && matches!(self.navigation.active, Pane::Tools | Pane::Terminal)
+                {
+                    let mut size = ctx
+                        .input(|input| {
+                            input
+                                .raw
+                                .viewports
+                                .get(&Self::tools_viewport())
+                                .and_then(|viewport| viewport.inner_rect)
+                                .map(|rect| rect.size())
+                        })
+                        .unwrap_or(egui::vec2(900., 760.));
+                    let axis = usize::from(matches!(action, Shorter | Taller));
+                    size[axis] = (size[axis]
+                        + if matches!(action, Wider | Taller) {
+                            32.
+                        } else {
+                            -32.
+                        })
+                    .max(if axis == 0 { 640. } else { 420. });
+                    ctx.send_viewport_cmd_to(
+                        Self::tools_viewport(),
+                        egui::ViewportCommand::InnerSize(size),
+                    );
+                } else if matches!(action, Narrower | Wider)
+                    && self.navigation.active == Pane::Explorer
+                {
+                    let width = self
+                        .navigation
+                        .rect(Pane::Explorer)
+                        .map_or(250., |rect| rect.width());
+                    self.navigation.widths[0] =
+                        Some(width + if action == Wider { 32. } else { -32. });
+                }
             }
             Zoom => {
+                if self.workbench.detached
+                    && matches!(self.navigation.active, Pane::Tools | Pane::Terminal)
+                {
+                    let maximized = ctx
+                        .input(|input| {
+                            input
+                                .raw
+                                .viewports
+                                .get(&Self::tools_viewport())
+                                .and_then(|viewport| viewport.maximized)
+                        })
+                        .unwrap_or(false);
+                    ctx.send_viewport_cmd_to(
+                        Self::tools_viewport(),
+                        egui::ViewportCommand::Maximized(!maximized),
+                    );
+                    return;
+                }
                 let pane = self.navigation.active;
                 if pane != Pane::Menus {
                     self.navigation.zoom = if self.navigation.zoom == Some(pane) {
@@ -330,12 +378,20 @@ impl EditorApp {
         match pane {
             Pane::Explorer => self.show_explorer,
             Pane::Editor => true,
-            Pane::Terminal => self.show_terminal,
-            Pane::Tools => self.workbench.panel.is_some(),
+            Pane::Terminal => self.terminal_visible(),
+            Pane::Tools => self.tools_visible(),
             Pane::Menus => true,
         }
     }
     pub(super) fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
+        if self.workbench.detached {
+            let target = if matches!(pane, Pane::Tools | Pane::Terminal) {
+                Self::tools_viewport()
+            } else {
+                egui::ViewportId::ROOT
+            };
+            ctx.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+        }
         self.navigation.active = pane;
         self.navigation.pending = Some(pane);
         if self.navigation.zoom.is_some_and(|p| p != pane) {
@@ -347,26 +403,19 @@ impl EditorApp {
         match pane {
             Pane::Explorer => self.show_explorer = true,
             Pane::Terminal => {
+                self.terminal_intent();
                 self.show_terminal = true;
-                if self.navigation.rects[Pane::Editor.index()].is_some_and(|r| r.height() < 80.) {
-                    self.navigation.height = Some(230.);
-                }
                 if self.terminal.is_none() && self.ssh_master.is_none() && !self.session_busy() {
                     self.new_terminal(ctx);
                 }
             }
             Pane::Tools => {
+                self.workbench.surface = workbench::Surface::Tools;
                 if self.workbench.panel.is_none() {
                     self.toggle_panel(Panel::Monitor, ctx);
                 }
             }
             Pane::Editor => {
-                // A manually maximized terminal must still allow returning to code.
-                if self.show_terminal
-                    && self.navigation.rects[Pane::Editor.index()].is_some_and(|r| r.height() < 80.)
-                {
-                    self.navigation.height = Some(230.);
-                }
                 self.focus_editor(ctx);
             }
             Pane::Menus => {}
@@ -379,6 +428,7 @@ impl EditorApp {
         let rect = ui.max_rect();
         if self.navigation.zoom.is_none() {
             self.navigation.rects[pane.index()] = Some(rect);
+            self.navigation.viewports[pane.index()] = Some(ctx.viewport_id());
         }
         let host = ui.interact(rect, pane.id(), Sense::focusable_noninteractive());
         let blocked = self.dialog != Dialog::None
@@ -389,6 +439,9 @@ impl EditorApp {
             && self.navigation.pending == Some(pane)
             && ctx.memory(|m| m.allows_interaction(ui.layer_id()))
         {
+            if self.workbench.detached && ctx.viewport_id() == Self::tools_viewport() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
             match pane {
                 Pane::Terminal => Terminal::focus(&ctx),
                 Pane::Editor if !self.documents.is_empty() => self.focus_editor(&ctx),
@@ -408,7 +461,9 @@ impl EditorApp {
                 i.pointer.any_pressed()
                     && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
             });
-            if inside || (pane == Pane::Terminal && Terminal::focused(&ctx)) || clicked {
+            if ctx.input(|input| input.focused)
+                && (inside || (pane == Pane::Terminal && Terminal::focused(&ctx)) || clicked)
+            {
                 self.navigation.active = pane;
                 if inside {
                     self.navigation.remembered[pane.index()] = focused;
@@ -444,7 +499,7 @@ impl EditorApp {
             ctx.request_repaint();
         }
         self.navigation.modal = modal;
-        if self.navigation.leader.is_some() {
+        if self.navigation.leader.is_some() && ctx.input(|input| input.focused) {
             let palette = self.themes.active().palette;
             egui::Area::new(egui::Id::new("navigation-hint"))
                 .anchor(egui::Align2::CENTER_BOTTOM, [0., -40.])

@@ -64,6 +64,7 @@ jobs:
       - run: bash scripts/test-ssh.sh
       - run: cargo build --locked --release
       - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-ui-harness.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-workspace-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-debugger-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-terminal-keys-ui.py
@@ -76,6 +77,7 @@ jobs:
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-languages-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-syntax-themes-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-ui.py
+      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-queue-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-persistence-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-codex-install-ui.py
       - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-multiprocess-ui.py
@@ -95,9 +97,11 @@ jobs:
           path: |
             target/ui-smoke/
             target/layout-ui/
+            target/workspace-ui/
             target/project-ui/
             target/workbench-ui/
             target/agent-ui/
+            target/agent-queue-ui/
             target/agent-persistence-ui/
             target/debugger-ui/
             target/multiprocess-ui/

@@ -169,7 +169,7 @@ impl EditorApp {
 
     pub(super) fn terminal_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let wide = ui.available_width() >= 500.;
+        let wide = ui.available_width() >= 700.;
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let native = self.terminal.as_ref().is_some_and(|t| t.native && t.is_alive());
@@ -208,14 +208,14 @@ impl EditorApp {
                 {
                     ctx.copy_text(t.contents());
                 }
-                if ui
+                if wide && ui
                     .small_button("Sessions")
                     .on_hover_text("Reattach native terminals / Slurm allocations")
                     .clicked()
                 {
                     self.open_sessions(ctx);
                 }
-                if ui
+                if wide && ui
                     .add_enabled(!self.session_busy(), egui::Button::new("New").small())
                     .on_hover_text("New terminal; use Persist to keep it running after exit")
                     .clicked()
@@ -224,13 +224,19 @@ impl EditorApp {
                 }
                 if !wide {
                     egui::containers::menu::MenuButton::from_button(egui::Button::new("More").small()).ui(ui, |ui| {
+                        if ui.add_enabled(!self.session_busy(), egui::Button::new("New terminal")).clicked() {
+                            self.new_terminal(ctx); ui.close();
+                        }
+                        if ui.button("Sessions and Slurm allocations").clicked() {
+                            self.open_sessions(ctx); ui.close();
+                        }
                         if ui.button("Copy terminal output").clicked() {
                             if let Some(terminal) = self.terminal.as_ref().or(self.ssh_master.as_ref()) {
                                 ctx.copy_text(terminal.contents());
                             }
                             ui.close();
                         }
-                        if ui.add_enabled(self.terminal.as_ref().is_some_and(Terminal::persistent), egui::Button::new("Detach terminal"))
+                        if ui.add_enabled(self.terminal.as_ref().is_some_and(Terminal::persistent), egui::Button::new("Detach session"))
                             .on_hover_text("Enable Persist before detaching a terminal.").clicked() {
                             self.detach_terminal(ctx);
                             ui.close();
@@ -241,7 +247,7 @@ impl EditorApp {
                     .terminal
                     .as_ref()
                     .is_some_and(|terminal| terminal.native)
-                    && ui.add_enabled(persistent, egui::Button::new("Detach").small())
+                    && ui.add_enabled(persistent, egui::Button::new("Detach session").small())
                         .on_hover_text("Enable Persist to detach and keep this terminal running.").clicked()
                 {
                     self.detach_terminal(ctx);
@@ -304,7 +310,11 @@ impl EditorApp {
         if self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal() {
             return;
         }
-        self.navigation.active = navigation::Pane::Editor;
+        self.editor_intent();
+        ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
+        if ctx.viewport_id() != egui::ViewportId::ROOT {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        }
         self.navigation.zoom = self
             .navigation
             .zoom

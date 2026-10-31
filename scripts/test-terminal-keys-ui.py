@@ -3,7 +3,6 @@
 
 import json
 import os
-import re
 import subprocess
 import tempfile
 import time
@@ -12,7 +11,18 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/terminal-keys-ui"
 )
-from ui_harness import ARTIFACTS, BINARY, click, close_window, display, key, screenshot, text, x11
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    click,
+    close_window,
+    display,
+    key,
+    screenshot,
+    text,
+    wait_for_window,
+    x11,
+)
 
 
 def wait_for(check, message):
@@ -32,6 +42,17 @@ def run():
         (root / "completion-target.txt").write_text("completed filename\n")
         source = root / "main.txt"
         source.write_text("editor source must stay unchanged\n")
+        (root / "control-input.py").write_text(
+            "import os,termios,tty\nfrom pathlib import Path\n"
+            "settings=termios.tcgetattr(0)\n"
+            "try:\n"
+            " tty.setraw(0)\n"
+            " Path('control-ready').touch()\n"
+            " data=b''\n"
+            " while len(data)<2: data+=os.read(0,2-len(data))\n"
+            " Path('control-result').write_text(data.hex())\n"
+            "finally: termios.tcsetattr(0,termios.TCSANOW,settings)\n"
+        )
         shell = base / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         shell.chmod(0o755)
@@ -50,20 +71,10 @@ def run():
             )
             window = None
             try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No native window")
-                time.sleep(0.7)
+                window = wait_for_window(process, ARTIFACTS / "native.log")
                 x11.XSetInputFocus(display, window, 1, 0)
                 x11.XFlush(display)
+                time.sleep(0.7)
                 key("p", ("Control_L",))
                 text("main.txt")
                 key("Return")
@@ -85,8 +96,10 @@ def run():
                 # Tab must remain a shell key immediately after clicking back
                 # into the pane, including after a period with no redraws.
                 text("cat completion-")
-                click(550, 140)
-                click(550, 740)
+                key("space", ("Control_L",))
+                key("e")  # Code and terminal share a workspace; switch away and back.
+                key("space", ("Control_L",))
+                key("t")
                 key("Tab")
                 text(" > refocused.out\n")
                 wait_for(
@@ -105,6 +118,14 @@ def run():
                 wait_for(
                     lambda: (root / "history.out").exists(), "Up did not navigate shell history"
                 )
+                # Native clipboard events must reach raw terminal applications
+                # as Control+X (nano exit) and Control+C (interrupt/cancel).
+                text("python3 control-input.py\n")
+                wait_for(lambda: (root / "control-ready").exists(), "Raw input fixture not ready")
+                key("x", ("Control_L",))
+                key("c", ("Control_L",))
+                wait_for(lambda: (root / "control-result").exists(), "Control keys were swallowed")
+                assert (root / "control-result").read_text() == "1803"
                 # The editor escape route must still work with terminal focus.
                 key("p", ("Control_L", "Shift_L"))
                 text("Terminal: Sessions and Slurm allocations")
@@ -121,7 +142,7 @@ def run():
                 assert source.read_text() == "editor source must stay unchanged\n"
                 close_window(window, process)
                 print(
-                    "Native readline Tab completion, first Tab after focus, history arrows, palette escape route, and editor preservation passed."
+                    "Native readline completion, focus, history, Control+X/Control+C, palette escape route, and editor preservation passed."
                 )
             except Exception:
                 if window and process.poll() is None:

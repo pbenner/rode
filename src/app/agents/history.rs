@@ -105,7 +105,11 @@ pub(super) fn ui(
             }
             if browser.more
                 && ui
-                    .add_enabled(!browser.busy, egui::Button::new("Load more conversations"))
+                    .add_enabled(
+                        !browser.busy,
+                        egui::Button::new("Load more conversations")
+                            .min_size(egui::vec2(ui.available_width(), 24.)),
+                    )
                     .clicked()
             {
                 action.more = true;

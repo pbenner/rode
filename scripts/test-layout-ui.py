@@ -183,26 +183,27 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             append_save(root / "README.md", "focus_after_cancel")
             assert "unsaved_layout_change" in (root / "README.md").read_text()
             command("System: Monitor")
+            screenshot(window, "monitor-full-workspace.png")
             key("grave", ("Control_L",))
             x11.XResizeWindow(display, window, 850, 560)
             x11.XFlush(display)
             time.sleep(0.6)
-            click(410, 215)  # Markdown source below its Edit/Preview controls.
-            key("f", ("Control_L",))
-            text("layout")
-            screenshot(window, "minimum-window.png")
-            active_line(
-                "minimum-window.png", 850, 560, (220, 163, 37), left=250, right=480, minimum=140
-            )
-            key("Escape")
-            append_save(root / "README.md", "focus_after_find")
-            click(420, 430)
+            screenshot(window, "minimum-terminal.png")
             text("echo layout_terminal_ok > terminal.ok\n")
             wait_for(
                 lambda: (root / "terminal.ok").exists(),
                 "Terminal controls/content were lost in the narrow layout",
             )
-            key("grave", ("Control_L",))
+            key("grave", ("Control_L",))  # Return to full-width code, not a split pane.
+            click(410, 215)
+            key("f", ("Control_L",))
+            text("layout")
+            screenshot(window, "minimum-window.png")
+            active_line(
+                "minimum-window.png", 850, 560, (220, 163, 37), left=250, right=750, minimum=140
+            )
+            key("Escape")
+            append_save(root / "README.md", "focus_after_find")
             append_save(root / "README.md", "focus_after_terminal")
             command("Git: Source control")
             time.sleep(0.5)
@@ -216,7 +217,6 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             active_line("tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
             key("grave", ("Control_L",))
             time.sleep(0.3)
-            drag((650, 643), (650, 48))
             screenshot(window, "terminal-full-height.png")
             click(600, 400)
             text("stty size > terminal.size\n")
@@ -225,7 +225,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
                 "Terminal input stopped working after expanding to full height",
             )
             rows, _ = map(int, (root / "terminal.size").read_text().split())
-            assert rows >= 48, f"Terminal height is still capped: {rows} rows"
+            assert rows >= 40, f"Terminal height is still capped: {rows} rows"
             key("grave", ("Control_L",))
             append_save(root / "README.md", "focus_after_full_terminal")
             screenshot(window, "terminal-restored-editor.png")
@@ -234,7 +234,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
                 "Native tabs: overflow/reveal, editor list, duplicate names, middle-close, drag ordering, focus, and unsaved protection passed."
             )
             print(
-                "Native layout: both themes, 850×560 with side panels/find/terminal, narrow Git rows, and full-height terminal/PTY resizing passed."
+                "Native layout: both themes, 850×560 with exclusive workspace views, find, full-width Git, and terminal/PTY resizing passed."
             )
         except Exception:
             if window is not None and process.poll() is None:

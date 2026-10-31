@@ -54,7 +54,7 @@ def filled(window, name, expected, width=1380, height=900, accent=(220, 163, 37)
     # Allocation is immediately left of the rightmost Persist toggle.
     count = sum(
         raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(accent)
-        for y in range(height - 250, height - 227)
+        for y in (range(98, 122) if width >= 1000 else range(124, 148))
         for x in range(width - 215, width - 108)
     )
     assert (count > 500) if expected else (count < 100), (name, count)
@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
             original = rpc("list")[0]
             click(600, 755)
             text("TOKEN=untouched\n")
-            click(1210, 656)
+            click(1210, 108)
             screenshot(window, "form.png")
             # Request two GPUs through the real number field and form action.
             click(592, 400)
@@ -178,7 +178,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
             )
             wait_for(lambda: (root / "allocation.env").exists(), "No interactive allocation shell")
             assert (root / "allocation.env").read_text() == "4242:0:0,1:0,1"
-            click(1326, 656)
+            click(1326, 108)
             wait_for(
                 lambda: any(i["id"] == info["id"] and i["persistent"] for i in rpc("list")),
                 "Could not persist the allocation",
@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
                 lambda: (root / "reattached.env").exists(), "Could not reattach the allocation"
             )
             assert (root / "reattached.env").read_text() == "4242"
-            click(1210, 656)
+            click(1210, 108)
             screenshot(window, "release.png")
             assert not (state / "cancelled").exists()
             click(682, 343)

@@ -382,6 +382,14 @@ try:
                 print("this is not JSON-RPC", flush=True)
             elif message == "overflow":
                 print("x" * (256 * 1024 + 10), flush=True)
+            elif message == "history-burst" and not acp:
+                # Evict earlier prompts from the bounded display transcript.
+                for index in range(140):
+                    notify(
+                        "item/commandExecution/outputDelta",
+                        {"itemId": f"history-tool-{index}", "delta": "Fixture tool output"},
+                    )
+                finish("History burst complete.")
             elif message == "exit":
                 finish("Last reply before exit.")
                 break

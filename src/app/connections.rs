@@ -44,7 +44,7 @@ impl EditorApp {
             output.set_visible(true);
             self.terminal = Some(output);
             self.show_terminal = true;
-            self.navigation.terminal_intent();
+            self.terminal_intent();
             self.notify(format!("{message} SSH login output is retained in the terminal. Choose New for a local shell."), true);
         } else {
             self.notify(message, true);

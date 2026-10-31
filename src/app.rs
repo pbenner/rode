@@ -373,6 +373,8 @@ pub struct EditorApp {
     show_hidden: bool,
     dialog: Dialog,
     dialog_focus: bool,
+    dialog_viewport: egui::ViewportId,
+    ui_viewport: egui::ViewportId,
     dialog_input: String,
     marp_overwrite: bool,
     profile: Profile,
@@ -511,6 +513,8 @@ impl EditorApp {
             show_hidden: false,
             dialog: Dialog::None,
             dialog_focus: false,
+            dialog_viewport: egui::ViewportId::ROOT,
+            ui_viewport: egui::ViewportId::ROOT,
             dialog_input: String::new(),
             marp_overwrite: false,
             profile: Profile::default(),
@@ -985,7 +989,10 @@ impl EditorApp {
     }
 
     fn open_file(&mut self, path: String, ctx: &egui::Context) {
-        self.navigation.editor_intent();
+        self.editor_intent();
+        if ctx.viewport_id() != egui::ViewportId::ROOT {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        }
         if let Some(index) = self
             .documents
             .iter()
@@ -1741,6 +1748,7 @@ impl EditorApp {
                 let alive = terminal.alive.clone();
                 self.ssh_master = Some(terminal);
                 self.show_terminal = true;
+                self.terminal_intent();
                 self.status = "Connecting · complete any prompts in the terminal".into();
                 let cancel = Arc::new(AtomicBool::new(false));
                 self.connection_cancel = cancel.clone();
@@ -1838,6 +1846,7 @@ impl EditorApp {
             _ => self.documents.iter().any(Document::dirty),
         };
         if dirty {
+            self.dialog_viewport = ctx.viewport_id();
             self.pending = Some(action);
         } else {
             self.perform(action, ctx);
@@ -1910,6 +1919,7 @@ impl EditorApp {
             self.file_browser.reset();
         }
         self.dialog = dialog;
+        self.dialog_viewport = self.ui_viewport;
         self.dialog_focus = true;
         self.dialog_input = match self.dialog {
             Dialog::Folder => {
@@ -1997,7 +2007,7 @@ impl EditorApp {
     }
 
     fn new_file(&mut self) {
-        self.navigation.editor_intent();
+        self.editor_intent();
         let id = self.next_id;
         self.next_id += 1;
         self.documents.push(Document {
@@ -2096,9 +2106,10 @@ impl EditorApp {
     }
 
     fn toggle_terminal(&mut self, ctx: &egui::Context) {
-        self.show_terminal = !self.show_terminal;
+        self.show_terminal = !(self.terminal_visible()
+            && (!self.workbench.detached || ctx.viewport_id() == Self::tools_viewport()));
         if self.show_terminal {
-            self.navigation.terminal_intent();
+            self.terminal_intent();
             if self.terminal.is_none() && self.ssh_master.is_none() {
                 self.start_project_terminal(ctx);
             }
@@ -2116,10 +2127,11 @@ impl EditorApp {
         {
             return;
         }
-        if self.show_terminal && self.dialog == Dialog::None && !egui::Popup::is_any_open(ctx) {
+        if self.terminal_visible() && self.dialog == Dialog::None && !egui::Popup::is_any_open(ctx)
+        {
             Terminal::prepare_input(ctx);
         }
-        let terminal_focus = Terminal::focused(ctx) && self.show_terminal;
+        let terminal_focus = Terminal::focused(ctx) && self.terminal_visible();
         let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
         if consume(egui::Modifiers::CTRL, Key::Backtick) {
             self.toggle_terminal(ctx);
@@ -2475,15 +2487,15 @@ impl EditorApp {
                     let selected = match action {
                         0 => self.show_explorer,
                         2 => self.dialog == Dialog::Connect,
-                        3 => self.show_terminal,
-                        4 => self.workbench.panel == Some(Panel::Git),
-                        5 => self.workbench.panel == Some(Panel::Monitor),
-                        6 => self.workbench.panel == Some(Panel::Problems),
-                        7 => self.workbench.panel == Some(Panel::Python),
-                        8 => self.workbench.panel == Some(Panel::Settings),
-                        9 => self.workbench.panel == Some(Panel::Agent),
+                        3 => self.terminal_visible(),
+                        4 => self.tools_visible() && self.workbench.panel == Some(Panel::Git),
+                        5 => self.tools_visible() && self.workbench.panel == Some(Panel::Monitor),
+                        6 => self.tools_visible() && self.workbench.panel == Some(Panel::Problems),
+                        7 => self.tools_visible() && self.workbench.panel == Some(Panel::Python),
+                        8 => self.tools_visible() && self.workbench.panel == Some(Panel::Settings),
+                        9 => self.tools_visible() && self.workbench.panel == Some(Panel::Agent),
                         10 => self.dialog == Dialog::Extensions,
-                        11 => self.workbench.panel == Some(Panel::Debug),
+                        11 => self.tools_visible() && self.workbench.panel == Some(Panel::Debug),
                         _ => false,
                     };
                     let response = ui.add_sized(
@@ -2540,12 +2552,7 @@ impl EditorApp {
         if !self.show_explorer || !self.navigation.visible(navigation::Pane::Explorer) {
             return;
         }
-        let reserve = if self.workbench.panel.is_some() {
-            280.
-        } else {
-            0.
-        };
-        let maximum = (ctx.available_rect().width() - 320. - reserve).clamp(180., 450.);
+        let maximum = (ctx.available_rect().width() - 320.).clamp(180., 450.);
         let zoom = self.navigation.zoom == Some(navigation::Pane::Explorer);
         let panel = egui::SidePanel::left(if zoom { "explorer-zoom" } else { "explorer" })
             .default_width(250.0)
@@ -2792,49 +2799,25 @@ impl EditorApp {
         self.navigation.tree.height = output.inner_rect.height();
     }
 
-    fn terminal_panel(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn terminal_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.terminal_colors.palette(self.themes.active());
-        if !self.show_terminal || !self.navigation.visible(navigation::Pane::Terminal) {
-            return;
+        self.pane_ui(ui, navigation::Pane::Terminal);
+        self.terminal_header(ui, ctx);
+        self.terminal_tabs(ui, ctx);
+        ui.separator();
+        if self.terminal.is_none() && self.ssh_master.is_none() {
+            ui.label(palette.tag(if self.session_busy() {
+                "Starting terminal…"
+            } else {
+                "No terminal attached. Choose New or Sessions."
+            }));
+            ui.allocate_space(ui.available_size().max(egui::Vec2::ZERO));
         }
-        let zoom = self.navigation.zoom == Some(navigation::Pane::Terminal);
-        let panel = egui::TopBottomPanel::bottom(if zoom { "terminal-zoom" } else { "terminal" })
-            .resizable(true)
-            .default_height(230.0)
-            .height_range(100.0..=ctx.available_rect().height().max(100.0))
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.background)
-                    .inner_margin(egui::Margin::symmetric(12, 6)),
-            );
-        let panel = if zoom {
-            panel.exact_height(ctx.available_rect().height())
-        } else if let Some(height) = self.navigation.height.take() {
-            panel.exact_height(height.clamp(100., ctx.available_rect().height().max(100.)))
-        } else {
-            panel
-        };
-        panel.show(ctx, |ui| {
-            self.pane_ui(ui, navigation::Pane::Terminal);
-            self.terminal_header(ui, ctx);
-            self.terminal_tabs(ui, ctx);
-            ui.separator();
-            if self.terminal.is_none() && self.ssh_master.is_none() {
-                ui.label(palette.tag(if self.session_busy() {
-                    "Starting terminal…"
-                } else {
-                    "No terminal attached. Choose New or Sessions."
-                }));
-                // Asynchronous startup must retain the requested pane height;
-                // otherwise the first empty frame saves the 100px minimum.
-                ui.allocate_space(ui.available_size().max(egui::Vec2::ZERO));
-            }
-            if let Some(terminal) = self.terminal.as_mut().or(self.ssh_master.as_mut())
-                && let Some(error) = terminal.ui(ui, self.font_size - 1.0, palette)
-            {
-                self.notify(error, true);
-            }
-        });
+        if let Some(terminal) = self.terminal.as_mut().or(self.ssh_master.as_mut())
+            && let Some(error) = terminal.ui(ui, self.font_size - 1.0, palette)
+        {
+            self.notify(error, true);
+        }
     }
 
     fn welcome(&mut self, ui: &mut egui::Ui) {
@@ -2933,6 +2916,7 @@ impl EditorApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.background))
             .show(ctx, |ui| {
+                if self.foreign_modal(ctx) { ui.disable(); }
                 self.pane_ui(ui,navigation::Pane::Editor);
                 if ui.available_height() <= 1.0 {
                     return;
@@ -3355,6 +3339,9 @@ impl EditorApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if ctx.viewport_id() != self.dialog_viewport {
+            return;
+        }
         let palette = self.themes.active().palette;
         if let Some(action) = self.pending.clone() {
             let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
@@ -3889,6 +3876,7 @@ fn consume_extensions_shortcut(ctx: &egui::Context) -> bool {
 
 impl eframe::App for EditorApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.ui_viewport = egui::ViewportId::ROOT;
         self.poll(ctx);
         self.poll_vaults(ctx);
         self.poll_agents(ctx);
@@ -3907,22 +3895,24 @@ impl eframe::App for EditorApp {
         {
             ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
         }
+        self.navigation.begin_layout();
         self.titlebar(ctx);
         self.workspace_banner(ctx);
         self.encrypted_banner(ctx);
         self.statusbar(ctx);
         self.activity(ctx);
         self.explorer(ctx);
-        self.workbench_panel(ctx);
-        self.terminal_panel(ctx);
-        self.editor(ctx);
+        self.workspace_content(ctx);
         self.dialogs(ctx);
-        self.workbench_windows(ctx);
+        if !self.workbench.detached {
+            self.workbench_windows(ctx);
+        }
         self.extension_windows(ctx);
         self.latex_window(ctx);
         self.terminal_colors.show(ctx, self.themes.active());
         self.notice_ui(ctx);
         self.navigation_finish(ctx);
+        self.detached_tools(ctx);
         if self.profiles_loading.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -4150,6 +4140,7 @@ mod tests {
             command.args(["-u", "-c", &format!("import sys,tty;tty.setraw(0);print('READY',flush=True);data=sys.stdin.buffer.read({});print('BYTES_'+data.hex(),flush=True)", bytes.len())]);
             app.terminal = Some(Terminal::spawn(&ctx, command, "Input recorder".into()).unwrap());
             app.show_terminal = true;
+            app.terminal_intent();
             let deadline = Instant::now() + Duration::from_secs(5);
             while !app.terminal.as_ref().unwrap().contents().contains("READY") {
                 assert!(Instant::now() < deadline);
@@ -4164,8 +4155,7 @@ mod tests {
                 ..Default::default()
             };
             let _ = ctx.run(frame(0.), |ctx| {
-                app.terminal_panel(ctx);
-                app.editor(ctx);
+                app.workspace_content(ctx);
                 Terminal::focus(ctx);
             });
             let mut input = frame(0.1);
@@ -4179,14 +4169,12 @@ mod tests {
             });
             let _ = ctx.run(input, |ctx| {
                 app.shortcuts(ctx);
-                app.terminal_panel(ctx);
-                app.editor(ctx);
+                app.workspace_content(ctx);
             });
             // Back-tab navigation can schedule a focus change for the next frame.
             let _ = ctx.run(frame(0.2), |ctx| {
                 app.shortcuts(ctx);
-                app.terminal_panel(ctx);
-                app.editor(ctx);
+                app.workspace_content(ctx);
             });
             assert!(
                 Terminal::focused(&ctx),

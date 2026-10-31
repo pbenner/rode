@@ -128,6 +128,8 @@ fn run_step(step: usize) {
         text("RODE_THEME_SESSION=kept\n")
         theme("carbon")
         saved_theme(directory, "carbon")
+        key("space", ("Control_L",))
+        key("e")  # Theme samples use the editor while the shell keeps running.
         background(window, "carbon.png", (16, 16, 16))
         # The status-bar menu has seven built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
@@ -157,6 +159,8 @@ fn run_step(step: usize) {
         key("s", ("Control_L",))
         time.sleep(0.3)
         assert path.read_text() == saved, "Changing themes must preserve document contents"
+        key("space", ("Control_L",))
+        key("t")
         click(600, 740)
         text("echo $RODE_THEME_SESSION > session.ok\n")
         time.sleep(0.3)

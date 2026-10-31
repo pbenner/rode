@@ -121,7 +121,8 @@ def run(remote=False):
                 command("Ruff: Apply safe fixes")
                 time.sleep(0.4)
                 # Return focus to the editor; normal Ctrl+S belongs to the shell when focused.
-                click(550, 220)
+                key("space", ("Control_L",))
+                key("e")
                 key("s", ("Control_L",))
                 wait_for(
                     lambda: "import os" not in source.read_text(),
@@ -146,24 +147,30 @@ def run(remote=False):
                 command("Git: Source control")
                 time.sleep(0.5)
                 screenshot(window, label + "-git.png")
-                # Coordinates refer to the native right panel at its default width.
-                click(1035, 377)  # Stage all
+
+                # The fallback sandbox warning adds one row to the workspace.
+                def tool_click(x, y):
+                    state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                    click(x, y - (30 if "[Sandbox]" in state else 0))
+
+                # Controls occupy the workspace beside the explorer.
+                tool_click(350, 343)  # Stage all
                 wait_for(
                     lambda: bool(git("diff", "--cached", "--name-only").strip()),
                     "Native Stage all failed",
                 )
                 screenshot(window, label + "-git-staged.png")
-                click(1150, 505)  # Commit message
+                tool_click(700, 480)  # Commit message
                 text("Native project commit")
-                click(1210, 553)  # Commit staged
+                tool_click(510, 530)  # Commit staged
                 wait_for(
                     lambda: git("log", "-1", "--format=%s").strip() == "Native project commit",
                     "Native commit failed",
                 )
                 command("Project: Settings and sandbox access")
                 screenshot(window, label + "-settings.png")
-                click(1010, 235)  # Disable format-on-save through the visible UI.
-                click(1060, 398)  # Save tool settings
+                tool_click(321, 235)  # Disable format-on-save through the visible UI.
+                tool_click(370, 398)  # Save tool settings
                 preferences = base / "data-home/rode/app.ron"
                 wait_for(
                     preferences.exists, "Project settings were not saved while the app was open"

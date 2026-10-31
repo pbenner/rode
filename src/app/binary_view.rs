@@ -147,7 +147,7 @@ impl HexView {
 }
 impl EditorApp {
     pub(super) fn open_hex(&mut self, path: String, ctx: &egui::Context) {
-        self.navigation.editor_intent();
+        self.editor_intent();
         if !self.feature(crate::extensions::Feature::Binary) {
             self.notify("Enable Hex & binary analysis in View → Extensions.", false);
             return;

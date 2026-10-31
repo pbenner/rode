@@ -10,10 +10,12 @@ mod git;
 mod monitoring;
 mod python;
 mod settings;
+mod workspace;
 use super::*;
 use crate::project::{self, Diagnostic};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
+pub(super) use workspace::Surface;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Panel {
@@ -140,6 +142,8 @@ struct Diff {
 /// Runtime epochs invalidate pending format/check results without rewriting source.
 pub(super) struct Workbench {
     pub panel: Option<Panel>,
+    pub surface: Surface,
+    pub detached: bool,
     preferences: BTreeMap<String, Preferences>,
     pub preferences_pending: bool,
     key: String,
@@ -218,10 +222,14 @@ impl Workbench {
         let preferences = std::mem::take(&mut self.preferences);
         let pending = self.preferences_pending;
         let panel = self.panel;
+        let surface = self.surface;
+        let detached = self.detached;
         *self = Self {
             preferences,
             preferences_pending: pending,
             panel,
+            surface,
+            detached,
             ..Default::default()
         };
     }
@@ -257,10 +265,7 @@ impl EditorApp {
             .sum()
     }
 
-    pub(super) fn workbench_panel(&mut self, ctx: &egui::Context) {
-        if !self.navigation.visible(navigation::Pane::Tools) {
-            return;
-        }
+    pub(in crate::app) fn workbench_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let Some(panel) = self.workbench.panel else {
             return;
         };
@@ -269,105 +274,42 @@ impl EditorApp {
             return;
         }
         let palette = self.themes.active().palette;
-        let maximum = (ctx.available_rect().width() - 320.).clamp(280., 680.);
-        let zoom = self.navigation.zoom == Some(navigation::Pane::Tools);
-        let sidebar = egui::SidePanel::right(if zoom {
-            "workbench-zoom"
-        } else {
-            "workbench-panel"
-        })
-        .default_width(390.)
-        .width_range(280.0..=maximum)
-        .frame(theme::frame(palette.panel));
-        let sidebar = if zoom {
-            sidebar.exact_width(ctx.available_rect().width())
-        } else if let Some(width) = self.navigation.widths[1].take() {
-            sidebar.exact_width(width.clamp(280., maximum))
-        } else {
-            sidebar
-        };
-        sidebar.show(ctx, |ui| {
-            self.pane_ui(ui, navigation::Pane::Tools);
-            ui.horizontal(|ui| {
-                ui.label(palette.tag(panel.title()));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icons::small(ui, Icon::Close, "Close project tools").clicked() {
-                        self.workbench.panel = None;
-                    }
-                });
+        self.pane_ui(ui, navigation::Pane::Tools);
+        if panel == Panel::Debug {
+            self.debugger_ui(ui, ctx);
+            return;
+        }
+        if panel == Panel::Agent {
+            self.agent_ui(ui, ctx);
+            return;
+        }
+        let host = self
+            .workspace
+            .as_ref()
+            .and_then(|w| w.remote.as_ref())
+            .map(|r| format!("SSH · {}", r.profile.endpoint()))
+            .unwrap_or_else(|| "LOCAL HOST".into());
+        ui.add(egui::Label::new(palette.tag(&host)).truncate())
+            .on_hover_text(&host);
+        if panel == Panel::Monitor && !self.monitor_ready() {
+            ui.label("Connect or reconnect to the SSH host to view its system monitor.");
+            return;
+        }
+        if panel != Panel::Monitor && !self.project_ready() {
+            ui.label("Open a project and connect to its host to use these tools.");
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .id_salt(("workbench-content", panel.title()))
+            .auto_shrink([false, false])
+            .show(ui, |ui| match panel {
+                Panel::Git => self.git_ui(ui, ctx),
+                Panel::Monitor => self.monitor_ui(ui),
+                Panel::Problems => self.problems_ui(ui, ctx),
+                Panel::Python => self.python_ui(ui, ctx),
+                Panel::Settings => self.settings_ui(ui, ctx),
+                Panel::Agent | Panel::Debug => unreachable!(),
             });
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 3.;
-                ui.spacing_mut().button_padding.x = 4.;
-                let width = (ui.available_width() - 18.) / 7.;
-                for (kind, icon) in [
-                    (Panel::Git, Icon::Git),
-                    (Panel::Monitor, Icon::Monitor),
-                    (Panel::Problems, Icon::Problems),
-                    (Panel::Python, Icon::Python),
-                    (Panel::Settings, Icon::Settings),
-                    (Panel::Agent, Icon::Chat),
-                    (Panel::Debug, Icon::Debug),
-                ] {
-                    if !self.panel_enabled(kind) {
-                        continue;
-                    }
-                    if ui
-                        .add_sized(
-                            [width, 26.],
-                            IconButton::icon(icon, kind.title())
-                                .icon_size(18.)
-                                .selected(panel == kind),
-                        )
-                        .clicked()
-                    {
-                        self.workbench.panel = Some(kind);
-                        if kind == Panel::Python {
-                            self.refresh_environment(false, ctx);
-                        }
-                        if kind == Panel::Git {
-                            self.refresh_git(ctx);
-                        }
-                    }
-                }
-            });
-            ui.separator();
-            if panel == Panel::Debug {
-                self.debugger_ui(ui, ctx);
-                return;
-            }
-            if panel == Panel::Agent {
-                self.agent_ui(ui, ctx);
-                return;
-            }
-            let host = self
-                .workspace
-                .as_ref()
-                .and_then(|w| w.remote.as_ref())
-                .map(|r| format!("SSH · {}", r.profile.endpoint()))
-                .unwrap_or_else(|| "LOCAL HOST".into());
-            ui.add(egui::Label::new(palette.tag(&host)).truncate())
-                .on_hover_text(&host);
-            if panel == Panel::Monitor && !self.monitor_ready() {
-                ui.label("Connect or reconnect to the SSH host to view its system monitor.");
-                return;
-            }
-            if panel != Panel::Monitor && !self.project_ready() {
-                ui.label("Open a project and connect to its host to use these tools.");
-                return;
-            }
-            egui::ScrollArea::vertical()
-                .id_salt(("workbench-content", panel.title()))
-                .auto_shrink([false, false])
-                .show(ui, |ui| match panel {
-                    Panel::Git => self.git_ui(ui, ctx),
-                    Panel::Monitor => self.monitor_ui(ui),
-                    Panel::Problems => self.problems_ui(ui, ctx),
-                    Panel::Python => self.python_ui(ui, ctx),
-                    Panel::Settings => self.settings_ui(ui, ctx),
-                    Panel::Agent | Panel::Debug => unreachable!(),
-                });
-        });
     }
 
     pub(super) fn toggle_panel(&mut self, panel: Panel, ctx: &egui::Context) {
@@ -378,11 +320,19 @@ impl EditorApp {
             );
             return;
         }
-        self.workbench.panel = if self.workbench.panel == Some(panel) {
-            None
-        } else {
-            Some(panel)
-        };
+        if self.workbench.detached
+            && self.workbench.panel == Some(panel)
+            && self.workbench.surface == Surface::Tools
+        {
+            ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
+            return;
+        }
+        self.workbench.panel =
+            if self.workbench.panel == Some(panel) && self.workbench.surface == Surface::Tools {
+                None
+            } else {
+                Some(panel)
+            };
         if panel == Panel::Git && self.workbench.panel.is_some() {
             self.refresh_git(ctx);
         }
@@ -520,7 +470,7 @@ impl EditorApp {
 
     pub(super) fn workbench_tick(&mut self, ctx: &egui::Context) {
         if self.feature(crate::extensions::Feature::Monitor)
-            && self.navigation.visible(navigation::Pane::Tools)
+            && self.tools_visible()
             && self.workbench.panel == Some(Panel::Monitor)
             && self.monitor_ready()
         {
@@ -551,7 +501,7 @@ impl EditorApp {
             return;
         }
         if self.feature(crate::extensions::Feature::Git)
-            && self.navigation.visible(navigation::Pane::Tools)
+            && self.tools_visible()
             && self.workbench.panel == Some(Panel::Git)
             && self.workbench.git.git_tab == GitTab::Changes
         {
@@ -1083,7 +1033,10 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| app.workbench_panel(ctx),
+            |ctx| {
+                app.workbench.surface = Surface::Tools;
+                app.workspace_content(ctx);
+            },
         )
         .shapes
         .iter()

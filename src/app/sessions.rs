@@ -253,7 +253,7 @@ impl EditorApp {
         self.show_terminal = true;
     }
     pub(super) fn new_temporary_terminal(&mut self, ctx: &egui::Context) {
-        self.navigation.terminal_intent();
+        self.terminal_intent();
         if self.sessions.other.len() >= 15 {
             self.notify(
                 "At most 16 terminal views per window. Detach an existing view first.",
@@ -303,7 +303,7 @@ impl EditorApp {
         allocation: Option<slurm::Allocation>,
         ctx: &egui::Context,
     ) {
-        self.navigation.terminal_intent();
+        self.terminal_intent();
         if self.sessions.busy {
             return;
         }
@@ -478,13 +478,10 @@ impl EditorApp {
             return;
         }
         for terminal in self.terminal.iter().chain(self.ssh_master.iter()) {
-            terminal.set_visible(
-                self.show_terminal && self.navigation.visible(navigation::Pane::Terminal),
-            );
+            terminal.set_visible(self.terminal_visible());
         }
         let manager = self.dialog == Dialog::Sessions;
-        let allocation_visible = self.show_terminal
-            && self.navigation.visible(navigation::Pane::Terminal)
+        let allocation_visible = self.terminal_visible()
             && self
                 .sessions
                 .active
@@ -513,7 +510,7 @@ impl EditorApp {
         }
     }
     fn attach_info(&mut self, info: rode_session::Info, ctx: &egui::Context) {
-        self.navigation.terminal_intent();
+        self.terminal_intent();
         if self
             .sessions
             .active
@@ -689,9 +686,7 @@ impl EditorApp {
                             if info.persistent != *persistent {
                                 self.notify("The running terminal service predates persistence controls. This session remains persistent; existing jobs were preserved. Finish old sessions before restarting the service.", true);
                             }
-                            let restore = if self.navigation.used
-                                && self.navigation.active != navigation::Pane::Terminal
-                            {
+                            let restore = if self.navigation.active != navigation::Pane::Terminal {
                                 Some(self.navigation.active)
                             } else {
                                 None
@@ -885,7 +880,7 @@ impl EditorApp {
                                 let slot = self.sessions.other.remove(index);
                                 self.adopt_terminal(slot.terminal, slot.meta);
                                 self.dialog = Dialog::None;
-                                self.navigation.terminal_intent();
+                                self.terminal_intent();
                                 Terminal::focus(ctx);
                             }
                         }
@@ -1102,7 +1097,7 @@ impl EditorApp {
     }
     fn final_quit(&mut self, ctx: &egui::Context) {
         self.quitting = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
     pub(super) fn quit_terminals(&mut self, ctx: &egui::Context) {
         self.stop_debugger();

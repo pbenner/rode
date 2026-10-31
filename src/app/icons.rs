@@ -37,6 +37,8 @@ pub(super) enum Icon {
     Close,
     ChevronLeft,
     ChevronRight,
+    ChevronUp,
+    ChevronDown,
     More,
     Copy,
     Chat,
@@ -361,6 +363,8 @@ impl Icon {
             }
             Self::ChevronLeft => c.path(&[[15., 5.], [8., 12.], [15., 19.]]),
             Self::ChevronRight => c.path(&[[9., 5.], [16., 12.], [9., 19.]]),
+            Self::ChevronUp => c.path(&[[5., 15.], [12., 8.], [19., 15.]]),
+            Self::ChevronDown => c.path(&[[5., 9.], [12., 16.], [19., 9.]]),
             Self::More => {
                 for x in [5., 12., 19.] {
                     c.dot([x, 12.]);

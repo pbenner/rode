@@ -15,6 +15,8 @@ pub(super) struct State {
     /// temporarily small window clamps the actual panel or history hides input.
     height: f32,
     drag_start: Option<f32>,
+    history: Vec<String>,
+    recall: Option<Recall>,
 }
 
 impl Default for State {
@@ -22,8 +24,16 @@ impl Default for State {
         Self {
             height: DEFAULT_HEIGHT,
             drag_start: None,
+            history: Vec::new(),
+            recall: None,
         }
     }
+}
+
+/// Temporary editable copies of sent prompts, ending with the unsent draft.
+struct Recall {
+    drafts: Vec<String>,
+    position: usize,
 }
 
 pub(super) struct Layout {
@@ -33,6 +43,107 @@ pub(super) struct Layout {
 }
 
 impl State {
+    pub fn reset_recall(&mut self) {
+        self.recall = None;
+    }
+
+    /// Retain each submitted prompt independently of the rolling transcript.
+    pub fn remember_prompt(&mut self, text: String) {
+        if !text.trim().is_empty() && text.len() <= crate::agent::PROMPT_LIMIT {
+            self.history.push(text);
+        }
+    }
+
+    pub fn clear_history(&mut self) {
+        self.reset_recall();
+        self.history.clear();
+    }
+
+    pub fn restore_history(&mut self, messages: impl Iterator<Item = String>) {
+        self.clear_history();
+        for text in messages {
+            self.remember_prompt(text);
+        }
+    }
+
+    /// Only bare arrows at an unselected character zero browse the current chat.
+    pub fn recall(&mut self, ui: &mut egui::Ui, draft: &mut String, id: egui::Id, enabled: bool) {
+        if !enabled
+            || !ui.memory(|memory| memory.has_focus(id) && memory.allows_interaction(ui.layer_id()))
+        {
+            return;
+        }
+        let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
+            return;
+        };
+        if !state
+            .cursor
+            .char_range()
+            .is_some_and(|range| range.is_empty() && range.primary.index == 0)
+        {
+            return;
+        }
+        let key = ui.input(|input| {
+            // Let TextEdit handle batched edits and IME without replacing their buffer.
+            if input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                        | egui::Event::Cut
+                        | egui::Event::Ime(_)
+                )
+            }) {
+                return None;
+            }
+            input.events.iter().find_map(|event| match event {
+                egui::Event::Key {
+                    key: key @ (Key::ArrowUp | Key::ArrowDown),
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                    ..
+                } => Some(*key),
+                _ => None,
+            })
+        });
+        let Some(key) = key else {
+            return;
+        };
+        if self.recall.is_none() {
+            if key != Key::ArrowUp {
+                return;
+            }
+            let mut drafts = self.history.clone();
+            if drafts.is_empty() {
+                return;
+            }
+            let position = drafts.len();
+            drafts.push(draft.clone());
+            self.recall = Some(Recall { drafts, position });
+        }
+        let recall = self.recall.as_mut().unwrap();
+        recall.drafts[recall.position].clone_from(draft);
+        recall.position = if key == Key::ArrowUp {
+            recall.position.saturating_sub(1)
+        } else {
+            (recall.position + 1).min(recall.drafts.len() - 1)
+        };
+        draft.clone_from(&recall.drafts[recall.position]);
+        if recall.position == recall.drafts.len() - 1 {
+            self.recall = None;
+        }
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(0),
+            )));
+        state.store(ui.ctx(), id);
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id.with("recall-reveal"), true));
+        ui.input_mut(|input| input.events.retain(|event| !matches!(event,
+            egui::Event::Key { key: pressed, pressed: true, modifiers: egui::Modifiers::NONE, .. } if *pressed == key)));
+    }
+
     pub fn layout(
         &mut self,
         ui: &mut egui::Ui,
@@ -177,7 +288,11 @@ pub(super) fn editor(
                     ))
                     .char_limit(crate::agent::PROMPT_LIMIT)
                     .show(ui);
-                if old != Some(viewport.size())
+                let recalled = ui
+                    .ctx()
+                    .data_mut(|data| data.remove_temp::<bool>(id.with("recall-reveal")))
+                    .unwrap_or(false);
+                if (recalled || old != Some(viewport.size()))
                     && output.response.has_focus()
                     && let Some(range) = output.cursor_range
                 {
@@ -185,7 +300,10 @@ pub(super) fn editor(
                         .galley
                         .pos_from_cursor(range.primary)
                         .translate(output.galley_pos.to_vec2());
-                    ui.scroll_to_rect(cursor.expand(2.), Some(Align::BOTTOM));
+                    ui.scroll_to_rect(
+                        cursor.expand(2.),
+                        Some(if recalled { Align::TOP } else { Align::BOTTOM }),
+                    );
                 }
                 ui.ctx()
                     .data_mut(|d| d.insert_temp(size_id, viewport.size()));
@@ -206,6 +324,228 @@ pub(super) fn editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RecallView {
+        ctx: egui::Context,
+        state: State,
+        draft: String,
+        messages: Vec<String>,
+    }
+
+    impl RecallView {
+        fn new(draft: &str, messages: &[&str]) -> Self {
+            let mut view = Self {
+                ctx: egui::Context::default(),
+                state: State::default(),
+                draft: draft.into(),
+                messages: messages.iter().map(|text| (*text).into()).collect(),
+            };
+            view.state.restore_history(view.messages.iter().cloned());
+            view.frame(vec![], true, true);
+            view.cursor(0, 0);
+            view
+        }
+        fn cursor(&self, start: usize, end: usize) {
+            let id = egui::Id::new("agent-composer");
+            let mut state = egui::TextEdit::load_state(&self.ctx, id).unwrap();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(start),
+                    egui::text::CCursor::new(end),
+                )));
+            state.store(&self.ctx, id);
+        }
+        fn frame(
+            &mut self,
+            events: Vec<egui::Event>,
+            enabled: bool,
+            focused: bool,
+        ) -> egui::text_edit::TextEditOutput {
+            let mut output = None;
+            let _ = self.ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let id = egui::Id::new("agent-composer");
+                        ui.memory_mut(|memory| {
+                            memory.request_focus(if focused { id } else { id.with("other") })
+                        });
+                        self.state.recall(ui, &mut self.draft, id, enabled);
+                        output = Some(editor(ui, &mut self.draft, id, 0.).inner);
+                    });
+                },
+            );
+            output.unwrap()
+        }
+        fn arrow(&mut self, key: Key) {
+            self.frame(vec![history_key(key, egui::Modifiers::NONE)], true, true);
+        }
+    }
+
+    fn history_key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn recall_browses_messages_preserves_edits_and_restores_the_unsent_draft() {
+        let mut view = RecallView::new(
+            "unfinished λ\nsecond line",
+            &["oldest\nmultiline", "newest 🦀"],
+        );
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "newest 🦀");
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "oldest\nmultiline");
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "oldest\nmultiline");
+        view.frame(vec![egui::Event::Text("edited ".into())], true, true);
+        view.cursor(0, 0);
+        view.arrow(Key::ArrowDown);
+        assert_eq!(view.draft, "newest 🦀");
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "edited oldest\nmultiline");
+        view.arrow(Key::ArrowDown);
+        view.arrow(Key::ArrowDown);
+        assert_eq!(view.draft, "unfinished λ\nsecond line");
+        assert!(view.state.recall.is_none());
+        assert_eq!(view.messages, ["oldest\nmultiline", "newest 🦀"]);
+        view.state.reset_recall();
+        view.messages = vec!["another conversation".into()];
+        view.state.restore_history(view.messages.iter().cloned());
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "another conversation");
+        view.arrow(Key::ArrowDown);
+        assert_eq!(view.draft, "unfinished λ\nsecond line");
+    }
+
+    #[test]
+    fn recall_reaches_every_prompt_beyond_64_and_keeps_duplicate_submissions() {
+        let mut view = RecallView::new("unfinished draft", &[]);
+        let messages: Vec<_> = (0..100)
+            .map(|index| format!("prompt {index}\nsecond line 🦀"))
+            .collect();
+        for text in &messages {
+            view.state.remember_prompt(text.clone());
+        }
+        view.state.remember_prompt(messages.last().unwrap().clone());
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, messages[99]);
+        for text in messages.iter().rev() {
+            view.arrow(Key::ArrowUp);
+            assert_eq!(&view.draft, text);
+            // Normal repaint frames must not reset or advance history.
+            view.frame(vec![], true, true);
+        }
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, messages[0]);
+        for text in messages.iter().skip(1) {
+            view.arrow(Key::ArrowDown);
+            assert_eq!(&view.draft, text);
+        }
+        view.arrow(Key::ArrowDown);
+        assert_eq!(view.draft, messages[99]);
+        view.arrow(Key::ArrowDown);
+        assert_eq!(view.draft, "unfinished draft");
+        view.state.clear_history();
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "unfinished draft");
+    }
+
+    #[test]
+    fn recall_respects_cursor_selection_focus_modifiers_modal_and_ime_guards() {
+        for (start, end, enabled, focused, events) in [
+            (
+                1,
+                1,
+                true,
+                true,
+                vec![history_key(Key::ArrowUp, egui::Modifiers::NONE)],
+            ),
+            (
+                0,
+                2,
+                true,
+                true,
+                vec![history_key(Key::ArrowUp, egui::Modifiers::NONE)],
+            ),
+            (
+                0,
+                0,
+                false,
+                true,
+                vec![history_key(Key::ArrowUp, egui::Modifiers::NONE)],
+            ),
+            (
+                0,
+                0,
+                true,
+                false,
+                vec![history_key(Key::ArrowUp, egui::Modifiers::NONE)],
+            ),
+            (
+                0,
+                0,
+                true,
+                true,
+                vec![history_key(Key::ArrowUp, egui::Modifiers::SHIFT)],
+            ),
+            (
+                0,
+                0,
+                true,
+                true,
+                vec![history_key(Key::ArrowUp, egui::Modifiers::CTRL)],
+            ),
+            (
+                0,
+                0,
+                true,
+                true,
+                vec![
+                    egui::Event::Ime(egui::ImeEvent::Enabled),
+                    history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                ],
+            ),
+            (
+                0,
+                0,
+                true,
+                true,
+                vec![
+                    egui::Event::Text("typed ".into()),
+                    history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                ],
+            ),
+        ] {
+            let mut view = RecallView::new("draft\nnext line", &["history"]);
+            view.cursor(start, end);
+            view.frame(events, enabled, focused);
+            assert!(view.state.recall.is_none());
+            assert!(!view.draft.contains("history"));
+        }
+        let mut view = RecallView::new("draft\nnext line", &["history"]);
+        let output = view.frame(
+            vec![history_key(Key::ArrowDown, egui::Modifiers::NONE)],
+            true,
+            true,
+        );
+        assert_eq!(view.draft, "draft\nnext line");
+        assert!(output.cursor_range.unwrap().primary.index > 0);
+        let mut view = RecallView::new("draft", &[]);
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "draft");
+        assert!(view.state.recall.is_none());
+    }
 
     struct View {
         viewport: Rect,

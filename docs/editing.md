@@ -35,8 +35,9 @@ Open File, Open as hex, and Save As share the project-folder browser's directory
 | Ctrl+Shift+M | Problems |
 | Ctrl+Shift+A | Agent chat |
 | Ctrl+Shift+X | Manage extensions |
-| Enter in agent chat | Send message |
+| Enter in agent chat | Send message, or queue a follow-up while the agent is working |
 | Shift+Enter in agent chat | Insert a newline |
+| Up / Down at the start of agent input | Recall older / newer messages in the current conversation; Down past the newest restores your unsent draft |
 | Shift+Alt+F | Format document |
 | F5 / Shift+F5 | [Start/continue debugging / stop or detach](debugger.md) |
 | F6 / F9 | Pause debugger / toggle source breakpoint |
@@ -51,12 +52,11 @@ Choose a percentage in **View → Interface scale** to resize the entire GUI, in
 
 **View → Editor font size** adjusts source/terminal text without resizing the menus and icons. **Ctrl+0** or **View → Reset interface scale (100%)** resets the whole-interface scale. The command palette offers **Interface: Zoom in**, **Interface: Zoom out**, and **Interface: Reset scale**. Interface scaling leaves buffers, terminal sessions, source font preferences and theme choices intact; it continues to follow monitor DPI when moving the window between displays.
 
-Side panels narrow to preserve a usable editor at the minimum 850×560 window size. Paths and status text stay on one line with full hover text, find/replace uses two rows when space is tight, and terminal/header controls stay accessible. Opening or switching a file focuses its editor, with cursor/undo state retained across tab switches and reordering. Unsaved tabs still require a discard decision when closed.
+The explorer remains at the left. The workspace beside it switches between **Code**, **Terminal**, and project tools such as **Chat**, **Git**, and **Debugger**. Opening tools replaces the code view instead of shrinking it. Choose **Code** or open a file in the explorer to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 
-Drag the terminal's top edge to resize it up to the full available workspace height. The application menu and status bar remain accessible. Drag it down again, or use **Ctrl+`** to hide it and return to the editor; the shell session keeps running.
+Choose **Detach** in the workspace toolbar to move the selected tools or terminal into a separate native window while the editor stays visible in the main window. Switch tools using the same tabs in that window. **Dock back**, or closing the tools window, returns it beside the explorer without stopping its work. The main window's **Show tools window** brings it to the front.
 
-[Compact layout with explorer, find/replace, terminal, and monitor](../assets/layout-compact.png).
-
+The terminal fills this workspace rather than occupying a separate bottom panel. **Ctrl+`** opens it or returns to code; hiding it keeps its shell running. Resize a detached tools window using its native borders. Paths and status text retain their full hover text, and find/replace adapts to narrow windows. Unsaved files still require a discard decision when closed.
 
 ## Keyboard pane navigation
 
@@ -80,8 +80,8 @@ Use **Ctrl+Space**, release Ctrl, then press a command key. Defaults avoid Alt s
 | `Tab` / `Shift+Tab` | Next / previous visible pane |
 | `e` / `f` / `t` / `p` | Focus editor / explorer / terminal / project tools |
 | `u` | Focus the application menu; use Enter and Tab to operate controls |
-| `Shift+H` / `Shift+L` | Shrink / grow the explorer, or the tools pane when focused |
-| `Shift+J` / `Shift+K` | Shrink / grow terminal height |
+| `Shift+H` / `Shift+L` | Shrink / grow the explorer or detached tools window |
+| `Shift+J` / `Shift+K` | Shrink / grow the detached tools window height |
 | `m` | Maximize / restore the focused pane |
 | `q` | Hide the focused side pane; terminal jobs keep running |
 | `n` / `[` / `]` | New / previous / next terminal view |

@@ -76,6 +76,9 @@ pub struct ChatView {
     pub busy: bool,
     /// Completed turns used for clean-buffer refresh.
     pub completed: u64,
+    /// False for older services, failures and interrupted turns.
+    #[serde(default)]
+    pub last_turn_succeeded: bool,
     /// Backend-advertised models.
     pub models: Vec<controls::Model>,
     /// Backend-advertised ACP settings.

@@ -66,6 +66,7 @@ impl Chat {
                 config: launch.config,
             })?;
             self.inner.busy = true;
+            self.inner.last_turn_succeeded = false;
             self.inner.status = "Working…".into();
             return Ok(());
         }
@@ -78,6 +79,7 @@ impl Chat {
             text,
         });
         self.inner.busy = true;
+        self.inner.last_turn_succeeded = false;
         self.inner.status = "Starting agent…".into();
         self.inner.changed = true;
         Ok(())
@@ -108,6 +110,7 @@ impl Chat {
         }
         if client.closed() {
             self.inner.busy = false;
+            self.inner.last_turn_succeeded = false;
             self.inner.status = if client.ending { "Stopped" } else { "Detached" }.into();
         }
     }

@@ -164,7 +164,7 @@ def run():
                     )
                     assert len(raw) == width * height * 3
                     right = range(width - 92, width - 14)
-                    header = range(height - 250, height - 227)
+                    header = range(98, 122) if width >= 1000 else range(124, 148)
                     filled = sum(
                         raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(accent)
                         for y in header
@@ -173,7 +173,7 @@ def run():
                     assert (filled > 500) if enabled else (filled < 100), (name, filled)
 
                 persistence_button(False, "persist-off.png")
-                click(1326, 656)
+                click(1326, 108)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and info["persistent"] for info in infos()
@@ -181,7 +181,7 @@ def run():
                     "The terminal Persist button did not enable persistence",
                 )
                 persistence_button(True, "persist-on.png")
-                click(1326, 656)
+                click(1326, 108)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and not info["persistent"] for info in infos()
@@ -194,7 +194,7 @@ def run():
                 text("printf '%s' \"$TOKEN\" > toggle.ok\n")
                 wait_for(lambda: (root / "toggle.ok").exists(), "Switching off restarted the shell")
                 assert (root / "toggle.ok").read_text() == "preserved", "Toggle replaced the shell"
-                click(1326, 656)
+                click(1326, 108)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and info["persistent"] for info in infos()
@@ -208,7 +208,7 @@ def run():
                 x11.XFlush(display)
                 time.sleep(0.5)
                 persistence_button(True, "persist-compact.png", width=850, height=560)
-                click(796, 316)
+                click(796, 134)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and not info["persistent"] for info in infos()
@@ -216,7 +216,7 @@ def run():
                     "Compact Persist button could not switch off",
                 )
                 persistence_button(False, "persist-compact-off.png", width=850, height=560)
-                click(796, 316)
+                click(796, 134)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and info["persistent"] for info in infos()
@@ -288,7 +288,7 @@ def run():
                 text("echo shared > shared.ok\n")
                 wait_for(lambda: (root / "shared.ok").exists(), "Shared view could not send input")
                 screenshot(other_window, "shared-terminal.png")
-                click(1326, 656)  # Turn it off in this view; both windows must agree.
+                click(1326, 108)  # Turn it off in this view; both windows must agree.
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and not info["persistent"] for info in infos()

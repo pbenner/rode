@@ -52,6 +52,8 @@ def show_chat(process, log):
     time.sleep(0.8)
     x11.XSetInputFocus(display, window, 1, 0)
     x11.XFlush(display)
+    if "[Sandbox]" not in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True):
+        click(1331, 820)  # The fallback notification would otherwise cover Persist.
     key("a", ("Control_L", "Shift_L"))
     time.sleep(0.4)
     return window
@@ -89,11 +91,13 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             )
             processes.append(process)
             window = show_chat(process, log_path)
-            click(1213, 183)  # Settings, existing executable: no installation or inference.
-            click(1110, 277)
+            info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+            header = 157 if "[Sandbox]" in info else 187
+            click(1213, header)  # Settings, existing executable: no installation or inference.
+            click(1110, header + 94)
             key("a", ("Control_L",))
             text("./agent.py")
-            click(1213, 183)
+            click(1213, header)
             screenshot(window, "ready.png")
             assert not (root / "agent.pid").exists()
             assert not infos(), "Opening chat started a native agent"
