@@ -160,6 +160,72 @@ impl EditorApp {
 mod tests {
     use super::*;
 
+    #[test]
+    fn explorer_shortcut_requests_connection_and_preserves_the_unsaved_buffer_guard() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        app.documents[0].text = "unsaved local edits".into();
+        let profile = Profile {
+            name: "Saved connection shortcut".into(),
+            host: "fixture.invalid".into(),
+            user: "researcher".into(),
+            port: "2222".into(),
+            root: "/scratch/project".into(),
+            identity: "/fixture/key".into(),
+            config: "/fixture/config".into(),
+            jump: "fixture-jump".into(),
+            ..Default::default()
+        };
+        app.profiles = vec![profile.clone()];
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 760.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.explorer(ctx);
+                    egui::CentralPanel::default().show(ctx, |_| {});
+                },
+            )
+        };
+        let output = frame(vec![]);
+        let point = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == profile.name => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+            .expect("saved connection shortcut");
+        let pointer = |pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(point), pointer(true)]);
+        frame(vec![pointer(false)]);
+        assert!(app.dialog == Dialog::None);
+        let Some(Action::Remote(requested)) = app.pending.as_ref() else {
+            panic!("shortcut must request a connection, not open connection settings");
+        };
+        assert_eq!(
+            serde_json::to_value(requested).unwrap(),
+            serde_json::to_value(&profile).unwrap()
+        );
+        assert_eq!(app.documents[0].text, "unsaved local edits");
+        assert!(app.workspace.is_none());
+    }
+
     fn remote_buffer() -> (EditorApp, egui::Context) {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());

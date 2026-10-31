@@ -2656,7 +2656,7 @@ impl EditorApp {
                         .clicked()
                     {
                         self.profile = profile;
-                        self.set_dialog(Dialog::Connect);
+                        self.guarded(Action::Remote(self.profile.clone()), ctx);
                     }
                 }
                 if self.profiles.is_empty() {

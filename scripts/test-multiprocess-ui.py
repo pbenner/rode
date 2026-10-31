@@ -26,7 +26,6 @@ from ui_harness import (
     text,
     theme,
     x11,
-    xtest,
 )
 
 x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
@@ -49,12 +48,21 @@ def focus(window):
 
 
 def window_for(process, previous):
-    for _ in range(150):
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
         tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
         for match in re.finditer(r'(0x[0-9a-f]+) "RODE', tree):
             window = int(match[1], 16)
             if window not in previous:
-                time.sleep(0.8)
+                state = subprocess.run(
+                    ["xwininfo", "-id", hex(window)], capture_output=True, text=True
+                )
+                if (
+                    state.returncode
+                    or "Map State: IsViewable" not in state.stdout
+                    or "[Opening project]" in state.stdout
+                ):
+                    continue
                 focus(window)
                 return window
         assert process.poll() is None
@@ -74,11 +82,13 @@ def agent(window, executable):
     focus(window)
     key("a", ("Control_L", "Shift_L"))
     time.sleep(0.2)
-    click(1229, 183)
-    click(1270, 281)
+    state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+    header = 157 if "[Sandbox]" in state else 187
+    click(1213, header)
+    click(700, header + 94)
     key("a", ("Control_L",))
     text(executable)
-    click(1229, 183)
+    click(1213, header)
 
 
 def connection_form(window, name):
@@ -126,19 +136,14 @@ with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
             focus(windows[0])
             theme("carbon")
             focus(windows[1])
-            click(550, 250)
-            click(195, 25)  # View → Font size; change the slider track.
+            click(195, 25)
             screenshot(windows[1], "font-menu.png")
-            xtest.XTestFakeMotionEvent(display, -1, 205, 356, 0)
-            xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-            x11.XFlush(display)
-            time.sleep(0.15)
-            xtest.XTestFakeMotionEvent(display, -1, 230, 356, 0)
-            x11.XFlush(display)
-            time.sleep(0.15)
-            xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-            x11.XFlush(display)
             key("Escape")
+            # Focus code first: the project terminal may open during startup.
+            # Use the font shortcut instead of a menu row's changing coordinates.
+            key("space", ("Control_L",))
+            key("e")
+            key("equal", ("Control_L",))
             wait_for(
                 lambda: float(preferences(saved).get("font_size", "14")) > 14, "Font was not saved"
             )
