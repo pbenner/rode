@@ -30,6 +30,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     x11,
@@ -119,8 +120,7 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
                 assert process.poll() is None, "RODE exited before project preparation"
                 time.sleep(0.05)
             assert window, "No prepared RODE window"
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             time.sleep(0.6)
             key("a", ("Control_L", "Shift_L"))
             time.sleep(0.3)

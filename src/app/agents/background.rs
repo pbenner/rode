@@ -99,7 +99,7 @@ impl EditorApp {
                 _ => self.agents.running.error = "Unexpected background-agent service reply".into(),
             }
             if mutating && !self.agents.running.error.is_empty() {
-                self.abort_agent_quit(self.agents.running.error.clone(), ctx);
+                self.abort_session_quit(self.agents.running.error.clone(), ctx);
             }
         }
         if self.dialog == Dialog::AgentSessions {

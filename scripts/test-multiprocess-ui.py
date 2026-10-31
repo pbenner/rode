@@ -21,6 +21,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -42,8 +43,7 @@ def wait_for(check, message):
 
 def focus(window):
     x11.XRaiseWindow(display, window)
-    x11.XSetInputFocus(display, window, 1, 0)
-    x11.XFlush(display)
+    focus_window(window)
     time.sleep(0.25)
 
 

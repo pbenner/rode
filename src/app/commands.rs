@@ -76,15 +76,17 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         ui.label(palette.tag("COMMAND PALETTE"));
         let list_keys = navigation::List::keys(ctx);
-        let response = ui.add(
+        let input_id = egui::Id::new("command-dialog-input");
+        if self.dialog_focus || ui.memory(|memory| memory.focused().is_none()) {
+            ui.memory_mut(|memory| memory.request_focus(input_id));
+            self.dialog_focus = false;
+        }
+        ui.add(
             egui::TextEdit::singleline(&mut self.dialog_input)
+                .id(input_id)
                 .desired_width(f32::INFINITY)
                 .hint_text("Type a command…"),
         );
-        if self.dialog_focus {
-            response.request_focus();
-            self.dialog_focus = false;
-        }
         let commands = [
             (PaletteAction::New, "New file", "Ctrl+N"),
             (PaletteAction::Open, "Open file by path", "Ctrl+P"),
@@ -413,5 +415,119 @@ impl EditorApp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_document_accepts_text_on_its_first_focused_frame() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1380., 900.),
+                )),
+                events: vec![egui::Event::Text("first-frame-edit".into())],
+                ..Default::default()
+            },
+            |ctx| app.editor(ctx),
+        );
+        assert_eq!(app.documents[0].text, "first-frame-edit");
+    }
+
+    #[test]
+    fn the_first_palette_frame_uses_queued_text_before_confirming_a_command() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.editor(ctx));
+        app.set_dialog(Dialog::Commands);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1380., 900.),
+                )),
+                events: vec![
+                    egui::Event::Text("Open file by path".into()),
+                    egui::Event::Key {
+                        key: Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                app.editor(ctx);
+                app.dialogs(ctx);
+            },
+        );
+        assert!(
+            app.documents.len() == 1 && app.documents[0].text.is_empty(),
+            "Sizing must not activate the default command"
+        );
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.editor(ctx);
+            app.dialogs(ctx);
+        });
+        assert!(
+            app.documents.len() == 1 && app.documents[0].text.is_empty(),
+            "A delayed first frame must not execute New file"
+        );
+        assert!(
+            app.dialog == Dialog::Open,
+            "The typed command must open the file picker"
+        );
+    }
+
+    #[test]
+    fn a_palette_with_no_focused_widget_recovers_before_processing_text() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.set_dialog(Dialog::Commands);
+        for _ in 0..3 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.dialogs(ctx));
+        }
+        ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("command-dialog-input")));
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Text("Open file by path".into())],
+                ..Default::default()
+            },
+            |ctx| app.dialogs(ctx),
+        );
+        assert_eq!(app.dialog_input, "Open file by path");
+    }
+
+    #[test]
+    fn changing_dialogs_discards_keyboard_input_waiting_for_the_old_dialog() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.set_dialog(Dialog::Commands);
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Text("New file".into())],
+                ..Default::default()
+            },
+            |ctx| app.dialogs(ctx),
+        );
+        app.set_dialog(Dialog::Open);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.dialogs(ctx));
+        assert!(app.dialog == Dialog::Open);
+        assert!(app.dialog_input.is_empty());
+        assert!(app.documents.is_empty());
     }
 }

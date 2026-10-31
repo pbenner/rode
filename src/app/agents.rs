@@ -39,6 +39,7 @@ pub(super) struct Agents {
     browser: Option<agent::history::Browser>,
     history_open: bool,
     history_filter: String,
+    history_delete: Option<history::Delete>,
     runtime: runtime::Runtime,
     running: background::Running,
     retired: Vec<Chat>,
@@ -71,6 +72,7 @@ impl Agents {
             browser: None,
             history_open: false,
             history_filter: String::new(),
+            history_delete: None,
             runtime: runtime::Runtime::default(),
             running: Default::default(),
             retired: vec![],
@@ -186,6 +188,7 @@ impl EditorApp {
             self.agents.browser = None;
             self.agents.history_open = false;
             self.agents.history_filter.clear();
+            self.agents.history_delete = None;
             self.agents.save_config();
             self.agents.replace_chat();
             self.agents.running = Default::default();
@@ -224,12 +227,12 @@ impl EditorApp {
         }
         self.agents.retired.retain(Chat::work_pending);
         if let Some(error) = retirement_error {
-            self.abort_agent_quit(error, ctx);
+            self.abort_session_quit(error, ctx);
         }
         let was_busy = self.agents.chat.busy;
         self.agents.chat.poll();
         if let Some(error) = self.agents.chat.take_persistence_error() {
-            self.abort_agent_quit(error, ctx);
+            self.abort_session_quit(error, ctx);
         }
         if self.agents.attaching
             && let Some(config) = self.agents.chat.attached_config().cloned()
@@ -499,11 +502,12 @@ impl EditorApp {
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
             if agents.history_open {
-                let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal);
+                let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal,agents.chat.conversation_id(),&mut agents.history_delete);
                 history_action.refresh |= panel.refresh;
                 history_action.more=panel.more;
                 history_action.resume=panel.resume;
                 history_action.close=panel.close;
+                history_action.delete=panel.delete;
                 return;
             }
             if let Some(prompt) = agents.chat.prompts.front_mut() {
@@ -777,10 +781,25 @@ impl EditorApp {
         if history_action.close {
             self.agents.browser = None;
             self.agents.history_open = false;
+            self.agents.history_delete = None;
         } else if history_action.refresh {
+            self.agents.history_delete = None;
             self.open_agent_history(ctx);
         } else if let Some(browser) = &mut self.agents.browser {
-            let result = if let Some(id) = history_action.resume {
+            let result = if let Some(selected) = history_action.delete {
+                let protected = self
+                    .agents
+                    .chat
+                    .conversation_id()
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect();
+                let id = match &selected {
+                    history::Delete::One { id, .. } => Some(id.as_str()),
+                    history::Delete::All => None,
+                };
+                browser.delete(id, protected)
+            } else if let Some(id) = history_action.resume {
                 browser.resume(&id)
             } else if history_action.more {
                 browser.load_more()

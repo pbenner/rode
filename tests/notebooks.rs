@@ -117,16 +117,19 @@ fn installed_python_kernel_keeps_state_streams_errors_and_real_png_outputs() {
     kernel
         .run(vec![
             Run {
+                cell: String::new(),
                 uid: 1,
                 version: 0,
                 code: "counter=40; print('first')".into(),
             },
             Run {
+                cell: String::new(),
                 uid: 2,
                 version: 3,
                 code: "print(counter+2)".into(),
             },
             Run {
+                cell: String::new(),
                 uid: 3,
                 version: 0,
                 code: "import matplotlib.pyplot as plt\nplt.plot([1,2],[3,4]); plt.show()".into(),
@@ -147,11 +150,13 @@ fn installed_python_kernel_keeps_state_streams_errors_and_real_png_outputs() {
     kernel
         .run(vec![
             Run {
+                cell: String::new(),
                 uid: 4,
                 version: 0,
                 code: "raise ValueError('expected failure')".into(),
             },
             Run {
+                cell: String::new(),
                 uid: 5,
                 version: 0,
                 code: "print('must not run')".into(),
@@ -167,6 +172,7 @@ fn installed_python_kernel_keeps_state_streams_errors_and_real_png_outputs() {
     assert!(!kernel.busy());
     kernel
         .run(vec![Run {
+            cell: String::new(),
             uid: 6,
             version: 0,
             code: "print(counter)".into(),
@@ -195,6 +201,7 @@ fn kernel_interrupt_and_scope_cleanup_stop_only_the_owned_kernel() {
     );
     kernel
         .run(vec![Run {
+            cell: String::new(),
             uid: 1,
             version: 0,
             code,
@@ -264,6 +271,7 @@ fn actual_sandbox_encloses_kernel_and_its_file_operations_without_network_sharin
     );
     kernel
         .run(vec![Run {
+            cell: String::new(),
             uid: 1,
             version: 0,
             code,

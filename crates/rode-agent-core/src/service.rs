@@ -75,6 +75,9 @@ pub struct Info {
 /// Current chat presentation; bounded exactly as the foreground controller.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatView {
+    /// Backend conversation identity, used to protect open chats from history deletion.
+    #[serde(default)]
+    pub conversation: String,
     /// Recent messages, never saved as RODE preferences.
     pub messages: VecDeque<Message>,
     /// Permission/questions waiting for explicit input.
@@ -110,6 +113,12 @@ pub struct HistoryView {
     pub busy: bool,
     /// Whether the backend supports restoring a row.
     pub can_resume: bool,
+    /// Whether the backend provides saved-conversation deletion.
+    #[serde(default)]
+    pub can_delete: bool,
+    /// Whether an explicit delete operation is pending.
+    #[serde(default)]
+    pub deleting: bool,
     /// Whether another page can be requested.
     pub more: bool,
 }
@@ -210,5 +219,12 @@ pub enum Command {
     HistoryResume {
         /// Backend-owned saved conversation ID.
         id: String,
+    },
+    /// Delete one listed conversation or all saved chats for this project/backend.
+    HistoryDelete {
+        /// A listed identity, or None for all pages (including archived Codex chats).
+        id: Option<String>,
+        /// Open frontend conversations to keep, in addition to host-owned controllers.
+        protected: Vec<String>,
     },
 }

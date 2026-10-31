@@ -47,7 +47,8 @@ impl EditorApp {
             .find(|d| d.path.as_deref() == Some(&target.path) && !d.is_preview())
         {
             let (id, row, column) = (doc.id, target.row, target.column);
-            self.debugger.versions.entry(id).or_insert(doc.edit_version);
+            let version = self.debugger.source_version(doc);
+            self.debugger.versions.entry(id).or_insert(version);
             self.debugger.pending_jump = None;
             self.jump_to_issue(id, row, column);
             self.focus_editor(ctx);

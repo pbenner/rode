@@ -8,6 +8,11 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Operation {
+    /// Host-owned notebook/debugger control, outside the captured process sandbox.
+    Runtimes {
+        /// Only runtime discovery, creation and termination are accepted.
+        request: Box<rode_session::Request>,
+    },
     /// Discover running terminal sessions without attaching a view.
     List,
     /// Native agent operations use the same verified host helper and service.
@@ -102,6 +107,15 @@ pub fn local(operation: &Operation) -> Result<Reply> {
     // The editor's embedded service always matches its client. A sibling
     // binary can be stale after cargo build or an unpackaged update.
     let standalone = std::env::var_os("RODE_SESSION_HELPER").map(PathBuf::from);
+    // Library-test executables have Rust's test harness as their main, so they
+    // cannot implement the editor's --session-service entry point themselves.
+    #[cfg(test)]
+    let standalone = standalone.or_else(|| {
+        exe.parent()
+            .and_then(std::path::Path::parent)
+            .map(|p| p.join("rode-sessiond"))
+            .filter(|p| p.is_file())
+    });
     if let Some(path) = &standalone {
         let mut command = std::process::Command::new(path);
         command.arg("protocol");
@@ -131,6 +145,35 @@ pub fn local(operation: &Operation) -> Result<Reply> {
         },
     };
     let request = match operation {
+        Operation::Runtimes { request } => {
+            let mut request = *request.clone();
+            ensure!(
+                matches!(
+                    request,
+                    rode_session::Request::Runtimes
+                        | rode_session::Request::CreateRuntime { .. }
+                        | rode_session::Request::EndRuntime { .. }
+                ),
+                "Only runtime control requests are accepted"
+            );
+            if let rode_session::Request::CreateRuntime { spec } = &mut request {
+                let root = std::path::Path::new(&spec.root);
+                let python = project::python_path(root, &spec.python);
+                spec.argv[0] = if spec.python_program {
+                    python.clone()
+                } else {
+                    crate::process::resolve_program(root, &spec.argv[0])
+                }
+                .to_string_lossy()
+                .into();
+                spec.env = std::env::vars_os()
+                    .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                    .collect();
+                spec.env
+                    .extend(project::environment_variables(&python.to_string_lossy()));
+            }
+            request
+        }
         Operation::List => rode_session::Request::List,
         Operation::Agents { request } => {
             let mut request = *request.clone();

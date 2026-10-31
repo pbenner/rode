@@ -66,6 +66,248 @@ fn log(root: &Path) -> Vec<Value> {
         .collect()
 }
 
+fn options(root: &Path, value: Value) {
+    fs::write(root.join("history-fixture.json"), value.to_string()).unwrap();
+}
+
+fn deleted(root: &Path) -> Vec<String> {
+    fs::read(root.join("history-deleted.json"))
+        .ok()
+        .map(|bytes| serde_json::from_slice(&bytes).unwrap())
+        .unwrap_or_default()
+}
+
+#[test]
+fn individual_deletion_is_acknowledged_persisted_and_never_requests_inference() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        assert!(browser.can_delete);
+        assert!(browser.delete(Some("foreign"), vec![]).is_err());
+        assert!(
+            browser
+                .delete(Some("saved-1"), vec!["saved-1".into()])
+                .is_err()
+        );
+        browser.delete(Some("saved-1"), vec![]).unwrap();
+        wait(&mut browser);
+        assert!(browser.status.contains("Deleted 1"), "{}", browser.status);
+        assert!(browser.entries.is_empty());
+        assert_eq!(deleted(temp.path()), ["saved-1"]);
+        let mut refreshed = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut refreshed);
+        assert!(refreshed.entries.is_empty());
+        refreshed.load_more().unwrap();
+        wait(&mut refreshed);
+        assert_eq!(refreshed.entries[0].id, "saved-2");
+        assert!(log(temp.path()).iter().all(|r| !matches!(
+            r["method"].as_str(),
+            Some(
+                "thread/start"
+                    | "thread/resume"
+                    | "turn/start"
+                    | "session/new"
+                    | "session/load"
+                    | "session/prompt"
+            )
+        )));
+    }
+}
+
+#[test]
+fn individual_codex_deletion_protects_active_descendants_on_unloaded_and_archived_pages() {
+    for (count, active, archived) in [
+        (3, "saved-1", false),
+        (300, "saved-299", false),
+        (3, "archived-1", true),
+    ] {
+        let (temp, launch) = fixture(Provider::Codex, false);
+        options(
+            temp.path(),
+            serde_json::json!({
+                "count":count, "archived":archived, "active":[active],
+                "parents":{(active):"saved-0"}
+            }),
+        );
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.delete(Some("saved-0"), vec![]).unwrap();
+        wait(&mut browser);
+        assert!(deleted(temp.path()).is_empty(), "{}", browser.status);
+        assert!(
+            browser.status.contains("active child"),
+            "{}",
+            browser.status
+        );
+        assert!(
+            log(temp.path())
+                .iter()
+                .all(|r| r["method"] != "thread/delete")
+        );
+    }
+}
+
+#[test]
+fn delete_all_enumerates_beyond_the_browser_limit_and_keeps_open_active_and_foreign_chats() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        options(
+            temp.path(),
+            serde_json::json!({
+                "count":300,"archived":true,"active":["saved-43"],"other_provider":["saved-44"]
+            }),
+        );
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        assert_eq!(browser.entries.len(), 32);
+        browser.delete(None, vec!["saved-42".into()]).unwrap();
+        wait(&mut browser);
+        let mut expected: Vec<_> = (0..300)
+            .filter(|n| *n != 42 && *n != 43 && (provider == Provider::Acp || *n != 44))
+            .map(|n| format!("saved-{n}"))
+            .collect();
+        if provider == Provider::Codex {
+            expected.push("archived-1".into());
+        }
+        expected.sort();
+        assert_eq!(deleted(temp.path()), expected, "{}", browser.status);
+        assert!(browser.status.contains("kept 2"), "{}", browser.status);
+        let calls = log(temp.path());
+        let first_delete = calls
+            .iter()
+            .position(|r| {
+                matches!(
+                    r["method"].as_str(),
+                    Some("thread/delete" | "session/delete")
+                )
+            })
+            .unwrap();
+        assert!(
+            calls
+                .iter()
+                .skip(first_delete)
+                .filter(|r| r["method"] == "thread/list" || r["method"] == "session/list")
+                .count()
+                == 1,
+            "Only the final refresh may list during/after deletion"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|r| r["method"] != "turn/start" && r["method"] != "session/prompt")
+        );
+    }
+}
+
+#[test]
+fn deletion_revalidates_saved_scope_and_partial_failures_leave_unacknowledged_rows() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        options(temp.path(), serde_json::json!({"wrong_root":true}));
+        browser.delete(Some("saved-1"), vec![]).unwrap();
+        wait(&mut browser);
+        assert!(deleted(temp.path()).is_empty());
+        assert_eq!(browser.entries.len(), 1);
+        options(temp.path(), serde_json::json!({"delete_error":"saved-2"}));
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.load_more().unwrap();
+        wait(&mut browser);
+        browser.delete(None, vec![]).unwrap();
+        wait(&mut browser);
+        assert_eq!(deleted(temp.path()), ["saved-1"]);
+        assert!(
+            browser.status.contains("Deleted 1 chats before"),
+            "{}",
+            browser.status
+        );
+        assert!(
+            browser.status.contains("Delete failed"),
+            "{}",
+            browser.status
+        );
+        assert_eq!(browser.entries.len(), 1);
+        assert_eq!(browser.entries[0].id, "saved-2");
+    }
+}
+
+#[test]
+fn unsupported_deletion_keeps_history_resumable_and_invalid_pagination_never_deletes() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        options(temp.path(), serde_json::json!({"delete_supported":false}));
+        let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        if provider == Provider::Acp {
+            assert!(!browser.can_delete);
+            assert!(browser.delete(Some("saved-1"), vec![]).is_err());
+            assert!(
+                !log(temp.path())
+                    .iter()
+                    .any(|r| r["method"] == "session/delete")
+            );
+        } else {
+            browser.delete(Some("saved-1"), vec![]).unwrap();
+            wait(&mut browser);
+            assert!(!browser.can_delete);
+            assert!(browser.status.contains("does not support deleting"));
+        }
+        assert!(browser.can_resume);
+        assert_eq!(browser.entries.len(), 1);
+        browser.resume("saved-1").unwrap();
+        wait(&mut browser);
+        assert!(browser.take_restored().is_some());
+        options(temp.path(), serde_json::json!({"repeat_cursor":true}));
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.delete(None, vec![]).unwrap();
+        wait(&mut browser);
+        assert!(browser.status.contains("Repeated delete discovery cursor"));
+        assert!(deleted(temp.path()).is_empty());
+    }
+}
+
+#[test]
+fn acp_missing_session_delete_is_idempotent_success() {
+    let (temp, launch) = fixture(Provider::Acp, false);
+    options(temp.path(), serde_json::json!({"missing_delete":true}));
+    let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+    wait(&mut browser);
+    browser.delete(Some("saved-1"), vec![]).unwrap();
+    wait(&mut browser);
+    assert!(browser.status.contains("Deleted 1"));
+    assert!(browser.can_delete);
+    assert!(browser.entries.is_empty());
+}
+
+#[test]
+fn a_failed_refresh_reports_the_deletion_that_already_committed() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        options(temp.path(), serde_json::json!({"refresh_error":true}));
+        browser.delete(Some("saved-1"), vec![]).unwrap();
+        wait(&mut browser);
+        assert_eq!(deleted(temp.path()), ["saved-1"]);
+        assert!(
+            browser
+                .status
+                .contains("Deleted 1 saved chats. Refresh failed"),
+            "{}",
+            browser.status
+        );
+        assert!(
+            browser.status.contains("List refresh failed"),
+            "{}",
+            browser.status
+        );
+    }
+}
+
 #[test]
 fn both_protocols_list_without_inference_filter_projects_page_and_resume_in_place() {
     for provider in [Provider::Codex, Provider::Acp] {
@@ -306,4 +548,76 @@ fn acp_replay_hides_fragmented_style_hints_and_default_resets_a_restored_chat() 
             .unwrap()
             .contains("name=\"default\"")
     );
+}
+
+#[test]
+fn bulk_deletion_handles_cascaded_children_with_inflight_reads_and_duplicate_notifications() {
+    for notifications_first in [false, true] {
+        let (temp, launch) = fixture(Provider::Codex, false);
+        options(
+            temp.path(),
+            serde_json::json!({
+                "count":4, "cascade":true, "notifications_first":notifications_first,
+                "duplicate_notifications":true,
+                "parents":{"saved-1":"saved-0", "saved-2":"saved-1"}
+            }),
+        );
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.delete(None, vec![]).unwrap();
+        wait(&mut browser);
+        assert_eq!(
+            deleted(temp.path()),
+            ["saved-0", "saved-1", "saved-2", "saved-3"]
+        );
+        assert!(
+            browser.status.contains("Deleted 4 saved chats"),
+            "{}",
+            browser.status
+        );
+        let calls = log(temp.path());
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| r["method"] == "thread/delete")
+                .count(),
+            2
+        );
+        if !notifications_first {
+            // The parent's response advances the queue before its notifications.
+            assert!(
+                calls
+                    .iter()
+                    .any(|r| r["method"] == "thread/read" && r["params"]["threadId"] == "saved-1")
+            );
+        }
+    }
+}
+
+#[test]
+fn a_missing_chat_without_a_confirmed_removal_still_stops_bulk_deletion() {
+    let (temp, launch) = fixture(Provider::Codex, false);
+    options(
+        temp.path(),
+        serde_json::json!({
+            "count":5, "cascade":true, "read_error":"saved-3",
+            "parents":{"saved-1":"saved-0", "saved-2":"saved-1"}
+        }),
+    );
+    let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+    wait(&mut browser);
+    browser.delete(None, vec![]).unwrap();
+    wait(&mut browser);
+    assert_eq!(deleted(temp.path()), ["saved-0", "saved-1", "saved-2"]);
+    assert!(
+        browser.status.contains("Thread not found"),
+        "{}",
+        browser.status
+    );
+    assert!(
+        browser.status.contains("Deleted 3 chats before"),
+        "{}",
+        browser.status
+    );
+    assert!(browser.entries.iter().any(|row| row.id == "saved-4"));
 }

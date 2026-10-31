@@ -17,6 +17,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -144,8 +145,7 @@ def run(remote=False):
 
                 wait_for(mapped, "No binary editor window")
                 time.sleep(0.8)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 # These coordinates are relative to the ordinary local project layout.
                 # Remote sandbox banners add 40 px above document content.
                 dy = 40 if remote else 0
@@ -209,7 +209,7 @@ def run(remote=False):
                     "Extension preference was not persisted",
                 )
                 key("Escape")
-                click(26, 542 + dy)  # Dedicated Extensions activity icon.
+                key("x", ("Control_L", "Shift_L"))  # Reopen the manager after its layout changes.
                 wheel(900, 500, ticks=20)
                 screenshot(window, label + "-installed-adapter.png")
                 # Last entry is the installed adapter; locating its checkbox by

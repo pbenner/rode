@@ -34,7 +34,7 @@ impl EditorApp {
         );
         if ui.button("Save tool settings").clicked() {
             if self.workbench.prefs.latex != self.workbench.draft.latex {
-                self.stop_debugger();
+                self.leave_debugger();
                 self.stop_latex();
             }
             let sandbox = self.workbench.prefs.sandbox.clone();
@@ -133,7 +133,7 @@ impl EditorApp {
         if ui.button("Save LaTeX settings").clicked() {
             match self.workbench.draft.latex.validate() {
                 Ok(()) => {
-                    self.stop_debugger();
+                    self.leave_debugger();
                     self.stop_latex();
                     self.workbench.prefs.latex = self.workbench.draft.latex.clone();
                     self.workbench.invalidate_tools();

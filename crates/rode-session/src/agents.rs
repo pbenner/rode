@@ -13,7 +13,7 @@ mod transport;
 
 #[derive(Default)]
 pub(super) struct Store {
-    jobs: Mutex<HashMap<String, Arc<Job>>>,
+    jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
 }
 struct Shared {
     state: State,
@@ -180,7 +180,8 @@ impl Store {
             created: Instant::now(),
         });
         jobs.insert(spec.id.clone(), job.clone());
-        std::thread::spawn(move || run(job, commands, spec));
+        let registry = Arc::downgrade(&self.jobs);
+        std::thread::spawn(move || run(job, commands, spec, registry));
         Ok(info)
     }
     pub fn attach(&self, mut stream: UnixStream, id: &str, policy: &str) -> Result<()> {
@@ -276,7 +277,12 @@ impl Store {
         Ok(())
     }
 }
-fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, mut spec: Spec) {
+fn run(
+    job: Arc<Job>,
+    input: mpsc::Receiver<Work>,
+    mut spec: Spec,
+    registry: std::sync::Weak<Mutex<HashMap<String, Arc<Job>>>>,
+) {
     let text = spec.text.take();
     let attachments = std::mem::take(&mut spec.attachments);
     let active = Arc::new(AtomicUsize::new(0));
@@ -470,6 +476,26 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, mut spec: Spec) {
                         .as_mut()
                         .context("History browser is closed")
                         .and_then(|b| b.resume(&id)),
+                    Action::HistoryDelete { id, mut protected } => {
+                        if let Some(jobs) = registry.upgrade() {
+                            for other in jobs.lock().unwrap().values() {
+                                let state = other.shared.lock().unwrap();
+                                if !state.finished
+                                    && state.state.info.root == spec.plan.root
+                                    && state.state.info.provider == spec.config.provider
+                                    && !state.state.chat.conversation.is_empty()
+                                {
+                                    protected.push(state.state.chat.conversation.clone());
+                                }
+                            }
+                        }
+                        protected.sort();
+                        protected.dedup();
+                        browser
+                            .as_mut()
+                            .context("History browser is closed")
+                            .and_then(|b| b.delete(id.as_deref(), protected))
+                    }
                 };
                 if let Err(failure) = result {
                     error = format!("{failure:#}");

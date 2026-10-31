@@ -11,6 +11,7 @@ import json
 import os
 import queue
 import signal
+import socket
 import sys
 import tempfile
 import threading
@@ -219,6 +220,8 @@ def run():
                 "ready",
                 kernel=spec.get("kernel", "python3"),
                 python=sys.executable,
+                host=socket.gethostname(),
+                slurm_job=os.environ.get("SLURM_JOB_ID"),
                 language_info=info,
                 pid=getattr(manager.provisioner, "pid", None),
             )

@@ -200,3 +200,110 @@ fn allocation_fields_are_literal_and_compute_sandbox_failure_never_falls_back() 
         assert!(invalid.validate().is_err());
     }
 }
+
+#[test]
+fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = root.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    for name in ["srun", "squeue"] {
+        let path = tools.join(name);
+        fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let state = root.path().join("slurm-state");
+    fs::create_dir(&state).unwrap();
+    let record = state.join("job.json");
+    let job =
+        serde_json::json!({"id":"4242", "state":"RUNNING", "name":"a ' $(touch injected) | job"});
+    fs::write(&record, job.to_string()).unwrap();
+    let target = slurm::Target {
+        id: "4242".into(),
+        name: job["name"].as_str().unwrap().into(),
+        queue: "tools/squeue".into(),
+        runner: "tools/srun".into(),
+    };
+    let mut plan = rode::sandbox::Plan::default();
+    plan.root = root.path().to_string_lossy().into();
+    let mut argv = target.notebook_argv(&plan, "off").unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(argv.last().unwrap()).unwrap();
+    payload["source"] = serde_json::json!(
+        "import json,os,sys\nrequest=json.loads(sys.stdin.readline())\nprint(json.dumps(dict(request=request,job=os.environ['SLURM_JOB_ID'],gpu=os.environ['CUDA_VISIBLE_DEVICES'],cwd=os.getcwd())))"
+    );
+    *argv.last_mut().unwrap() = payload.to_string();
+    let execute = |argv: &[String], peer: bool| {
+        let mut command = if peer {
+            let mut cmd = Command::new("python3");
+            cmd.args(["-u", "-c", include_str!("../src/remote_agent.py")]);
+            cmd
+        } else {
+            let mut cmd = Command::new(&argv[0]);
+            cmd.args(&argv[1..]);
+            cmd
+        };
+        let mut child = command
+            .current_dir(root.path())
+            .env("SLURM_JOB_ID", "stale")
+            .env("CUDA_VISIBLE_DEVICES", "wrong")
+            .env("SALLOC_NO_SHELL", "1")
+            .env("SRUN_EXPORT_ENV", "NONE")
+            .env("SLURM_CLUSTERS", "wrong-cluster")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        if peer {
+            writeln!(input, "{}", serde_json::json!({"root":plan.root,"prefix":[],"argv":argv,"python":"off","python_program":false})).unwrap();
+        }
+        writeln!(input, "{{\"code\":\"hello\"}}").unwrap();
+        // Keep the peer's request channel open until its owned child has replied.
+        let output = child.wait_with_output().unwrap();
+        drop(input);
+        output
+    };
+    for peer in [false, true] {
+        let output = execute(&argv, peer);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["job"], "4242");
+        assert_eq!(response["gpu"], "0,1");
+        assert_eq!(response["request"]["code"], "hello");
+        assert_eq!(response["cwd"], root.path().to_string_lossy().as_ref());
+        assert!(!root.path().join("injected").exists());
+
+        for changed in [
+            serde_json::json!({"id":"4242", "state":"PENDING", "name":job["name"]}),
+            serde_json::json!({"id":"4242", "state":"RUNNING", "name":"reused id"}),
+        ] {
+            fs::remove_file(state.join("step.json")).unwrap();
+            fs::write(&record, changed.to_string()).unwrap();
+            let failed = execute(&argv, peer);
+            assert!(!failed.status.success());
+            assert!(!state.join("step.json").exists());
+            assert!(String::from_utf8_lossy(&failed.stderr).contains("no longer your running job"));
+            fs::write(&record, job.to_string()).unwrap();
+            // Restore the marker for the next refusal case.
+            fs::write(state.join("step.json"), "").unwrap();
+        }
+        fs::remove_file(&record).unwrap();
+        assert!(!execute(&argv, peer).status.success());
+        fs::write(&record, job.to_string()).unwrap();
+        let mut sandboxed = argv.clone();
+        payload["prefix"] = serde_json::json!(["/bin/false"]);
+        *sandboxed.last_mut().unwrap() = payload.to_string();
+        let failed = execute(&sandboxed, peer);
+        assert!(!failed.status.success());
+        assert!(failed.stdout.is_empty());
+    }
+    for id in ["12_3", "12+1", "--all", "12.0"] {
+        let mut invalid = target.clone();
+        invalid.id = id.into();
+        assert!(invalid.notebook_argv(&plan, "off").is_err());
+    }
+}

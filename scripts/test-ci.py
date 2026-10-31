@@ -40,6 +40,7 @@ class SelectionTests(unittest.TestCase):
             "terminal-keys",
             "sessions",
             "slurm",
+            "slurm-notebooks",
             "binary",
             "notebooks",
             "layout",
@@ -49,6 +50,7 @@ class SelectionTests(unittest.TestCase):
             "agent-queue",
             "agent-attachments",
             "agent-persistence",
+            "agent-history",
             "codex-install",
             "multiprocess",
             "project",
@@ -137,6 +139,10 @@ class RunnerTests(unittest.TestCase):
         helper.parent.mkdir()
         helper.write_text("static helper")
         helper.chmod(0o755)
+        ruff = self.root / "target/test-tools/bin/ruff"
+        ruff.parent.mkdir(parents=True)
+        ruff.write_text("pinned ruff")
+        ruff.chmod(0o755)
         records = []
         for name in ci.TEST_BINARIES:
             executable = self.root / f"compiled-{name}-hash"
@@ -153,6 +159,26 @@ class RunnerTests(unittest.TestCase):
             )
             self.assertEqual(archive.getmember("target/ci/tests/ssh_roundtrip").mode, 0o755)
             self.assertEqual(archive.extractfile("target/ci/rode").read(), b"rode")
+            self.assertEqual(archive.extractfile("target/ci/tools/ruff").read(), b"pinned ruff")
+            self.assertEqual(archive.getmember("target/ci/tools/ruff").mode, 0o755)
+
+    def test_remote_documents_receive_bundled_ruff_and_fail_early_if_it_is_missing(self):
+        for name in ["rode", "rode-sessiond-static", "tools/ruff"]:
+            path = self.root / "target/ci" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture")
+            path.chmod(0o755)
+        with patch.dict(os.environ, {}, clear=True), patch.object(ci, "measure") as run:
+            ci.run_suite("remote-documents")
+            for call in run.call_args_list:
+                self.assertEqual(
+                    call.args[2]["RODE_TEST_RUFF"], str(self.root / "target/ci/tools/ruff")
+                )
+            run.reset_mock()
+            (self.root / "target/ci/tools/ruff").unlink()
+            with self.assertRaisesRegex(SystemExit, "RODE_TEST_RUFF"):
+                ci.run_suite("remote-documents")
+            run.assert_not_called()
 
 
 class SshFixtureTests(unittest.TestCase):

@@ -20,11 +20,10 @@ from ui_harness import (
     assert_running,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     screenshot,
     text,
-    x11,
 )
 
 
@@ -50,8 +49,7 @@ def mapped(process, log):
 def show_chat(process, log):
     window = wait(lambda: mapped(process, log), "No prepared project window")
     time.sleep(0.8)
-    x11.XSetInputFocus(display, window, 1, 0)
-    x11.XFlush(display)
+    focus_window(window)
     if "[Sandbox]" not in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True):
         click(1331, 820)  # The fallback notification would otherwise cover Persist.
     key("a", ("Control_L", "Shift_L"))

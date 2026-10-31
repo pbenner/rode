@@ -62,7 +62,7 @@ impl EditorApp {
                 }
             });
         if selected != self.workbench.prefs.python {
-            self.stop_debugger();
+            self.leave_debugger();
             self.workbench.prefs.python = selected.clone();
             self.workbench.draft.python = selected;
             self.workbench.epoch += 1;
@@ -85,7 +85,7 @@ impl EditorApp {
                 )
                 .clicked()
             {
-                self.stop_debugger();
+                self.leave_debugger();
                 self.workbench.prefs.python = self.workbench.draft.python.trim().into();
                 self.workbench.epoch += 1;
                 self.workbench.code_tools.tool_error.clear();

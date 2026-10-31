@@ -19,6 +19,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -122,7 +123,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
             wait_for(mapped, "No native RODE window")
             window = found[-1]
             time.sleep(0.7)
-            x11.XSetInputFocus(display, window, 1, 0)
+            focus_window(window)
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.4)

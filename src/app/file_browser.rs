@@ -407,6 +407,10 @@ impl EditorApp {
             .color(palette.muted),
         );
         let path_id = egui::Id::new("file-dialog-path");
+        if self.dialog_focus || ui.memory(|memory| memory.focused().is_none()) {
+            ui.memory_mut(|memory| memory.request_focus(path_id));
+            self.dialog_focus = false;
+        }
         let keys = if ctx.memory(|m| m.has_focus(path_id)) {
             navigation::List::keys(ctx)
         } else {
@@ -422,10 +426,6 @@ impl EditorApp {
                     "File name, search, or path…"
                 }),
         );
-        if self.dialog_focus {
-            response.request_focus();
-            self.dialog_focus = false;
-        }
         if response.changed() {
             self.file_browser.query = self.dialog_input.clone();
             self.file_browser.selected = None;

@@ -18,7 +18,17 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
         else "target/navigation-ui"
     )
 )
-from ui_harness import ARTIFACTS, BINARY, close_window, display, key, screenshot, text, x11
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    close_window,
+    display,
+    focus_window,
+    key,
+    screenshot,
+    text,
+    x11,
+)
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
@@ -133,8 +143,7 @@ def run():
                     "Project did not become ready",
                 )
                 time.sleep(0.9)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 # Enter a directory and open its child entirely with arrows.
                 nav("f")
                 key("Home")

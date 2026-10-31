@@ -11,7 +11,18 @@ import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/notebook-ui")
-from ui_harness import ARTIFACTS, BINARY, close_window, display, key, screenshot, text, x11, xtest
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    close_window,
+    display,
+    focus_window,
+    key,
+    screenshot,
+    text,
+    x11,
+    xtest,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON = Path(
@@ -123,12 +134,12 @@ def run(remote=False):
 
                 wait_for(mapped, "No notebook window")
                 time.sleep(1)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 open_file("demo.ipynb")
-                if remote:
-                    # Hide the automatically opened SSH shell to see all cells.
-                    key("t", ("Control_L", "Shift_L"))
+                # Select Code explicitly: opening the notebook may already have
+                # hidden the SSH terminal, so toggling it can cover the notebook.
+                key("space", ("Control_L",))
+                key("e")
                 screenshot(window, label + "-opened.png")
                 assert json.loads(source.read_text()) == original, (
                     "Opening a notebook changed its source"

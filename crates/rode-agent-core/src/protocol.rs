@@ -135,6 +135,7 @@ impl Chat {
     /// Copy the bounded presentation state, never process handles or credentials.
     pub fn view(&self) -> crate::service::ChatView {
         crate::service::ChatView {
+            conversation: self.conversation.clone(),
             messages: self.messages.clone(),
             prompts: self.prompts.clone(),
             status: self.status.clone(),
@@ -169,7 +170,12 @@ impl Chat {
         self.models = view.models;
         self.controls = view.controls;
         self.config = view.config;
+        self.conversation = view.conversation;
         self.changed = true;
+    }
+    /// Backend identity of the displayed conversation, absent before initialization.
+    pub fn conversation_id(&self) -> Option<&str> {
+        (!self.conversation.is_empty()).then_some(self.conversation.as_str())
     }
     /// Adopt an acknowledged history restore, replacing only this chat's process.
     /// Current project policy was captured before the backend resumed the thread.

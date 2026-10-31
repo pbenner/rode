@@ -239,7 +239,7 @@ impl EditorApp {
                 });
                 self.slurm_settings_ui(ui);
             });
-        ui.label("Slurm supplies SLURM_JOB_ID, node/resource variables and GPU visibility to the shell. Enable Persist in that terminal if it should survive closing RODE.");
+        ui.label("Interactive terminals use Persist to survive closing RODE. Notebook reservations always start persistent; their view is a progress log, not a shell. Release the allocation explicitly when finished.");
         if self.session_plan().active {
             ui.colored_label(palette.muted, "The active sandbox is also applied on the compute node. It must support the same paths and bubblewrap; GPU device access requires explicit grants.");
         }
@@ -247,18 +247,24 @@ impl EditorApp {
             ui.colored_label(palette.error, &self.sessions.allocation_error);
         }
         ui.horizontal(|ui| {
-            if ui
+            let interactive = ui
                 .add_enabled(
                     !self.session_busy(),
                     egui::Button::new("Allocate in new terminal"),
                 )
-                .clicked()
-            {
+                .clicked();
+            let reserve = ui
+                .add_enabled(
+                    !self.session_busy(),
+                    egui::Button::new("Reserve for notebooks"),
+                )
+                .clicked();
+            if interactive || reserve {
                 let settings = self.sessions.allocation_draft.clone();
                 match settings.validate() {
                     Ok(()) => {
                         self.workbench.save_slurm_allocation(settings.clone());
-                        self.create_terminal(false, Some(settings), ctx);
+                        self.create_terminal(reserve, Some(settings), reserve, ctx);
                         if self.sessions.starting {
                             self.dialog = Dialog::None;
                         }

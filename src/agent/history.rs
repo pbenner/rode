@@ -63,6 +63,11 @@ impl Browser {
             if let Some(state) = native.poll() {
                 if let Some(view) = state.history {
                     self.view = view;
+                    if !state.error.is_empty() {
+                        self.view.status = state.error;
+                        self.view.busy = false;
+                        self.view.deleting = false;
+                    }
                 } else if !state.chat.connected {
                     self.view.status = state.error;
                     self.view.busy = false;
@@ -126,6 +131,29 @@ impl Browser {
             self.view.busy = true;
             Ok(())
         }
+    }
+    /// Delete one saved chat or all pages for this project/backend, keeping open chats.
+    pub fn delete(&mut self, id: Option<&str>, protected: Vec<String>) -> Result<()> {
+        if let Some(direct) = &mut self.direct {
+            direct.delete(id, protected)?;
+            self.view = direct.view();
+        } else {
+            anyhow::ensure!(
+                !self.view.busy && self.view.can_delete,
+                "History deletion is unavailable"
+            );
+            self.native
+                .as_ref()
+                .context("History browser is closed")?
+                .send(Command::HistoryDelete {
+                    id: id.map(str::to_owned),
+                    protected,
+                })?;
+            self.view.busy = true;
+            self.view.deleting = true;
+            self.view.status = "Deleting saved chats…".into();
+        }
+        Ok(())
     }
     /// Invalidate browsing when the interpreter context changes.
     pub fn uses_interpreter(&self, interpreter: &str) -> bool {

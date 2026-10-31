@@ -13,7 +13,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/latex-ui")
-from ui_harness import ARTIFACTS, BINARY, close_window, display, key, screenshot, text, x11
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    close_window,
+    display,
+    focus_window,
+    key,
+    screenshot,
+    text,
+    x11,
+)
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
@@ -144,8 +154,7 @@ def run(remote=False, isolated=False):
 
                 wait_for(mapped, "No LaTeX window")
                 time.sleep(1)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 if remote:
                     wait_for(
                         lambda: (

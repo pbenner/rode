@@ -85,7 +85,7 @@ def native_sessions(request):
         if hashlib.sha256(source.read(24 * 1024 * 1024 + 1)).hexdigest() != digest:
             raise ValueError("Installed terminal helper failed its integrity check.")
     protocol = globals()["project_run"]([executable, "protocol"], timeout=5)
-    if protocol["code"] != 0 or protocol["stdout"].strip() != "6":
+    if protocol["code"] != 0 or protocol["stdout"].strip() != "8":
         raise ValueError(
             "The packaged terminal helper uses an older protocol. Rebuild it with "
             "scripts/build-sessiond.sh or select an updated RODE_SESSION_HELPER. "
@@ -93,6 +93,22 @@ def native_sessions(request):
         )
     operation = request["operation"]
     payload = dict(operation)
+    if operation["action"] == "runtimes":
+        import shutil
+
+        payload = operation["request"]
+        if payload["action"] not in ("runtimes", "create_runtime", "end_runtime"):
+            raise ValueError("Only notebook/debugger runtime requests are accepted")
+        if payload["action"] == "create_runtime":
+            spec = payload["spec"]
+            python = globals()["project_python"](spec["root"], spec["python"])
+            program = python if spec["python_program"] else spec["argv"][0]
+            if "/" in program or program.startswith("~"):
+                program = globals()["project_resolve"](spec["root"], program)
+            else:
+                program = shutil.which(program) or program
+            spec["argv"][0] = program
+            spec["env"] = globals()["project_environment"](python)
     if operation["action"] == "agents":
         import shutil
 

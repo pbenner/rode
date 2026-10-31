@@ -348,6 +348,7 @@ pub struct EditorApp {
     extensions: extensions::Extensions,
     workspace: Option<Workspace>,
     documents: Vec<Document>,
+    notebook_shutdowns: notebook_view::Shutdowns,
     active: usize,
     next_id: u64,
     generation: u64,
@@ -380,6 +381,7 @@ pub struct EditorApp {
     show_hidden: bool,
     dialog: Dialog,
     dialog_focus: bool,
+    dialog_events: Vec<egui::Event>,
     dialog_viewport: egui::ViewportId,
     ui_viewport: egui::ViewportId,
     dialog_input: String,
@@ -485,6 +487,7 @@ impl EditorApp {
             extensions: extensions::Extensions::load(storage),
             workspace: None,
             documents: vec![],
+            notebook_shutdowns: Default::default(),
             active: 0,
             next_id: 1,
             generation: 0,
@@ -520,6 +523,7 @@ impl EditorApp {
             show_hidden: false,
             dialog: Dialog::None,
             dialog_focus: false,
+            dialog_events: vec![],
             dialog_viewport: egui::ViewportId::ROOT,
             ui_viewport: egui::ViewportId::ROOT,
             dialog_input: String::new(),
@@ -1299,6 +1303,7 @@ impl EditorApp {
                                             notebook_view::View::new(
                                                 book,
                                                 self.markdown_images.clone(),
+                                                self.notebook_shutdowns.clone(),
                                             )
                                         });
                                     }
@@ -1403,6 +1408,7 @@ impl EditorApp {
                                                 notebook_view::View::new(
                                                     book,
                                                     self.markdown_images.clone(),
+                                                    self.notebook_shutdowns.clone(),
                                                 )
                                             },
                                         ),
@@ -1762,7 +1768,7 @@ impl EditorApp {
             }
         };
         if reconnect {
-            self.stop_debugger();
+            self.leave_debugger();
             self.stop_latex();
             self.connection_cancel.store(true, Ordering::Release);
             self.terminal = None;
@@ -1845,6 +1851,14 @@ impl EditorApp {
     /// Defer an ownership-changing action when source edits or encrypted-project work require
     /// an explicit decision; route accepted actions through the same lifecycle path.
     fn guarded(&mut self, action: Action, ctx: &egui::Context) {
+        if matches!(
+            action,
+            Action::Project { .. } | Action::Remote(_) | Action::PreparedProject { .. }
+        ) && self.sessions_need_exit_check()
+        {
+            self.notify("Wait for runtime startup or submitted state changes to be acknowledged before switching projects.",false);
+            return;
+        }
         if self.vaults.locking {
             return;
         }
@@ -1924,6 +1938,16 @@ impl EditorApp {
                 self.connect(profile, ctx, resume);
             }
             Action::CloseTab(id) => {
+                if self.documents.iter().any(|doc| {
+                    doc.id == id
+                        && doc
+                            .notebook
+                            .as_ref()
+                            .is_some_and(|view| view.lifetime_pending())
+                }) {
+                    self.notify("Wait for kernel startup or submitted work to be acknowledged before closing this notebook.",false);
+                    return;
+                }
                 if let Some(index) = self.documents.iter().position(|d| d.id == id) {
                     self.documents.remove(index);
                     if self.active > index {
@@ -1973,6 +1997,7 @@ impl EditorApp {
             self.file_browser.reset();
         }
         self.dialog = dialog;
+        self.dialog_events.clear();
         self.dialog_viewport = self.ui_viewport;
         self.dialog_focus = true;
         self.dialog_input = match self.dialog {
@@ -2979,7 +3004,7 @@ impl EditorApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.background))
             .show(ctx, |ui| {
-                if self.foreign_modal(ctx) { ui.disable(); }
+                if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.is_some() { ui.disable(); }
                 self.pane_ui(ui,navigation::Pane::Editor);
                 if ui.available_height() <= 1.0 {
                     return;
@@ -3118,6 +3143,13 @@ impl EditorApp {
                                 egui::vec2(gutter_width, line_height * doc.lines as f32),
                                 Sense::hover(),
                             );
+                            if queued_focus == Some(doc.id)
+                                || (jump_requested
+                                    && ui.memory(|m| m.allows_interaction(ui.layer_id())))
+                            {
+                                ui.memory_mut(|memory| memory.request_focus(id));
+                                ctx.request_repaint();
+                            }
                             let mut output = egui::TextEdit::multiline(&mut doc.text)
                                 .id(id)
                                 .code_editor()
@@ -3130,13 +3162,6 @@ impl EditorApp {
                                 .layouter(&mut layouter)
                                 .show(ui);
                             editing.after_source(ui,doc.id,&mut output,&doc.text,palette);
-                            if queued_focus == Some(doc.id)
-                                || (jump_requested
-                                    && ui.memory(|m| m.allows_interaction(ui.layer_id())))
-                            {
-                                output.response.request_focus();
-                                ctx.request_repaint();
-                            }
                             if jump_requested
                                 && let Some(cursor) = output
                                     .cursor_range
@@ -3436,11 +3461,44 @@ impl EditorApp {
             return;
         }
         if self.dialog == Dialog::None {
+            self.dialog_events.clear();
             return;
+        }
+        if !self.dialog_events.is_empty() {
+            let mut events = std::mem::take(&mut self.dialog_events);
+            ctx.input_mut(|input| {
+                events.append(&mut input.events);
+                input.events = events;
+            });
         }
         let encrypted_dialog = self.dialog == Dialog::Encrypted;
         let file_dialog = file_browser::is_file_dialog(&self.dialog);
         let response = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+            let sizing = ui.is_sizing_pass();
+            let focus = self.dialog_focus;
+            if sizing {
+                // Area's first pass is invisible and disables widgets. Keep
+                // keyboard input for its first interactive pass instead of
+                // consuming Enter against an empty command/path field.
+                self.dialog_events = ctx.input_mut(|input| {
+                    let (keyboard, other) = std::mem::take(&mut input.events)
+                        .into_iter()
+                        .partition(|event| {
+                            matches!(
+                                event,
+                                egui::Event::Text(_)
+                                    | egui::Event::Key { .. }
+                                    | egui::Event::Paste(_)
+                                    | egui::Event::Copy
+                                    | egui::Event::Cut
+                                    | egui::Event::Ime(_)
+                            )
+                        });
+                    input.events = other;
+                    keyboard
+                });
+                ctx.request_repaint();
+            }
             ui.set_width(
                 if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions) {
                     680_f32.min(ctx.content_rect().width() - 50.)
@@ -3476,6 +3534,9 @@ impl EditorApp {
                 } else {
                     self.path_dialog(ui, ctx);
                 }
+            }
+            if sizing {
+                self.dialog_focus = focus;
             }
         });
         if response.should_close()
@@ -3701,15 +3762,17 @@ impl EditorApp {
             .small()
             .color(palette.muted),
         );
+        let input_id = egui::Id::new("project-dialog-path");
+        if self.dialog_focus {
+            ui.memory_mut(|memory| memory.request_focus(input_id));
+            self.dialog_focus = false;
+        }
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.dialog_input)
+                .id(input_id)
                 .desired_width(f32::INFINITY)
                 .hint_text("Project folder"),
         );
-        if self.dialog_focus {
-            response.request_focus();
-            self.dialog_focus = false;
-        }
         let enter = (response.has_focus() || response.lost_focus())
             && ui.input(|i| i.key_pressed(Key::Enter));
         let mut browse = None;

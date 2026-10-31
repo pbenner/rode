@@ -19,6 +19,7 @@ from ui_harness import (
     BINARY,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -149,8 +150,7 @@ fn main() { println!("ready"); }
                     time.sleep(0.05)
                 assert window
                 time.sleep(1)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 key("p", ("Control_L", "Shift_L"))
                 text("Open file by path")
                 key("Return")
@@ -159,9 +159,8 @@ fn main() { println!("ready"); }
                 time.sleep(0.7)
                 key("End", ("Control_L",))
                 text("\n## Unsaved section\n")
-                key(
-                    "t", ("Control_L", "Shift_L")
-                )  # Hide the terminal before rendering the fixture.
+                key("space", ("Control_L",))
+                key("e")  # Keep the Code surface visible before switching to preview.
                 key("r", ("Control_L", "Shift_L"))
                 wait_for(
                     lambda: (

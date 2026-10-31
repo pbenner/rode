@@ -22,6 +22,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     request_close,
     screenshot,
@@ -35,8 +36,7 @@ x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 
 def focus(window):
     x11.XRaiseWindow(display, window)
-    x11.XSetInputFocus(display, window, 1, 0)
-    x11.XFlush(display)
+    focus_window(window)
     time.sleep(0.15)
 
 

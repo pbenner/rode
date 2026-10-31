@@ -23,6 +23,43 @@ fn openssh_proxyjump_roundtrip_and_disconnect() {
 
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn agent_history_deletion_roundtrip_over_ssh_and_proxyjump() {
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let base = tempfile::tempdir().unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let plan = remote
+            .request(&Request::Prepare {
+                path: base.path().to_string_lossy().into(),
+                sandbox: Default::default(),
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        agent_roundtrip(&remote, &plan);
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn interactive_slurm_shells_receive_scheduler_environment_over_ssh_and_proxyjump() {
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
     for jump in ["", "rode-jump"] {
@@ -62,6 +99,436 @@ fn interactive_slurm_shells_receive_scheduler_environment_over_ssh_and_proxyjump
             }
             interactive_allocation_roundtrip(&remote, &plan);
         }
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn slurm_notebooks_execute_and_stop_over_ssh_and_proxyjump() {
+    use rode::{
+        notebook::kernel::{Event, Kernel, Run},
+        slurm,
+    };
+    use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
+    let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
+        eprintln!("Set RODE_TEST_JUPYTER to exercise Slurm notebooks over SSH");
+        return;
+    };
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let root = tempfile::tempdir().unwrap();
+        let tools = root.path().join("tools");
+        fs::create_dir(&tools).unwrap();
+        for name in ["srun", "squeue"] {
+            let path = tools.join(name);
+            fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let state = root.path().join("slurm-state");
+        fs::create_dir(&state).unwrap();
+        let record = state.join("job.json");
+        fs::write(
+            &record,
+            r#"{"id":"4242","state":"RUNNING","name":"notebook"}"#,
+        )
+        .unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let response = remote
+            .request(&Request::Prepare {
+                path: root.path().to_string_lossy().into(),
+                sandbox: Default::default(),
+            })
+            .unwrap();
+        let target = slurm::Target {
+            id: "4242".into(),
+            name: "notebook".into(),
+            queue: tools.join("squeue").to_string_lossy().into(),
+            runner: tools.join("srun").to_string_lossy().into(),
+        };
+        let mut kernel = Kernel::start_on(
+            response.project.unwrap(),
+            Some(remote.clone()),
+            python.clone(),
+            "python3".into(),
+            Some(target),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        kernel.run(vec![Run { cell: String::new(),
+uid: 1, version: 0, code: "import os\nprint('SSH_NOTEBOOK', os.environ['SLURM_JOB_ID'], os.environ['CUDA_VISIBLE_DEVICES'])".into() }]).unwrap();
+        let until = Instant::now() + Duration::from_secs(35);
+        let mut output = String::new();
+        loop {
+            let mut done = false;
+            for event in kernel.poll() {
+                match event {
+                    Event::Output { output: value, .. } => {
+                        output.push_str(value["text"].as_str().unwrap_or(""))
+                    }
+                    Event::Done(_, _) => done = true,
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            if done {
+                break;
+            }
+            assert!(Instant::now() < until, "{}", kernel.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(output.contains("SSH_NOTEBOOK 4242 0,1"), "{output}");
+        fs::remove_file(&record).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            if kernel
+                .poll()
+                .iter()
+                .any(|event| matches!(event, Event::Error(_)))
+            {
+                break;
+            }
+            assert!(Instant::now() < until, "Kernel survived expired allocation");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        drop(kernel);
+        assert!(
+            remote.connected(),
+            "Kernel cleanup must preserve the workspace SSH master"
+        );
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
+    use rode::{
+        debugger::{
+            self,
+            protocol::{Client, Phase},
+        },
+        notebook::kernel::{Event, Kernel, Run},
+        runtime,
+    };
+    use rode_runtime_core::service::Info;
+    use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, sync::Arc};
+    let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
+        eprintln!("Set RODE_TEST_JUPYTER for persistent Slurm runtime coverage");
+        return;
+    };
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    struct Cleanup(rode::sandbox::Plan, Vec<Info>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for info in &self.1 {
+                let _ = runtime::request_with_upload(
+                    &self.0,
+                    None,
+                    rode_session::Request::EndRuntime {
+                        id: info.id.clone(),
+                        policy: info.policy.clone(),
+                    },
+                    false,
+                );
+            }
+        }
+    }
+    let connect = |jump: &str| {
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        (remote, login)
+    };
+    let infos = |plan: &rode::sandbox::Plan, remote: &Remote| {
+        let reply = runtime::request_with_upload(
+            plan,
+            Some(remote),
+            rode_session::Request::Runtimes,
+            false,
+        )
+        .unwrap();
+        let rode_session::Response::Runtimes(infos) = reply.response else {
+            panic!()
+        };
+        infos
+    };
+    for jump in ["", "rode-jump"] {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path();
+        let tools = root.join("tools");
+        fs::create_dir(&tools).unwrap();
+        for name in ["srun", "squeue"] {
+            let path = tools.join(name);
+            fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let state = root.join("slurm-state");
+        fs::create_dir(&state).unwrap();
+        fs::write(
+            state.join("job.json"),
+            r#"{"id":"4242","state":"RUNNING","name":"persistent"}"#,
+        )
+        .unwrap();
+        let (remote, login) = connect(jump);
+        let plan = remote
+            .request(&Request::Prepare {
+                path: root.to_string_lossy().into(),
+                sandbox: Default::default(),
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        let mut cleanup = Cleanup(plan.clone(), vec![]);
+        let target = rode::slurm::Target {
+            id: "4242".into(),
+            name: "persistent".into(),
+            queue: tools.join("squeue").to_string_lossy().into(),
+            runner: tools.join("srun").to_string_lossy().into(),
+        };
+        let done = root.join("queue-done");
+        let first = root.join("queue-started");
+        let runs = vec![
+            Run {
+                uid: 1,
+                cell: "first".into(),
+                version: 0,
+                code: format!(
+                    "import os,time\ncounter=41\nopen({:?},'w').write(os.environ['SLURM_JOB_ID'])\ntime.sleep(1)",
+                    first.to_string_lossy()
+                ),
+            },
+            Run {
+                uid: 2,
+                cell: "second".into(),
+                version: 0,
+                code: format!(
+                    "counter+=1\nprint(counter)\nopen({:?},'w').write(str(counter))",
+                    done.to_string_lossy()
+                ),
+            },
+        ];
+        let mut kernel = Kernel::start_persistent(
+            plan.clone(),
+            Some(remote.clone()),
+            python.clone(),
+            "python3".into(),
+            Some(target.clone()),
+            root.join("demo.ipynb").to_string_lossy().into(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        kernel.bind(runs.clone());
+        kernel.run(runs.clone()).unwrap();
+        let until = Instant::now() + Duration::from_secs(35);
+        while !first.exists() || kernel.pending() {
+            for e in kernel.poll() {
+                if let Event::Error(error) = e {
+                    panic!("{error}");
+                }
+            }
+            assert!(Instant::now() < until, "{}", kernel.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let kernel_info = infos(&plan, &remote)
+            .into_iter()
+            .find(|info| Some(info.id.as_str()) == kernel.native_id())
+            .unwrap();
+        cleanup.1.push(kernel_info.clone());
+        drop(kernel);
+        drop(login);
+        remote.cleanup();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !done.exists() {
+            assert!(Instant::now() < until, "Detached Run All did not finish");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(fs::read_to_string(&done).unwrap(), "42");
+        let (remote, login) = connect(jump);
+        let until = Instant::now() + Duration::from_secs(10);
+        while infos(&plan, &remote)
+            .iter()
+            .any(|i| i.id == kernel_info.id && i.attached)
+        {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut kernel = Kernel::attach(
+            plan.clone(),
+            Some(remote.clone()),
+            kernel_info.clone(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let mut rebound = runs.clone();
+        for run in &mut rebound {
+            run.uid += 100;
+            run.version = 3;
+        }
+        kernel.bind(rebound);
+        let until = Instant::now() + Duration::from_secs(35);
+        let mut restored = false;
+        while !restored {
+            for e in kernel.poll() {
+                match e {
+                    Event::Output { run, output, .. }
+                        if run.uid == 102 && output["text"] == "42\n" =>
+                    {
+                        restored = true
+                    }
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            assert!(Instant::now() < until, "No source-bound output replay");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let file = root.join("main.py");
+        fs::write(&file, "answer=42\n").unwrap();
+        let adapter = root.join("adapter.py");
+        fs::write(&adapter, include_str!("fixtures/debug_adapter.py")).unwrap();
+        let mut settings = debugger::Settings::default();
+        settings.config.backend = debugger::Backend::Custom;
+        settings.config.adapter = "python3".into();
+        settings.config.adapter_arguments = vec![adapter.to_string_lossy().into()];
+        let mut client = Client::start_managed(
+            plan.clone(),
+            Some(remote.clone()),
+            file.to_string_lossy().into(),
+            python.clone(),
+            settings,
+            Some(target),
+            true,
+            BTreeMap::new(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let until = Instant::now() + Duration::from_secs(35);
+        while client.phase != Phase::Paused || client.variables.is_empty() {
+            client.poll();
+            assert!(client.error.is_empty(), "{}", client.error);
+            assert!(Instant::now() < until, "{}", client.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let epoch = client.inspection_epoch();
+        let debug_info = infos(&plan, &remote)
+            .into_iter()
+            .find(|info| Some(info.id.as_str()) == client.native_id())
+            .unwrap();
+        cleanup.1.push(debug_info.clone());
+        drop(client);
+        drop(kernel);
+        drop(login);
+        remote.cleanup();
+        let (remote, login) = connect(jump);
+        let until = Instant::now() + Duration::from_secs(10);
+        while infos(&plan, &remote)
+            .iter()
+            .any(|i| i.id == debug_info.id && i.attached)
+        {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut client = Client::attach(
+            plan.clone(),
+            Some(remote.clone()),
+            debug_info.clone(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let until = Instant::now() + Duration::from_secs(35);
+        while !client.attached_ready() || client.variables.is_empty() {
+            client.poll();
+            assert!(client.error.is_empty(), "{}", client.error);
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(client.inspection_epoch(), epoch);
+        assert_eq!(client.phase, Phase::Paused);
+        let mut duplicate = Client::attach(
+            plan.clone(),
+            Some(remote.clone()),
+            debug_info,
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while duplicate.error.is_empty() || duplicate.lifetime_pending() {
+            duplicate.poll();
+            assert!(
+                Instant::now() < until,
+                "Rejected attachment blocked window exit"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(duplicate.phase, Phase::Ended);
+        assert!(duplicate.control("next").is_err());
+        drop(duplicate);
+        client.control("next").unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while client.inspection_epoch() == epoch || client.phase != Phase::Paused {
+            client.poll();
+            assert!(client.error.is_empty(), "{}", client.error);
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        client.stop();
+        let until = Instant::now() + Duration::from_secs(12);
+        while client.is_stopping() {
+            client.poll();
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            infos(&plan, &remote)
+                .iter()
+                .any(|i| i.id == kernel_info.id && i.alive),
+            "Debugger shutdown ended the notebook kernel"
+        );
+        assert!(remote.connected());
+        runtime::request_with_upload(
+            &plan,
+            Some(&remote),
+            rode_session::Request::EndRuntime {
+                id: kernel_info.id,
+                policy: kernel_info.policy,
+            },
+            false,
+        )
+        .unwrap();
+        drop(client);
         drop(login);
         remote.cleanup();
     }
@@ -1414,6 +1881,10 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(root.parent().unwrap().join("private.txt"), "hidden").unwrap();
     for provider in [Provider::Codex, Provider::Acp] {
+        let deleted = root.join("history-deleted.json");
+        if deleted.exists() {
+            std::fs::remove_file(&deleted).unwrap();
+        }
         let mut launch = Launch {
             config: Config {
                 provider,
@@ -1544,6 +2015,35 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
                 .unwrap_or_else(|| panic!("{}", browser.status)),
         );
         assert!(chat.messages.iter().any(|m| m.text == "Earlier answer 1"));
+        // Native history deletion must mutate only this project's backend on
+        // the SSH host, while the independent restored chat keeps working.
+        let mut browser =
+            rode::agent::history::Browser::open_service(launch.clone(), Arc::new(|| {})).unwrap();
+        let wait_history = |browser: &mut rode::agent::history::Browser| {
+            let until = Instant::now() + Duration::from_secs(20);
+            while browser.busy {
+                browser.poll();
+                assert!(Instant::now() < until, "{}", browser.status);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait_history(&mut browser);
+        assert!(browser.can_delete, "{}", browser.status);
+        browser.load_more().unwrap();
+        wait_history(&mut browser);
+        browser
+            .delete(
+                Some("saved-2"),
+                chat.conversation_id()
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect(),
+            )
+            .unwrap();
+        wait_history(&mut browser);
+        assert!(browser.status.contains("Deleted 1"), "{}", browser.status);
+        assert_eq!(std::fs::read_to_string(deleted).unwrap(), r#"["saved-2"]"#);
+        drop(browser);
         assert!(remote.connected());
         std::fs::remove_file(root.join("agent-child.pid")).unwrap();
         chat.submit(launch, "wait".into(), Arc::new(|| {})).unwrap();
@@ -1748,7 +2248,9 @@ fn notebook_roundtrip(remote: &Remote, root: &str, outside: &str) {
         std::sync::Arc::new(|| {}),
     )
     .unwrap();
-    kernel.run(vec![Run{uid:1,version:0,code:"value=40".into()},Run{uid:2,version:0,code:format!("import os\nprint(value+2)\nprint(os.getcwd())\nprint(os.path.exists({outside:?}))")}]).unwrap();
+    kernel.run(vec![Run{cell: String::new(),
+uid:1,version:0,code:"value=40".into()},Run{cell: String::new(),
+uid:2,version:0,code:format!("import os\nprint(value+2)\nprint(os.getcwd())\nprint(os.path.exists({outside:?}))")}]).unwrap();
     let mut done = 0;
     let mut text = String::new();
     let start = Instant::now();

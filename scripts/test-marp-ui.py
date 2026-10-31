@@ -12,7 +12,18 @@ import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/marp-ui")
-from ui_harness import ARTIFACTS, BINARY, click, close_window, display, key, screenshot, text, x11
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    click,
+    close_window,
+    display,
+    focus_window,
+    key,
+    screenshot,
+    text,
+    x11,
+)
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 ROOT = Path(__file__).resolve().parent.parent
@@ -144,8 +155,7 @@ def run(remote=False):
 
                 wait_for(mapped, "No Marp window")
                 time.sleep(0.7)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 if remote:
                     wait_for(
                         lambda: (
@@ -160,8 +170,8 @@ def run(remote=False):
                     )
                     wait_for(terminal_attached, "SSH project terminal did not attach")
                 open_file("deck.marp.md")
-                if remote:
-                    key("t", ("Control_L", "Shift_L"))
+                key("space", ("Control_L",))
+                key("e")  # Select Code explicitly after opening the document.
                 key("End", ("Control_L",))
                 text("\nUNSAVED_SNAPSHOT\n")
                 command("Marp: Toggle slide preview")
@@ -276,8 +286,7 @@ def run(remote=False):
                 process = subprocess.Popen(shutdown_args, env=environment, stdout=log, stderr=log)
                 wait_for(mapped, "No shutdown-test window")
                 time.sleep(0.5)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 if remote:
                     wait_for(
                         lambda: (
@@ -292,8 +301,8 @@ def run(remote=False):
                     )
                     wait_for(terminal_attached, "SSH shutdown-test terminal did not attach")
                 open_file("cancel.marp.md")
-                if remote:
-                    key("t", ("Control_L", "Shift_L"))
+                key("space", ("Control_L",))
+                key("e")  # Select Code explicitly after opening the document.
                 command("Marp: Toggle slide preview")
                 wait_for(
                     lambda: (project / "marp-pids.json").exists(), "Shutdown fixture did not start"

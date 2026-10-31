@@ -153,6 +153,29 @@ def wait_for_window(process, log_path, timeout=20):
     )
 
 
+def focus_window(window, timeout=20):
+    """Focus only a mapped window; XSetInputFocus aborts Python on an unmapped X window."""
+    deadline = time.monotonic() + timeout
+    environment = dict(os.environ, LC_ALL="C.UTF-8")
+    state = "unknown"
+    while time.monotonic() < deadline:
+        attributes = subprocess.run(
+            ["xwininfo", "-id", hex(window)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=3,
+        )
+        mapped = re.search(r"Map State:\s*(\w+)", attributes.stdout)
+        state = mapped[1] if attributes.returncode == 0 and mapped else "disappeared"
+        if state == "IsViewable":
+            x11.XSetInputFocus(display, window, 1, 0)
+            x11.XFlush(display)
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"Cannot focus RODE window {hex(window)} within {timeout}s: {state}")
+
+
 def screenshot(window, name):
     """Capture this test window after a render opportunity into its artifact directory."""
     time.sleep(0.25)

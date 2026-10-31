@@ -13,7 +13,7 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/workbench-ui"
 )
-from ui_harness import ARTIFACTS, BINARY, click, close_window, display, key, screenshot, text, x11
+from ui_harness import ARTIFACTS, BINARY, click, close_window, focus_window, key, screenshot, text
 
 
 def wait_for(check, message):
@@ -101,8 +101,7 @@ def run(remote=False):
 
                 wait_for(mapped, "No native window")
                 time.sleep(1.0)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 command("Open file by path")
                 text("main.py")
                 key("Return")
@@ -210,8 +209,7 @@ def run(remote=False):
                 window = None
                 wait_for(mapped, "No native window on restart")
                 time.sleep(1.0)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
                 if "[Sandbox]" in state:
                     click(500, 750)

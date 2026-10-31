@@ -13,7 +13,7 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/languages-ui"
 )
-from ui_harness import ARTIFACTS, BINARY, click, close_window, display, key, screenshot, text, x11
+from ui_harness import ARTIFACTS, BINARY, click, close_window, focus_window, key, screenshot, text
 
 
 def wait_for(check, message):
@@ -111,8 +111,7 @@ def run():
 
                 wait_for(mapped, "No native window")
                 time.sleep(1)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 open_file("main.go")
                 command("Code: Format document")
                 key("s", ("Control_L",))

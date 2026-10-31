@@ -17,11 +17,10 @@ from ui_harness import (
     background,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     screenshot,
     text,
-    x11,
 )
 
 
@@ -110,8 +109,7 @@ fn dispatch<'a>(packet: &Packet<'a>) -> Option<String> {
 
                     wait_for(mapped, "No native window")
                     time.sleep(0.6)
-                    x11.XSetInputFocus(display, window, 1, 0)
-                    x11.XFlush(display)
+                    focus_window(window)
                     open_source()
                     if restart:
                         assert saved("syntax_theme", "nord") and saved("color_theme", "carbon")

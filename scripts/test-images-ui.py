@@ -20,6 +20,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -174,8 +175,7 @@ def run(remote=False):
                     time.sleep(0.05)
                 assert window
                 time.sleep(0.8)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 open_file("alpha.png")
                 normal = pixels(window, label + "-png-phosphor.png", (224, 40, 64))
                 assert 118 <= normal[2] - normal[0] <= 121 and 158 <= normal[3] - normal[1] <= 161
@@ -200,9 +200,14 @@ def run(remote=False):
                 x11.XResizeWindow(display, window, 850, 560)
                 x11.XFlush(display)
                 screenshot(window, label + "-compact.png")
-                click(319, 186)  # Fit remains accessible with the terminal open.
+                # The Code surface has the full content area; account for the
+                # extra reason strip when sandbox preparation falls back.
+                title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                host_offset = 44 if "[Sandbox]" in title else 74
+                click(319, 142 + host_offset)  # Fit resets the enlarged compact preview.
                 fitted = pixels(window, label + "-compact-fit.png", (240, 160, 24), size=(850, 560))
-                assert fitted[2] - fitted[0] < 130 and fitted[3] - fitted[1] < 80
+                assert 238 <= fitted[2] - fitted[0] <= 241, fitted
+                assert 158 <= fitted[3] - fitted[1] <= 161, fitted
                 time.sleep(0.4)
                 before = Path(f"/proc/{process.pid}/stat").read_text().split()
                 time.sleep(1)

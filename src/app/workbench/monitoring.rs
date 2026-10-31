@@ -334,7 +334,7 @@ fn card(ui: &mut egui::Ui, palette: theme::Palette, contents: impl FnOnce(&mut e
     ui.add_space(10.);
     egui::Frame::new()
         .fill(palette.panel)
-        .stroke(Stroke::new(1., palette.border))
+        .stroke(Stroke::new(1_f32, palette.border))
         .corner_radius(6.)
         .inner_margin(12.)
         .show(ui, |ui| {
@@ -387,7 +387,7 @@ fn legend(ui: &mut egui::Ui, series: &[Series<'_>]) {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(16., 14.), Sense::hover());
             ui.painter().line_segment(
                 [rect.left_center(), rect.right_center()],
-                Stroke::new(2., series.color),
+                Stroke::new(2_f32, series.color),
             );
             ui.label(format!(
                 "{} {}",
@@ -455,7 +455,7 @@ fn chart(
         let y = plot.bottom() - plot.height() * tick as f32 / 4.;
         painter.line_segment(
             [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
-            Stroke::new(1., palette.border),
+            Stroke::new(1_f32, palette.border),
         );
         painter.text(
             egui::pos2(plot.left() - 7., y),
@@ -505,7 +505,7 @@ fn chart(
             } else {
                 plot_painter.add(egui::Shape::line(
                     points,
-                    Stroke::new(if index == 0 { 2. } else { 1.3 }, series.color),
+                    Stroke::new(if index == 0 { 2_f32 } else { 1.3_f32 }, series.color),
                 ));
             }
         }
@@ -555,7 +555,7 @@ fn chart(
         let x = position(times[index], 0.).x;
         painter.line_segment(
             [egui::pos2(x, plot.top()), egui::pos2(x, plot.bottom())],
-            Stroke::new(1., palette.muted),
+            Stroke::new(1_f32, palette.muted),
         );
         response.on_hover_ui(|ui| {
             ui.label(format!(

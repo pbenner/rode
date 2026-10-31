@@ -14,7 +14,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent
     / ("target/shortcut-styles-ssh-ui" if remote_config else "target/shortcut-styles-ui")
 )
-from ui_harness import ARTIFACTS, BINARY, close_window, display, key, screenshot, text, x11
+from ui_harness import ARTIFACTS, BINARY, close_window, focus_window, key, screenshot, text
 
 
 def wait_for(check, message):
@@ -96,8 +96,7 @@ def run():
 
                 wait_for(mapped, "No native window")
                 time.sleep(1.0)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 command("Open file by path")
                 text("main.txt")
                 key("Return")

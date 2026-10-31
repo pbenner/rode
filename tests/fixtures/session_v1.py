@@ -94,6 +94,10 @@ def handle(stream):
                 log.write(action + "\n")
             if action == "list":
                 reply(stream, "sessions", [info()])
+            elif action == "supports_history_deletion" and os.environ.get(
+                "RODE_TEST_HISTORY_CAPABLE"
+            ):
+                reply(stream, "ok")
             elif action not in ("attach", "rename", "end", "shutdown", "create"):
                 reply(
                     stream,

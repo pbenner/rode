@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FAST = ["workspace", "agents", "terminals", "ssh"]
 EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox"]
 TEST_BINARIES = {
+    "runtimes",
     "ssh_roundtrip",
     "debugger",
     "notebooks",
@@ -55,7 +56,13 @@ SUITES = {
         ui("terminal-keys"),
         ui("multiprocess"),
     ],
-    "agents": [ui("agent"), ui("agent-queue"), ui("agent-attachments"), ui("agent-persistence")],
+    "agents": [
+        ui("agent"),
+        ui("agent-history"),
+        ui("agent-queue"),
+        ui("agent-attachments"),
+        ui("agent-persistence"),
+    ],
     "terminals": [ui("sessions"), ui("slurm"), ui("codex-install")],
     "ssh": [remote("remote-smoke", transport=True)],
     "remote-smoke": [ui("project", RODE_PROJECT_UI_CASE="ssh")],
@@ -88,12 +95,15 @@ SUITES = {
         ui("vaults", RODE_VAULT_UI_REMOTE_ONLY="1"),
     ],
     "runtimes": [
+        rust("runtimes"),
         rust("debugger"),
         rust("notebooks"),
+        rust("sessions"),
         rust("project"),
         rust("languages"),
         ui("debugger"),
         ui("notebooks"),
+        ui("slurm-notebooks"),
         remote("remote-runtimes", transport=True),
     ],
     "remote-runtimes": [
@@ -207,9 +217,12 @@ def run_suite(name):
     env.setdefault("RODE_TEST_BINARY", str(ROOT / "target/ci/rode"))
     env.setdefault("RODE_SSH_TEST_BINARY", str(ROOT / "target/ci/tests/ssh_roundtrip"))
     env.setdefault("RODE_TEST_SESSION_HELPER", str(ROOT / "target/ci/rode-sessiond-static"))
+    env.setdefault("RODE_TEST_RUFF", str(ROOT / "target/ci/tools/ruff"))
     env.setdefault("RODE_SESSION_DIR", str(ROOT / "target/ci-results" / name / "sessions"))
     env.setdefault("RODE_CI_SSH_LOG_DIR", str(ROOT / "target/ci-results" / name))
     required = ["RODE_TEST_BINARY", "RODE_TEST_SESSION_HELPER"]
+    if name in {"documents", "remote", "remote-documents", "runtimes", "remote-runtimes"}:
+        required.append("RODE_TEST_RUFF")
     if "RODE_SESSION_HELPER" in env:
         required.append("RODE_SESSION_HELPER")
     if any("scripts/test-ssh.sh" in command for command, _, _ in SUITES[name]):
@@ -244,8 +257,11 @@ def bundle():
     shutil.copy2(
         ROOT / "target/release/rode-sessiond-static", ROOT / "target/ci/rode-sessiond-static"
     )
+    tools = ROOT / "target/ci/tools"
+    tools.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "target/test-tools/bin/ruff", tools / "ruff")
     with tarfile.open(ROOT / "target/ci-bundle.tar.gz", "w:gz", compresslevel=1) as archive:
-        for name in ["rode", "rode-sessiond", "rode-sessiond-static", "tests"]:
+        for name in ["rode", "rode-sessiond", "rode-sessiond-static", "tests", "tools"]:
             archive.add(ROOT / "target/ci" / name, arcname=f"target/ci/{name}")
 
 

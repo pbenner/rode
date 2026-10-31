@@ -55,13 +55,14 @@ use std::{
 };
 
 mod agents;
+mod runtimes;
 
 /// Runtime-directory generation; distinct from optional protocol feature levels.
 pub const VERSION: u32 = 1;
 /// Feature level that supports explicit persistence toggles.
 pub const PERSISTENCE_PROTOCOL: u32 = 2;
 /// Current feature level, including host-owned agent queues, attachments and scheduler metadata.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 8;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -125,6 +126,31 @@ fn persistent_default() -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
+    /// Probe backend history deletion before creating a browser in an older service.
+    SupportsHistoryDeletion,
+    /// Probe host-owned notebook/debugger controllers without starting work.
+    SupportsRuntimes,
+    /// Discover retained notebook and debugger runtimes.
+    Runtimes,
+    /// Create a captured host-owned runtime.
+    CreateRuntime {
+        /// Immutable launch and lifetime context.
+        spec: Box<rode_runtime_core::service::Spec>,
+    },
+    /// Attach the exclusive controlling desktop.
+    AttachRuntime {
+        /// Native runtime identity.
+        id: String,
+        /// Original workspace policy fingerprint.
+        policy: String,
+    },
+    /// End a runtime and discard retained output.
+    EndRuntime {
+        /// Native runtime identity.
+        id: String,
+        /// Original workspace policy fingerprint.
+        policy: String,
+    },
     /// List running sessions without keeping an otherwise idle service alive.
     List,
     /// Probe persistence support before sending newer requests to legacy services.
@@ -219,6 +245,10 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum Response {
+    /// Discoverable retained notebook/debugger controllers.
+    Runtimes(Vec<rode_runtime_core::service::Info>),
+    /// Created notebook/debugger identity.
+    Runtime(Box<rode_runtime_core::service::Info>),
     /// Snapshot of discoverable running terminals.
     Sessions(Vec<Info>),
     /// Live native agent controllers.
@@ -328,7 +358,7 @@ fn connect_at(dir: &Path) -> Result<UnixStream> {
 /// creation is serialized; existing legacy sessions remain separately discoverable.
 pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
     let until = Instant::now()
-        + if matches!(request, Request::List | Request::Agents) {
+        + if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
             Duration::from_millis(500)
         } else {
             Duration::from_secs(10)
@@ -337,7 +367,12 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         let result = request_routed(request, launcher);
         let retry = matches!(
             request,
-            Request::Create { .. } | Request::CreateAgent { .. } | Request::List | Request::Agents
+            Request::Create { .. }
+                | Request::CreateAgent { .. }
+                | Request::CreateRuntime { .. }
+                | Request::List
+                | Request::Agents
+                | Request::Runtimes
         ) && result.as_ref().err().is_some_and(|error| {
             error.to_string() == "Session service is stopping"
                 || error.chain().any(|cause| {
@@ -360,12 +395,14 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 4] {
+fn service_directories() -> [PathBuf; 6] {
     let primary = directory();
     [
         primary.clone(),
         primary.join("protocol-2"),
         primary.join("protocol-3"),
+        primary.join("protocol-6"),
+        primary.join("protocol-7"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -382,6 +419,19 @@ fn agents_at(dir: &Path, launcher: &Launcher) -> Result<Vec<rode_agent_core::ser
         _ => bail!("Unexpected background-agent listing"),
     }
 }
+fn runtimes_at(dir: &Path, launcher: &Launcher) -> Result<Vec<rode_runtime_core::service::Info>> {
+    match request_once(&Request::Runtimes, launcher, dir) {
+        Ok(Response::Runtimes(infos)) => Ok(infos),
+        Err(error)
+            if service_offline(&error)
+                || error.to_string().contains("unknown variant `runtimes`") =>
+        {
+            Ok(vec![])
+        }
+        Err(error) => Err(error),
+        _ => bail!("Unexpected runtime listing"),
+    }
+}
 fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
     let primary = directory();
     let compatible = primary.join(format!("protocol-{PROTOCOL}"));
@@ -389,13 +439,13 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
         return Ok(compatible);
     }
     if primary.join("socket").exists() {
-        match request_once(&Request::SupportsAgents, launcher, &primary) {
+        match request_once(&Request::SupportsRuntimes, launcher, &primary) {
             Ok(Response::Ok) => {}
             Err(error) if service_offline(&error) => {}
             Err(error)
                 if error
                     .to_string()
-                    .contains("unknown variant `supports_agents`") =>
+                    .contains("unknown variant `supports_runtimes`") =>
             {
                 return Ok(compatible);
             }
@@ -441,6 +491,40 @@ fn service_offline(error: &anyhow::Error) -> bool {
 }
 fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
     match request {
+        Request::Runtimes => {
+            let mut infos = vec![];
+            for dir in service_directories() {
+                infos.extend(runtimes_at(&dir, launcher)?);
+            }
+            infos.sort_by_key(|i| i.created);
+            Ok(Response::Runtimes(infos))
+        }
+        Request::CreateRuntime { spec } => {
+            for dir in service_directories() {
+                if runtimes_at(&dir, launcher)?
+                    .iter()
+                    .any(|info| info.id == spec.id)
+                {
+                    return request_once(request, launcher, &dir);
+                }
+            }
+            request_once(request, launcher, &creation_directory(launcher)?)
+        }
+        Request::AttachRuntime { id, .. } | Request::EndRuntime { id, .. } => {
+            for dir in service_directories() {
+                if runtimes_at(&dir, launcher)?
+                    .iter()
+                    .any(|info| info.id == *id)
+                {
+                    return request_once(request, launcher, &dir);
+                }
+            }
+            ensure!(
+                matches!(request, Request::EndRuntime { .. }),
+                "Runtime is no longer available; refresh the running list"
+            );
+            Ok(Response::Ok)
+        }
         Request::List => {
             let mut infos = vec![];
             for dir in service_directories() {
@@ -492,6 +576,10 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         }
         Request::Shutdown => {
             ensure!(
+                matches!(request_routed(&Request::Runtimes,launcher)?,Response::Runtimes(infos) if infos.is_empty()),
+                "End notebook/debugger runtimes before stopping the service"
+            );
+            ensure!(
                 matches!(request_routed(&Request::List, launcher)?, Response::Sessions(infos) if infos.is_empty()),
                 "End running terminals before stopping the service"
             );
@@ -511,9 +599,11 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
             }
             Ok(Response::Ok)
         }
-        Request::SupportsPersistence | Request::SupportsAllocations | Request::SupportsAgents => {
-            request_once(request, launcher, &directory())
-        }
+        Request::SupportsPersistence
+        | Request::SupportsAllocations
+        | Request::SupportsAgents
+        | Request::SupportsHistoryDeletion
+        | Request::SupportsRuntimes => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -537,9 +627,11 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
     let mut stream = match connect_at(dir) {
         Ok(stream) => stream,
         Err(error) => {
-            if matches!(request, Request::List | Request::Agents) {
+            if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
                 if !dir.join("socket").exists() {
-                    return Ok(if matches!(request, Request::Agents) {
+                    return Ok(if matches!(request, Request::Runtimes) {
+                        Response::Runtimes(vec![])
+                    } else if matches!(request, Request::Agents) {
                         Response::Agents(vec![])
                     } else {
                         Response::Sessions(vec![])
@@ -550,7 +642,9 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
             }
             if !matches!(
                 request,
-                Request::Create { .. } | Request::CreateAgent { .. }
+                Request::Create { .. }
+                    | Request::CreateAgent { .. }
+                    | Request::CreateRuntime { .. }
             ) {
                 return Err(error)
                     .context("Session service is offline; no session was created or ended.");
@@ -712,6 +806,7 @@ impl Session {
     }
 }
 struct Server {
+    runtimes: runtimes::Store,
     agents: agents::Store,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     last_exit: Mutex<Instant>,
@@ -724,7 +819,7 @@ impl Server {
         // starting concurrently must either keep this service alive or retry
         // against the next service, never be accepted while it is exiting.
         let sessions = self.sessions.lock().unwrap();
-        if !sessions.is_empty() || self.agents.live() {
+        if !sessions.is_empty() || self.agents.live() || self.runtimes.live() {
             *idle_since = None;
             return;
         }
@@ -751,7 +846,7 @@ impl Server {
             session.stopped.store(true, Ordering::Release);
         }
         sessions.remove(id);
-        if sessions.is_empty() && !self.agents.live() {
+        if sessions.is_empty() && !self.agents.live() && !self.runtimes.live() {
             self.stop.store(true, Ordering::Release);
         }
         drop(sessions);
@@ -1106,6 +1201,9 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let request: Request = recv_json(&mut stream)?;
+    if let Request::AttachRuntime { id, policy } = &request {
+        return server.runtimes.attach(stream, id, policy);
+    }
     if let Request::AttachAgent { id, policy } = &request {
         return server.agents.attach(stream, id, policy);
     }
@@ -1190,7 +1288,23 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
         Ok(match request {
             Request::SupportsPersistence
             | Request::SupportsAllocations
-            | Request::SupportsAgents => Response::Ok,
+            | Request::SupportsAgents
+            | Request::SupportsHistoryDeletion
+            | Request::SupportsRuntimes => Response::Ok,
+            Request::Runtimes => Response::Runtimes(server.runtimes.list()),
+            Request::CreateRuntime { spec } => {
+                let _sessions = server.sessions.lock().unwrap();
+                ensure!(
+                    !server.stop.load(Ordering::Acquire),
+                    "Session service is stopping"
+                );
+                Response::Runtime(Box::new(server.runtimes.create(*spec)?))
+            }
+            Request::EndRuntime { id, policy } => {
+                server.runtimes.end(&id, &policy)?;
+                Response::Ok
+            }
+            Request::AttachRuntime { .. } => unreachable!(),
             Request::Agents => Response::Agents(server.agents.list()),
             Request::CreateAgent { spec } => {
                 let _creation = server.sessions.lock().unwrap();
@@ -1260,12 +1374,16 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
                 {
                     sessions.remove(&id);
                 }
-                if sessions.is_empty() && !server.agents.live() {
+                if sessions.is_empty() && !server.agents.live() && !server.runtimes.live() {
                     server.stop.store(true, Ordering::Release);
                 }
                 Response::Ok
             }
             Request::Shutdown => {
+                ensure!(
+                    !server.runtimes.live(),
+                    "End notebook/debugger runtimes before stopping the service"
+                );
                 ensure!(
                     !server.agents.live(),
                     "End running agents before stopping the service"
@@ -1315,6 +1433,7 @@ pub fn serve() -> Result<()> {
     fs::set_permissions(socket(), fs::Permissions::from_mode(0o600))?;
     let server = Arc::new(Server {
         agents: agents::Store::default(),
+        runtimes: runtimes::Store::default(),
         sessions: Mutex::new(HashMap::new()),
         last_exit: Mutex::new(Instant::now()),
         stop: AtomicBool::new(false),
@@ -1479,6 +1598,7 @@ pub fn cli(args: &[String]) -> Result<()> {
             serde_json::to_writer(std::io::stdout().lock(), &response)?;
             Ok(())
         }
+        Some("attach-runtime") if args.len() == 3 => runtimes::bridge(&args[1], &args[2]),
         Some("attach-agent") if args.len() == 3 => agents::bridge(&args[1], &args[2]),
         Some("attach") if args.len() == 3 => attach(&args[1], &args[2], false),
         Some("attach") if args.len() == 4 && args[1] == "--framed" => {

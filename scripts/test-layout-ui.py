@@ -16,6 +16,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -138,8 +139,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
                 time.sleep(0.05)
             assert window
             time.sleep(0.8)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             for name in names:
                 key("p", ("Control_L",))
                 text(name)

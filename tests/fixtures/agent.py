@@ -19,6 +19,16 @@ child = None
 option_values = {"model": "fixture-fast", "mode": "ask", "effort": "low", "automatic": False}
 
 
+def history_options():
+    path = root / "history-fixture.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def deleted_history():
+    path = root / "history-deleted.json"
+    return set(json.loads(path.read_text())) if path.exists() else set()
+
+
 def saved(identity):
     """Agent-owned history, with a deliberately foreign row to check client isolation."""
     return {
@@ -148,7 +158,14 @@ try:
                     if "--no-history" in sys.argv
                     else {
                         "loadSession": True,
-                        "sessionCapabilities": {"list": {}},
+                        "sessionCapabilities": dict(
+                            {"list": {}},
+                            **(
+                                {"delete": {}}
+                                if history_options().get("delete_supported", True)
+                                else {}
+                            ),
+                        ),
                         "promptCapabilities": {"image": "--image-input" in sys.argv},
                     },
                 }
@@ -181,23 +198,114 @@ try:
             response(request, result)
         elif method in ("thread/list", "session/list"):
             assert params["cwd"] == str(root)
-            if params.get("cursor"):
+            options = history_options()
+            if options.get("refresh_error") and deleted_history():
+                emit(
+                    {
+                        "id": request["id"],
+                        "error": {"code": -32000, "message": "List refresh failed"},
+                    }
+                )
+                continue
+            if params.get("archived"):
+                rows = [saved("archived-1")] if options.get("archived") else []
+                next_cursor = None
+            elif options.get("count"):
+                start = int(params.get("cursor", "0"))
+                stop = min(start + 32, options["count"])
+                rows = [saved(f"saved-{n}") for n in range(start, stop)]
+                next_cursor = str(stop) if stop < options["count"] else None
+                if not start:
+                    rows.insert(0, dict(saved("foreign"), cwd=str(root.parent)))
+            elif params.get("cursor"):
                 rows = [saved("saved-2")]
+                next_cursor = None
             else:
                 foreign = dict(saved("foreign"), cwd=str(root.parent))
                 rows = [foreign, saved("saved-1"), saved("saved-1")]
+                if options.get("include_open"):
+                    rows.append(saved(session_id if acp else thread_id))
+                next_cursor = "history-page-2"
+            if options.get("repeat_cursor"):
+                next_cursor = "history-page-2"
+            for row in rows:
+                if options.get("wrong_root"):
+                    row["cwd"] = str(root.parent)
+                if row["id"] in options.get("active", []):
+                    row["status"] = {"type": "active"}
+                if row["id"] in options.get("other_provider", []):
+                    row["modelProvider"] = "rode_local"
+            rows = [row for row in rows if row["id"] not in deleted_history()]
             response(
                 request,
                 {
                     "sessions" if acp else "data": rows,
-                    "nextCursor": None if params.get("cursor") else "history-page-2",
+                    "nextCursor": next_cursor,
                 },
             )
         elif method == "thread/read":
             row = saved(params["threadId"])
+            options = history_options()
+            if row["id"] in deleted_history() or options.get("read_error") == row["id"]:
+                emit(
+                    {"id": request["id"], "error": {"code": -32600, "message": "Thread not found"}}
+                )
+                continue
+            if parent := options.get("parents", {}).get(row["id"]):
+                row["parentThreadId"] = parent
             if "--wrong-history-root" in sys.argv:
                 row["cwd"] = str(root.parent)
+            if options.get("wrong_root"):
+                row["cwd"] = str(root.parent)
+            if row["id"] in options.get("active", []):
+                row["status"] = {"type": "active"}
             response(request, {"thread": row})
+        elif method in ("thread/delete", "session/delete"):
+            options = history_options()
+            identity = params["sessionId" if acp else "threadId"]
+            if not options.get("delete_supported", True):
+                emit(
+                    {
+                        "id": request["id"],
+                        "error": {"code": -32601, "message": "Deletion unsupported"},
+                    }
+                )
+            elif options.get("delete_error") == identity:
+                emit({"id": request["id"], "error": {"code": -32000, "message": "Delete failed"}})
+            else:
+                removed = {identity}
+                if options.get("cascade") and not acp:
+                    parents = options.get("parents", {})
+                    while (
+                        children := {
+                            child for child, parent in parents.items() if parent in removed
+                        }
+                        - removed
+                    ):
+                        removed |= children
+                deleted = deleted_history() | removed
+                metadata("history-deleted.json", json.dumps(sorted(deleted)))
+
+                def deleted_notifications():
+                    if not acp:
+                        for removed_id in sorted(removed):
+                            notify("thread/deleted", {"threadId": removed_id})
+                            if options.get("duplicate_notifications"):
+                                notify("thread/deleted", {"threadId": removed_id})
+
+                if options.get("notifications_first"):
+                    deleted_notifications()
+                if options.get("missing_delete"):
+                    emit(
+                        {
+                            "id": request["id"],
+                            "error": {"code": -32002, "message": "Session not found"},
+                        }
+                    )
+                else:
+                    response(request, {})
+                if not options.get("notifications_first"):
+                    deleted_notifications()
         elif method == "thread/resume":
             thread_id = params["threadId"]
             response(request, {"thread": saved(thread_id)})

@@ -165,6 +165,8 @@ jobs:
             target/ci-results/
             target/*-ui/
             target/ui-smoke/
+            !target/ci-results/**/sessions/**
+            !target/**/session-runtime/**
           retention-days: 7
 
   extended:
@@ -187,7 +189,7 @@ jobs:
           path: target
       - run: tar -xzf target/ci-bundle.tar.gz
       - uses: astral-sh/setup-uv@v7
-        if: matrix.suite == 'runtimes'
+        if: contains(fromJSON('["documents","remote","runtimes"]'), matrix.suite)
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
       - name: Enable unprivileged namespaces on the disposable sandbox runner
         if: matrix.suite == 'sandbox'
@@ -204,6 +206,8 @@ jobs:
             target/ci-results/
             target/*-ui/
             target/ui-smoke/
+            !target/ci-results/**/sessions/**
+            !target/**/session-runtime/**
           retention-days: 7
 
   # Preserve the original required check name while extended checks report

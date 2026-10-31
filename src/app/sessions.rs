@@ -11,6 +11,7 @@ use crate::{sessions as service, slurm};
 use anyhow::Context;
 use std::collections::VecDeque;
 mod allocation;
+mod runtimes;
 #[derive(Clone)]
 pub(super) struct Meta {
     pub key: String,
@@ -101,6 +102,7 @@ enum Confirm {
 }
 #[derive(Default)]
 pub(super) struct Sessions {
+    runtimes: runtimes::Browser,
     pub active: Option<Meta>,
     other: Vec<Attached>,
     pub available: Vec<rode_session::Info>,
@@ -113,9 +115,9 @@ pub(super) struct Sessions {
     view_next: usize,
     pub queued: VecDeque<String>,
     last: Option<Instant>,
-    slurm: Option<slurm::Snapshot>,
-    slurm_error: String,
-    slurm_busy: bool,
+    pub(super) slurm: Option<slurm::Snapshot>,
+    pub(super) slurm_error: String,
+    pub(super) slurm_busy: bool,
     slurm_last: Option<Instant>,
     confirm: Option<Confirm>,
     rename: Option<(String, String)>,
@@ -196,7 +198,7 @@ impl EditorApp {
     pub(super) fn session_exit_pending(&self) -> bool {
         self.sessions.quit_waiting
     }
-    pub(super) fn abort_agent_quit(&mut self, error: String, ctx: &egui::Context) {
+    pub(super) fn abort_session_quit(&mut self, error: String, ctx: &egui::Context) {
         if self.sessions.quit_waiting {
             self.sessions.quit_waiting = false;
             self.dialog = Dialog::None;
@@ -215,10 +217,28 @@ impl EditorApp {
             .is_some_and(|info| info.persistence_supported)
     }
     pub(super) fn sessions_need_exit_check(&self) -> bool {
-        self.sessions.starting || self.sessions.persistence_pending || self.debugger_stopping()
+        self.sessions.starting
+            || self.sessions.persistence_pending
+            || self.sessions.runtimes.shutdown_pending()
+            || self.notebook_shutdowns.pending()
+            || self.debugger_stopping()
+            || self.documents.iter().any(|doc| {
+                doc.notebook
+                    .as_ref()
+                    .is_some_and(|view| view.lifetime_pending())
+            })
+            || self
+                .debugger
+                .client
+                .as_ref()
+                .is_some_and(|c| c.lifetime_pending())
     }
     pub(super) fn session_context_reset(&mut self) {
-        self.sessions = Sessions::default();
+        let runtimes = self.sessions.runtimes.take_shutdowns();
+        self.sessions = Sessions {
+            runtimes,
+            ..Sessions::default()
+        };
     }
     pub(super) fn add_terminal_view(&mut self, terminal: Terminal, key: String, name: String) {
         self.sessions.view_next += 1;
@@ -302,12 +322,13 @@ impl EditorApp {
         self.create_native_terminal(false, ctx);
     }
     fn create_native_terminal(&mut self, persistent: bool, ctx: &egui::Context) {
-        self.create_terminal(persistent, None, ctx);
+        self.create_terminal(persistent, None, false, ctx);
     }
     fn create_terminal(
         &mut self,
         persistent: bool,
         allocation: Option<slurm::Allocation>,
+        reserve: bool,
         ctx: &egui::Context,
     ) {
         self.terminal_intent();
@@ -339,7 +360,13 @@ impl EditorApp {
         self.sessions.next += 1;
         let plan = self.session_plan();
         let allocation = match allocation
-            .map(|settings| settings.launch(&plan, &id))
+            .map(|settings| {
+                if reserve {
+                    settings.reserve(&plan, &id)
+                } else {
+                    settings.launch(&plan, &id)
+                }
+            })
             .transpose()
         {
             Ok(launch) => launch,
@@ -357,7 +384,9 @@ impl EditorApp {
                 id,
                 name: format!(
                     "{} {}",
-                    if allocation.is_some() {
+                    if reserve {
+                        "Notebook allocation"
+                    } else if allocation.is_some() {
                         "Slurm"
                     } else {
                         "Terminal"
@@ -423,12 +452,13 @@ impl EditorApp {
         self.set_dialog(Dialog::Sessions);
         self.refresh_sessions(ctx);
         self.refresh_slurm(None, ctx);
+        self.refresh_background_runtimes(ctx);
     }
     fn refresh_sessions(&mut self, ctx: &egui::Context) {
         self.sessions.last = Some(Instant::now());
         self.session_request(service::Operation::List, Job::List, ctx);
     }
-    fn refresh_slurm(&mut self, cancel: Option<String>, ctx: &egui::Context) {
+    pub(super) fn refresh_slurm(&mut self, cancel: Option<String>, ctx: &egui::Context) {
         if self.sessions.slurm_busy {
             return;
         }
@@ -478,11 +508,12 @@ impl EditorApp {
         });
     }
     pub(super) fn session_tick(&mut self, ctx: &egui::Context) {
+        self.poll_runtimes(ctx);
         if self.sessions.quit_waiting
             && !self.sessions_need_exit_check()
             && !self.agent_installation_pending()
         {
-            self.final_quit(ctx);
+            self.quit_terminals(ctx);
             return;
         }
         for terminal in self.terminal.iter().chain(self.ssh_master.iter()) {
@@ -505,7 +536,11 @@ impl EditorApp {
         {
             self.refresh_sessions(ctx);
         }
-        if (manager || allocation_visible || self.dialog == Dialog::Slurm)
+        let notebook_allocation = self
+            .documents
+            .iter()
+            .any(|doc| doc.notebook.as_ref().is_some_and(|v| v.uses_slurm()));
+        if (manager || allocation_visible || notebook_allocation || self.dialog == Dialog::Slurm)
             && self
                 .sessions
                 .slurm_last
@@ -513,7 +548,7 @@ impl EditorApp {
         {
             self.refresh_slurm(None, ctx);
         }
-        if manager || allocation_visible || self.dialog == Dialog::Slurm {
+        if manager || allocation_visible || notebook_allocation || self.dialog == Dialog::Slurm {
             ctx.request_repaint_after(Duration::from_secs(2));
         }
     }
@@ -663,7 +698,7 @@ impl EditorApp {
                     self.dialog = Dialog::None;
                     self.focus_editor(ctx);
                 } else if self.sessions.quit_waiting && !self.sessions_need_exit_check() {
-                    self.final_quit(ctx);
+                    self.quit_terminals(ctx);
                 }
                 return;
             }
@@ -735,7 +770,10 @@ impl EditorApp {
                     }
                     rode_session::Response::Ok => {}
                     rode_session::Response::Error(error) => self.notify(error, true),
-                    rode_session::Response::Agents(_) | rode_session::Response::Agent(_) => {
+                    rode_session::Response::Agents(_)
+                    | rode_session::Response::Agent(_)
+                    | rode_session::Response::Runtimes(_)
+                    | rode_session::Response::Runtime(_) => {
                         self.notify("Unexpected agent reply in terminal controls", true)
                     }
                 }
@@ -760,7 +798,7 @@ impl EditorApp {
             _ => self.notify("Unexpected session response", true),
         }
         if self.sessions.quit_waiting && !self.sessions_need_exit_check() {
-            self.final_quit(ctx);
+            self.quit_terminals(ctx);
         }
     }
     pub(super) fn sessions_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -895,6 +933,7 @@ impl EditorApp {
                     });
                 }
                 self.slurm_allocations_ui(ui, ctx);
+                self.runtimes_ui(ui, ctx);
                 self.slurm_settings_ui(ui);
             });
         if ui.button("Close").clicked() {
@@ -1115,7 +1154,14 @@ impl EditorApp {
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
     pub(super) fn quit_terminals(&mut self, ctx: &egui::Context) {
-        self.stop_debugger();
+        if !self
+            .debugger
+            .client
+            .as_ref()
+            .is_some_and(|c| c.lifetime_pending())
+        {
+            self.leave_debugger();
+        }
         self.cancel_agent_installation();
         if self.sessions_need_exit_check() || self.agent_installation_pending() {
             self.sessions.quit_waiting = true;
@@ -1131,7 +1177,7 @@ impl EditorApp {
         ui.label(if self.agent_installation_pending() {
             "Finishing agent setup/lifetime changes and cleaning installation files…"
         } else {
-            "Finishing terminal changes and stopping the debugger…"
+            "Finishing submitted work and runtime lifetime changes…"
         });
         ui.small("RODE will close automatically when it completes.");
     }

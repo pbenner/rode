@@ -81,15 +81,51 @@ def run():
             (state / "ended").write_text("released")
     if program == "srun":
         args = sys.argv[1:]
-        assert args[:4] == ["--export=ALL", "--nodes=1", "--ntasks=1", "--pty"]
-        assert os.environ["SLURM_JOB_ID"] == "4242"
+        if args[0].startswith("--jobid="):
+            assert args[:5] == [
+                "--jobid=4242",
+                "--overlap",
+                "--export=ALL",
+                "--nodes=1",
+                "--ntasks=1",
+            ]
+            assert record.exists() and json.loads(record.read_text())["state"] == "RUNNING"
+            assert "SLURM_JOB_ID" not in os.environ
+            assert not any(key.startswith(("SALLOC_", "SRUN_")) for key in os.environ)
+            os.environ["SLURM_JOB_ID"] = "4242"
+            (state / "step.json").write_text(json.dumps(args[:5]))
+            command = args[5:]
+        else:
+            assert args[:4] == ["--export=ALL", "--nodes=1", "--ntasks=1", "--pty"]
+            assert os.environ["SLURM_JOB_ID"] == "4242"
+            command = args[4:]
         os.environ.update(
             SLURM_STEP_ID="0",
             SLURM_STEP_GPUS="0,1",
             SLURM_GPUS_ON_NODE="2",
             CUDA_VISIBLE_DEVICES="0,1",
         )
-        os.execvpe(args[4], args[4:], os.environ)
+        if not args[0].startswith("--jobid="):
+            os.execvpe(command[0], command, os.environ)
+        child = subprocess.Popen(command, start_new_session=True)
+
+        def end_step(_signal=None, _frame=None):
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGTERM)
+
+        signal.signal(signal.SIGTERM, end_step)
+        signal.signal(signal.SIGHUP, end_step)
+        try:
+            while child.poll() is None and record.exists():
+                time.sleep(0.05)
+        finally:
+            end_step()
+            try:
+                child.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+        return child.returncode
     if program == "squeue":
         assert sys.argv[sys.argv.index("--user") + 1] == str(os.geteuid())
         if (state / "queue-error").exists():
@@ -97,9 +133,13 @@ def run():
             return 1
         if record.exists():
             job = json.loads(record.read_text())
-            print(
-                f"{job['id']}|{job['state']}|0:00|1:00:00|gpu-test|cpu=4,gres/gpu=2|{job['name']}"
-            )
+            if "--jobs" in sys.argv:
+                assert sys.argv[sys.argv.index("--jobs") + 1] == job["id"]
+                print(f"{job['id']}|{job['state']}|{job['name']}")
+            else:
+                print(
+                    f"{job['id']}|{job['state']}|0:00|1:00:00|gpu-test|cpu=4,gres/gpu=2|{job['name']}"
+                )
         return 0
     if program == "scancel":
         assert sys.argv[1:] == ["--user", str(os.geteuid()), "--", "4242"]

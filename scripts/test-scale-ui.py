@@ -16,6 +16,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -48,8 +49,7 @@ def window_for(process):
         if match:
             window = int(match[1], 16)
             time.sleep(0.8)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             return window
         assert process.poll() is None, "RODE exited before opening a window"
         time.sleep(0.05)

@@ -35,6 +35,8 @@ UsePAM no
 AllowUsers $test_user
 LogLevel VERBOSE
 AcceptEnv CODEX_HOME RODE_CODEX_CACHE
+# The fixture runs on this host; expose the same CI-installed tools to its child shells.
+SetEnv "PATH=$PATH"
 EOF
 read -r key_type key_data _ < "$test_dir/host.pub"
 printf '[127.0.0.1]:%s %s %s\n' "$test_port" "$key_type" "$key_data" > "$test_dir/known_hosts"

@@ -71,7 +71,7 @@ pub(super) fn layout(ui: &egui::Ui, text: &str, palette: theme::Palette) -> Layo
                     }
                     Tag::Emphasis => out.format.italics = true,
                     Tag::Strikethrough => {
-                        out.format.strikethrough = Stroke::new(1., out.format.color)
+                        out.format.strikethrough = Stroke::new(1_f32, out.format.color)
                     }
                     Tag::Heading { level, .. } => {
                         out.separate(2);

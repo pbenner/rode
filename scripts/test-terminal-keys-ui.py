@@ -16,12 +16,11 @@ from ui_harness import (
     BINARY,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     screenshot,
     text,
     wait_for_window,
-    x11,
 )
 
 
@@ -72,8 +71,7 @@ def run():
             window = None
             try:
                 window = wait_for_window(process, ARTIFACTS / "native.log")
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 time.sleep(0.7)
                 key("p", ("Control_L",))
                 text("main.txt")

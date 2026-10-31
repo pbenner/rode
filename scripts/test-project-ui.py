@@ -18,6 +18,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -30,8 +31,7 @@ x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ct
 
 def window_for(process, log_path):
     window = wait_for_window(process, log_path)
-    x11.XSetInputFocus(display, window, 1, 0)
-    x11.XFlush(display)
+    focus_window(window)
     return window
 
 

@@ -6,7 +6,7 @@ A lightweight native Rust code editor for local and SSH projects, with on-demand
 - **[Remote projects through your SSH setup](docs/remote.md).** Use existing OpenSSH aliases, keys and jump hosts. Browse and edit remote folders while Git, tools and debuggers run where the files live.
 - **[One sandbox policy for the project](docs/sandbox.md).** Configure filesystem grants locally or over SSH; editor I/O, shells, agents and tools share the active policy. Unavailable sandboxing is clearly labelled normal mode.
 - **[Background agents inside the sandbox](docs/agents.md).** Use Codex, local models through Ollama, or ACP agents locally and over SSH. Enable **Persist** to keep tasks running after exit and reattach through **Running**. Browse saved chats, control model/reasoning/permissions, and install Codex without root, VS Code or Node.js. Approvals cannot widen the active sandbox.
-- **[Interactive GPU allocations](docs/slurm.md).** Request Slurm resources beside the terminal's Persist button, watch pending/active status and work in an allocated shell. Persist and reattach it for ML work; release allocations after confirmation. Host CPU/GPU telemetry is available separately.
+- **[Slurm GPU allocations](docs/slurm.md).** Request resources for an interactive shell or a persistent reservation. Run notebook kernels and debuggers in a selected allocation; retain their queues, variables and pause state across desktop/SSH disconnects and reattach from Sessions. Release resources after confirmation. Host CPU/GPU telemetry is available separately.
 - **[Encrypted local and remote projects](docs/encrypted-projects.md).** Open gocryptfs storage as a normal project; locking requires active project jobs to stop.
 
 Also included:

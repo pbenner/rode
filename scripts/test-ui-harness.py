@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from ui_harness import wait_for_window
+from ui_harness import focus_window, wait_for_window
 
 
 class WindowReadinessTests(unittest.TestCase):
@@ -59,6 +59,27 @@ class WindowReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "renderer failed"):
                 wait_for_window(self.process, log)
         self.query_tree.assert_not_called()
+
+    def test_focus_waits_for_viewable_state_instead_of_raising_an_x11_badmatch(self):
+        self.query_attributes.side_effect = [
+            self.state("IsUnMapped"),
+            self.state("IsUnviewable"),
+            self.state("IsViewable"),
+        ]
+        with patch("ui_harness.x11.XSetInputFocus") as focus, patch("ui_harness.x11.XFlush"):
+            focus_window(0x123)
+            self.assertEqual(self.query_attributes.call_count, 3)
+            focus.assert_called_once()
+
+    def test_focus_timeout_reports_the_state_without_calling_xsetinputfocus(self):
+        self.query_attributes.return_value = self.state("IsUnMapped")
+        with (
+            patch("ui_harness.time.monotonic", side_effect=[0, 0, 21]),
+            patch("ui_harness.x11.XSetInputFocus") as focus,
+        ):
+            with self.assertRaisesRegex(AssertionError, "0x123.*IsUnMapped"):
+                focus_window(0x123)
+            focus.assert_not_called()
 
 
 if __name__ == "__main__":

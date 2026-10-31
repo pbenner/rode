@@ -462,6 +462,195 @@ fn interactive_allocation_waits_then_supplies_the_scheduler_environment_and_surv
 }
 
 #[test]
+fn notebook_reservations_survive_view_and_kernel_closure_until_explicit_release() {
+    use rode::{
+        notebook::kernel::{Event, Kernel, Run},
+        slurm,
+    };
+    use std::{os::unix::fs::PermissionsExt, sync::Arc};
+    let mut fixture = Fixture::new();
+    let plan = fixture.plan();
+    let tools = fixture.root.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    for name in ["salloc", "srun", "squeue", "scancel"] {
+        let path = tools.join(name);
+        fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let settings = slurm::Allocation {
+        allocator: tools.join("salloc").to_string_lossy().into(),
+        runner: tools.join("srun").to_string_lossy().into(),
+        ..Default::default()
+    };
+    let id = rode_session::new_id().unwrap();
+    let policy = sessions::fingerprint(&plan);
+    let launch = settings.reserve(&plan, &id).unwrap();
+    let Response::Session(info) = fixture
+        .rpc(&Request::Create {
+            id: id.clone(),
+            name: "Notebook allocation".into(),
+            root: plan.root.clone(),
+            policy: policy.clone(),
+            mode: plan.label().into(),
+            argv: launch.argv,
+            initial_input: String::new(),
+            persistent: true,
+            env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+            allocation: Some(launch.job_name.clone()),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    fixture.ids.push((id.clone(), policy));
+    let view = fixture.attach(&info);
+    let state = fixture.root.path().join("slurm-state");
+    wait(|| state.join("job.json").exists());
+    fs::write(state.join("grant"), "").unwrap();
+    wait(|| view.contents().contains("is ready"));
+    drop(view);
+    let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
+        panic!()
+    };
+    assert!(
+        infos
+            .iter()
+            .any(|session| session.id == id && session.alive && session.persistent)
+    );
+    assert!(
+        !state.join("step.json").exists(),
+        "Reservation must not occupy a compute step"
+    );
+    let queue = tools.join("squeue").to_string_lossy().into_owned();
+    let target = slurm::Target {
+        id: "4242".into(),
+        name: launch.job_name,
+        queue: queue.clone(),
+        runner: settings.runner,
+    };
+    let mut running = None;
+    if let Ok(python) = std::env::var("RODE_TEST_JUPYTER") {
+        let start_kernel = || {
+            Kernel::start_on(
+                plan.clone(),
+                None,
+                python.clone(),
+                "python3".into(),
+                Some(target.clone()),
+                Arc::new(|| {}),
+            )
+            .unwrap()
+        };
+        let mut kernel = start_kernel();
+        kernel.run(vec![Run { cell: String::new(),
+uid: 1, version: 0, code: "import os\nprint('ALLOCATED', os.environ['SLURM_JOB_ID'], os.environ['CUDA_VISIBLE_DEVICES'])".into() }]).unwrap();
+        let mut output = String::new();
+        let deadline = Instant::now() + Duration::from_secs(35);
+        loop {
+            let mut done = false;
+            for event in kernel.poll() {
+                match event {
+                    Event::Output { output: value, .. } => {
+                        output.push_str(value["text"].as_str().unwrap_or(""))
+                    }
+                    Event::Done(_, _) => done = true,
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            if done {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{}", kernel.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(output.contains("ALLOCATED 4242 0,1"), "{output}");
+        assert!(kernel.execution.contains("Slurm job 4242"));
+        let marker = fixture.root.path().join("kernel-pid");
+        kernel
+            .run(vec![Run {
+                cell: String::new(),
+                uid: 2,
+                version: 0,
+                code: format!(
+                    "import time\nopen({:?}, 'w').write(str(os.getpid()))\ntime.sleep(60)",
+                    marker.to_string_lossy()
+                ),
+            }])
+            .unwrap();
+        wait(|| marker.exists());
+        let pid: i32 = fs::read_to_string(&marker).unwrap().parse().unwrap();
+        kernel.interrupt().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while kernel.busy() {
+            for event in kernel.poll() {
+                if let Event::Error(error) = event {
+                    panic!("{error}");
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(kernel);
+        wait(|| unsafe { libc::kill(pid, 0) } != 0);
+        assert!(slurm::snapshot(fixture.root.path(), &queue).unwrap().jobs[0].allocated());
+        let mut kernel = start_kernel();
+        kernel
+            .run(vec![Run {
+                cell: String::new(),
+                uid: 3,
+                version: 0,
+                code: "print('ready')".into(),
+            }])
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(35);
+        while kernel.busy() {
+            for event in kernel.poll() {
+                if let Event::Error(error) = event {
+                    panic!("{error}");
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        running = Some(kernel);
+    } else {
+        eprintln!("Set RODE_TEST_JUPYTER for real Slurm notebook kernel/interrupt/expiry coverage");
+    }
+    slurm::cancel(
+        fixture.root.path(),
+        &queue,
+        &tools.join("scancel").to_string_lossy(),
+        "4242",
+    )
+    .unwrap();
+    wait(|| state.join("ended").exists());
+    if let Some(mut kernel) = running {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if kernel
+                .poll()
+                .iter()
+                .any(|event| matches!(event, Event::Error(_)))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Kernel survived allocation release"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(
+        slurm::snapshot(fixture.root.path(), &queue)
+            .unwrap()
+            .jobs
+            .is_empty()
+    );
+}
+
+#[test]
 fn stale_service_sockets_do_not_hide_sessions_or_prevent_safe_startup() {
     use std::os::unix::{fs::PermissionsExt, net::UnixListener};
     for stale_compatible in [false, true] {

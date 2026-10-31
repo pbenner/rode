@@ -77,7 +77,7 @@ impl EditorApp {
         self.workbench.invalidate_tools();
         if !enabled {
             if id == Feature::Debugger.id() {
-                self.stop_debugger();
+                self.leave_debugger();
             }
             if id == Feature::Latex.id() {
                 self.stop_latex();

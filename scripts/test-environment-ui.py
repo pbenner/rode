@@ -17,12 +17,11 @@ from ui_harness import (
     assert_running,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     screenshot,
     text,
     wait_for_window,
-    x11,
 )
 
 
@@ -88,8 +87,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 return (project / filename).read_text()
 
             window = wait_for_window(process, log_path)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             command("Open file by path")
             text("main.js")
             key("Return")
@@ -146,8 +144,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 [str(BINARY), str(project)], env=environment, stdout=log, stderr=log
             )
             window = wait_for_window(process, log_path)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             time.sleep(0.5)
             key("t", ("Control_L", "Shift_L"))
             time.sleep(0.6)

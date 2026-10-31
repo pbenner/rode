@@ -1,8 +1,8 @@
 //! Project debugging UI. It never opens source through a different host backend.
 //!
-//! The client owns protocol state; the UI owns drafts, source jumps and terminal views.
-//! Context changes stop the old client, and stopped-epoch/buffer checks prevent late source
-//! reads or execution markers from selecting stale code.
+//! Managed controllers own protocol state on the host; the UI owns drafts, source jumps
+//! and terminal views. Context changes detach persistent work or stop foreground work.
+//! Stopped-epoch/buffer checks reject late source reads and stale execution markers.
 mod configuration;
 mod navigation;
 mod terminals;
@@ -16,6 +16,11 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(super) struct State {
+    target: Option<crate::slurm::Target>,
+    persistent: bool,
+    reattaching: bool,
+    source_digests: BTreeMap<String, String>,
+    verify_sources: bool,
     pub client: Option<Client>,
     streams: BTreeMap<u64, (String, crate::terminal::Stream)>,
     serial: u64,
@@ -29,9 +34,27 @@ pub(super) struct State {
     expression: String,
     was_live: bool,
 }
+impl State {
+    /// Capture only a buffer whose current content matches the launched source.
+    /// Saves change the baseline without advancing edit_version, so saved_text
+    /// cannot establish which buffer version the debuggee actually uses.
+    fn source_version(&self, doc: &Document) -> u64 {
+        if self.verify_sources
+            && doc
+                .path
+                .as_ref()
+                .and_then(|path| self.source_digests.get(path))
+                != Some(&crate::files::digest(doc.text.as_bytes()))
+        {
+            u64::MAX
+        } else {
+            doc.edit_version
+        }
+    }
+}
 impl EditorApp {
     pub(super) fn reset_debugger(&mut self) {
-        self.stop_debugger();
+        self.leave_debugger();
         self.debugger.client = None;
         self.debugger.versions.clear();
         self.debugger.draft_generation = None;
@@ -39,6 +62,69 @@ impl EditorApp {
         self.debugger.watch.clear();
         self.debugger.expression.clear();
         self.debugger.was_live = false;
+        self.debugger.target = None;
+        self.debugger.persistent = false;
+        self.debugger.reattaching = false;
+        self.debugger.source_digests.clear();
+        self.debugger.verify_sources = false;
+    }
+    pub(super) fn leave_debugger(&mut self) {
+        if self
+            .debugger
+            .client
+            .as_ref()
+            .is_some_and(Client::persistent)
+        {
+            if let Some(mut client) = self.debugger.client.take() {
+                client.detach();
+            }
+            for (_, (key, stream)) in std::mem::take(&mut self.debugger.streams) {
+                stream.end();
+                self.remove_view(&key);
+            }
+            self.debugger.pending_jump = None;
+            self.debugger.source_loading = None;
+        } else {
+            self.stop_debugger();
+        }
+    }
+    pub(in crate::app) fn attach_debugger_runtime(
+        &mut self,
+        info: rode_runtime_core::service::Info,
+        ctx: &egui::Context,
+    ) -> anyhow::Result<()> {
+        let workspace = self
+            .workspace
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Open the debugger's original project"))?;
+        let plan = workspace.plan.clone();
+        let remote = workspace.remote.clone();
+        let target = info
+            .target
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()?;
+        let persistent = info.persistent;
+        let sources = info.sources.clone();
+        let wake = ctx.clone();
+        let client = Client::attach(plan, remote, info, Arc::new(move || wake.request_repaint()))?;
+        self.leave_debugger();
+        self.debugger.client = Some(client);
+        self.debugger.target = target;
+        self.debugger.persistent = persistent;
+        self.debugger.reattaching = true;
+        self.debugger.serial += 1;
+        self.debugger.source_digests = sources;
+        self.debugger.verify_sources = true;
+        self.debugger.versions = self
+            .documents
+            .iter()
+            .map(|doc| (doc.id, self.debugger.source_version(doc)))
+            .collect();
+        self.workbench.panel = Some(Panel::Debug);
+        self.workbench.surface = workbench::Surface::Tools;
+        self.workbench.tools_hidden = false;
+        Ok(())
     }
     pub(super) fn stop_debugger(&mut self) {
         if let Some(client) = &mut self.debugger.client {
@@ -111,15 +197,32 @@ impl EditorApp {
             .unwrap_or_default();
         let python = self.terminal_python_selection();
         let wake_ctx = ctx.clone();
-        match Client::start(
+        let sources = self
+            .documents
+            .iter()
+            .filter_map(|doc| {
+                doc.path.as_ref().map(|path| {
+                    (
+                        path.clone(),
+                        crate::files::digest(doc.saved_text.as_bytes()),
+                    )
+                })
+            })
+            .take(128)
+            .collect();
+        match Client::start_managed(
             workspace.plan.clone(),
             workspace.remote.clone(),
             file,
             python,
             settings,
+            self.debugger.target.clone(),
+            self.debugger.persistent,
+            sources,
             Arc::new(move || wake_ctx.request_repaint()),
         ) {
             Ok(client) => {
+                self.debugger.verify_sources = false;
                 self.debugger.client = Some(client);
                 self.debugger.serial += 1;
                 self.debugger.versions = self
@@ -265,14 +368,21 @@ impl EditorApp {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if self.debugger_active() && !self.project_ready() {
-            self.stop_debugger();
+            self.leave_debugger();
             return;
         }
         let Some(mut client) = self.debugger.client.take() else {
             return;
         };
+        let previous_error = client.error.clone();
         if client.terminal_events.is_empty() {
             client.poll();
+        }
+        if self.debugger.reattaching && client.attached_ready() {
+            self.debugger.reattaching = false;
+            self.workbench
+                .save_debugger_settings(client.settings.clone());
+            self.debugger.draft_generation = None;
         }
         self.debugger
             .streams
@@ -300,6 +410,10 @@ impl EditorApp {
         }
         if client.phase == Phase::Starting || client.pending() {
             ctx.request_repaint_after(Duration::from_millis(250));
+        }
+        if self.session_exit_pending() && !client.error.is_empty() && client.error != previous_error
+        {
+            self.abort_session_quit(client.error.clone(), ctx);
         }
         self.debugger.client = Some(client);
     }
@@ -331,6 +445,76 @@ impl EditorApp {
             palette: self.terminal_colors.palette(self.themes.active()),
         };
         let drawn_epoch = self.debugger.client.as_ref().map(Client::inspection_epoch);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Execution target");
+            let mut target = self.debugger.target.clone();
+            let (queue, _) = self.slurm_programs();
+            let runner = self.workbench.slurm_allocation().runner.clone();
+            egui::ComboBox::from_id_salt("debugger-execution-target")
+                .selected_text(target.as_ref().map(|t| format!("Slurm job {}", t.id))
+                    .unwrap_or_else(|| "Project host".into()))
+                .show_ui(ui, |ui| {
+                ui.selectable_value(&mut target, None, "Project host");
+                if let Some(snapshot) = &self.sessions.slurm {
+                    for job in &snapshot.jobs {
+                        if job.state == "RUNNING" && job.id.bytes().all(|b| b.is_ascii_digit()) {
+                            ui.selectable_value(
+                                &mut target,
+                                Some(crate::slurm::Target {
+                                    id: job.id.clone(), name: job.name.clone(),
+                                    queue: queue.clone(), runner: runner.clone(),
+                                }),
+                                format!("Job {} · {}", job.id, job.nodes),
+                            );
+                        }
+                    }
+                }
+            }).response.on_hover_text("The coordinator, adapter and launched program run together on this target. Changing it detaches persistent work; Start creates a new debugger.");
+            if target != self.debugger.target {
+                if let Some(client) = self.debugger.client.as_mut().filter(|c| c.lifetime_pending()) {
+                    client.error = "Wait for submitted debugger changes before changing execution targets".into();
+                } else {
+                    self.leave_debugger();
+                    self.debugger.client = None;
+                    self.debugger.target = target;
+                }
+            }
+            if ui.add_enabled(!self.sessions.slurm_busy, egui::Button::new("Refresh targets")).clicked() {
+                self.refresh_slurm(None, ctx);
+            }
+            let on = self.debugger.client.as_ref().map_or(self.debugger.persistent, Client::persistent);
+            if ui.add_enabled(
+                self.debugger.client.as_ref().is_none_or(|c| !c.lifetime_pending()),
+                egui::Button::new(if on { "Persist debugger: on" } else { "Persist debugger: off" }),
+            ).clicked() {
+                if let Some(client) = &mut self.debugger.client {
+                    match client.set_persistent(!on) {
+                        Ok(()) => self.debugger.persistent = !on,
+                        Err(error) => client.error = error.to_string(),
+                    }
+                } else {
+                    self.debugger.persistent = !on;
+                }
+            }
+            if ui.small_button("Running debuggers…").clicked() {
+                self.open_sessions(ctx);
+            }
+            if on && ui.add_enabled(
+                self.debugger.client.as_ref().is_none_or(|c| !c.lifetime_pending()),
+                egui::Button::new("Detach debugger").small(),
+            ).clicked() {
+                self.leave_debugger();
+            }
+        });
+        if self
+            .debugger
+            .client
+            .as_ref()
+            .is_none_or(|c| c.phase == Phase::Ended)
+            && ui.small_button("Reattach debugger").clicked()
+        {
+            self.find_debugger_runtime(ctx);
+        }
         let actions = ui::show(
             ui,
             &mut self.debugger,
@@ -410,3 +594,65 @@ impl EditorApp {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+
+    #[test]
+    fn reattached_source_versions_compare_current_buffers_and_remain_stale_after_save() {
+        for current in ["answer = 42\n", "answer = 0\nanswer += 1\n"] {
+            let original = "answer = 42\n";
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_file();
+            let doc = &mut app.documents[0];
+            doc.path = Some("/project/main.py".into());
+            doc.saved_text = original.into();
+            doc.text = current.into();
+            doc.edit_version = 1;
+            doc.modified = current != original;
+            app.debugger.verify_sources = true;
+            app.debugger.source_digests.insert(
+                "/project/main.py".into(),
+                crate::files::digest(original.as_bytes()),
+            );
+            let version = app.debugger.source_version(&app.documents[0]);
+            app.debugger.versions.insert(app.documents[0].id, version);
+            let mut client = Client::default();
+            client.phase = Phase::Paused;
+            app.debugger.client = Some(client);
+            app.documents[0].acknowledge_save(
+                "/project/main.py".into(),
+                current.into(),
+                "revision".into(),
+            );
+            assert_eq!(
+                app.debug_source_stale(&app.documents[0]),
+                current != original
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_sources_remain_stale_and_matching_new_sources_are_tracked() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        app.documents[0].path = Some("/project/later.py".into());
+        app.documents[0].text = "value = 1\n".into();
+        app.documents[0].edit_version = 7;
+        app.debugger.verify_sources = true;
+        assert_eq!(app.debugger.source_version(&app.documents[0]), u64::MAX);
+        app.debugger.source_digests.insert(
+            "/project/later.py".into(),
+            crate::files::digest(app.documents[0].text.as_bytes()),
+        );
+        assert_eq!(app.debugger.source_version(&app.documents[0]), 7);
+        app.debugger.verify_sources = false;
+        app.documents[0].text.push_str("value += 1\n");
+        assert_eq!(app.debugger.source_version(&app.documents[0]), 7);
+    }
+}

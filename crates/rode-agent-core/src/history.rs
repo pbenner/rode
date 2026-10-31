@@ -25,6 +25,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+mod deletion;
 
 /// A host/project-scoped saved conversation returned by the agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -60,6 +61,10 @@ enum Call {
     Resume,
     Turns,
     Load,
+    DeleteList,
+    DeleteRead,
+    DeleteProtect,
+    Delete,
 }
 
 /// An explicit, bounded history-browser connection. Drop cancels owned work.
@@ -72,6 +77,8 @@ pub struct Browser {
     pub busy: bool,
     /// Whether this agent can replay/resume listed sessions.
     pub can_resume: bool,
+    /// Whether the backend supports deleting saved conversations.
+    pub can_delete: bool,
     /// Whether another metadata page can be requested.
     pub more: bool,
     launch: Launch,
@@ -89,6 +96,8 @@ pub struct Browser {
     deadline: Instant,
     stderr: String,
     restored: Option<Restored>,
+    deletion: Option<deletion::Deletion>,
+    deletion_result: Option<String>,
 }
 
 impl Browser {
@@ -99,6 +108,8 @@ impl Browser {
             status: self.status.clone(),
             busy: self.busy,
             can_resume: self.can_resume,
+            can_delete: self.can_delete,
+            deleting: self.deletion.is_some(),
             more: self.more,
         }
     }
@@ -110,6 +121,7 @@ impl Browser {
             status: "Loading saved conversations…".into(),
             busy: true,
             can_resume: false,
+            can_delete: false,
             more: false,
             launch,
             session: Some(session),
@@ -126,6 +138,8 @@ impl Browser {
             deadline: Instant::now() + Duration::from_secs(420),
             stderr: String::new(),
             restored: None,
+            deletion: None,
+            deletion_result: None,
         })
     }
     /// Request another bounded metadata page without polling in the background.
@@ -238,9 +252,18 @@ impl Browser {
         self.deadline = Instant::now() + Duration::from_secs(60);
         self.status = "Loading saved conversations…".into();
         let acp = self.launch.config.provider == Provider::Acp;
+        let params = self.list_params(self.cursor.clone());
+        self.call(
+            if acp { "session/list" } else { "thread/list" },
+            params,
+            Call::List,
+        )
+    }
+    fn list_params(&self, cursor: Option<String>) -> Value {
+        let acp = self.launch.config.provider == Provider::Acp;
         let mut params = json!({"cwd":self.launch.plan.root});
-        if let Some(cursor) = &self.cursor {
-            params["cursor"] = cursor.clone().into();
+        if let Some(cursor) = cursor {
+            params["cursor"] = cursor.into();
         }
         if !acp {
             params["limit"] = 32.into();
@@ -252,14 +275,13 @@ impl Browser {
                 json!([])
             };
         }
-        self.call(
-            if acp { "session/list" } else { "thread/list" },
-            params,
-            Call::List,
-        )
+        params
     }
     fn receive(&mut self, value: Value) -> Result<()> {
         if let Some(method) = value["method"].as_str() {
+            if method == "thread/deleted" {
+                self.deleted_notification(&value["params"]);
+            }
             if let Some(id) = value.get("id") {
                 // Browsing/replay never grants tool access or answers questions.
                 let result = match method {
@@ -298,7 +320,13 @@ impl Browser {
             return Ok(());
         }
         self.pending = None;
+        if self.deleted_response(call)? {
+            return Ok(());
+        }
         if let Some(error) = value.get("error") {
+            if self.delete_error(call, error)? {
+                return Ok(());
+            }
             bail!(
                 "Agent history: {}",
                 error["message"].as_str().unwrap_or("request failed")
@@ -313,6 +341,8 @@ impl Browser {
                         "Agent does not support ACP v1"
                     );
                     self.can_resume = result["agentCapabilities"]["loadSession"] == true;
+                    self.can_delete =
+                        result["agentCapabilities"]["sessionCapabilities"]["delete"].is_object();
                     if !result["agentCapabilities"]["sessionCapabilities"]["list"].is_object() {
                         self.busy = false;
                         self.status = "This ACP agent does not support a history list.".into();
@@ -321,6 +351,7 @@ impl Browser {
                     }
                 } else {
                     self.can_resume = true;
+                    self.can_delete = true;
                     self.send(json!({"method":"initialized","params":{}}))?;
                 }
                 self.list()?;
@@ -399,6 +430,9 @@ impl Browser {
                 {
                     self.status.push_str(" · browse limit reached");
                 }
+                if let Some(summary) = self.deletion_result.take() {
+                    self.status = format!("{summary} · {}", self.status);
+                }
             }
             Call::Read => {
                 let thread = &result["thread"];
@@ -463,6 +497,10 @@ impl Browser {
                 );
                 self.finish(controls::acp(result))?;
             }
+            Call::DeleteList => self.deleted_list(result)?,
+            Call::DeleteRead => self.delete_read(result)?,
+            Call::DeleteProtect => self.delete_protect(result)?,
+            Call::Delete => self.deleted()?,
         }
         Ok(())
     }
@@ -507,9 +545,24 @@ impl Browser {
         Ok(())
     }
     fn fail(&mut self, error: &str) {
+        let progress = self
+            .deletion
+            .take()
+            .map(|d| {
+                format!(
+                    "Deleted {} chats before this operation stopped. ",
+                    d.deleted
+                )
+            })
+            .or_else(|| {
+                self.deletion_result
+                    .take()
+                    .map(|summary| format!("{summary}. Refresh failed. "))
+            })
+            .unwrap_or_default();
         self.status = clip(
             &format!(
-                "{error}{}",
+                "{progress}{error}{}",
                 if self.stderr.is_empty() {
                     String::new()
                 } else {
@@ -521,6 +574,7 @@ impl Browser {
         self.busy = false;
         self.more = false;
         self.can_resume = false;
+        self.can_delete = false;
         self.pending = None;
         self.session = None;
         self.pages.clear();

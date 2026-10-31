@@ -15,13 +15,12 @@ from ui_harness import (
     background,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     saved_theme,
     screenshot,
     text,
     theme,
-    x11,
 )
 
 with tempfile.TemporaryDirectory(prefix="rode-ui-") as directory:
@@ -82,8 +81,7 @@ fn run_step(step: usize) {
             time.sleep(0.05)
         assert window, "RODE window did not appear"
         time.sleep(0.5)  # winit creates the window before mapping its first frame
-        x11.XSetInputFocus(display, window, 1, 0)
-        x11.XFlush(display)
+        focus_window(window)
         time.sleep(0.4)
         screenshot(window, "welcome.png")
         key("p", ("Control_L",))

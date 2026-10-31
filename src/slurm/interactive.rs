@@ -1,5 +1,5 @@
-//! Interactive allocations are native terminal processes, not detached scheduler
-//! reservations. salloc owns the allocation until its srun shell ends. The job
+//! Allocations belong to native sessions. Interactive sessions end with their
+//! srun shell; notebook reservations instead hold salloc until explicitly ended. The job
 //! name is tied to a random session ID so reattachment and renaming retain the
 //! association without saving another allocation database.
 use anyhow::{Result, ensure};
@@ -106,6 +106,14 @@ impl Allocation {
     /// on the compute node: Slurm's remote execution does not inherit the login
     /// host's mount namespace. Missing compute-node sandboxing fails visibly.
     pub fn launch(&self, plan: &crate::sandbox::Plan, id: &str) -> Result<Launch> {
+        self.launch_inner(plan, id, false)
+    }
+    /// Hold a reservation in a native session independently of interactive shells.
+    /// Its view is a progress log; cancellation or ending the session releases it.
+    pub fn reserve(&self, plan: &crate::sandbox::Plan, id: &str) -> Result<Launch> {
+        self.launch_inner(plan, id, true)
+    }
+    fn launch_inner(&self, plan: &crate::sandbox::Plan, id: &str, reserve: bool) -> Result<Launch> {
         self.validate()?;
         ensure!(
             id.len() == 34
@@ -160,16 +168,25 @@ impl Allocation {
         // Clear inherited job identity/GPU visibility. Keep site configuration/auth such
         // as SLURM_CONF and SLURM_JWT. The new values come from salloc/srun,
         // never from an editor-side guess or a separate squeue response.
+        let command = if reserve {
+            ["/bin/sh", "-c", "printf 'Notebook allocation %s is ready. Select it in the notebook Execution target.\\nClosing this persistent view keeps the reservation. Release it in Slurm controls when finished.\\n' \"$SLURM_JOB_ID\"; trap 'exit 0' HUP INT TERM; while :; do sleep 3600 & wait $!; done"]
+                .iter().map(|v| quote(v)).collect::<Vec<_>>().join(" ")
+        } else {
+            format!(
+                "{} {}",
+                program(&self.runner),
+                step.iter().map(|v| quote(v)).collect::<Vec<_>>().join(" ")
+            )
+        };
         let script = format!(
-            "unset SLURM_JOB_ID SLURM_JOBID SLURM_STEP_ID SLURM_STEPID SLURM_CLUSTERS SLURM_STEP_GPUS SLURM_JOB_GPUS SLURM_GPUS_ON_NODE CUDA_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES GPU_DEVICE_ORDINAL; exec {} {} {} {}",
+            "unset SLURM_JOB_ID SLURM_JOBID SLURM_STEP_ID SLURM_STEPID SLURM_CLUSTERS SLURM_STEP_GPUS SLURM_JOB_GPUS SLURM_GPUS_ON_NODE CUDA_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES GPU_DEVICE_ORDINAL; exec {} {} {}",
             program(&self.allocator),
             options
                 .iter()
                 .map(|v| quote(v))
                 .collect::<Vec<_>>()
                 .join(" "),
-            program(&self.runner),
-            step.iter().map(|v| quote(v)).collect::<Vec<_>>().join(" "),
+            command,
         );
         Ok(Launch {
             job_name,

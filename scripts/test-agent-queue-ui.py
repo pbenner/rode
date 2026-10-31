@@ -19,12 +19,11 @@ from ui_harness import (
     assert_running,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     screenshot,
     text,
     wait_for_window,
-    x11,
 )
 
 with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
@@ -79,8 +78,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
                 time.sleep(0.2)
 
             window = wait_for_window(process, log_path)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             key("a", ("Control_L", "Shift_L"))
             time.sleep(0.3)
             send("wait")

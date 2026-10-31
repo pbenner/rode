@@ -3,7 +3,9 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Command, time::Duration};
 mod interactive;
+mod target;
 pub use interactive::{Allocation, Launch};
+pub use target::Target;
 /// One user-owned Slurm allocation; scheduler resource counts are distinct from live GPU
 /// utilization.
 #[derive(Clone, Debug, Serialize, Deserialize)]

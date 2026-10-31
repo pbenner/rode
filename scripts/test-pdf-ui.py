@@ -16,6 +16,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -125,8 +126,7 @@ def run(remote=False):
 
                 wait_for(mapped, "No PDF viewer window")
                 time.sleep(1)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 open_file("report.PDF")
                 wait_for(
                     lambda: color(window, label + "-first-page.png", "red"),

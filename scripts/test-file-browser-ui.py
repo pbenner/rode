@@ -17,11 +17,10 @@ from ui_harness import (
     BINARY,
     click,
     close_window,
-    display,
+    focus_window,
     key,
     screenshot,
     text,
-    x11,
 )
 
 
@@ -138,8 +137,7 @@ def run(remote=False):
                     "Project did not become ready",
                 )
                 time.sleep(1)
-                x11.XSetInputFocus(display, window, 1, 0)
-                x11.XFlush(display)
+                focus_window(window)
                 command("Open project folder")
                 screenshot(window, label + "-project-folders.png")
                 key("Escape")

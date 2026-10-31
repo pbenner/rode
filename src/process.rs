@@ -82,7 +82,7 @@ impl Launch {
             "Invalid process arguments."
         );
         ensure!(
-            (8192..=4 * 1024 * 1024).contains(&self.line_limit),
+            (8192..=16 * 1024 * 1024).contains(&self.line_limit),
             "Invalid process line limit."
         );
         Ok(())
@@ -147,8 +147,8 @@ pub struct Writer {
 pub(crate) fn encode_request(message: &Value) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec(message)?;
     ensure!(
-        bytes.len() < 4 * 1024 * 1024,
-        "Process request exceeds 4 MiB."
+        bytes.len() < 16 * 1024 * 1024,
+        "Process request exceeds 16 MiB."
     );
     bytes.push(b'\n');
     Ok(bytes)
@@ -161,7 +161,7 @@ impl Writer {
     /// Retain the already encoded buffer when the bounded pipe is full.
     pub(crate) fn try_send_buffer(&self, bytes: &mut Vec<u8>) -> Result<bool> {
         ensure!(
-            bytes.len() <= self.limit.min(4 * 1024 * 1024),
+            bytes.len() <= self.limit.min(16 * 1024 * 1024),
             "Process request exceeds its line limit."
         );
         match self.input.try_send(std::mem::take(bytes)) {
@@ -183,6 +183,10 @@ impl Writer {
     }
 }
 impl Session {
+    /// Transfer ownership to a headless notebook/debugger controller.
+    pub fn into_runtime(self) -> rode_runtime_core::process::Session {
+        rode_runtime_core::process::Session::new(self)
+    }
     /// Clone an input-only handle without transferring process ownership.
     pub fn writer(&self) -> Writer {
         Writer {
@@ -244,6 +248,32 @@ impl Session {
     /// Request idempotent SIGTERM followed by timed SIGKILL for the owned process group.
     pub fn stop(&self) {
         self.control.stop();
+    }
+}
+impl rode_runtime_core::process::Sink for Writer {
+    fn try_send_buffer(&self, bytes: &mut Vec<u8>) -> Result<bool> {
+        self.try_send_buffer(bytes)
+    }
+}
+impl rode_runtime_core::process::Transport for Session {
+    fn writer(&self) -> rode_runtime_core::process::Writer {
+        rode_runtime_core::process::Writer::new(self.writer())
+    }
+    fn poll(&self) -> Option<rode_runtime_core::process::Event> {
+        use rode_runtime_core::process::Event as Runtime;
+        self.poll().map(|event| match event {
+            Event::Started => Runtime::Started,
+            Event::Message(v) => Runtime::Message(v),
+            Event::Stderr(v) => Runtime::Stderr(v),
+            Event::Error(v) => Runtime::Error(v),
+            Event::Exited(v) => Runtime::Exited(v),
+        })
+    }
+    fn stop(&self) {
+        self.stop();
+    }
+    fn is_finished(&self) -> bool {
+        self.is_finished()
     }
 }
 impl Drop for Session {

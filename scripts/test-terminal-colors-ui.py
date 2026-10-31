@@ -23,6 +23,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    focus_window,
     key,
     screenshot,
     text,
@@ -55,8 +56,7 @@ def window_for(process, title="RODE"):
         if match:
             window = int(match[1], 16)
             time.sleep(0.8)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             return window
         assert process.poll() is None, "RODE exited before opening a window"
         time.sleep(0.05)
@@ -334,8 +334,7 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
                 reference.wait(timeout=10)
             else:
                 print("xterm reference check skipped: xterm is not installed")
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+            focus_window(window)
             close_window(window, process)
         finally:
             for child in (reference, process):

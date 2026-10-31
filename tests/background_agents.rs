@@ -82,6 +82,15 @@ impl Fixture {
         prompt: &str,
         attachments: Vec<rode_agent_core::attachment::Attachment>,
     ) -> Info {
+        self.create_agent(provider, persistent, Some(prompt), attachments)
+    }
+    fn create_agent(
+        &self,
+        provider: Provider,
+        persistent: bool,
+        prompt: Option<&str>,
+        attachments: Vec<rode_agent_core::attachment::Attachment>,
+    ) -> Info {
         let executable = self.root.join("agent.py").to_string_lossy().into_owned();
         let config = Config {
             provider,
@@ -105,7 +114,7 @@ impl Fixture {
             env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
             python: "off".into(),
             persistent,
-            text: Some(prompt.into()),
+            text: prompt.map(str::to_owned),
             attachments,
         };
         let Response::Agent(info) = self
@@ -208,6 +217,72 @@ impl Drop for View {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn history_deletion_uses_host_backend_and_protects_another_open_controller() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.root.join("agent.py"),
+            include_str!("fixtures/agent.py"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("history-fixture.json"),
+            serde_json::json!({"include_open":true,"parents":
+                if provider == Provider::Codex { serde_json::json!({"thread-1":"saved-1"}) } else { serde_json::json!({}) }
+            }).to_string(),
+        )
+        .unwrap();
+        let info = fixture.create(provider, true, "current");
+        let mut current = fixture.attach(&info);
+        let state = current.until(|s| s.chat.connected && s.chat.completed == 1);
+        let conversation = state.chat.conversation.clone();
+        let config = state.chat.config.clone();
+        assert!(!conversation.is_empty());
+        let info = fixture.create_agent(provider, false, None, vec![]);
+        let mut browser = fixture.attach(&info);
+        browser.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_delete));
+        browser.send(Action::HistoryDelete {
+            id: None,
+            protected: vec![],
+        });
+        let state = browser.until(|s| {
+            s.history
+                .as_ref()
+                .is_some_and(|h| !h.busy && h.status.starts_with("Deleted"))
+        });
+        let history = state.history.unwrap();
+        assert!(
+            history.status.contains(if provider == Provider::Codex {
+                "kept 2"
+            } else {
+                "kept 1"
+            }),
+            "{}",
+            history.status
+        );
+        let deleted: Vec<String> =
+            serde_json::from_slice(&fs::read(fixture.root.join("history-deleted.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            deleted,
+            if provider == Provider::Codex {
+                vec!["saved-2"]
+            } else {
+                vec!["saved-1", "saved-2"]
+            }
+        );
+        assert!(history.entries.iter().any(|e| e.id == conversation));
+        current.send(Action::Submit {
+            text: "still open".into(),
+            attachments: vec![],
+            config,
+        });
+        let state = current.until(|s| s.chat.completed == 2);
+        assert_eq!(state.chat.conversation, conversation);
     }
 }
 
