@@ -82,7 +82,7 @@ fn native_and_remote_slurm_queries_and_releases_use_exact_owned_allocations() {
     let cancel = root.path().join("cancel");
     let log = root.path().join("cancelled");
     fs::write(&queue,"#!/usr/bin/python3\nimport os,sys\nassert 'SLURM_CLUSTERS' not in os.environ\nassert 'SQUEUE_STATES' not in os.environ\nassert sys.argv[sys.argv.index('--user')+1]==str(os.geteuid())\nassert '--local' in sys.argv\nprint('12|RUNNING|2:30|1:00:00|gpu01|cpu=16,gres/gpu=4,gres/gpu:a100=4|training')\nprint('13|PENDING|0:00|2:00:00|(Resources)|gres/gpu=8|waiting')\n").unwrap();
-    fs::write(&cancel,format!("#!/usr/bin/python3\nimport os,sys,json\nassert 'SCANCEL_SIGNAL' not in os.environ\nassert 'SLURM_CLUSTERS' not in os.environ\nassert sys.argv[1:]==['--user',str(os.geteuid()),'--','12']\nopen({:?},'w').write(json.dumps(sys.argv[1:]))\n",log.to_str().unwrap())).unwrap();
+    fs::write(&cancel,format!("#!/usr/bin/python3\nimport os,sys,json\nassert 'SCANCEL_SIGNAL' not in os.environ\nassert 'SLURM_CLUSTERS' not in os.environ\nassert sys.argv[1:4]==['--user',str(os.geteuid()),'--']\nassert sys.argv[4] in ('12','13')\nopen({:?},'w').write(json.dumps(sys.argv[1:]))\n",log.to_str().unwrap())).unwrap();
     for path in [&queue, &cancel] {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -112,16 +112,19 @@ fn native_and_remote_slurm_queries_and_releases_use_exact_owned_allocations() {
             assert!(execute(&bad, peer).is_err());
             assert!(!log.exists());
         }
-        let mut release = request.clone();
-        if let Request::Slurm { cancel, .. } = &mut release {
-            *cancel = Some("12".into());
+        for id in ["12", "13"] {
+            let mut release = request.clone();
+            if let Request::Slurm { cancel, .. } = &mut release {
+                *cancel = Some(id.into());
+            }
+            let Response::Command(result) = execute(&release, peer).unwrap() else {
+                panic!()
+            };
+            assert!(result.success());
+            let args: Vec<String> = serde_json::from_slice(&fs::read(&log).unwrap()).unwrap();
+            assert_eq!(args.last().unwrap(), id);
+            fs::remove_file(&log).unwrap();
         }
-        let Response::Command(result) = execute(&release, peer).unwrap() else {
-            panic!()
-        };
-        assert!(result.success());
-        assert!(log.exists());
-        fs::remove_file(&log).unwrap();
     }
 }
 

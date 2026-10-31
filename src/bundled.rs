@@ -529,6 +529,37 @@ fn remote_call(
     serde_json::from_str(&output).context("Invalid Codex deployment reply")
 }
 
+/// Check runtime availability from a worker without installing or starting Codex.
+pub(crate) fn available(remote: Option<&ssh::Remote>, cancel: &AtomicBool) -> Result<bool> {
+    if let Some(remote) = remote {
+        let host = remote_call(
+            remote,
+            &serde_json::json!({"action":"host"}),
+            std::io::empty(),
+            cancel,
+        )?;
+        let architecture = host["architecture"]
+            .as_str()
+            .context("Missing remote architecture")?;
+        if host["platform"] != "linux" {
+            return Ok(host["installed"].is_string());
+        }
+        let bundle = find(architecture, cancel)?;
+        let release = bundle
+            .as_ref()
+            .map(|bundle| &bundle.release)
+            .unwrap_or(embedded());
+        if !release.manifest.targets.contains_key(architecture) {
+            return Ok(host["installed"].is_string());
+        }
+        let mut spec: serde_json::Value = serde_json::from_str(&release.raw)?;
+        spec["action"] = "probe".into();
+        let result = remote_call(remote, &spec, std::io::empty(), cancel)?;
+        return Ok(bundle.is_some() || result["cached"] == true || result["installed"].is_string());
+    }
+    Ok(find(std::env::consts::ARCH, cancel)?.is_some() || installed().is_some())
+}
+
 /// Prepare only the selected tool assets. Call exclusively from a process worker.
 pub(crate) fn prepare(
     plan: &sandbox::Plan,

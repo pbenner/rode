@@ -43,15 +43,16 @@ impl EditorApp {
                 .sessions
                 .slurm_last
                 .is_none_or(|time| time.elapsed() > Duration::from_secs(25));
-        let job = self.current_allocation();
-        let active = managed && alive && !stale && job.is_some_and(|job| job.state == "RUNNING");
+        let job = self.current_allocation().cloned();
+        let active =
+            managed && alive && !stale && job.as_ref().is_some_and(|job| job.state == "RUNNING");
         let label = if managed && !alive {
             "Slurm: offline".into()
         } else if managed && !self.sessions.slurm_error.is_empty() {
             "Slurm: error".into()
         } else if managed && stale {
             "Slurm: checking".into()
-        } else if let Some(job) = job {
+        } else if let Some(job) = &job {
             if active {
                 format!(
                     "Slurm: {} GPU",
@@ -91,6 +92,7 @@ impl EditorApp {
             .as_ref()
             .is_none_or(|w| w.ready && w.connected);
         let mut detail = job
+            .as_ref()
             .map(|j| format!("Job {} · {} · {}\n{}", j.id, j.state, j.nodes, j.tres))
             .unwrap_or_else(|| {
                 "Request an interactive allocation in a new terminal on this host.".into()
@@ -107,6 +109,18 @@ impl EditorApp {
             .clicked()
         {
             self.open_slurm(ctx);
+        }
+        if let Some(job) = job.filter(|job| job.state == "PENDING")
+            && ui
+                .add_enabled(
+                    ready && !self.sessions.slurm_busy,
+                    egui::Button::new("Cancel queued").small(),
+                )
+                .on_hover_text("Cancel this terminal's queued Slurm allocation.")
+                .clicked()
+        {
+            self.open_slurm(ctx);
+            self.sessions.confirm = Some(Confirm::Release(job));
         }
     }
 

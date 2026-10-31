@@ -918,8 +918,13 @@ impl EditorApp {
                 } else {
                     "This cancels the entire job and all its steps."
                 };
+                let action = if job.state == "PENDING" {
+                    "Cancel queued"
+                } else {
+                    "Release"
+                };
                 format!(
-                    "Release Slurm allocation {} ({})? {scope} This also stops affected work started outside RODE.",
+                    "{action} Slurm allocation {} ({})? {scope} This also stops affected work started outside RODE.",
                     job.id, job.name
                 )
             }
@@ -1023,7 +1028,11 @@ impl EditorApp {
                     if ui
                         .add_enabled(
                             !self.sessions.slurm_busy,
-                            egui::Button::new("Release allocation"),
+                            egui::Button::new(if job.state == "PENDING" {
+                                "Cancel queued allocation"
+                            } else {
+                                "Release allocation"
+                            }),
                         )
                         .clicked()
                     {

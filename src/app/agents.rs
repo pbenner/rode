@@ -333,6 +333,14 @@ impl EditorApp {
             && !agents.chat.busy
             && matches!(agents.config.codex.trim(), "" | "auto" | "codex")
             && std::env::var_os("RODE_CODEX_BUNDLE").is_none();
+        let automatic_codex = matches!(agents.config.codex.trim(), "" | "auto" | "codex");
+        let codex_available = if agents.config.provider == Provider::Acp || !automatic_codex {
+            Some(true)
+        } else if offline {
+            None
+        } else {
+            agents.runtime.check(ui, remote.as_ref())
+        };
         let before = agents.config.clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(content));
@@ -387,7 +395,7 @@ impl EditorApp {
                                 ui.label("Model (blank: Codex default)");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.model).desired_width(f32::INFINITY).char_limit(256));
                             }
-                            agents.runtime.ui(ui, remote.as_ref(), install_enabled);
+                            agents.runtime.ui(ui, remote.as_ref(), install_enabled, codex_available);
                         }
                     });
                     ui.label(RichText::new("Settings are saved for this project. Model and Access controls are below. Executable/provider changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
@@ -439,14 +447,14 @@ impl EditorApp {
             egui::ScrollArea::vertical().id_salt("agent-transcript").stick_to_bottom(true).auto_shrink([false,false]).max_height(ui.available_height().max(1.)).show(ui,|ui| {
                 if agents.config.provider != Provider::Acp && !agents.settings
                     && (agents.chat.messages.is_empty() || agents.runtime.started()) {
-                    agents.runtime.ui(ui, remote.as_ref(), install_enabled);
+                    agents.runtime.ui(ui, remote.as_ref(), install_enabled, codex_available);
                 }
                 if agents.chat.messages.is_empty() {
                     ui.add_space(8.);
                     ui.label(RichText::new("Work on this project with an agent").strong());
                     ui.add(egui::Label::new("Ask a question, request a change, or investigate an issue. The agent works in the folder above.").wrap());
                     if agents.config.provider == Provider::Local { ui.add(egui::Label::new("Start Ollama or a compatible local server and select an installed model in settings.").wrap()); }
-                    else if agents.config.provider == Provider::Codex { ui.add(egui::Label::new("Install Codex above or use an existing executable. Authenticate on the project host before sending a message.").wrap()); }
+                    else if agents.config.provider == Provider::Codex { ui.add(egui::Label::new(if codex_available == Some(false) { "Install Codex above or use an existing executable. Authenticate on the project host before sending a message." } else { "Authenticate Codex on the project host before sending a message." }).wrap()); }
                     else { ui.add(egui::Label::new("Install and authenticate your agent on this host before sending a message.").wrap()); }
                 }
                 for message in &agents.chat.messages {
