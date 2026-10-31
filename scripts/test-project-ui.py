@@ -4,7 +4,6 @@
 import ctypes
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -13,24 +12,27 @@ import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/project-ui")
-from ui_harness import ARTIFACTS, BINARY, click, close_window, display, key, screenshot, text, x11
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    click,
+    close_window,
+    display,
+    key,
+    screenshot,
+    text,
+    wait_for_window,
+    x11,
+)
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
-def window_for(process):
-    for _ in range(150):
-        tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-        match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-        if match:
-            window = int(match[1], 16)
-            time.sleep(0.7)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
-            return window
-        assert process.poll() is None, "RODE exited before opening a window"
-        time.sleep(0.05)
-    raise AssertionError("No RODE window")
+def window_for(process, log_path):
+    window = wait_for_window(process, log_path)
+    x11.XSetInputFocus(display, window, 1, 0)
+    x11.XFlush(display)
+    return window
 
 
 def wait_for(check, message):
@@ -61,6 +63,11 @@ def edit_file(path, marker):
 
 def title(window):
     return subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+
+
+def workspace_y(window, y):
+    # A prepared project adds a host bar and, in fallback mode, a reason strip.
+    return y + (44 if "[Sandbox]" in title(window) else 74)
 
 
 def session_rpc(environment, action, **values):
@@ -136,7 +143,7 @@ def run(remote=False, fallback=False):
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
-                window = window_for(process)
+                window = window_for(process, log.name)
                 wait_for(
                     lambda: (
                         "first-project" in title(window)
@@ -187,6 +194,8 @@ def run(remote=False, fallback=False):
                     )
                 edit_file(second / "beta.rs", label + "-second-saved")
                 screenshot(window, label + "-second-project.png")
+                key("t", ("Control_L", "Shift_L"))
+                time.sleep(0.3)
                 click(600, 740)
                 text("pwd > cwd.txt\n")
                 wait_for(
@@ -200,7 +209,7 @@ def run(remote=False, fallback=False):
                     persistent = infos[0]
                     # Enable the real per-terminal toggle and verify that this
                     # session, rather than the new nonpersistent one, survives.
-                    click(1326, 656)
+                    click(1326, workspace_y(window, 108))
                     wait_for(
                         lambda: any(
                             info["id"] == persistent["id"] and info["persistent"]
@@ -218,6 +227,7 @@ def run(remote=False, fallback=False):
                     time.sleep(0.4)
                     # Dirty the remote source before disconnecting. The source
                     # must remain in its remote tab and save after reconnect.
+                    click(339, workspace_y(window, 69))  # Code replaces the terminal.
                     click(600, 250)
                     key("End", ("Control_L",))
                     text("\n// survives-disconnect")
@@ -225,7 +235,9 @@ def run(remote=False, fallback=False):
                     x11.XFlush(display)
                     time.sleep(0.4)
                     screenshot(window, "ssh-disconnect-compact.png")
-                    click(302, 70)
+                    key("p", ("Control_L", "Shift_L"))
+                    text("Remote: Disconnect SSH")
+                    key("Return")
                     wait_for(lambda: '"RODE"' in title(window), "Disconnect did not clear the host")
                     wait_for(
                         lambda: len(session_rpc(environment, "list")) == 1,
@@ -256,6 +268,7 @@ def run(remote=False, fallback=False):
                     x11.XResizeWindow(display, window, 1380, 900)
                     x11.XFlush(display)
                     time.sleep(0.4)
+                    click(339, workspace_y(window, 69))
                     click(600, 250)
                     key("s", ("Control_L",))
                     wait_for(
@@ -268,7 +281,7 @@ def run(remote=False, fallback=False):
                     time.sleep(0.6)
                     screenshot(window, "ssh-reconnected-sessions.png")
                     key("Escape")
-                    # Exercise the palette path as well as the banner button.
+                    # Disconnect once more after restoring the dirty buffer.
                     key("p", ("Control_L", "Shift_L"))
                     text("Remote: Disconnect SSH")
                     key("Return")
@@ -373,16 +386,30 @@ def failed_connection():
                 )
                 window = None
                 try:
-                    window = window_for(process)
-                    time.sleep(0.6)
+                    window = window_for(process, log.name)
                     wait_for(
                         lambda: '"RODE"' in title(window), "Failed SSH retained the host title"
                     )
                     screenshot(window, "ssh-login-error-output.png")
                     click(600, 740)
                     text("echo should-not-run\n")  # The failed-login view accepts no input.
-                    click(1218, 659)  # Copy the retained, read-only terminal output.
-                    time.sleep(0.2)
+                    # Use the same copy action as the header without depending on its layout.
+                    key("p", ("Control_L", "Shift_L"))
+                    text("Terminal: Copy output")
+                    key("Return")
+
+                    def copied_error():
+                        result = subprocess.run(
+                            ["xclip", "-selection", "clipboard", "-o"],
+                            capture_output=True,
+                            text=True,
+                            timeout=2,
+                        )
+                        return result.returncode == 0 and "Connection refused" in result.stdout
+
+                    wait_for(
+                        copied_error, "Terminal copy did not expose the refused SSH diagnostic"
+                    )
                     key("p", ("Control_L", "Shift_L"))
                     text("New file")
                     key("Return")
@@ -396,7 +423,7 @@ def failed_connection():
                     key("Return")
                     wait_for(copied.exists, "Could not save copied login output locally")
                     output = copied.read_text()
-                    assert "Connection refused" in output, output
+                    assert "Connection refused" in output, f"Copied SSH diagnostic: {output!r}"
                     assert "should-not-run" not in output, output
                     screenshot(window, "ssh-login-error-copied.png")
                     key("o", ("Control_L", "Shift_L"))

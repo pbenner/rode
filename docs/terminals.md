@@ -4,6 +4,7 @@ RODE owns terminal sessions through a small native Rust service on the computer 
 
 ## Everyday use
 
+- **Copy** in the terminal header, or **Terminal: Copy output** in the command palette, copies terminal contents, including retained diagnostics after a failed SSH login.
 - **New** in the terminal header creates another native terminal with **Persist: off** in the current project, using its prepared sandbox and selected environment. Switch between views using the terminal tabs.
 - **Sessions**, or **View → Terminals & Slurm**, lists your running terminals on the current host, including attachment count, project path, and sandbox mode. Use **Attach**, **Rename**, or **End** there. Exited terminals are cleared automatically; the visible list refreshes every two seconds.
 - **Persist: off / on** at the far right of the terminal header controls whether that session keeps running after its last view closes. The button uses the theme's accent fill when on; click it again to switch off. New terminals start off. Change it at any time without restarting the shell or its commands. The setting belongs to the session and updates in every attached RODE window.

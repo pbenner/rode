@@ -48,6 +48,12 @@ strip = true
 [profile.dev]
 opt-level = 1
 
+# Keep routine CI tests and the UI binary in one inexpensive build profile.
+[profile.ci]
+inherits = "dev"
+debug = 0
+incremental = false
+
 [workspace]
 members = ["crates/rode-session", "crates/rode-agent-core"]
 default-members = [".", "crates/rode-session", "crates/rode-agent-core"]

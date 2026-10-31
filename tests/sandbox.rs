@@ -56,6 +56,18 @@ fn normal_and_sandbox_project_preparation_match_on_both_backends() {
         assert_eq!(local.entries.len(), 1);
         let local = local.project.unwrap();
         let remote = remote.project.unwrap();
+        if enabled && std::env::var("RODE_TEST_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+            assert!(
+                local.active,
+                "Required local sandbox unavailable: {}",
+                local.reason
+            );
+            assert!(
+                remote.active,
+                "Required Python sandbox unavailable: {}",
+                remote.reason
+            );
+        }
         assert_eq!(local.requested, enabled);
         assert_eq!(
             local.active, remote.active,

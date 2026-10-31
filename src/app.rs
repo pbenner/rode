@@ -3582,6 +3582,9 @@ impl EditorApp {
                     ui.label(label);
                     let response = ui.add(
                         egui::TextEdit::singleline(field)
+                            // Loading saved profiles can insert a dropdown above
+                            // these fields while the user is already typing.
+                            .id(egui::Id::new(("connection-field", label)))
                             .hint_text(hint)
                             .desired_width(340.0),
                     );

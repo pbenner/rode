@@ -306,9 +306,9 @@ def run():
                 )
                 command("Terminal: Sessions and Slurm allocations")
                 screenshot(window, "before-release.png")
-                for _ in range(12):
-                    key("Tab")
-                key("Return")  # Release allocation 42; confirmation must come first.
+                # The fixture has two terminal rows, followed by job 42. Focus
+                # order also includes live refresh controls; do not count Tabs.
+                click(650, 538)  # Release allocation 42; confirmation comes first.
                 time.sleep(0.3)
                 assert not released.exists(), "Release ran without confirmation"
                 screenshot(window, "release-confirmation.png")

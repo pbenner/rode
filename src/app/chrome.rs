@@ -157,6 +157,12 @@ impl EditorApp {
             });
     }
 
+    pub(super) fn copy_terminal_output(&self, ctx: &egui::Context) {
+        if let Some(terminal) = self.terminal.as_ref().or(self.ssh_master.as_ref()) {
+            ctx.copy_text(terminal.contents());
+        }
+    }
+
     pub(super) fn terminal_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let wide = ui.available_width() >= 700.;
@@ -194,9 +200,8 @@ impl EditorApp {
                     .small_button("Copy")
                     .on_hover_text("Copy visible terminal contents")
                     .clicked()
-                    && let Some(t) = self.terminal.as_ref().or(self.ssh_master.as_ref())
                 {
-                    ctx.copy_text(t.contents());
+                    self.copy_terminal_output(ctx);
                 }
                 if wide && ui
                     .small_button("Sessions")
@@ -221,9 +226,7 @@ impl EditorApp {
                             self.open_sessions(ctx); ui.close();
                         }
                         if ui.button("Copy terminal output").clicked() {
-                            if let Some(terminal) = self.terminal.as_ref().or(self.ssh_master.as_ref()) {
-                                ctx.copy_text(terminal.contents());
-                            }
+                            self.copy_terminal_output(ctx);
                             ui.close();
                         }
                         if ui.add_enabled(self.terminal.as_ref().is_some_and(Terminal::persistent), egui::Button::new("Detach session"))

@@ -11,6 +11,38 @@ RODE_TEST_RUFF=/path/to/ruff cargo test --workspace --all-targets
 
 Open `target/doc/rode/index.html` for editor services and `target/doc/rode_session/index.html` for the native terminal service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
 
+## CI tiers and timings
+
+The **Check** workflow runs on pull requests and pushes to `main`, avoiding duplicate branch-push and PR runs. New commits cancel superseded PR/main checks. Runners are pinned to Ubuntu 24.04, and routine Rust tests and the editor share the `ci` Cargo profile (development optimisation without debug information or release LTO). The editor, session daemon, static SSH helper and selected integration-test executables are built once and transferred together, preserving executable permissions.
+
+| Tier | Coverage | When |
+| --- | --- | --- |
+| Fast | Formatting, linting, API docs, packaging-script checks, Rust tests, editor/workspace, keyboard input, multiwindow preferences, agents/attachments/queues/persistence, terminal sessions/Slurm, installer, direct/ProxyJump SSH and failed-login diagnostics | Every PR and main push |
+| Extended | Environment/language tools/layout/themes, local and remote document viewers, real LLDB/Jupyter/formatters, and required sandbox enforcement | Main, nightly, full manual runs, or relevant PR changes |
+| Release | Optimised Debian package and extracted-package GUI validation | Nightly/full manual checks, plus the existing version-tag/manual package workflow |
+
+Fast UI checks run in four isolated jobs: `workspace`, `agents`, `terminals` and `ssh`. Extended jobs are `tools`, `documents`, `remote`, `runtimes` and `sandbox`. Each job has its own X display, clipboard and session directories; tests inside a job run sequentially. Specialist dependencies are installed only in their owning jobs. The `runtimes` job explicitly enables installed-tool integration tests that the ordinary Rust run may skip. SSH transport tests run once in the fast SSH job and once with those additional real tools in the runtime job; remote viewer cases share a private sshd without rerunning transport tests per viewer.
+
+`scripts/ci.py` owns the suite manifest and PR selection. Changes under `src/`, `crates/`, `tests/` or `.github/`, Cargo changes, and shared harness changes select every extended job. Individual UI-script changes select their associated extended jobs; documentation-only PRs keep the fast checks. Add the **full-ci** PR label to force the complete extended tier. **Run workflow → full** also includes release packaging; disabling full runs only the fast tier. The nightly check runs at 03:23 UTC. The existing required **linux** check aggregates the fast jobs and reports independently of extended results. Repositories that require extended coverage before merging should also require the corresponding extended checks in branch protection.
+
+The sandbox job adjusts the unprivileged-user-namespace AppArmor setting only on its disposable GitHub runner. `RODE_TEST_REQUIRE_SANDBOX=1` requires both Rust and Python project preparation to activate the real sandbox; unavailable sandboxing fails that job. Ordinary jobs retain explicit fallback coverage and print unavailable-host diagnostics.
+
+Every test command has a deadline and writes its log and elapsed time under `target/ci-results/<suite>/`. Timings also appear in the Actions job summary. Job limits bound setup/build hangs; failure logs and screenshots are uploaded even after test failures, with separate artifact names per job. Tests are not automatically retried. Use the recorded timings to rebalance jobs before tightening budgets; a sub-ten-minute fast tier is a target, not an assumed runner speed.
+
+Inspect or run the same suites locally:
+
+```sh
+python3 scripts/ci.py list
+mkdir -p target
+cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json
+cargo build --locked --profile ci --bins
+bash scripts/build-sessiond.sh
+python3 scripts/ci.py bundle
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1100x24' python3 scripts/ci.py run workspace
+```
+
+Install each suite's prerequisites first (listed in `scripts/ci-deps.sh`); that script uses sudo and is intended for disposable CI runners. The failed-login clipboard regression also requires `xclip`. `RODE_TEST_BINARY`, `RODE_TEST_SESSION_HELPER` and `RODE_SESSION_HELPER` can override the binaries for local runs. `RODE_SSH_TEST_BINARY` selects a prebuilt transport-test executable; standalone `scripts/test-ssh.sh` still builds/runs its Rust tests by default. To batch UI-only commands under one SSH fixture, use `RODE_SSH_RUN_TRANSPORT=0 bash scripts/test-ssh.sh <command> [arguments...]`; omitting the command in this mode is an error. `python3 scripts/test-ci.py` checks suite selection, artifact permissions, timeout cleanup and both SSH-wrapper execution modes without contacting an SSH host.
+
 The root package declares both `rode` and `rode-sessiond`, so plain `cargo install --locked --path .` installs both. `tests/sessions.rs` exercises the headless binary through `CARGO_BIN_EXE_rode-sessiond`, including protocol negotiation without a display and reattachment through the ordinary editor after the helper's clients exit. The library package's opt-in `standalone` feature exposes a separate `rode-sessiond-standalone` target for the static builder; distinct names avoid workspace output collisions even with all features enabled. `scripts/build-sessiond.sh` and Debian packaging build that target without desktop dependencies; the published helper names remain unchanged.
 
 An additional test starts a temporary localhost-only SSH daemon using fresh keys, a private known-hosts file, and an isolated config. It never edits `~/.ssh`:

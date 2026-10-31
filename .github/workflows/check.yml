@@ -1,21 +1,64 @@
 name: Check
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run all extended suites and release packaging
+        type: boolean
+        default: true
 permissions:
   contents: read
+concurrency:
+  group: check-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+env:
+  RODE_XVFB_SCREEN: '-screen 0 1600x1100x24'
+  LIBGL_ALWAYS_SOFTWARE: '1'
+  __GLX_VENDOR_LIBRARY_NAME: mesa
+  __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
 jobs:
-  linux:
-    runs-on: ubuntu-latest
-    env:
-      # UI fixtures use a 1380x900 window; keep it inside the virtual screen.
-      RODE_XVFB_SCREEN: "-screen 0 1600x1100x24"
-      # Xvfb has no hardware GPU. Use the explicitly installed Mesa drivers.
-      LIBGL_ALWAYS_SOFTWARE: "1"
-      __GLX_VENDOR_LIBRARY_NAME: mesa
-      __EGL_VENDOR_LIBRARY_FILENAMES: /usr/share/glvnd/egl_vendor.d/50_mesa.json
-      RODE_TEST_LLDB: /usr/bin/lldb-dap-19
-      RODE_TEST_JUPYTER: ${{ github.workspace }}/target/notebook-env/bin/python
-      RODE_TEST_PRETTIER: ${{ github.workspace }}/target/language-tools/node_modules/.bin/prettier
-      RODE_TEST_RUFF: ${{ github.workspace }}/target/test-tools/bin/ruff
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      extended: ${{ steps.suites.outputs.extended }}
+      run-extended: ${{ steps.suites.outputs.run-extended }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: suites
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FULL: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.full || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          if [[ "$FULL" == true ]]; then
+            suites=$(python3 scripts/ci.py matrix --full)
+          elif [[ -n "$BASE_SHA" ]]; then
+            suites=$(python3 scripts/ci.py matrix --base "$BASE_SHA")
+          else
+            suites='[]'
+          fi
+          if [[ "$suites" == '[]' ]]; then
+            echo 'run-extended=false' >> "$GITHUB_OUTPUT"
+            # Keep the matrix valid even when its job is skipped.
+            echo 'extended=["tools"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run-extended=true' >> "$GITHUB_OUTPUT"
+            echo "extended=$suites" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Extended suites: $suites" >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -24,14 +67,46 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v7
         with:
-          python-version: '3.13'
+          shared-key: ci-lint
+      - name: Reset logs restored from the build cache
+        run: rm -rf target/ci-results
       - uses: astral-sh/setup-uv@v7
-      - name: Check Python with Ruff
+      - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh lint
+      - run: python3 scripts/ci.py time rust-format -- cargo fmt --all --check
+      - run: python3 scripts/ci.py time python-lint -- scripts/uvx.sh ruff@0.17.3 check .
+      - run: python3 scripts/ci.py time python-format -- scripts/uvx.sh ruff@0.17.3 format --check .
+      - run: python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py
+      - run: python3 scripts/ci.py time packaging -- python3 scripts/test-packaging.py
+      - name: Check Rust API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: python3 scripts/ci.py time rust-doc -- cargo doc --locked --profile ci --workspace --no-deps --document-private-items
+      - run: python3 scripts/ci.py time --timeout 900 clippy -- cargo clippy --locked --profile ci --workspace --all-targets -- -D warnings
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-lint
+          path: target/ci-results/
+          retention-days: 7
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-build
+      - name: Reset logs restored from the build cache
+        run: rm -rf target/ci-results
+      - uses: astral-sh/setup-uv@v7
+      - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh build
+      - name: Prepare pinned Ruff executable
         run: |
-          scripts/uvx.sh ruff@0.17.3 check .
-          scripts/uvx.sh ruff@0.17.3 format --check .
           scripts/uvx.sh --from ruff==0.17.3 python - <<'PY'
           from pathlib import Path
           import shutil
@@ -39,84 +114,121 @@ jobs:
           destination.parent.mkdir(parents=True, exist_ok=True)
           shutil.copy2(shutil.which('ruff'), destination)
           PY
-      - name: Install system test dependencies
+          echo "RODE_TEST_RUFF=$PWD/target/test-tools/bin/ruff" >> "$GITHUB_ENV"
+      - name: Build all tests and record their executable paths
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev \
-            libegl1 libegl-mesa0 libglx-mesa0 libgl1-mesa-dri \
-            openssh-server xvfb xauth x11-utils imagemagick libxtst6 bubblewrap \
-            golang-go clang-format shfmt poppler-utils gocryptfs lldb-19
-      - name: Install test formatter
-        run: npm install --prefix target/language-tools --ignore-scripts --no-audit --no-fund prettier@3.6.2
-      - name: Install notebook test dependencies
-        run: |
-          uv venv --python python3 target/notebook-env
-          uv pip install --python target/notebook-env/bin/python jupyter-client==8.10.0 ipykernel==7.4.0 matplotlib==3.11.2
-      - run: cargo fmt --all --check
-      - run: python3 scripts/test-packaging.py
-      - name: Check Rust API documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked --workspace --no-deps --document-private-items
-      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - run: cargo test --locked --workspace --all-targets
-      - run: scripts/build-sessiond.sh
-      - run: bash scripts/test-ssh.sh
-      - run: cargo build --locked --release
-      - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-ui-harness.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-workspace-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-environment-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-debugger-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_DEBUGGER_UI=1 RODE_DEBUGGER_UI_REMOTE_ONLY=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-terminal-keys-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-sessions-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-slurm-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-binary-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-notebooks-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-layout-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-languages-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-syntax-themes-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-queue-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-attachments-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-agent-persistence-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-codex-install-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/test-multiprocess-ui.py
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_SSH_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_WORKBENCH_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_IMAGES_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARKDOWN_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_PDF_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_NOTEBOOK_UI=1 RODE_NOTEBOOK_UI_REMOTE_ONLY=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_MARP_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_LATEX_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
-      - run: RODE_TEST_BINARY="$PWD/target/release/rode" RODE_VAULT_UI=1 xvfb-run -a -s "$RODE_XVFB_SCREEN" bash scripts/test-ssh.sh
+          python3 scripts/ci.py time --timeout 1200 test-build -- bash -c 'cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json'
+      - run: python3 scripts/ci.py time --timeout 600 rust-tests -- cargo test --locked --profile ci --workspace --all-targets
+      - run: python3 scripts/ci.py time --timeout 600 editor-build -- cargo build --locked --profile ci --bins
+      - run: python3 scripts/ci.py time --timeout 600 static-helper -- bash scripts/build-sessiond.sh
+      - run: python3 scripts/ci.py bundle
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-binaries
+          path: target/ci-bundle.tar.gz
+          compression-level: 0
+          retention-days: 2
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: native-ui-smoke
+          name: ci-build
           path: |
+            target/ci-results/
+            target/ci-test-binaries.json
+          retention-days: 7
+
+  fast-ui:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [workspace, agents, terminals, ssh]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-binaries
+          path: target
+      - run: tar -xzf target/ci-bundle.tar.gz
+      - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
+      - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/ci.py run '${{ matrix.suite }}'
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-fast-${{ matrix.suite }}
+          path: |
+            target/ci-results/
+            target/*-ui/
             target/ui-smoke/
-            target/layout-ui/
-            target/workspace-ui/
-            target/environment-ui/
-            target/project-ui/
-            target/workbench-ui/
-            target/agent-ui/
-            target/agent-queue-ui/
-            target/agent-attachments-ui/
-            target/agent-persistence-ui/
-            target/debugger-ui/
-            target/multiprocess-ui/
-            target/images-ui/
-            target/markdown-ui/
-            target/latex-ui/
-            target/vaults-ui/
-            target/languages-ui/
-            target/syntax-themes-ui/
-            target/pdf-ui/
-            target/sessions-ui/
-            target/slurm-ui/
-            target/terminal-keys-ui/
-            target/marp-ui/
+          retention-days: 7
+
+  extended:
+    needs: [plan, build]
+    if: needs.plan.outputs.run-extended == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        suite: ${{ fromJSON(needs.plan.outputs.extended) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-binaries
+          path: target
+      - run: tar -xzf target/ci-bundle.tar.gz
+      - uses: astral-sh/setup-uv@v7
+        if: matrix.suite == 'runtimes'
+      - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
+      - name: Enable unprivileged namespaces on the disposable sandbox runner
+        if: matrix.suite == 'sandbox'
+        run: |
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/ci.py run '${{ matrix.suite }}'
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-extended-${{ matrix.suite }}
+          path: |
+            target/ci-results/
+            target/*-ui/
+            target/ui-smoke/
+          retention-days: 7
+
+  # Preserve the original required check name while extended checks report
+  # separately, so ordinary feedback does not wait for every document viewer.
+  linux:
+    if: always()
+    needs: [plan, lint, build, fast-ui]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          results = json.loads(os.environ['RESULTS'])
+          failed = [name for name, job in results.items() if job['result'] != 'success']
+          if failed:
+              raise SystemExit('Required checks failed or were skipped: ' + ', '.join(failed))
+          PY
+
+  release:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full)
+    uses: ./.github/workflows/package.yml
+    with:
+      maintainer: 'RODE CI <ci@example.invalid>'
+      build_codex: false

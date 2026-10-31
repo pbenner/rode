@@ -194,14 +194,6 @@ impl EditorApp {
             }
             ui.separator();
             if self.workbench.detached {
-                if !child && ui.small_button("Show tools window").clicked() {
-                    self.workbench.tools_hidden = false;
-                    ctx.send_viewport_cmd_to(
-                        Self::tools_viewport(),
-                        egui::ViewportCommand::Visible(true),
-                    );
-                    ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
-                }
                 if ui.small_button("Dock back").clicked() {
                     self.dock_tools(ctx);
                 }
@@ -228,7 +220,7 @@ impl EditorApp {
         if self.navigation.zoom == Some(navigation::Pane::Explorer) {
             return;
         }
-        if !self.workbench.detached && !self.tool_surface() {
+        if self.workbench.detached || !self.tool_surface() {
             self.editor(ctx);
             return;
         }
@@ -413,17 +405,25 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
         app.agents.chat.notice("retained conversation");
+        render(&mut app, &ctx);
+        let code = app.navigation.rect(navigation::Pane::Editor).unwrap();
         app.toggle_panel(Panel::Settings, &ctx);
         app.workbench.detached = true;
         render(&mut app, &ctx);
-        assert!(app.navigation.rect(navigation::Pane::Editor).is_some());
+        assert_eq!(app.navigation.rect(navigation::Pane::Editor), Some(code));
         app.focus_editor(&ctx);
         assert!(app.workbench.detached);
         assert_eq!(app.workbench.surface, Surface::Tools);
+        app.toggle_sidebar(&ctx);
+        render(&mut app, &ctx);
+        assert!(app.workbench.tools_hidden);
+        assert_eq!(app.navigation.rect(navigation::Pane::Editor), Some(code));
+        app.toggle_sidebar(&ctx);
         app.dock_tools(&ctx);
         render(&mut app, &ctx);
         assert!(!app.workbench.detached);
         assert!(app.navigation.rect(navigation::Pane::Editor).is_none());
+        assert!(app.navigation.rect(navigation::Pane::Tools).unwrap().top() > code.top());
         assert_eq!(app.workbench.panel, Some(Panel::Settings));
         assert_eq!(
             app.agents.chat.messages.back().unwrap().text,

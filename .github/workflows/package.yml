@@ -1,6 +1,14 @@
 name: Package Debian
 
 on:
+  workflow_call:
+    inputs:
+      maintainer:
+        type: string
+        required: true
+      build_codex:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       maintainer:
@@ -104,7 +112,7 @@ jobs:
     # Publish the core artifact first. A runtime download/architecture failure
     # cannot discard the validated editor package or make it a dependency.
     needs: debian
-    if: github.event_name != 'workflow_dispatch' || inputs.build_codex
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.build_codex
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:

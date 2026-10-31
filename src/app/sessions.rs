@@ -906,6 +906,7 @@ impl EditorApp {
             return;
         };
         ui.separator();
+        let releasing = matches!(confirm, Confirm::Release(_));
         let message = match confirm {
             Confirm::End { name, clients, .. } => format!(
                 "End '{name}'? Its shell/programs will stop, affecting {clients} attached views. Release Slurm allocations separately to free their GPUs."
@@ -937,7 +938,13 @@ impl EditorApp {
             if ui.button("Cancel").clicked() {
                 self.sessions.confirm = None;
             }
-            let ready = !self.sessions.busy && !self.sessions.slurm_busy;
+            // Native session polling and Slurm run through independent workers.
+            // A terminal-list refresh must not disable allocation cancellation.
+            let ready = if releasing {
+                !self.sessions.slurm_busy
+            } else {
+                !self.sessions.busy
+            };
             let confirm = ui
                 .add_enabled(ready, egui::Button::new("Confirm · Alt+Enter"))
                 .clicked()
