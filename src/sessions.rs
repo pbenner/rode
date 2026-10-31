@@ -27,6 +27,9 @@ pub enum Operation {
         policy: String,
         /// Selected interpreter used for new-shell environment activation.
         python: String,
+        /// Runtime paths and literal variables captured for this new shell.
+        #[serde(default)]
+        environment: Box<crate::environment::Settings>,
         /// Explicit opt-in lifetime after the final view closes.
         persistent: bool,
         /// Optional managed scheduler launch; otherwise create the normal login shell.
@@ -160,6 +163,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             plan,
             policy,
             python,
+            environment,
             persistent,
             allocation,
         } => {
@@ -185,8 +189,30 @@ pub fn local(operation: &Operation) -> Result<Reply> {
                 .collect();
             let python = project::python_path(std::path::Path::new(&plan.root), python);
             env.extend(project::environment_variables(&python.to_string_lossy()));
+            let mut configured = env.clone();
+            environment.apply(&mut configured)?;
             if allocation.is_some() {
                 env.retain(|key, _| !key.starts_with("SALLOC_") && !key.starts_with("SRUN_"));
+                configured
+                    .retain(|key, _| !key.starts_with("SALLOC_") && !key.starts_with("SRUN_"));
+            }
+            if plan.active {
+                // Apply project values inside bwrap, not to its host-side loader.
+                let mut options = vec![];
+                for (name, value) in &configured {
+                    if environment.variables.contains_key(name) || env.get(name) != Some(value) {
+                        options.extend(["--setenv".into(), name.clone(), value.clone()]);
+                    }
+                }
+                if !options.is_empty() {
+                    ensure!(
+                        plan.prefix.last().is_some_and(|arg| arg == "--"),
+                        "Invalid sandbox command boundary"
+                    );
+                    argv.splice(plan.prefix.len() - 1..plan.prefix.len() - 1, options);
+                }
+            } else {
+                env = configured;
             }
             rode_session::Request::Create {
                 id: id.clone(),
@@ -199,7 +225,13 @@ pub fn local(operation: &Operation) -> Result<Reply> {
                 initial_input: if allocation.is_some() {
                     String::new()
                 } else {
-                    initial_input(&python)
+                    let activation = initial_input(&python);
+                    let exports = environment.exports()?;
+                    if exports.is_empty() {
+                        activation
+                    } else {
+                        format!("{activation}{exports}\n")
+                    }
                 },
                 env,
                 persistent: *persistent,

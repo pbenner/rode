@@ -1,4 +1,4 @@
-//! Window-local follow-ups for the current conversation. Only acknowledged,
+//! Queue presentation and unsent edits; native conversations own the queued payloads. Only acknowledged,
 //! successful turns advance the queue. Editing and Stop suspend dispatch.
 use super::super::icons::{self, Icon};
 use eframe::egui::{self, RichText};
@@ -9,6 +9,8 @@ const LIMIT: usize = 16;
 struct Prompt {
     id: u64,
     text: String,
+    attachments: Vec<rode_agent_core::attachment::Attachment>,
+    files: Vec<String>,
 }
 
 struct Edit {
@@ -23,6 +25,9 @@ pub(super) struct Queue {
     paused: bool,
     edit: Option<Edit>,
     waiting_for_reply: bool,
+    hosted: bool,
+    observed_ack: Option<String>,
+    commands: VecDeque<rode_agent_core::queue::Action>,
 }
 
 enum Action {
@@ -40,14 +45,75 @@ impl Queue {
 
     pub fn clear(&mut self) {
         self.prompts.clear();
+        self.commands.clear();
+        self.hosted = false;
+        self.observed_ack = None;
         self.edit = None;
         self.paused = false;
         self.waiting_for_reply = false;
     }
 
     pub fn pause(&mut self) {
-        if !self.is_empty() {
-            self.paused = true;
+        if !self.is_empty() && !self.paused {
+            self.set_paused(true);
+        }
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        if self.hosted {
+            self.commands
+                .push_back(rode_agent_core::queue::Action::Pause { paused });
+        }
+    }
+    pub fn set_hosted(&mut self) {
+        self.hosted = true;
+    }
+    pub fn hosted(&self) -> bool {
+        self.hosted
+    }
+    pub fn command(&self) -> Option<&rode_agent_core::queue::Action> {
+        self.commands.front()
+    }
+    pub fn command_sent(&mut self) {
+        self.commands.pop_front();
+    }
+    pub fn head_id(&self) -> Option<u64> {
+        self.prompts.front().map(|p| p.id)
+    }
+    pub fn sync(&mut self, view: &rode_agent_core::queue::View, busy: bool) {
+        if self.hosted
+            && self.observed_ack.as_deref() == Some(view.acknowledged.as_str())
+            && self.serial == view.serial
+            && self.paused == view.paused
+        {
+            return;
+        }
+        self.observed_ack = Some(view.acknowledged.clone());
+        let restoring = !self.hosted;
+        self.hosted = true;
+        self.serial = view.serial;
+        self.paused = view.paused;
+        if restoring || view.paused && !busy {
+            self.waiting_for_reply = busy;
+        }
+        self.prompts = view
+            .items
+            .iter()
+            .map(|p| Prompt {
+                id: p.id,
+                text: p.text.clone(),
+                files: p.files.clone(),
+                attachments: vec![],
+            })
+            .collect();
+        if self.edit.as_ref().map(|e| e.id) != view.editing {
+            self.edit = view.editing.and_then(|id| {
+                self.prompts.iter().find(|p| p.id == id).map(|p| Edit {
+                    id,
+                    text: p.text.clone(),
+                })
+            });
         }
     }
 
@@ -55,13 +121,31 @@ impl Queue {
         self.prompts.len() < LIMIT
     }
 
+    #[cfg(test)]
     pub fn push(&mut self, text: String) -> anyhow::Result<()> {
+        self.push_with_attachments(text, vec![])
+    }
+    pub fn push_with_attachments(
+        &mut self,
+        text: String,
+        attachments: Vec<rode_agent_core::attachment::Attachment>,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(self.can_push(), "The prompt queue is full (16 messages).");
-        anyhow::ensure!(valid(&text), "Agent messages must contain 1–32768 bytes.");
+        rode_agent_core::attachment::validate(&text, &attachments)?;
         self.serial += 1;
+        if self.hosted {
+            self.commands
+                .push_back(rode_agent_core::queue::Action::Push {
+                    id: self.serial,
+                    text: text.clone(),
+                    attachments: attachments.clone(),
+                });
+        }
         self.prompts.push_back(Prompt {
             id: self.serial,
             text,
+            files: attachments.iter().map(|f| f.name().into()).collect(),
+            attachments,
         });
         Ok(())
     }
@@ -71,6 +155,13 @@ impl Queue {
             return None;
         }
         self.prompts.front().map(|prompt| prompt.text.as_str())
+    }
+
+    pub fn next_attachments(&self) -> &[rode_agent_core::attachment::Attachment] {
+        self.prompts
+            .front()
+            .map(|p| p.attachments.as_slice())
+            .unwrap_or_default()
     }
 
     pub fn waiting_for_reply(&self) -> bool {
@@ -107,11 +198,11 @@ impl Queue {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Queued ({})", self.prompts.len())).strong())
-                    .on_hover_text("Pending prompts belong to this conversation and stay in this window. Closing RODE discards them, even with Persist on.");
+                    .on_hover_text("Pending prompts belong to this agent. Persist on retains the queue and its attachments when Rode closes. Dispatch resumes when you reattach.");
                 if ui.small_button(if self.paused { "Resume queue" } else { "Pause queue" })
                     .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.")
                     .clicked() {
-                    self.paused = !self.paused;
+                    self.set_paused(!self.paused);
                 }
                 if self.edit.is_some() {
                     ui.weak("Editing · waiting");
@@ -140,6 +231,7 @@ impl Queue {
                                 if ui.small_button("Delete").clicked() {
                                     action = Some(Action::Remove(prompt.id));
                                 }
+                                if !prompt.files.is_empty() { ui.label(format!("{} files", prompt.files.len())).on_hover_text(prompt.files.join("\n")); }
                                 ui.add(egui::Label::new(prompt.text.lines().find(|line| !line.trim().is_empty()).unwrap_or_default()).truncate())
                                     .on_hover_text(&prompt.text);
                             });
@@ -151,7 +243,7 @@ impl Queue {
                                     .desired_width(f32::INFINITY)
                                     .char_limit(crate::agent::PROMPT_LIMIT));
                                 ui.horizontal(|ui| {
-                                    if ui.add_enabled(valid(&edit.text), egui::Button::new("Save prompt").small()).clicked() {
+                                    if ui.add_enabled(valid(&edit.text) || edit.text.len() <= crate::agent::PROMPT_LIMIT && !prompt.files.is_empty(), egui::Button::new("Save prompt").small()).clicked() {
                                         action = Some(Action::Save);
                                     }
                                     if ui.small_button("Cancel edit").clicked() {
@@ -170,6 +262,28 @@ impl Queue {
     }
 
     fn apply(&mut self, action: Action) {
+        if self.hosted {
+            use rode_agent_core::queue::Action as Host;
+            let command = match &action {
+                Action::Edit(id) => Some(Host::Edit { id: *id }),
+                Action::Save => self.edit.as_ref().map(|edit| Host::Save {
+                    id: edit.id,
+                    text: edit.text.clone(),
+                }),
+                Action::Cancel => self
+                    .edit
+                    .as_ref()
+                    .map(|edit| Host::CancelEdit { id: edit.id }),
+                Action::Remove(id) => Some(Host::Remove { id: *id }),
+                Action::Move(id, earlier) => Some(Host::Move {
+                    id: *id,
+                    earlier: *earlier,
+                }),
+            };
+            if let Some(command) = command {
+                self.commands.push_back(command);
+            }
+        }
         match action {
             Action::Edit(id) => {
                 if let Some(prompt) = self.prompts.iter().find(|prompt| prompt.id == id) {
@@ -260,5 +374,43 @@ mod tests {
         queue.clear();
         assert!(queue.is_empty());
         assert!(queue.next().is_none());
+    }
+    #[test]
+    fn restored_queue_retains_order_pause_and_files_without_transferring_payloads() {
+        let view = rode_agent_core::queue::View {
+            serial: 7,
+            paused: true,
+            items: vec![rode_agent_core::queue::Item {
+                id: 7,
+                text: "later".into(),
+                files: vec!["image.png".into()],
+            }],
+            ..Default::default()
+        };
+        let mut queue = Queue::default();
+        queue.sync(&view, false);
+        assert!(queue.next().is_none());
+        assert_eq!(queue.prompts[0].files, ["image.png"]);
+        assert!(queue.prompts[0].attachments.is_empty());
+        queue.set_paused(false);
+        assert_eq!(queue.next(), Some("later"));
+        queue.push("next".into()).unwrap();
+        assert_eq!(queue.prompts[1].id, 8);
+    }
+    #[test]
+    fn an_old_idle_snapshot_does_not_release_a_submitted_turn() {
+        let mut queue = Queue::default();
+        queue.set_hosted();
+        queue.submitted();
+        queue.sync(&rode_agent_core::queue::View::default(), false);
+        assert!(queue.waiting_for_reply());
+        queue.sync(
+            &rode_agent_core::queue::View {
+                paused: true,
+                ..Default::default()
+            },
+            false,
+        );
+        assert!(!queue.waiting_for_reply());
     }
 }

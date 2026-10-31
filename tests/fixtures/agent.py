@@ -146,7 +146,11 @@ try:
                     "protocolVersion": 1,
                     "agentCapabilities": {}
                     if "--no-history" in sys.argv
-                    else {"loadSession": True, "sessionCapabilities": {"list": {}}},
+                    else {
+                        "loadSession": True,
+                        "sessionCapabilities": {"list": {}},
+                        "promptCapabilities": {"image": "--image-input" in sys.argv},
+                    },
                 }
                 if acp
                 else {"userAgent": "fixture"},

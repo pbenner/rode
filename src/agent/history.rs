@@ -41,7 +41,7 @@ impl Browser {
     /// Open a disposable browser on the native host service, without inference.
     pub fn open_service(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
         let interpreter = launch.python.clone();
-        let native = Client::start(launch, None, false, wake)?;
+        let native = Client::start(launch, None, vec![], false, wake)?;
         Ok(Self {
             view: HistoryView {
                 busy: true,

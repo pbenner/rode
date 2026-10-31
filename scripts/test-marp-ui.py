@@ -161,7 +161,7 @@ def run(remote=False):
                     wait_for(terminal_attached, "SSH project terminal did not attach")
                 open_file("deck.marp.md")
                 if remote:
-                    key("grave", ("Control_L",))
+                    key("t", ("Control_L", "Shift_L"))
                 key("End", ("Control_L",))
                 text("\nUNSAVED_SNAPSHOT\n")
                 command("Marp: Toggle slide preview")
@@ -293,7 +293,7 @@ def run(remote=False):
                     wait_for(terminal_attached, "SSH shutdown-test terminal did not attach")
                 open_file("cancel.marp.md")
                 if remote:
-                    key("grave", ("Control_L",))
+                    key("t", ("Control_L", "Shift_L"))
                 command("Marp: Toggle slide preview")
                 wait_for(
                     lambda: (project / "marp-pids.json").exists(), "Shutdown fixture did not start"

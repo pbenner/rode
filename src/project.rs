@@ -24,6 +24,13 @@ const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "task", rename_all = "snake_case")]
 pub enum Request {
+    /// Inspect configured runtime executables inside the project boundary.
+    Runtimes {
+        /// Working directory on the execution host.
+        root: String,
+        /// Saved runtime paths and literal project variables.
+        settings: crate::environment::Settings,
+    },
     /// Format/check an unsaved TeX buffer without modifying its source file.
     LatexAnalyze {
         /// Working project root on the execution host.
@@ -125,6 +132,8 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum Response {
+    /// Runtime availability and version strings.
+    Runtimes(Vec<Runtime>),
     /// Installed adapter reply.
     Extension(crate::extensions::Reply),
     /// Native terminal discovery/control reply.
@@ -139,6 +148,19 @@ pub enum Response {
     Environments(Environments),
     /// Formatted buffer text and diagnostics.
     Analysis(Analysis),
+}
+
+/// One bounded runtime probe result, including unavailable executables.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Runtime {
+    /// Logical tool name.
+    pub name: String,
+    /// Selected executable or command name on this host.
+    pub executable: String,
+    /// First nonempty version output line.
+    pub version: String,
+    /// Probe error, without treating missing tools as a global failure.
+    pub error: String,
 }
 
 /// Bounded UTF-8 command output and an exit status.
@@ -297,6 +319,54 @@ pub struct Analysis {
 /// this off the UI thread.
 pub fn local(request: &Request) -> Result<Response> {
     match request {
+        Request::Runtimes { root, settings } => {
+            settings.validate()?;
+            let mut env = std::env::vars_os()
+                .filter_map(|(key, value)| {
+                    Some((key.into_string().ok()?, value.into_string().ok()?))
+                })
+                .collect();
+            settings.apply(&mut env)?;
+            let mut results = vec![];
+            for (name, _) in crate::environment::TOOLS {
+                let executable = settings.program(name);
+                let mut command = Command::new(&executable);
+                command
+                    .current_dir(crate::files::expand_home(root))
+                    .envs(&env)
+                    .env("RUSTUP_AUTO_INSTALL", "0")
+                    .env("GOTOOLCHAIN", "local")
+                    .arg(if *name == "go" {
+                        "version"
+                    } else if matches!(*name, "java" | "javac") {
+                        "-version"
+                    } else {
+                        "--version"
+                    });
+                let mut entry = Runtime {
+                    name: (*name).into(),
+                    executable,
+                    ..Default::default()
+                };
+                match run(command, vec![], Duration::from_secs(3)) {
+                    Ok(output) if output.success() => {
+                        entry.version = output
+                            .stdout
+                            .lines()
+                            .chain(output.stderr.lines())
+                            .find(|line| !line.trim().is_empty())
+                            .unwrap_or_default()
+                            .chars()
+                            .take(256)
+                            .collect()
+                    }
+                    Ok(output) => entry.error = format!("Unavailable (exit {})", output.code),
+                    Err(error) => entry.error = error.to_string().chars().take(256).collect(),
+                }
+                results.push(entry);
+            }
+            Ok(Response::Runtimes(results))
+        }
         Request::LatexAnalyze {
             root,
             path,

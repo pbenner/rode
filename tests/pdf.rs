@@ -175,3 +175,15 @@ fn sandbox_pdf_reads_cannot_escape_through_paths_or_symlinks() {
         eprintln!("Sandbox unavailable: {}", plan.reason);
     }
 }
+
+#[test]
+fn document_attachments_extract_pdf_text_and_reject_cancelled_conversion() {
+    if sandbox::find_program("pdftotext").is_none() {
+        return;
+    }
+    let text = pdf::extract_text(FIXTURE.to_vec(), &AtomicBool::new(false)).unwrap();
+    assert!(!text.trim().is_empty());
+    assert!(!text.contains("%PDF-"));
+    assert!(pdf::extract_text(FIXTURE.to_vec(), &AtomicBool::new(true)).is_err());
+    assert!(pdf::extract_text(b"not a PDF".to_vec(), &AtomicBool::new(false)).is_err());
+}

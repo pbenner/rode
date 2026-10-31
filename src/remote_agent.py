@@ -29,13 +29,13 @@ class Input:
         while True:
             end = self.pending.find(b"\n")
             if end >= 0:
-                if end >= 256 * 1024:
-                    raise ValueError("Process request exceeds 256 KiB.")
+                if end >= 4 * 1024 * 1024:
+                    raise ValueError("Process request exceeds 4 MiB.")
                 line = bytes(self.pending[: end + 1])
                 del self.pending[: end + 1]
                 return line
-            if len(self.pending) > 256 * 1024:
-                raise ValueError("Process request exceeds 256 KiB.")
+            if len(self.pending) > 4 * 1024 * 1024:
+                raise ValueError("Process request exceeds 4 MiB.")
             data = os.read(sys.stdin.fileno(), 65536)
             if not data:
                 result = bytes(self.pending)
@@ -120,8 +120,8 @@ def run():
                 data = source.readline()
                 if not data:
                     break
-                if len(data) > 256 * 1024:
-                    raise ValueError("Agent request exceeds 256 KiB.")
+                if len(data) > 4 * 1024 * 1024:
+                    raise ValueError("Agent request exceeds 4 MiB.")
                 child.stdin.write(data)
                 child.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):

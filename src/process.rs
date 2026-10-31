@@ -146,7 +146,10 @@ pub struct Writer {
 }
 pub(crate) fn encode_request(message: &Value) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec(message)?;
-    ensure!(bytes.len() < 256 * 1024, "Process request exceeds 256 KiB.");
+    ensure!(
+        bytes.len() < 4 * 1024 * 1024,
+        "Process request exceeds 4 MiB."
+    );
     bytes.push(b'\n');
     Ok(bytes)
 }
@@ -158,7 +161,7 @@ impl Writer {
     /// Retain the already encoded buffer when the bounded pipe is full.
     pub(crate) fn try_send_buffer(&self, bytes: &mut Vec<u8>) -> Result<bool> {
         ensure!(
-            bytes.len() <= self.limit.min(256 * 1024),
+            bytes.len() <= self.limit.min(4 * 1024 * 1024),
             "Process request exceeds its line limit."
         );
         match self.input.try_send(std::mem::take(bytes)) {

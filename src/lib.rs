@@ -31,6 +31,7 @@ pub mod app;
 pub mod binary;
 pub mod bundled;
 pub mod debugger;
+pub mod environment;
 pub mod extensions;
 pub mod files;
 pub mod images;

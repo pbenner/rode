@@ -85,7 +85,7 @@ def native_sessions(request):
         if hashlib.sha256(source.read(24 * 1024 * 1024 + 1)).hexdigest() != digest:
             raise ValueError("Installed terminal helper failed its integrity check.")
     protocol = globals()["project_run"]([executable, "protocol"], timeout=5)
-    if protocol["code"] != 0 or protocol["stdout"].strip() != "4":
+    if protocol["code"] != 0 or protocol["stdout"].strip() != "6":
         raise ValueError(
             "The packaged terminal helper uses an older protocol. Rebuild it with "
             "scripts/build-sessiond.sh or select an updated RODE_SESSION_HELPER. "
@@ -117,11 +117,32 @@ def native_sessions(request):
         argv += allocation["argv"] if allocation else [os.environ.get("SHELL", "/bin/sh"), "-l"]
         python = globals()["project_python"](plan["root"], operation["python"])
         env = globals()["project_environment"](python)
+        settings = operation.get("environment", {})
+        configured, environment_input = globals()["project_environment_settings"](
+            settings, dict(env)
+        )
         initial_input = ""
         if allocation:
             env = {
                 key: value for key, value in env.items() if not key.startswith(("SALLOC_", "SRUN_"))
             }
+            configured = {
+                key: value
+                for key, value in configured.items()
+                if not key.startswith(("SALLOC_", "SRUN_"))
+            }
+        if plan["active"]:
+            options = []
+            for name, value in sorted(configured.items()):
+                if name in settings.get("variables", {}) or env.get(name) != value:
+                    options += ["--setenv", name, value]
+            if options:
+                if not plan["prefix"] or plan["prefix"][-1] != "--":
+                    raise ValueError("Invalid sandbox command boundary")
+                boundary = len(plan["prefix"]) - 1
+                argv[boundary:boundary] = options
+        else:
+            env = configured
         if not allocation and os.path.isabs(python):
             folder, prefix = os.path.dirname(python), os.path.dirname(os.path.dirname(python))
             deactivate = "if command -v deactivate >/dev/null 2>&1; then deactivate; fi; "
@@ -134,6 +155,8 @@ def native_sessions(request):
                 )
             else:
                 initial_input = f'{deactivate}unset VIRTUAL_ENV PYTHONHOME; export PATH={shlex.quote(folder)}:"$PATH"\n'
+        if not allocation and environment_input:
+            initial_input += environment_input + "\n"
         payload = dict(
             action="create",
             id=operation["id"],

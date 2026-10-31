@@ -111,7 +111,7 @@ fn run_step(step: usize) {
         assert path.read_text() == saved, (
             "Find / Enter must select a match without modifying the document"
         )
-        key("grave", ("Control_L",))
+        key("t", ("Control_L", "Shift_L"))
         time.sleep(0.4)
         text("echo RODE_NATIVE_TERMINAL_OK > terminal.ok\n")
         time.sleep(0.4)

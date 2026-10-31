@@ -60,8 +60,8 @@ mod agents;
 pub const VERSION: u32 = 1;
 /// Feature level that supports explicit persistence toggles.
 pub const PERSISTENCE_PROTOCOL: u32 = 2;
-/// Current feature level, including allocation metadata for scheduler terminals.
-pub const PROTOCOL: u32 = 4;
+/// Current feature level, including host-owned agent queues, attachments and scheduler metadata.
+pub const PROTOCOL: u32 = 6;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -288,7 +288,7 @@ fn socket() -> PathBuf {
     directory().join("socket")
 }
 fn frame<W: Write>(out: &mut W, kind: u8, bytes: &[u8]) -> Result<()> {
-    ensure!(bytes.len() < MAX_FRAME, "Session message exceeds 1 MiB");
+    ensure!(bytes.len() < MAX_FRAME, "Session message exceeds 4 MiB");
     out.write_all(&((bytes.len() + 1) as u32).to_be_bytes())?;
     out.write_all(&[kind])?;
     out.write_all(bytes)?;
@@ -1467,9 +1467,9 @@ pub fn cli(args: &[String]) -> Result<()> {
         Some("request") => {
             let mut bytes = vec![];
             std::io::stdin()
-                .take(256 * 1024 + 1)
+                .take(MAX_FRAME as u64 + 1)
                 .read_to_end(&mut bytes)?;
-            ensure!(bytes.len() <= 256 * 1024, "Session request exceeds 256 KiB");
+            ensure!(bytes.len() < MAX_FRAME, "Session request exceeds 4 MiB");
             let request = serde_json::from_slice(&bytes)?;
             let launcher = Launcher {
                 executable: current_executable()?,

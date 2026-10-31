@@ -184,7 +184,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             assert "unsaved_layout_change" in (root / "README.md").read_text()
             command("System: Monitor")
             screenshot(window, "monitor-full-workspace.png")
-            key("grave", ("Control_L",))
+            key("t", ("Control_L", "Shift_L"))
             x11.XResizeWindow(display, window, 850, 560)
             x11.XFlush(display)
             time.sleep(0.6)
@@ -194,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
                 lambda: (root / "terminal.ok").exists(),
                 "Terminal controls/content were lost in the narrow layout",
             )
-            key("grave", ("Control_L",))  # Return to full-width code, not a split pane.
+            key("t", ("Control_L", "Shift_L"))  # Return to full-width code, not a split pane.
             click(410, 215)
             key("f", ("Control_L",))
             text("layout")
@@ -215,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             theme("phosphor")
             screenshot(window, "tabs-phosphor.png")
             active_line("tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
-            key("grave", ("Control_L",))
+            key("t", ("Control_L", "Shift_L"))
             time.sleep(0.3)
             screenshot(window, "terminal-full-height.png")
             click(600, 400)
@@ -226,7 +226,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             )
             rows, _ = map(int, (root / "terminal.size").read_text().split())
             assert rows >= 40, f"Terminal height is still capped: {rows} rows"
-            key("grave", ("Control_L",))
+            key("t", ("Control_L", "Shift_L"))
             append_save(root / "README.md", "focus_after_full_terminal")
             screenshot(window, "terminal-restored-editor.png")
             close_window(window, process)

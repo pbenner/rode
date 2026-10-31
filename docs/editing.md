@@ -13,7 +13,7 @@
 - [Multiple persistent PTY terminals](terminals.md) with reattachment, shared views, ANSI colors, resizing, scrollback, bracketed paste, shell control keys, and a copy-output button
 - Command palette, separate editor font size and interface scale, and persistent configurable themes
 - Optional local/remote bubblewrap project mode with explicit normal-mode fallback
-- Configurable sandbox access table, Git source control/worktrees, Python environments, Ruff diagnostics/formatting, and on-demand system/GPU monitoring
+- Configurable sandbox access table, Git source control/worktrees, project environments and tasks, Ruff diagnostics/formatting, and on-demand system/GPU monitoring
 
 Open File, Open as hex, and Save As share the project-folder browser's directory rows. Double-click a folder to enter it, or select it and press Right/Enter; the **Up** button returns to its parent. Select a file and choose Open, or double-click it. Arrow keys navigate results, and Tab moves between controls. The filename field also filters the current listing and known files in expanded folders/open tabs; exact paths still work. Save As lets you enter a new name. File browsing runs on the displayed local/SSH host under the active project's sandbox rules.
 
@@ -42,11 +42,12 @@ Open File, Open as hex, and Save As share the project-folder browser's directory
 | F5 / Shift+F5 | [Start/continue debugging / stop or detach](debugger.md) |
 | F6 / F9 | Pause debugger / toggle source breakpoint |
 | F10 / F11 / Shift+F11 | Step over / into / out |
-| Ctrl+` | Toggle / focus terminal |
+| Ctrl+~ / Ctrl+` | Toggle tools sidebar, restoring its last selected tab |
+| Ctrl+Shift+T | Toggle / focus terminal |
 | Ctrl+Plus / Minus | Editor/terminal font size, or image zoom when the image canvas has focus |
 | Ctrl+0 | Reset interface scale to 100% (outside the terminal) |
 
-Use Command for editor shortcuts on macOS; tab cycling with Control+Tab remains available. When the terminal has focus, Tab/Shift+Tab, arrows, Escape, and normal control keys go to the shell; the command palette, project/tools shortcuts, tab switching, and terminal toggle remain editor shortcuts. Escape closes find and returns to the editor; Escape in the terminal belongs to the shell.
+Use Command for editor shortcuts on macOS; tab cycling with Control+Tab remains available. When the terminal has focus, Tab/Shift+Tab, arrows, Escape, and normal control keys go to the shell; the command palette, project/tools shortcuts, tab switching, and sidebar/terminal toggles remain editor shortcuts. Escape closes find and returns to the editor; Escape in the terminal belongs to the shell.
 
 Choose a percentage in **View → Interface scale** to resize the entire GUI, including menu text, icons, buttons, side panels and editor/terminal text. **Smaller (5%)** and **Larger (5%)** provide fine adjustments. Each action applies after a completed click and closes the menu; there is no slider to chase as the interface resizes. The 50–200% scale is relative to the operating system's monitor scaling: **100%** follows the system, **75%** makes the interface smaller, and **50%** compensates for a 2x display scale when you want a more compact layout. Changes apply immediately and are saved on the desktop computer, independently of the project or SSH host.
 
@@ -56,7 +57,7 @@ The explorer remains at the left. The workspace beside it switches between **Cod
 
 Choose **Detach** in the workspace toolbar to move the selected tools or terminal into a separate native window while the editor stays visible in the main window. Switch tools using the same tabs in that window. **Dock back**, or closing the tools window, returns it beside the explorer without stopping its work. The main window's **Show tools window** brings it to the front.
 
-The terminal fills this workspace rather than occupying a separate bottom panel. **Ctrl+`** opens it or returns to code; hiding it keeps its shell running. Resize a detached tools window using its native borders. Paths and status text retain their full hover text, and find/replace adapts to narrow windows. Unsaved files still require a discard decision when closed.
+The terminal fills this workspace rather than occupying a separate bottom panel. **Ctrl+Shift+T** selects the terminal or returns to code. **Ctrl+~** (also **Ctrl+`**) hides or restores the tools sidebar with the same selected tab, whether that is Chat, Terminal, Git or another tool. Hiding it keeps the shell and agent running, and preserves drafts. A detached tools window hides and reopens without docking itself. Resize a detached tools window using its native borders. Paths and status text retain their full hover text, and find/replace adapts to narrow windows. Unsaved files still require a discard decision when closed.
 
 ## Keyboard pane navigation
 

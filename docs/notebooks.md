@@ -25,7 +25,7 @@ uv pip install --python .venv/bin/python jupyter_client ipykernel
 uv pip install --python .venv/bin/python matplotlib
 ```
 
-Do not recreate an existing environment. You can also use pip or an already prepared interpreter. Select it through **Python environment**; automatic selection uses the project's `.venv` when available. The editor installs no notebook dependencies. The default Python kernelspec uses that interpreter; a custom kernelspec may explicitly select a different executable.
+Do not recreate an existing environment. You can also use pip or an already prepared interpreter. Select it through **Environment → Python interpreter and virtual environments**; automatic selection uses the project's `.venv` when available. The editor installs no notebook dependencies. The default Python kernelspec uses that interpreter; a custom kernelspec may explicitly select a different executable.
 
 - **Run cell / Shift+Enter:** execute the selected code cell in a stateful kernel. Variables persist across runs. Shift+Enter on Markdown switches it to Preview.
 - **Run all:** execute code cells in document order. An execution error stops the remaining queue. Edits to queued cells invalidate their queued snapshots; outputs from an already running edited/deleted cell are discarded.

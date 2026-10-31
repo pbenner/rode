@@ -27,6 +27,31 @@ pub fn is_path(path: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
 }
 
+/// Extract complete PDF text on a worker using the desktop's bounded Poppler runner.
+/// Scanned/image-only PDFs need OCR or image attachments instead.
+pub fn extract_text(bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String> {
+    ensure!(bytes.starts_with(b"%PDF-"), "Invalid PDF attachment.");
+    let text = run(
+        "pdftotext",
+        &[
+            "-layout".into(),
+            "-enc".into(),
+            "UTF-8".into(),
+            "-".into(),
+            "-".into(),
+        ],
+        bytes.into(),
+        rode_agent_core::attachment::CONTENT_LIMIT,
+        cancel,
+    )?;
+    let text = String::from_utf8(text).context("PDF text is not UTF-8")?;
+    ensure!(
+        !text.trim().is_empty(),
+        "This PDF contains no extractable text. Attach page images or an OCR text version."
+    );
+    Ok(text)
+}
+
 /// Immutable PDF byte snapshot with a retained-memory lease; pages are rasterized only on
 /// demand.
 pub struct Source {
@@ -222,7 +247,7 @@ fn run(
             Ok(())
         });
     }
-    let child=command.spawn().with_context(||format!("PDF preview needs Poppler's pdfinfo and pdftoppm on this desktop (for example: install poppler-utils). Cannot run {program}"))?;
+    let child=command.spawn().with_context(||format!("PDF tools need Poppler's pdfinfo, pdftoppm and pdftotext on this desktop (for example: install poppler-utils). Cannot run {program}"))?;
     struct Child(std::process::Child);
     impl Drop for Child {
         fn drop(&mut self) {

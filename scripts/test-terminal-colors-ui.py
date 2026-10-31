@@ -148,7 +148,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
             window = None
             try:
                 window = window_for(process)
-                key("grave", ("Control_L",))
+                key("t", ("Control_L", "Shift_L"))
                 time.sleep(1)
                 if run == "initial":
                     screenshot(window, "contrast-default.png")
@@ -286,7 +286,7 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
         reference = None
         try:
             window = window_for(process)
-            key("grave", ("Control_L",))
+            key("t", ("Control_L", "Shift_L"))
             time.sleep(1)
             prompt_colors(window, "bash-prompt.png", palette, "1050x170+315+690")
             click(600, 745)

@@ -194,6 +194,11 @@ enum Job {
     BrowseFiles {
         token: u64,
         path: String,
+        local: bool,
+    },
+    AgentAttachment {
+        token: u64,
+        local: bool,
     },
     List(String),
     Open(String),
@@ -308,6 +313,8 @@ enum Dialog {
     Connect,
     Folder,
     Open,
+    AgentAttachLocal,
+    AgentAttachHost,
     Save(u64),
     Commands,
     Sessions,
@@ -771,16 +778,26 @@ impl EditorApp {
     }
 
     /// Capture host, plan, generation and resource guards before spawning blocking work. The
-    /// raw-host exception is limited to preparation/project discovery; file pickers retain
-    /// active project restrictions.
+    /// raw-host exceptions are preparation/discovery and explicit desktop attachment selection;
+    /// project-host file pickers retain active project restrictions.
     fn dispatch(&mut self, request: Request, job: Job, ctx: &egui::Context) {
-        let raw = matches!(&job, Job::Prepare { .. } | Job::Browse { .. });
+        let raw = matches!(
+            &job,
+            Job::Prepare { .. }
+                | Job::Browse { .. }
+                | Job::BrowseFiles { local: true, .. }
+                | Job::AgentAttachment { local: true, .. }
+        );
         if self.vaults.locking
             || (!raw
                 && (self.workspace.as_ref().is_some_and(|w| !w.ready)
                     || (self.workspace.is_none() && self.preparing)))
         {
             match &job {
+                Job::AgentAttachment { token, .. } => self.agents.files.finish(
+                    *token,
+                    Err("Wait for the project environment to be ready.".into()),
+                ),
                 Job::BrowseFiles { .. } => {
                     self.file_browser.loading = false;
                     self.file_browser.error = Some(
@@ -806,6 +823,9 @@ impl EditorApp {
         }
         let use_remote = match &job {
             Job::Prepare { remote, .. } | Job::Browse { remote, .. } => *remote,
+            Job::BrowseFiles { local: true, .. } | Job::AgentAttachment { local: true, .. } => {
+                false
+            }
             _ => self.workspace.as_ref().is_some_and(|w| w.remote.is_some()),
         };
         let remote = if use_remote {
@@ -915,6 +935,28 @@ impl EditorApp {
                     Ok(response)
                 })
                 .and_then(|mut response| {
+                    if matches!(&job, Job::AgentAttachment { .. }) {
+                        let encoded = response
+                            .binary
+                            .take()
+                            .ok_or_else(|| anyhow::anyhow!("Missing attachment bytes"))?;
+                        response.attachment = Some(
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                agents::attachments::prepare(
+                                    &response.path,
+                                    &encoded,
+                                    &image_budget,
+                                    &pdf_cancel,
+                                )
+                            }))
+                            .map_err(|_| {
+                                anyhow::anyhow!(
+                                    "Attachment conversion failed; the file may be corrupt."
+                                )
+                            })??,
+                        );
+                        return Ok(response);
+                    }
                     if let Some(encoded) = response.binary.take() {
                         let _binary_io = matches!(&request, Request::ReadAuto { .. })
                             .then(|| image_budget.io.lock().unwrap_or_else(|e| e.into_inner()));
@@ -1174,13 +1216,14 @@ impl EditorApp {
                         {
                             continue;
                         }
-                        Job::BrowseFiles { token, path }
+                        Job::BrowseFiles { token, path, .. }
                             if !file_browser::is_file_dialog(&self.dialog)
                                 || !self.file_browser.matches(*token, path) =>
                         {
                             continue;
                         }
                         Job::BrowseFiles { .. } => self.file_browser.loading = false,
+                        Job::AgentAttachment { .. } => {}
                         Job::Prepare { .. } => self.preparing = false,
                         Job::Browse { .. } => self.folder_loading = false,
                         Job::List(path) => {
@@ -1222,7 +1265,9 @@ impl EditorApp {
                     }
                     match *result {
                         Err(error) => {
-                            if matches!(job, Job::Browse { .. }) {
+                            if let Job::AgentAttachment { token, .. } = job {
+                                self.agents.files.finish(token, Err(error));
+                            } else if matches!(job, Job::Browse { .. }) {
                                 self.folder_error = Some(error);
                             } else if matches!(job, Job::BrowseFiles { .. }) {
                                 self.file_browser.error = Some(error);
@@ -1234,6 +1279,15 @@ impl EditorApp {
                             }
                         }
                         Ok(response) => match job {
+                            Job::AgentAttachment { token, .. } => {
+                                self.agents.files.finish(
+                                    token,
+                                    response
+                                        .attachment
+                                        .ok_or_else(|| "Missing attachment contents".into()),
+                                );
+                                self.agents.focus = true;
+                            }
                             Job::Reload { id, version } => {
                                 if let Some(doc) = self
                                     .documents
@@ -2106,13 +2160,13 @@ impl EditorApp {
     }
 
     fn toggle_terminal(&mut self, ctx: &egui::Context) {
-        self.show_terminal = !(self.terminal_visible()
-            && (!self.workbench.detached || ctx.viewport_id() == Self::tools_viewport()));
+        self.show_terminal = !self.terminal_visible() || self.workbench.detached;
         if self.show_terminal {
             self.terminal_intent();
-            if self.terminal.is_none() && self.ssh_master.is_none() {
+            if self.terminal.is_none() && self.ssh_master.is_none() && !self.session_busy() {
                 self.start_project_terminal(ctx);
             }
+            self.focus_pane(navigation::Pane::Terminal, ctx);
             Terminal::focus(ctx);
         } else {
             self.focus_editor(ctx);
@@ -2133,9 +2187,6 @@ impl EditorApp {
         }
         let terminal_focus = Terminal::focused(ctx) && self.terminal_visible();
         let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
-        if consume(egui::Modifiers::CTRL, Key::Backtick) {
-            self.toggle_terminal(ctx);
-        }
         if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::P) {
             self.set_dialog(Dialog::Commands);
         }
@@ -2147,6 +2198,12 @@ impl EditorApp {
         }
         if self.dialog != Dialog::None {
             return;
+        }
+        if !egui::Popup::is_any_open(ctx) && consume(egui::Modifiers::CTRL, Key::Backtick) {
+            self.toggle_sidebar(ctx);
+        }
+        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::T) {
+            self.toggle_terminal(ctx);
         }
         self.debugger_shortcuts(ctx, terminal_focus);
         if consume(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Tab)
@@ -2265,7 +2322,7 @@ impl EditorApp {
                     self.ui_scale_menu(ui, ctx);
                     if ui.add(IconButton::new(Icon::Palette, "Terminal colors…")).clicked() { self.terminal_colors.open = true; ui.close(); }
                     ui.separator();
-                    for (panel,icon,label,shortcut) in [(Panel::Git,Icon::Git,"Source control","Ctrl+Shift+G"),(Panel::Monitor,Icon::Monitor,"System monitor",""),(Panel::Problems,Icon::Problems,"Problems","Ctrl+Shift+M"),(Panel::Python,Icon::Python,"Python environment",""),(Panel::Settings,Icon::Settings,"Project settings / sandbox access",""),(Panel::Agent,Icon::Chat,"Agent chat","Ctrl+Shift+A"),(Panel::Debug,Icon::Debug,"Debugger","F5")] {
+                    for (panel,icon,label,shortcut) in [(Panel::Git,Icon::Git,"Source control","Ctrl+Shift+G"),(Panel::Monitor,Icon::Monitor,"System monitor",""),(Panel::Problems,Icon::Problems,"Problems","Ctrl+Shift+M"),(Panel::Environment,Icon::Environment,"Environment",""),(Panel::Tasks,Icon::Play,"Tasks",""),(Panel::Settings,Icon::Settings,"Project settings / sandbox access",""),(Panel::Agent,Icon::Chat,"Agent chat","Ctrl+Shift+A"),(Panel::Debug,Icon::Debug,"Debugger","F5")] {
                         if ui.add(IconButton::new(icon,label).shortcut(shortcut)).clicked() { self.toggle_panel(panel, ctx); ui.close(); }
                     }
                     if ui.add(IconButton::new(Icon::Extensions,"Extensions…").shortcut("Ctrl+Shift+X")).clicked(){self.set_dialog(Dialog::Extensions);ui.close();}
@@ -2273,7 +2330,8 @@ impl EditorApp {
                     if ui.add(IconButton::new(Icon::Settings,"Keyboard shortcuts / navigation…")).clicked() {self.set_dialog(Dialog::Shortcuts);ui.close();}
                     ui.separator();
                     ui.add(egui::Checkbox::new(&mut self.show_explorer, ("Explorer", egui::Atom::grow(), RichText::new("Ctrl+B").text_style(egui::TextStyle::Button).color(palette.muted))));
-                    if ui.add(IconButton::new(Icon::Terminal, "Toggle terminal").shortcut("Ctrl+`")).clicked() { self.toggle_terminal(ctx); ui.close(); }
+                    if ui.add(IconButton::new(Icon::ChevronRight, "Toggle tools sidebar").shortcut("Ctrl+~")).clicked() { self.toggle_sidebar(ctx); ui.close(); }
+                    if ui.add(IconButton::new(Icon::Terminal, "Toggle terminal").shortcut("Ctrl+Shift+T")).clicked() { self.toggle_terminal(ctx); ui.close(); }
                     if ui.add(IconButton::new(Icon::Files, "Markdown preview").shortcut("Ctrl+Shift+R")).clicked() { self.toggle_markdown(ctx); ui.close(); }
                     if ui.add(IconButton::new(Icon::Play, "Marp slide preview")).clicked() { self.toggle_marp(ctx); ui.close(); }
                     if ui.add(IconButton::new(Icon::Search, "Find / replace").shortcut(self.editing_hint("Ctrl+F"))).clicked() { self.markdown_source(); self.show_find = true; self.find_focus = true; ui.close(); }
@@ -2469,16 +2527,17 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.spacing_mut().button_padding = egui::vec2(0., 2.);
-                let button_height = ((ui.available_height() - 68.) / 12. - 6.).clamp(22., 40.);
+                let button_height = ((ui.available_height() - 68.) / 13. - 6.).clamp(22., 40.);
                 for (icon, hint, action) in [
                     (Icon::Files, "Toggle explorer · Ctrl+B", 0),
                     (Icon::Search, "Open file · Ctrl+P", 1),
                     (Icon::Remote, "Connect via SSH", 2),
-                    (Icon::Terminal, "Toggle terminal · Ctrl+`", 3),
+                    (Icon::Terminal, "Toggle terminal · Ctrl+Shift+T", 3),
                     (Icon::Git, "Source control · Ctrl+Shift+G", 4),
                     (Icon::Monitor, "System monitor", 5),
                     (Icon::Problems, "Problems · Ctrl+Shift+M", 6),
-                    (Icon::Python, "Python environment", 7),
+                    (Icon::Environment, "Environment", 7),
+                    (Icon::Play, "Tasks", 12),
                     (Icon::Settings, "Project settings / sandbox access", 8),
                     (Icon::Chat, "Agent chat · Ctrl+Shift+A", 9),
                     (Icon::Extensions, "Extensions · Ctrl+Shift+X", 10),
@@ -2491,10 +2550,13 @@ impl EditorApp {
                         4 => self.tools_visible() && self.workbench.panel == Some(Panel::Git),
                         5 => self.tools_visible() && self.workbench.panel == Some(Panel::Monitor),
                         6 => self.tools_visible() && self.workbench.panel == Some(Panel::Problems),
-                        7 => self.tools_visible() && self.workbench.panel == Some(Panel::Python),
+                        7 => {
+                            self.tools_visible() && self.workbench.panel == Some(Panel::Environment)
+                        }
                         8 => self.tools_visible() && self.workbench.panel == Some(Panel::Settings),
                         9 => self.tools_visible() && self.workbench.panel == Some(Panel::Agent),
                         10 => self.dialog == Dialog::Extensions,
+                        12 => self.tools_visible() && self.workbench.panel == Some(Panel::Tasks),
                         11 => self.tools_visible() && self.workbench.panel == Some(Panel::Debug),
                         _ => false,
                     };
@@ -2523,7 +2585,8 @@ impl EditorApp {
                             4 => self.toggle_panel(Panel::Git, ctx),
                             5 => self.toggle_panel(Panel::Monitor, ctx),
                             6 => self.toggle_panel(Panel::Problems, ctx),
-                            7 => self.toggle_panel(Panel::Python, ctx),
+                            7 => self.toggle_panel(Panel::Environment, ctx),
+                            12 => self.toggle_panel(Panel::Tasks, ctx),
                             8 => self.toggle_panel(Panel::Settings, ctx),
                             9 => self.toggle_panel(Panel::Agent, ctx),
                             11 => self.toggle_panel(Panel::Debug, ctx),
@@ -3774,7 +3837,11 @@ impl EditorApp {
                                 ("F6 / F9", "Debug: pause / toggle breakpoint"),
                                 ("F10 / F11 / Shift+F11", "Debug: step over / into / out"),
                                 ("Ctrl+B", "Toggle explorer"),
-                                ("Ctrl+`", "Toggle / focus terminal"),
+                                (
+                                    "Ctrl+~ / Ctrl+`",
+                                    "Toggle tools sidebar (remember selected tab)",
+                                ),
+                                ("Ctrl+Shift+T", "Toggle / focus terminal"),
                                 ("Ctrl+F", "Find and replace"),
                                 ("Ctrl+Plus / Minus", "Editor font size"),
                                 ("Escape", "Close dialog / find"),
@@ -4420,6 +4487,7 @@ mod tests {
             binary: None,
             pdf: None,
             hex: None,
+            attachment: None,
             notebook: None,
             preview: None,
             entries: vec![],

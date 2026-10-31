@@ -176,11 +176,10 @@ impl EditorApp {
                 ui.label("Creating environment…");
             });
         }
-        ui.separator();
+    }
+    pub(in crate::app) fn python_tasks_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let palette = self.themes.active().palette;
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Run current file").clicked() {
-                self.run_active(false, ctx);
-            }
             if ui
                 .add_enabled(
                     self.workbench.python.env.is_some(),

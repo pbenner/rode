@@ -115,10 +115,7 @@ impl Store {
         );
         spec.config.arguments(spec.text.is_some())?;
         if let Some(text) = &spec.text {
-            ensure!(
-                !text.trim().is_empty() && text.len() <= rode_agent_core::PROMPT_LIMIT,
-                "Agent prompt must contain 1–32768 bytes"
-            );
+            rode_agent_core::attachment::validate(text, &spec.attachments)?;
         }
         let mut jobs = self.jobs.lock().unwrap();
         if let Some(job) = jobs.get(&spec.id) {
@@ -136,6 +133,8 @@ impl Store {
         );
         let (input, commands) = mpsc::sync_channel(32);
         let info = Info {
+            supports_attachments: true,
+            supports_queue: true,
             id: spec.id.clone(),
             name: spec.name.clone(),
             root: spec.plan.root.clone(),
@@ -152,6 +151,7 @@ impl Store {
         let job = Arc::new(Job {
             shared: Mutex::new(Shared {
                 state: State {
+                    queue: Default::default(),
                     info: info.clone(),
                     chat: rode_agent_core::service::ChatView {
                         busy: spec.text.is_some(),
@@ -276,7 +276,9 @@ impl Store {
         Ok(())
     }
 }
-fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
+fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, mut spec: Spec) {
+    let text = spec.text.take();
+    let attachments = std::mem::take(&mut spec.attachments);
     let active = Arc::new(AtomicUsize::new(0));
     let factory = Arc::new(transport::Factory {
         spec: spec.clone(),
@@ -295,8 +297,8 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
     });
     let mut chat = Chat::default();
     let mut browser = None;
-    let result = if let Some(text) = spec.text {
-        chat.submit(launch.clone(), text, wake.clone())
+    let result = if let Some(text) = text {
+        chat.submit_with_attachments(launch.clone(), text, attachments, wake.clone())
     } else {
         Browser::open(launch.clone(), wake.clone()).map(|value| browser = Some(value))
     };
@@ -304,11 +306,19 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
     if !error.is_empty() {
         chat.notice(&error);
     }
+    let mut queue = rode_agent_core::queue::Queue::default();
+    let mut completed = chat.completed;
     let mut changed = true;
     let mut stopping = false;
     let mut last_view = Instant::now() - Duration::from_secs(1);
     loop {
         chat.poll();
+        if completed != chat.completed {
+            completed = chat.completed;
+            if !chat.last_turn_succeeded {
+                queue.pause();
+            }
+        }
         if let Some(history) = &mut browser {
             history.poll();
             if let Some(restored) = history.take_restored() {
@@ -348,6 +358,7 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
         shared.state.info.alive = !finished;
         if (changed && view && last_view.elapsed() >= Duration::from_millis(200)) || finished {
             shared.state.chat = chat.view();
+            shared.state.queue = queue.view();
             shared.state.history = browser.as_ref().map(Browser::view);
             shared.state.error = std::mem::take(&mut error);
             shared.revision = shared.revision.wrapping_add(1);
@@ -375,7 +386,49 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
                 changed = true;
                 error.clear();
                 let result = match *action {
-                    Action::Submit { text, config } => {
+                    Action::Queue { request, operation } => {
+                        if request.is_empty() || request.len() > 128 {
+                            Err(anyhow::anyhow!("Invalid queue request identity"))
+                        } else {
+                            queue.acknowledge(request);
+                            if let rode_agent_core::queue::Action::Dispatch { id, config } =
+                                operation
+                            {
+                                let result = (|| -> Result<()> {
+                                    ensure!(
+                                        !chat.busy && browser.is_none(),
+                                        "The agent is not ready for a queued prompt."
+                                    );
+                                    ensure!(
+                                        launch.config.same_process(&config),
+                                        "Queued prompts cannot change the agent executable/provider."
+                                    );
+                                    let (text, attachments) = queue.head(id)?;
+                                    let mut next = launch.clone();
+                                    next.config = *config;
+                                    chat.submit_with_attachments(
+                                        next,
+                                        text,
+                                        attachments,
+                                        wake.clone(),
+                                    )?;
+                                    queue.sent(id);
+                                    Ok(())
+                                })();
+                                if result.is_err() {
+                                    queue.pause();
+                                }
+                                result
+                            } else {
+                                queue.apply(operation)
+                            }
+                        }
+                    }
+                    Action::Submit {
+                        text,
+                        attachments,
+                        config,
+                    } => {
                         if !launch.config.same_process(&config) {
                             Err(anyhow::anyhow!(
                                 "Backend executable/provider changes require a new agent session"
@@ -383,7 +436,7 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
                         } else {
                             let mut launch = launch.clone();
                             launch.config = config;
-                            chat.submit(launch, text, wake.clone())
+                            chat.submit_with_attachments(launch, text, attachments, wake.clone())
                         }
                     }
                     Action::Configure { config } => chat.configure_idle(&config),
@@ -397,6 +450,7 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Work>, spec: Spec) {
                         }
                     }
                     Action::Cancel => {
+                        queue.pause();
                         chat.cancel();
                         Ok(())
                     }
@@ -454,9 +508,9 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         loop {
             let mut bytes = vec![];
             let read = (&mut reader)
-                .take(256 * 1024 + 1)
+                .take(rode_agent_core::LINE_LIMIT as u64 + 1)
                 .read_until(b'\n', &mut bytes);
-            if !matches!(read, Ok(n) if n > 0 && n <= 256 * 1024) {
+            if !matches!(read, Ok(n) if n > 0 && n <= rode_agent_core::LINE_LIMIT) {
                 break;
             }
             let Ok(action) = serde_json::from_slice::<Action>(&bytes) else {

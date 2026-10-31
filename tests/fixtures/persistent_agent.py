@@ -112,6 +112,12 @@ for line in sys.stdin:
             dict(sessionId="native-thread") if acp else dict(thread=dict(id="native-thread")),
         )
     elif method in ("turn/start", "session/prompt"):
+        if (root / "record-inputs").exists():
+            with (root / "recorded-inputs.jsonl").open("a") as recorded:
+                recorded.write(
+                    json.dumps(message["params"].get("prompt", message["params"].get("input", [])))
+                    + "\n"
+                )
         turn += 1
         cancelled.clear()
         params = message["params"]

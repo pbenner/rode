@@ -34,10 +34,19 @@ pub struct Spec {
     pub persistent: bool,
     /// First prompt, absent only for explicit history browsing.
     pub text: Option<String>,
+    /// Immutable file contents for the first prompt; absent for older clients.
+    #[serde(default)]
+    pub attachments: Vec<crate::attachment::Attachment>,
 }
 /// Discoverable live agent metadata, separate from backend-owned saved chats.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
+    /// Whether this host controller accepts portable prompt attachments.
+    #[serde(default)]
+    pub supports_attachments: bool,
+    /// Whether queued prompts are held by this live controller.
+    #[serde(default)]
+    pub supports_queue: bool,
     /// Native agent identity.
     pub id: String,
     /// Display title.
@@ -107,6 +116,9 @@ pub struct HistoryView {
 /// Current authoritative state streamed by the process host to one controlling UI.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
+    /// Host-owned waiting prompts, excluding attachment data.
+    #[serde(default)]
+    pub queue: crate::queue::View,
     /// Live worker identity and lifetime policy.
     pub info: Info,
     /// Current chat, or the current history browser when present.
@@ -154,10 +166,20 @@ impl Update {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Command {
+    /// Save or dispatch a conversation-owned queued prompt.
+    Queue {
+        /// Unique controlling-view request used to acknowledge durable ownership.
+        request: String,
+        /// Ordered queue operation.
+        operation: crate::queue::Action,
+    },
     /// Submit the next prompt using the current UI settings.
     Submit {
         /// Exact user message, bounded to PROMPT_LIMIT.
         text: String,
+        /// File snapshots submitted with this turn.
+        #[serde(default)]
+        attachments: Vec<crate::attachment::Attachment>,
         /// Current model, reply and permission settings.
         config: Config,
     },

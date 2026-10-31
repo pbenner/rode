@@ -3,6 +3,7 @@
 //! Send. Persistence belongs to the live conversation, never shared preferences.
 use super::{Config, Launch, background::Client, history::Restored};
 use anyhow::{Result, ensure};
+use rode_agent_core::attachment::{self, Attachment};
 pub use rode_agent_core::protocol::{Choice, Message, Prompt, Question, Role, clip};
 use rode_agent_core::service::Command;
 use serde_json::Value;
@@ -40,8 +41,21 @@ impl Chat {
         text: String,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<()> {
+        self.submit_with_attachments(launch, text, vec![], wake)
+    }
+    /// Submit captured file contents through the same local/SSH controller.
+    pub fn submit_with_attachments(
+        &mut self,
+        launch: Launch,
+        text: String,
+        attachments: Vec<Attachment>,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<()> {
+        attachment::validate(&text, &attachments)?;
         if !self.managed {
-            return self.inner.submit(launch.core(), text, wake);
+            return self
+                .inner
+                .submit_with_attachments(launch.core(), text, attachments, wake);
         }
         ensure!(
             !self.inner.busy,
@@ -54,15 +68,20 @@ impl Chat {
             "Reattach the background agent from Running, or choose New chat before sending another message"
         );
         launch.config.argv()?;
-        ensure!(
-            !text.trim().is_empty() && text.len() <= super::PROMPT_LIMIT,
-            "Agent messages must contain 1–32768 bytes"
-        );
         if let Some(client) = &self.native
             && client.matches(&launch)
         {
+            ensure!(
+                attachments.is_empty()
+                    || client
+                        .state
+                        .as_ref()
+                        .is_some_and(|s| s.info.supports_attachments),
+                "This background agent uses an older Rode version without attachments. Start a new chat to send files."
+            );
             client.send(Command::Submit {
                 text,
+                attachments,
                 config: launch.config,
             })?;
             self.inner.busy = true;
@@ -70,18 +89,56 @@ impl Chat {
             self.inner.status = "Working…".into();
             return Ok(());
         }
-        let client = Client::start(launch, Some(text.clone()), self.desired, wake)?;
+        let summary = attachment::summary(&text, &attachments);
+        let client = Client::start(launch, Some(text), attachments, self.desired, wake)?;
         self.native = Some(client);
         self.inner.messages.push_back(Message {
             id: "pending-native-submit".into(),
             role: Role::User,
             title: "You".into(),
-            text,
+            text: summary,
         });
         self.inner.busy = true;
         self.inner.last_turn_succeeded = false;
         self.inner.status = "Starting agent…".into();
         self.inner.changed = true;
+        Ok(())
+    }
+    /// Host-owned queue metadata for this controlling view.
+    pub fn queue_view(&self) -> Option<&rode_agent_core::queue::View> {
+        self.native.as_ref().and_then(Client::queue_view)
+    }
+    /// Whether queue edits are waiting for host acknowledgement.
+    pub fn queue_pending(&self) -> bool {
+        self.native.as_ref().is_some_and(Client::queue_pending)
+    }
+    /// Whether the current controller can accept another queue edit.
+    pub fn queue_capacity(&self) -> bool {
+        self.native.as_ref().is_none_or(Client::queue_capacity)
+    }
+    /// Older live agents remain usable, but cannot claim to retain a queue.
+    pub fn supports_queue(&self) -> bool {
+        self.native
+            .as_ref()
+            .is_none_or(|c| c.state.as_ref().is_none_or(|s| s.info.supports_queue))
+    }
+    /// Transfer one queue mutation to the controlling host.
+    pub fn queue_action(&mut self, operation: rode_agent_core::queue::Action) -> Result<()> {
+        self.native
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("No native agent owns this queue"))?
+            .queue_action(operation)
+    }
+    /// Dispatch a host-owned queue head atomically, without retransferring its files.
+    pub fn dispatch_queued(&mut self, id: u64, config: Config) -> Result<()> {
+        config.argv()?;
+        self.queue_action(rode_agent_core::queue::Action::Dispatch {
+            id,
+            config: Box::new(config),
+        })?;
+        self.inner.busy = true;
+        self.inner.last_turn_succeeded = false;
+        self.inner.status = "Sending queued prompt…".into();
         Ok(())
     }
     /// Follow authoritative updates while keeping user question drafts local.

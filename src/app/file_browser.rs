@@ -255,7 +255,14 @@ pub(super) fn rows(
 }
 
 pub(super) fn is_file_dialog(dialog: &Dialog) -> bool {
-    matches!(dialog, Dialog::Open | Dialog::HexOpen | Dialog::Save(_))
+    matches!(
+        dialog,
+        Dialog::Open
+            | Dialog::HexOpen
+            | Dialog::Save(_)
+            | Dialog::AgentAttachLocal
+            | Dialog::AgentAttachHost
+    )
 }
 fn parent(path: &str) -> String {
     std::path::Path::new(path)
@@ -275,7 +282,11 @@ impl EditorApp {
         let token = browser.token;
         self.dispatch(
             Request::List { path: path.clone() },
-            Job::BrowseFiles { token, path },
+            Job::BrowseFiles {
+                token,
+                path,
+                local: self.dialog == Dialog::AgentAttachLocal,
+            },
             ctx,
         );
     }
@@ -306,28 +317,37 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         if self.file_browser.needs_load {
             self.file_browser.needs_load = false;
-            let directory =
-                if matches!(self.dialog, Dialog::Save(_)) && self.dialog_input.starts_with('/') {
-                    parent(&self.dialog_input)
-                } else {
-                    self.workspace
-                        .as_ref()
-                        .map(|w| w.root.clone())
-                        .or_else(|| {
-                            self.documents
-                                .get(self.active)
-                                .and_then(|d| d.path.as_deref())
-                                .map(parent)
-                        })
-                        .unwrap_or_else(|| {
-                            std::env::current_dir()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .into()
-                        })
-                };
+            let directory = if matches!(self.dialog, Dialog::Save(_))
+                && self.dialog_input.starts_with('/')
+            {
+                parent(&self.dialog_input)
+            } else {
+                self.workspace
+                    .as_ref()
+                    .filter(|w| self.dialog != Dialog::AgentAttachLocal || w.remote.is_none())
+                    .map(|w| w.root.clone())
+                    .or_else(|| {
+                        self.documents
+                            .get(self.active)
+                            .filter(|_| {
+                                self.dialog != Dialog::AgentAttachLocal
+                                    || self.workspace.as_ref().is_none_or(|w| w.remote.is_none())
+                            })
+                            .and_then(|d| d.path.as_deref())
+                            .map(parent)
+                    })
+                    .unwrap_or_else(|| {
+                        std::env::current_dir()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into()
+                    })
+            };
             self.file_browser.directory = directory.clone();
-            if let Some(entries) = self.directories.get(&directory) {
+            if let Some(entries) = self.directories.get(&directory).filter(|_| {
+                self.dialog != Dialog::AgentAttachLocal
+                    || self.workspace.as_ref().is_none_or(|w| w.remote.is_none())
+            }) {
                 self.file_browser.entries.clone_from(entries);
             }
             self.browse_files(directory, ctx);
@@ -335,18 +355,44 @@ impl EditorApp {
         let host = self
             .workspace
             .as_ref()
+            .filter(|_| self.dialog != Dialog::AgentAttachLocal)
             .and_then(|w| w.remote.as_ref())
             .map_or_else(
                 || "THIS MACHINE".into(),
                 |r| format!("SSH · {}", r.profile.endpoint()),
             );
-        let host = if let Some(workspace) = &self.workspace {
+        let host = if let Some(workspace) = self
+            .workspace
+            .as_ref()
+            .filter(|_| self.dialog != Dialog::AgentAttachLocal)
+        {
             format!("{host} · {}", workspace.plan.label())
         } else {
             host
         };
         ui.label(palette.tag(host));
+        if matches!(
+            self.dialog,
+            Dialog::AgentAttachLocal | Dialog::AgentAttachHost
+        ) {
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.dialog == Dialog::AgentAttachLocal, "This computer")
+                    .clicked()
+                {
+                    self.set_dialog(Dialog::AgentAttachLocal);
+                }
+                if self.workspace.as_ref().is_some_and(|w| w.remote.is_some())
+                    && ui
+                        .selectable_label(self.dialog == Dialog::AgentAttachHost, "Project host")
+                        .clicked()
+                {
+                    self.set_dialog(Dialog::AgentAttachHost);
+                }
+            });
+        }
         ui.heading(match self.dialog {
+            Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach image or document",
             Dialog::Save(_) => "Save file as",
             Dialog::HexOpen => "Open as hex / inspect binary",
             _ => "Open file",
@@ -417,7 +463,13 @@ impl EditorApp {
         if let Some(error) = &self.file_browser.error {
             ui.colored_label(palette.error, error);
         }
-        self.file_browser.rows(&self.directories, &self.documents);
+        if self.dialog == Dialog::AgentAttachLocal
+            && self.workspace.as_ref().is_some_and(|w| w.remote.is_some())
+        {
+            self.file_browser.rows(&HashMap::new(), &[]);
+        } else {
+            self.file_browser.rows(&self.directories, &self.documents);
+        }
         let query = format!(
             "{}:{}:{}",
             self.file_browser.token, self.file_browser.query, self.show_hidden
@@ -485,6 +537,7 @@ impl EditorApp {
             let label = match self.dialog {
                 Dialog::Save(_) => "Save",
                 Dialog::HexOpen => "Open as hex",
+                Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach",
                 _ => "Open",
             };
             if palette.primary(ui, label).clicked() || keys.1 {
@@ -531,6 +584,9 @@ impl EditorApp {
                     self.focus_editor(ctx);
                 }
                 Dialog::HexOpen => self.open_hex(path, ctx),
+                Dialog::AgentAttachLocal | Dialog::AgentAttachHost => {
+                    self.attach_agent_file(path, dialog == Dialog::AgentAttachLocal, ctx)
+                }
                 _ => self.open_file(path, ctx),
             }
         }
@@ -571,6 +627,7 @@ mod tests {
                 generation: app.generation,
                 job: Job::BrowseFiles {
                     token,
+                    local: false,
                     path: "/first".into(),
                 },
                 result: Box::new(Ok(files::Response {
@@ -590,6 +647,7 @@ mod tests {
                 generation: app.generation,
                 job: Job::BrowseFiles {
                     token,
+                    local: false,
                     path: "/old".into(),
                 },
                 result: Box::new(Ok(files::Response {
@@ -615,6 +673,7 @@ mod tests {
                 generation: app.generation,
                 job: Job::BrowseFiles {
                     token,
+                    local: false,
                     path: "/project".into(),
                 },
                 result: Box::new(Ok(files::Response {

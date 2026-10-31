@@ -128,7 +128,7 @@ def run(remote=False):
                 open_file("demo.ipynb")
                 if remote:
                     # Hide the automatically opened SSH shell to see all cells.
-                    key("grave", ("Control_L",))
+                    key("t", ("Control_L", "Shift_L"))
                 screenshot(window, label + "-opened.png")
                 assert json.loads(source.read_text()) == original, (
                     "Opening a notebook changed its source"

@@ -14,6 +14,7 @@ pub(super) struct State {
     /// Preferred height without the optional unsaved-file row. Keep it when a
     /// temporarily small window clamps the actual panel or history hides input.
     height: f32,
+    attachment_height: f32,
     drag_start: Option<f32>,
     history: Vec<String>,
     recall: Option<Recall>,
@@ -23,6 +24,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             height: DEFAULT_HEIGHT,
+            attachment_height: 0.,
             drag_start: None,
             history: Vec::new(),
             recall: None,
@@ -43,6 +45,10 @@ pub(super) struct Layout {
 }
 
 impl State {
+    pub fn set_attachment_height(&mut self, height: f32) {
+        self.attachment_height = height;
+    }
+
     pub fn reset_recall(&mut self) {
         self.recall = None;
     }
@@ -160,7 +166,7 @@ impl State {
                 stretch: 0.,
             };
         }
-        let extra = if warning { WARNING_HEIGHT } else { 0. };
+        let extra = if warning { WARNING_HEIGHT } else { 0. } + self.attachment_height;
         let maximum = (bounds.height() - TRANSCRIPT_MIN_HEIGHT)
             .max(MIN_HEIGHT + extra)
             .min(bounds.height())

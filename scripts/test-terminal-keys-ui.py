@@ -79,7 +79,7 @@ def run():
                 text("main.txt")
                 key("Return")
                 time.sleep(0.4)
-                key("grave", ("Control_L",))
+                key("t", ("Control_L", "Shift_L"))
                 time.sleep(0.6)
                 text("cat completion-")
                 key("Tab")

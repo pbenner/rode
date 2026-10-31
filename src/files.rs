@@ -112,6 +112,9 @@ pub enum Request {
 /// defaults; fields marked `serde(skip)` never cross SSH.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Response {
+    /// Desktop-only normalized prompt contents, never accepted from the file peer.
+    #[serde(skip)]
+    pub attachment: Option<rode_agent_core::attachment::Attachment>,
     /// Canonical host path associated with the operation.
     pub path: String,
     /// Sorted immediate children for a directory listing.
@@ -184,6 +187,7 @@ pub fn local(request: &Request) -> Result<Response> {
             pdf: None,
             preview: None,
             hex: None,
+            attachment: None,
             notebook: None,
         });
     }
@@ -230,6 +234,7 @@ pub fn local(request: &Request) -> Result<Response> {
         pdf: None,
         preview: None,
         hex: None,
+        attachment: None,
         notebook: None,
     };
     match request {

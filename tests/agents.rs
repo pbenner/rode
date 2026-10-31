@@ -700,3 +700,151 @@ fn a_brief_executable_write_does_not_break_agent_startup() {
             .any(|m| m.role == Role::Assistant && m.text.contains("busy-script"))
     );
 }
+
+#[test]
+fn file_contents_reach_codex_local_and_capable_acp_agents_without_payloads_in_transcripts() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use rode_agent_core::attachment::Attachment;
+    let image = image::RgbImage::from_fn(360, 360, |x, y| {
+        let n = (x + y * 360).wrapping_mul(2654435761);
+        image::Rgb([n as u8, (n >> 8) as u8, (n >> 16) as u8])
+    });
+    let mut bytes = std::io::Cursor::new(vec![]);
+    image::DynamicImage::ImageRgb8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let data = STANDARD.encode(bytes.into_inner());
+    assert!(
+        data.len() > 256 * 1024,
+        "Exercise the larger image-bearing transport"
+    );
+    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+        let (_temp, root, program) = fixture();
+        let mut launch = launch(&root, &program, provider, false);
+        launch.config.local_model = "fixture-local".into();
+        launch.config.acp_arguments = vec!["--image-input".into()];
+        let mut chat = Chat::default();
+        let files = vec![
+            Attachment::Image {
+                name: "view.png".into(),
+                mime_type: "image/png".into(),
+                data: data.clone(),
+            },
+            Attachment::Document {
+                name: "notes.md".into(),
+                text: "Document body λ".into(),
+            },
+        ];
+        chat.submit_with_attachments(launch, "Compare these".into(), files, Arc::new(|| {}))
+            .unwrap();
+        wait(&mut chat, |c| c.completed == 1 && !c.busy);
+        let calls = log(&root);
+        let turn = calls
+            .iter()
+            .find(|v| matches!(v["method"].as_str(), Some("turn/start" | "session/prompt")))
+            .unwrap();
+        let blocks = if provider == Provider::Acp {
+            &turn["params"]["prompt"]
+        } else {
+            &turn["params"]["input"]
+        };
+        assert_eq!(blocks[0]["text"], "Compare these");
+        let image = blocks
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["type"] == "image")
+            .unwrap();
+        if provider == Provider::Acp {
+            assert_eq!(image["data"], data);
+            assert_eq!(image["mimeType"], "image/png");
+        } else {
+            assert_eq!(image["url"], format!("data:image/png;base64,{data}"));
+        }
+        assert!(blocks.as_array().unwrap().iter().any(|b| {
+            b["text"]
+                .as_str()
+                .is_some_and(|s| s.contains("Document body λ"))
+        }));
+        let user = chat.messages.iter().find(|m| m.role == Role::User).unwrap();
+        assert!(user.text.contains("view.png, notes.md"));
+        assert!(!user.text.contains(&data[..100]));
+        assert!(!user.text.contains("Document body"));
+    }
+}
+
+#[test]
+fn acp_agents_without_image_capability_never_receive_image_blocks() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use rode_agent_core::attachment::Attachment;
+    let (_temp, root, program) = fixture();
+    let mut chat = Chat::default();
+    let file = Attachment::Image {
+        name: "image.png".into(),
+        mime_type: "image/png".into(),
+        data: STANDARD.encode(b"\x89PNG\r\n\x1a\n"),
+    };
+    chat.submit_with_attachments(
+        launch(&root, &program, Provider::Acp, false),
+        "inspect".into(),
+        vec![file],
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    wait(&mut chat, |c| !c.busy);
+    assert!(
+        chat.messages
+            .iter()
+            .any(|m| m.text.contains("does not advertise image input"))
+    );
+    assert!(!log(&root).iter().any(|v| v["method"] == "session/prompt"));
+}
+
+#[test]
+fn ssh_stdio_supervisor_forwards_attachment_sized_messages_without_an_ssh_server() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::{Command, Stdio},
+        sync::mpsc,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let mut child = Command::new("python3")
+        .args(["-c", include_str!("../src/remote_agent.py")])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let launch = json!({"root":root.path(),"prefix":[],"argv":["python3","-c","import sys; print(len(sys.stdin.buffer.readline()), flush=True)"],"python":"off"});
+    writeln!(input, "{launch}").unwrap();
+    let payload = serde_json::to_vec(&json!({"image":"a".repeat(400_000)})).unwrap();
+    input.write_all(&payload).unwrap();
+    input.write_all(b"\n").unwrap();
+    input.flush().unwrap();
+    let output = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(output).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    let result = rx.recv_timeout(Duration::from_secs(10));
+    if result.is_err() {
+        let _ = child.kill();
+    }
+    let line = result.expect("Remote supervisor did not forward the attachment payload");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("Remote supervisor did not exit");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    assert_eq!(line.trim().parse::<usize>().unwrap(), payload.len() + 1);
+}

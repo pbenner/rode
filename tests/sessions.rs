@@ -534,7 +534,12 @@ fn older_service_keeps_its_jobs_while_new_terminals_get_persistence_controls() {
     let modern = fixture.create_with_persistence(&plan, false);
     assert!(modern.persistence_supported);
     assert!(!modern.persistent);
-    assert!(fixture.runtime.join("protocol-4/socket").exists());
+    assert!(
+        fixture
+            .runtime
+            .join(format!("protocol-{}/socket", rode_session::PROTOCOL))
+            .exists()
+    );
     let new_view = fixture.attach(&modern);
     new_view
         .send(b"printf 'MODERN_%s\\n' READY\n".to_vec())

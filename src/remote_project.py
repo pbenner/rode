@@ -15,6 +15,48 @@ import threading
 import time
 
 
+def project_environment_settings(settings, env):
+    """Apply validated literal values and runtime directories on this execution host."""
+    import re
+    import shlex
+
+    variables = settings.get("variables", {})
+    runtimes = settings.get("runtimes", {})
+    if len(variables) > 64 or len(runtimes) > 32 or len(json.dumps(settings).encode()) > 65536:
+        raise ValueError("Too many project environment settings.")
+    exports = []
+    for name, value in variables.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,127}", name):
+            raise ValueError("Invalid environment variable name.")
+        if len(value.encode()) > 4096 or any(c in value for c in "\0\n\r"):
+            raise ValueError("Invalid environment variable value.")
+        env[name] = value
+        exports.append(f"export {name}={shlex.quote(value)};")
+    directories = []
+    if runtimes.get("rustc") and "RUSTC" not in variables:
+        env["RUSTC"] = runtimes["rustc"]
+    if runtimes.get("rustc") and "RUSTC" not in variables:
+        exports.append(f"export RUSTC={shlex.quote(runtimes['rustc'])};")
+    for name, value in sorted(runtimes.items()):
+        if (
+            not re.fullmatch(r"[A-Za-z_0-9-]{1,64}", name)
+            or len(value.encode()) > 4096
+            or any(ord(c) < 32 or ord(c) == 127 for c in value)
+        ):
+            raise ValueError("Invalid runtime executable.")
+        if "/" in value and not os.path.isabs(value):
+            raise ValueError("Use an absolute host path for a runtime executable.")
+        if os.path.isabs(value):
+            directory = os.path.dirname(value)
+            if directory not in directories:
+                directories.append(directory)
+    if directories:
+        prefix = ":".join(directories)
+        env["PATH"] = prefix + ":" + env.get("PATH", "")
+        exports.append(f'export PATH={shlex.quote(prefix)}:"$PATH";')
+    return env, " ".join(exports)
+
+
 def project_run(args, root=None, text="", timeout=20, env=None, cancel=None):
     """Run literal arguments in an owned group with concurrent bounded pipe draining, timeout and cancellation."""
     limit = 8 * 1024 * 1024
@@ -495,6 +537,39 @@ def project_handle(request):
         )
     task = request["task"]
     root = os.path.expanduser(request["root"])
+    if task == "runtimes":
+        settings = request.get("settings", {})
+        env, _ = project_environment_settings(settings, dict(os.environ))
+        env["RUSTUP_AUTO_INSTALL"] = "0"
+        env["GOTOOLCHAIN"] = "local"
+        results = []
+        for name in ("node", "npm", "cargo", "rustc", "go", "java", "javac", "dotnet"):
+            program = settings.get("runtimes", {}).get(name) or name
+            entry = dict(name=name, executable=program, version="", error="")
+            try:
+                flag = (
+                    "version"
+                    if name == "go"
+                    else "-version"
+                    if name in ("java", "javac")
+                    else "--version"
+                )
+                output = project_run([program, flag], root=root, env=env, timeout=3)
+                if output["code"]:
+                    entry["error"] = f"Unavailable (exit {output['code']})"
+                else:
+                    entry["version"] = next(
+                        (
+                            line
+                            for line in (output["stdout"] + "\n" + output["stderr"]).splitlines()
+                            if line.strip()
+                        ),
+                        "",
+                    )[:256]
+            except Exception as error:
+                entry["error"] = str(error)[:256]
+            results.append(entry)
+        return dict(kind="runtimes", data=results)
     if task == "latex_analyze":
         return dict(kind="analysis", data=globals()["latex_analyze"](request, root))
     if task == "sessions":

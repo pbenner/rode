@@ -10,10 +10,12 @@ use crate::agent::{
     protocol::{Chat, Role},
 };
 use serde_json::json;
+pub(super) mod attachments;
 mod background;
 mod composer;
 mod controls;
 mod history;
+mod message;
 mod queue;
 mod runtime;
 
@@ -26,6 +28,7 @@ pub(super) struct Agents {
     composing: bool,
     composer: composer::State,
     queue: queue::Queue,
+    pub(super) files: attachments::State,
     arguments: String,
     argument_error: String,
     settings: bool,
@@ -58,6 +61,7 @@ impl Agents {
             composing: false,
             composer: composer::State::default(),
             queue: queue::Queue::default(),
+            files: attachments::State::default(),
             arguments: "[]".into(),
             argument_error: String::new(),
             settings: false,
@@ -103,7 +107,30 @@ impl Agents {
             self.pending = true;
         }
     }
+    fn flush_queue(&mut self) {
+        if !self.queue.hosted() {
+            return;
+        }
+        while self.chat.queue_capacity() {
+            let Some(operation) = self.queue.command().cloned() else {
+                break;
+            };
+            match self.chat.queue_action(operation) {
+                Ok(()) => self.queue.command_sent(),
+                Err(error) => {
+                    self.chat
+                        .notice(&format!("Queue changes were not saved: {error:#}"));
+                    break;
+                }
+            }
+        }
+    }
     fn replace_chat(&mut self) {
+        self.release_chat();
+        self.files.clear();
+    }
+    fn release_chat(&mut self) {
+        self.flush_queue();
         self.composer.clear_history();
         self.queue.clear();
         let old = std::mem::take(&mut self.chat);
@@ -245,6 +272,12 @@ impl EditorApp {
                 self.agents.focus = true;
             }
         }
+        if !self.agents.chat.queue_pending()
+            && self.agents.queue.command().is_none()
+            && let Some(view) = self.agents.chat.queue_view()
+        {
+            self.agents.queue.sync(view, self.agents.chat.busy);
+        }
         if self.agents.completed != self.agents.chat.completed {
             self.agents.completed = self.agents.chat.completed;
             self.agents.queue.finished();
@@ -260,7 +293,11 @@ impl EditorApp {
             self.agents.queue.finished();
             self.agents.queue.pause();
         }
+        self.agents.flush_queue();
         self.dispatch_agent_queue(ctx);
+        if self.agents.chat.work_pending() {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
         if self.agents.chat.busy {
             // Needed only for startup/cancellation deadlines. Streamed output
             // wakes the window directly; idle agent sessions do not poll it.
@@ -341,6 +378,9 @@ impl EditorApp {
         let modal = self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal();
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         // Give history the full compact panel; retain Stop while a turn is running.
+        self.agents
+            .composer
+            .set_attachment_height(self.agents.files.height());
         let hide_composer = self.agents.history_open && !self.agents.chat.busy;
         let read_only = self
             .workspace
@@ -366,6 +406,7 @@ impl EditorApp {
             content.max.y = (queue_rect.top() - 6.).max(content.top());
         }
         let mut send = false;
+        let mut attach = false;
         let mut stop = false;
         let mut new_chat = false;
         let mut running = false;
@@ -398,7 +439,7 @@ impl EditorApp {
                     egui::ComboBox::from_id_salt("agent-provider").width(width)
                         .truncate().selected_text(agents.config.provider.label()).show_ui(ui,|ui| {
                             for provider in [Provider::Codex,Provider::Local,Provider::Acp] {
-                                ui.add_enabled_ui(!agents.chat.busy,|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label()));
+                                ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label()));
                             }
                         }).response.on_hover_text(agents.config.provider.label());
                 });
@@ -412,7 +453,7 @@ impl EditorApp {
             if agents.settings {
                 egui::ScrollArea::vertical().id_salt("agent-settings-scroll")
                     .max_height((ui.available_height()-90.).clamp(60.,240.)).show(ui,|ui| {
-                    ui.add_enabled_ui(!agents.chat.busy,|ui| {
+                    ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui| {
                         if agents.config.provider == Provider::Acp {
                             ui.label("ACP executable on this host");
                             ui.add(egui::TextEdit::singleline(&mut agents.config.acp_program).desired_width(f32::INFINITY).hint_text("agent executable or absolute path").char_limit(4096));
@@ -529,9 +570,11 @@ impl EditorApp {
         if queue_height > 0. {
             ui.scope_builder(egui::UiBuilder::new().max_rect(queue_rect), |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(queue_rect));
-                agents
-                    .queue
-                    .ui(ui, !offline && !modal && !agents.history_open);
+                agents.queue.ui(
+                    ui,
+                    !offline && !modal && !agents.history_open && agents.chat.queue_capacity(),
+                );
+                agents.flush_queue();
             });
         }
         ui.scope_builder(egui::UiBuilder::new().max_rect(composer), |ui| {
@@ -561,6 +604,7 @@ impl EditorApp {
                     );
                 });
             });
+            agents.files.ui(ui, !modal && !offline);
             let id = egui::Id::new("agent-composer");
             let shortcut = composer_submit(ui, id, modal, &mut agents.composing);
             agents.composer.recall(
@@ -591,8 +635,11 @@ impl EditorApp {
                                 && !installing
                                 && !agents.chat.stopping()
                                 && agents.queue.can_push()
+                                && agents.chat.queue_capacity()
                                 && !agents.history_open
-                                && !agents.draft.trim().is_empty()
+                                && !agents.attaching
+                                && !agents.files.pending
+                                && (!agents.draft.trim().is_empty() || !agents.files.files.is_empty())
                                 && agents.draft.len() <= agent::PROMPT_LIMIT
                                 && (agents.config.provider != Provider::Acp
                                     || agents.argument_error.is_empty());
@@ -618,11 +665,11 @@ impl EditorApp {
                             if !agents.chat.busy
                                 && agents.chat.connected()
                                 && ui
-                                    .button(if agents.chat.persistent() {
+                                    .add_enabled(!agents.chat.work_pending(), egui::Button::new(if agents.chat.persistent() {
                                         "Detach"
                                     } else {
                                         "Disconnect"
-                                    })
+                                    }))
                                     .clicked()
                             {
                                 if agents.chat.persistent() {
@@ -635,6 +682,8 @@ impl EditorApp {
                         .chat
                         .notice("Agent disconnected. The next message starts a new conversation.");
                             }
+                            if ui.add_enabled(!offline && !modal && !agents.history_open && !agents.files.pending && agents.files.files.len() < rode_agent_core::attachment::MAX_ATTACHMENTS,
+                                egui::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.").clicked() { attach = true; }
                             if ui.available_width() > 100. {
                                 ui.add(
                                     egui::Label::new(palette.tag("Enter · Shift+Enter")).truncate(),
@@ -649,7 +698,8 @@ impl EditorApp {
         if agents.config != before {
             if !before.same_process(&agents.config) {
                 agents.runtime.reset();
-                agents.queue.clear();
+                agents.release_chat();
+                agents.completed = 0;
             }
             agents.browser = None;
             agents.history_open = false;
@@ -711,6 +761,9 @@ impl EditorApp {
                 );
             }
         }
+        if attach {
+            self.set_dialog(Dialog::AgentAttachLocal);
+        }
         if send {
             if self.agents.runtime.installing() {
                 self.notify(
@@ -744,25 +797,41 @@ impl EditorApp {
         if running {
             self.open_background_agents(ctx);
         }
+        self.agents.flush_queue();
     }
 
     fn send_agent(&mut self, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Agents) {
             return;
         }
+        if self.agents.files.pending || self.agents.attaching {
+            return;
+        }
         let text = self.agents.draft.clone();
+        let files = self.agents.files.files.clone();
         let result = if self.agents.chat.busy
             || self.agents.queue.waiting_for_reply()
             || !self.agents.queue.is_empty()
         {
-            self.agents.queue.push(text)
+            if !self.agents.chat.supports_queue() {
+                Err(anyhow::anyhow!(
+                    "This running agent predates persistent queues. Start a new chat to queue prompts without losing them on restart."
+                ))
+            } else if !self.agents.chat.queue_capacity() {
+                Err(anyhow::anyhow!("Wait for queued changes to be saved."))
+            } else {
+                let result = self.agents.queue.push_with_attachments(text, files);
+                self.agents.flush_queue();
+                result
+            }
         } else {
-            self.submit_agent_text(text, ctx)
+            self.submit_agent_input(text, files, ctx)
         };
         match result {
             Ok(()) => {
                 self.agents.composer.reset_recall();
                 self.agents.draft.clear();
+                self.agents.files.clear();
                 self.agents.focus = true;
             }
             Err(error) => {
@@ -772,16 +841,23 @@ impl EditorApp {
         }
     }
 
-    fn submit_agent_text(&mut self, text: String, ctx: &egui::Context) -> anyhow::Result<()> {
+    fn submit_agent_input(
+        &mut self,
+        text: String,
+        files: Vec<rode_agent_core::attachment::Attachment>,
+        ctx: &egui::Context,
+    ) -> anyhow::Result<()> {
         let launch = self.agent_launch();
         self.agents.chat.use_service();
         let context = ctx.clone();
-        self.agents.chat.submit(
+        self.agents.chat.submit_with_attachments(
             launch,
             text.clone(),
+            files,
             Arc::new(move || context.request_repaint()),
         )?;
         self.agents.composer.remember_prompt(text);
+        self.agents.queue.set_hosted();
         // An older idle snapshot can arrive before the service acknowledges
         // Submit. Wait for a completed-turn counter change before sending again.
         self.agents.queue.submitted();
@@ -790,6 +866,8 @@ impl EditorApp {
 
     fn dispatch_agent_queue(&mut self, ctx: &egui::Context) {
         if self.agents.chat.busy
+            || self.agents.chat.queue_pending()
+            || self.agents.queue.command().is_some()
             || self.agents.attaching
             || self.agents.history_open
             || self.agents.browser.is_some()
@@ -809,7 +887,20 @@ impl EditorApp {
         let Some(text) = self.agents.queue.next().map(str::to_owned) else {
             return;
         };
-        match self.submit_agent_text(text, ctx) {
+        let result = if self.agents.queue.hosted() {
+            let id = self.agents.queue.head_id().unwrap();
+            self.agents
+                .chat
+                .dispatch_queued(id, self.agents.config.clone())
+                .map(|()| {
+                    self.agents.composer.remember_prompt(text);
+                    self.agents.queue.submitted();
+                })
+        } else {
+            let files = self.agents.queue.next_attachments().to_vec();
+            self.submit_agent_input(text, files, ctx)
+        };
+        match result {
             Ok(()) => self.agents.queue.sent(),
             Err(error) => {
                 self.agents.queue.pause();
@@ -911,43 +1002,17 @@ fn render_message(
     text: &str,
     palette: theme::Palette,
 ) -> egui::text_edit::TextEditOutput {
-    let mut job = egui::text::LayoutJob::default();
-    for (index, part) in text.split("```").enumerate() {
-        let code = index % 2 != 0;
-        let part = if code {
-            part.split_once('\n')
-                .map(|(_, code)| code)
-                .unwrap_or(part)
-                .trim_end()
-        } else {
-            part.trim()
-        };
-        if part.is_empty() {
-            continue;
-        }
-        let format = egui::TextFormat {
-            font_id: if code {
-                egui::FontId::monospace(12.)
-            } else {
-                egui::TextStyle::Body.resolve(ui.style())
-            },
-            color: palette.text,
-            background: if code {
-                palette.raised
-            } else {
-                egui::Color32::TRANSPARENT
-            },
-            ..Default::default()
-        };
-        if !job.text.is_empty() {
-            job.append("\n\n", 0., format.clone());
-        }
-        job.append(part, 0., format);
-    }
+    let job = message::layout(ui, text, palette);
+    // A parent can request more width than the visible transcript, especially
+    // during resizing. Wrap to the visible edge rather than that larger layout.
+    let visible_width = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.next_widget_position().x)
+        .max(1.);
     let mut display = job.text.as_str();
     let mut layouter = |ui: &egui::Ui, _: &dyn egui::TextBuffer, width: f32| {
         let mut job = job.clone();
-        job.wrap.max_width = width;
+        job.wrap.max_width = width.min(visible_width).max(1.);
         ui.fonts_mut(|fonts| fonts.layout_job(job))
     };
     let id = ui.make_persistent_id("message-text");
@@ -963,7 +1028,7 @@ fn render_message(
         .id(id)
         .frame(false)
         .margin(egui::Vec2::ZERO)
-        .desired_width(f32::INFINITY)
+        .desired_width(visible_width)
         .desired_rows(1)
         .layouter(&mut layouter)
         .show(ui);
@@ -999,6 +1064,86 @@ fn render_message(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn long_responses_wrap_to_the_visible_chat_width_after_resizing() {
+        for (body, code) in [
+            (
+                "A long response should remain readable in the chat panel. ".repeat(80),
+                false,
+            ),
+            (
+                format!("https://example.invalid/{}", "longpath".repeat(200)),
+                false,
+            ),
+            (format!("    result = '{}'", "value".repeat(200)), true),
+        ] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.agents.config.provider = Provider::Acp;
+            app.agents
+                .chat
+                .messages
+                .push_back(agent::protocol::Message {
+                    id: "wrapped-response".into(),
+                    role: Role::Assistant,
+                    title: "Agent".into(),
+                    text: if code {
+                        format!("```text\n{body}\n```")
+                    } else {
+                        body.clone()
+                    },
+                });
+            for (width, oversized) in [
+                (1100., false),
+                (500., false),
+                (320., false),
+                (1100., true),
+                (500., true),
+            ] {
+                let mut output = None;
+                for _ in 0..2 {
+                    output = Some(ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                if oversized {
+                                    ui.set_min_width(width * 2.);
+                                }
+                                app.agent_ui(ui, ctx);
+                            });
+                        },
+                    ));
+                }
+                let output = output.unwrap();
+                let (shape, text) = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == body.trim_end() => {
+                            Some((shape, text))
+                        }
+                        _ => None,
+                    })
+                    .expect("rendered response text");
+                assert!(text.galley.rows.len() > 1);
+                assert!(
+                    text.pos.x + text.galley.size().x <= shape.clip_rect.right() + 1.,
+                    "response overruns visible chat: width={width}, right={}, clip={}",
+                    text.pos.x + text.galley.size().x,
+                    shape.clip_rect.right()
+                );
+                assert!(!text.galley.elided);
+            }
+        }
+    }
 
     #[test]
     fn copy_response_copies_displayed_content_without_code_fences() {
@@ -1117,7 +1262,7 @@ mod tests {
     #[test]
     fn response_selection_copies_across_prose_and_code_without_editing() {
         let ctx = egui::Context::default();
-        let source = "Alpha βeta\n\n```rust\nlet value = 1;\n```\n\nOmega end";
+        let source = "**Alpha** *βeta*\n\n```rust\nlet value = 1;\n```\n\nOmega end";
         let frame = |events| {
             let mut output = None;
             let full = ctx.run(
@@ -1231,7 +1376,7 @@ mod tests {
             );
             (full, output.unwrap())
         };
-        let (_, mut output) = frame("Alpha βeta", vec![]);
+        let (_, mut output) = frame("Alpha **βeta**", vec![]);
         output
             .state
             .cursor
@@ -1242,7 +1387,7 @@ mod tests {
         output.state.store(&ctx, output.response.id);
         output.response.request_focus();
         let (full, output) = frame(
-            "Alpha βeta\n\n```rust\nlet value = 1;\n```",
+            "Alpha **βeta**\n\n```rust\nlet value = 1;\n```",
             vec![egui::Event::Copy],
         );
         assert_eq!(output.cursor_range.unwrap().as_sorted_char_range(), 6..10);

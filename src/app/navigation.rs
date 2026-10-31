@@ -329,6 +329,7 @@ impl EditorApp {
                 }
             }
             Hide => {
+                self.remember_tool_tab();
                 match self.navigation.active {
                     Pane::Explorer => self.show_explorer = false,
                     Pane::Terminal => self.show_terminal = false,
@@ -390,6 +391,10 @@ impl EditorApp {
             } else {
                 egui::ViewportId::ROOT
             };
+            if target == Self::tools_viewport() {
+                self.workbench.tools_hidden = false;
+                ctx.send_viewport_cmd_to(target, egui::ViewportCommand::Visible(true));
+            }
             ctx.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
         }
         self.navigation.active = pane;
@@ -411,6 +416,8 @@ impl EditorApp {
             }
             Pane::Tools => {
                 self.workbench.surface = workbench::Surface::Tools;
+                self.workbench.tools_hidden = false;
+                self.remember_tool_tab();
                 if self.workbench.panel.is_none() {
                     self.toggle_panel(Panel::Monitor, ctx);
                 }

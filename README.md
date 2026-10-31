@@ -12,7 +12,7 @@ A lightweight native Rust code editor for local and SSH projects, with on-demand
 Also included:
 
 - [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md).
-- [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees and Python environments](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
+- [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - [Jupyter notebooks](docs/notebooks.md), [Markdown](docs/markdown.md), [Marp slides](docs/marp.md), [LaTeX](docs/latex.md), [images](docs/images.md), [PDFs](docs/pdf.md), and [hex editing / binary analysis](docs/binary.md).
 
 ![RODE](assets/carbon.png)

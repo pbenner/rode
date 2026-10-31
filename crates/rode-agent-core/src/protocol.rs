@@ -1,5 +1,6 @@
 //! Small Codex app-server / ACP v1 clients, sharing one bounded chat model.
-use super::{Access, Approval, Config, Event, Launch, PROMPT_LIMIT, Provider, Session, controls};
+use super::{Access, Approval, Config, Event, Launch, Provider, Session, controls};
+use crate::attachment::{self, Attachment};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -118,7 +119,8 @@ pub struct Chat {
     turn: String,
     next_id: u64,
     calls: HashMap<u64, Call>,
-    pending: Option<String>,
+    pending: Option<(String, Vec<Attachment>)>,
+    image_support: bool,
     cancelling: bool,
     deadline: Option<Instant>,
     last_stderr: String,
@@ -252,15 +254,22 @@ impl Chat {
         text: String,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<()> {
+        self.submit_with_attachments(launch, text, vec![], wake)
+    }
+
+    /// Submit immutable image/document contents with a bounded user prompt.
+    pub fn submit_with_attachments(
+        &mut self,
+        launch: Launch,
+        text: String,
+        attachments: Vec<Attachment>,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<()> {
         ensure!(
             !self.busy,
             "The agent is still working. Stop it or wait for its reply."
         );
-        ensure!(!text.trim().is_empty(), "Enter a message.");
-        ensure!(
-            text.len() <= PROMPT_LIMIT,
-            "Agent messages are limited to 32 KiB."
-        );
+        attachment::validate(&text, &attachments)?;
         let bundled = launch.config.argv()?[0] == crate::AUTO_CODEX;
         let reset_defaults = (self.config.model() != launch.config.model()
             && launch.config.model().is_empty())
@@ -299,9 +308,9 @@ impl Chat {
             format!("user-{}", self.serial),
             Role::User,
             "You".into(),
-            text.clone(),
+            attachment::summary(&text, &attachments),
         );
-        self.pending = Some(text);
+        self.pending = Some((text, attachments));
         self.settings_attempts = 0;
         self.busy = true;
         self.cancelling = false;
@@ -509,7 +518,16 @@ impl Chat {
                 }
             }
         }
-        let Some(text) = self.pending.take() else {
+        if self.config.provider == Provider::Acp && !self.image_support {
+            ensure!(
+                !self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|(_, files)| files.iter().any(Attachment::is_image)),
+                "This ACP agent does not advertise image input support. Remove the image or choose another agent."
+            );
+        }
+        let Some((text, attachments)) = self.pending.take() else {
             self.busy = false;
             self.deadline = None;
             self.status = "Ready".into();
@@ -518,7 +536,12 @@ impl Chat {
         self.status = "Working…".into();
         self.deadline = None;
         self.turn.clear();
-        let mut input = vec![json!({"type":"text","text":text})];
+        let mut input = vec![
+            json!({"type":"text","text":if text.trim().is_empty() { "Attached files.".into() } else { text }}),
+        ];
+        for attachment in attachments {
+            input.extend(attachment.blocks(self.config.provider == Provider::Acp));
+        }
         if let Some(hint) = self.config.personality.hint(self.response_style_context) {
             input.push(json!({"type":"text","text":format!("\n\n{hint}")}));
             self.response_style_context = true;
@@ -634,6 +657,9 @@ impl Chat {
                         result["protocolVersion"].as_u64() == Some(1),
                         "Agent does not support ACP v1."
                     );
+                    self.image_support = result["agentCapabilities"]["promptCapabilities"]["image"]
+                        .as_bool()
+                        .unwrap_or(false);
                     self.call(
                         "session/new",
                         json!({"cwd":self.root,"mcpServers":[]}),

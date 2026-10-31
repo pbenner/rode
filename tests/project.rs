@@ -38,6 +38,48 @@ fn remote(request: &Request) -> anyhow::Result<Response> {
         .tool
         .unwrap())
 }
+
+#[test]
+fn runtime_overrides_and_literal_variables_match_on_native_and_python_hosts() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let program = root.path().join("runtime tool 'quoted'");
+    fs::write(
+        &program,
+        "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$APP_MODE\" \"$1\" \"$RUSTUP_AUTO_INSTALL\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut settings = rode::environment::Settings::default();
+    settings
+        .variables
+        .insert("APP_MODE".into(), "literal $(touch unwanted)".into());
+    for (name, _) in rode::environment::TOOLS {
+        settings
+            .runtimes
+            .insert((*name).into(), program.to_string_lossy().into_owned());
+    }
+    let request = Request::Runtimes {
+        root: root.path().to_string_lossy().into_owned(),
+        settings,
+    };
+    let Response::Runtimes(native) = project::local(&request).unwrap() else {
+        panic!()
+    };
+    let Response::Runtimes(peer) = remote(&request).unwrap() else {
+        panic!()
+    };
+    assert_eq!(native.len(), rode::environment::TOOLS.len());
+    for (native, peer) in native.iter().zip(peer.iter()) {
+        assert_eq!(native.name, peer.name);
+        assert_eq!(native.executable, peer.executable);
+        assert_eq!(native.version, peer.version);
+        assert!(native.version.starts_with("literal $(touch unwanted)|"));
+        assert!(native.version.ends_with("|0"));
+        assert!(native.error.is_empty() && peer.error.is_empty());
+    }
+    assert!(!root.path().join("unwanted").exists());
+}
 fn git(root: &Path, args: &[&str]) -> project::Output {
     let request = Request::Git {
         root: root.to_str().unwrap().into(),

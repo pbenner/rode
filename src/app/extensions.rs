@@ -46,7 +46,6 @@ impl EditorApp {
         match panel {
             Panel::Git => Some(Feature::Git),
             Panel::Monitor => Some(Feature::Monitor),
-            Panel::Python => Some(Feature::Python),
             Panel::Agent => Some(Feature::Agents),
             Panel::Debug => Some(Feature::Debugger),
             _ => None,

@@ -6,7 +6,7 @@ use crate::{files, project, sessions as service};
 use anyhow::{Context, Result, ensure};
 use rode_agent_core::service::{Command, Info, Spec, State};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -44,6 +44,11 @@ struct Preparing {
     pending: AtomicBool,
     cancelled: AtomicBool,
 }
+struct QueueRequest {
+    id: String,
+    operation: rode_agent_core::queue::Action,
+    sent: Option<std::time::Instant>,
+}
 /// One controlling attachment. Only an explicit message or History creates a
 /// controller; setting persistence before Send creates no process.
 pub struct Client {
@@ -59,6 +64,7 @@ pub struct Client {
     id: String,
     desired: bool,
     persistence_pending: Option<bool>,
+    queue_requests: VecDeque<QueueRequest>,
     /// A requested explicit End is distinct from detaching a persistent view.
     pub ending: bool,
     closed: bool,
@@ -68,15 +74,13 @@ impl Client {
     pub fn start(
         launch: Launch,
         text: Option<String>,
+        attachments: Vec<rode_agent_core::attachment::Attachment>,
         persistent: bool,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
         launch.config.arguments(text.is_some())?;
         if let Some(text) = &text {
-            ensure!(
-                !text.trim().is_empty() && text.len() <= super::PROMPT_LIMIT,
-                "Agent messages must contain 1–32768 bytes"
-            );
+            rode_agent_core::attachment::validate(text, &attachments)?;
         }
         let id = rode_session::new_id()?;
         let mut client = Self::pending(launch.clone(), id.clone(), persistent, wake.clone());
@@ -124,6 +128,7 @@ impl Client {
                     python: launch.python.clone(),
                     persistent,
                     text,
+                    attachments,
                 };
                 let reply = request(
                     &launch,
@@ -188,6 +193,7 @@ impl Client {
             id,
             desired,
             persistence_pending: None,
+            queue_requests: VecDeque::new(),
             ending: false,
             closed: false,
         }
@@ -273,6 +279,13 @@ impl Client {
                         .and_then(|update| update.apply(self.state.as_ref()))
                     {
                         Ok(state) => {
+                            if self
+                                .queue_requests
+                                .front()
+                                .is_some_and(|r| r.id == state.queue.acknowledged)
+                            {
+                                self.queue_requests.pop_front();
+                            }
                             self.launch.config = state.chat.config.clone();
                             if self.persistence_pending == Some(state.info.persistent) {
                                 self.persistence_pending = None;
@@ -301,7 +314,35 @@ impl Client {
                 crate::process::Event::Started => {}
             }
         }
+        if !self.closed && self.bridge.is_some() && self.state.is_some() {
+            if self.queue_requests.front().is_some_and(|r| {
+                r.sent
+                    .is_some_and(|sent| sent.elapsed() >= std::time::Duration::from_secs(30))
+            }) {
+                self.error = Some("Queued prompt changes were not acknowledged. Reattach the agent before closing Rode.".into());
+                self.closed = true;
+            } else if let Some(request) = self.queue_requests.front().filter(|r| r.sent.is_none()) {
+                let result = self.send(Command::Queue {
+                    request: request.id.clone(),
+                    operation: request.operation.clone(),
+                });
+                match result {
+                    Ok(()) => {
+                        self.queue_requests.front_mut().unwrap().sent =
+                            Some(std::time::Instant::now())
+                    }
+                    Err(error) if error.to_string().contains("full") => {}
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        self.closed = true;
+                    }
+                }
+            }
+        }
         if self.closed {
+            if !self.queue_requests.is_empty() {
+                self.error.get_or_insert_with(|| "Queued prompt changes were not acknowledged. Reattach the agent to check its saved queue.".into());
+            }
             self.bridge = None;
             self.persistence_pending = None;
         }
@@ -317,6 +358,48 @@ impl Client {
             .as_ref()
             .context("Agent service is still preparing")?
             .send(&serde_json::to_value(action)?)
+    }
+    /// Save an ordered queue action; retain it until the host acknowledges ownership.
+    pub fn queue_action(&mut self, operation: rode_agent_core::queue::Action) -> Result<()> {
+        ensure!(
+            !self.closed,
+            "Reattach the agent before changing its queue."
+        );
+        ensure!(
+            self.state.as_ref().is_none_or(|s| s.info.supports_queue),
+            "This agent uses an older Rode version without persistent queues. Start a new chat to use them."
+        );
+        ensure!(
+            self.queue_requests.len() < 64,
+            "Wait for queued changes to be saved."
+        );
+        static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        self.queue_requests.push_back(QueueRequest {
+            id: format!("{}-{nanos}-{serial}", std::process::id()),
+            operation,
+            sent: None,
+        });
+        Ok(())
+    }
+    /// Queue controls reserve room for automatic Stop/failure pause operations.
+    pub fn queue_capacity(&self) -> bool {
+        !self.closed && self.queue_requests.len() < 32
+    }
+    /// Whether the latest queue state is still awaiting host acknowledgement.
+    pub fn queue_pending(&self) -> bool {
+        !self.queue_requests.is_empty()
+    }
+    /// Current acknowledged queue, only while this view controls the agent.
+    pub fn queue_view(&self) -> Option<&rode_agent_core::queue::View> {
+        self.state
+            .as_ref()
+            .filter(|s| !self.closed && s.info.supports_queue)
+            .map(|s| &s.queue)
     }
     /// Whether this exact process/host/interpreter can accept a follow-up.
     pub fn matches(&self, launch: &Launch) -> bool {
@@ -343,6 +426,7 @@ impl Client {
         self.preparing.pending.load(Ordering::Acquire)
             || (!self.closed && self.state.is_none())
             || self.persistence_pending.is_some()
+            || (!self.closed && !self.queue_requests.is_empty())
             || (self.ending && !self.closed)
     }
     /// Request explicit termination, including an in-flight initial preparation.

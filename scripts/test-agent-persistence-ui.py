@@ -64,6 +64,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
     root = base / "project"
     root.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/persistent_agent.py", root / "agent.py")
+    (root / "record-inputs").touch()
+    attachment = base / "queued-document.txt"
+    attachment.write_text("Attachment retained across restart")
     (root / "agent.py").chmod(0o755)
     environment = dict(
         os.environ,
@@ -115,11 +118,26 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             click(1325, 840)
             wait(lambda: infos() and infos()[0]["persistent"], "Persist button did not enable")
             screenshot(window, "on.png")
+            click(460, 850)  # Attach a desktop file to a waiting prompt.
+            time.sleep(0.3)
+            key("a", ("Control_L",))
+            text(str(attachment))
+            key("Return")
+            time.sleep(0.8)
+            click(700, 790)
+            text("queued across restart")
+            key("Return")
+            # Close immediately: clean exit must wait for host acknowledgement.
             close_window(window, process)
             wait(lambda: infos() and not infos()[0]["attached"], "View did not detach")
+            attachment.write_text("Changed after Rode closed")
             (root / "continue").touch()
             wait(lambda: (root / "work-done").exists(), "Work stopped when RODE closed")
             assert (root / "agent.pid").read_text() == pid
+            time.sleep(0.4)
+            assert (root / "work-done").read_text() == "1", (
+                "A queued prompt ran without an attached view"
+            )
             # Another window may have changed this project's saved executable.
             # Attaching must restore the live backend's settings before follow-up.
             preferences = base / "data/rode/app.ron"
@@ -145,11 +163,28 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
                 lambda: "./not-existing-agent" not in preferences.read_text(),
                 "Reattach did not restore the live backend settings",
             )
+            wait(
+                lambda: (root / "work-done").read_text() == "2",
+                "Queued prompt was lost on restart/reattach",
+            )
+            recorded = [
+                json.loads(line)
+                for line in (root / "recorded-inputs.jsonl").read_text().splitlines()
+            ]
+            assert len(recorded) == 2
+            assert recorded[1][0]["text"] == "queued across restart"
+            assert any(
+                "Attachment retained across restart" in block.get("text", "")
+                for block in recorded[1]
+            )
+            assert not any(
+                "Changed after Rode closed" in block.get("text", "") for block in recorded[1]
+            )
             click(1280, 785)
             text("work again")
             key("Return")
             wait(
-                lambda: (root / "work-done").read_text() == "2", "Reattached chat did not continue"
+                lambda: (root / "work-done").read_text() == "3", "Reattached chat did not continue"
             )
             assert (root / "agent.pid").read_text() == pid, "Reattach restarted the backend"
             click(1325, 840)
@@ -157,7 +192,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             screenshot(window, "off-again.png")
             close_window(window, process)
             wait(lambda: not infos(), "Nonpersistent agent survived the last view")
-            print("Native agent persistence, reattachment and opt-out passed")
+            print(
+                "Native agent persistence, queued attachment restoration, reattachment and opt-out passed"
+            )
         finally:
             for process in processes:
                 if process.poll() is None:

@@ -125,11 +125,34 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             time.sleep(0.3)
             send("before detach", window, (700, 790))
             screenshot(window, "chat-full-workspace.png")
-            click(980, 69)  # Detach in the workspace toolbar, not the chat-session controls.
+            click(700, 790)
+            text("draft across sidebar toggle")
+            key("grave", ("Control_L",))
+            screenshot(window, "sidebar-hidden.png")
+            key("grave", ("Control_L", "Shift_L"))
+            time.sleep(0.3)
+            key("Return")
+            wait(
+                lambda: any(
+                    call.get("method") == "turn/start"
+                    and call["params"]["input"][0]["text"] == "draft across sidebar toggle"
+                    for call in calls()
+                ),
+                "Sidebar did not restore the chat and its draft",
+            )
+            time.sleep(0.3)
+            click(1073, 69)  # Detach in the workspace toolbar, not the chat-session controls.
             wait(tools_window, "No native tools window was created")
             child = tools_window()
             send("while detached", child, (450, 680))
             screenshot(child, "chat-floating.png")
+            key("grave", ("Control_L",))
+            wait(lambda: tools_window() is None, "Sidebar shortcut did not hide detached tools")
+            focus(window)
+            key("grave", ("Control_L", "Shift_L"))
+            wait(tools_window, "Sidebar shortcut did not restore detached tools")
+            assert tools_window() == child, "Hiding the sidebar recreated its native window"
+            focus(child)
             key("p", ("Control_L", "Shift_L"))
             text("Terminal: Sessions and Slurm allocations")
             key("Return")
@@ -140,12 +163,12 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             wait(lambda: tools_window() is None, "Closing tools did not dock them back")
             send("after docking", window, (700, 790))
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
-            assert sum(call.get("method") == "turn/start" for call in calls()) == 3
+            assert sum(call.get("method") == "turn/start" for call in calls()) == 4
             click(339, 69)  # Code replaces tools again, preserving the unsaved buffer.
             key("s", ("Control_L",))
             wait(lambda: "unsaved workspace edit" in source.read_text(), "Code edits were lost")
             screenshot(window, "code-restored.png")
-            key("grave", ("Control_L",))
+            key("t", ("Control_L", "Shift_L"))
             time.sleep(0.8)
             text("echo $$ > before.pid\n")
             wait(
@@ -153,7 +176,15 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 "Integrated terminal did not accept input",
             )
             screenshot(window, "terminal-full-workspace.png")
-            click(980, 69)
+            key("grave", ("Control_L",))
+            key("grave", ("Control_L", "Shift_L"))
+            time.sleep(0.3)
+            text("echo $$ > sidebar.pid\n")
+            wait(
+                lambda: (project / "sidebar.pid").exists(), "Sidebar did not restore terminal input"
+            )
+            assert (project / "before.pid").read_text() == (project / "sidebar.pid").read_text()
+            click(1073, 69)
             wait(tools_window, "Terminal could not open in the tools window")
             child = tools_window()
             focus(child)
@@ -164,12 +195,12 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             text("echo $$ > after.pid\n")
             wait(lambda: (project / "after.pid").exists(), "Docking lost terminal input focus")
             assert (project / "before.pid").read_text() == (project / "after.pid").read_text()
-            click(980, 69)
+            click(1073, 69)
             wait(tools_window, "Could not reopen tools before closing the main window")
             close_window(window, process)
             assert tools_window() is None, "Closing the main window left an orphan tools window"
             print(
-                "Workspace switching, native tools docking, retained chat/code and the same live shell passed."
+                "Workspace switching, remembered sidebar tabs, detached hide/show, retained chat/code and the same live shell passed."
             )
         finally:
             if process.poll() is None:

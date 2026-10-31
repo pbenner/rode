@@ -153,6 +153,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 python: "off".into(),
                 persistent: true,
                 text: Some("work".into()),
+                attachments: vec![],
             };
             let reply = rpc(
                 &remote,
@@ -1090,6 +1091,7 @@ fn interactive_allocation_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan)
             request: rode::project::Request::Sessions {
                 root: plan.root.clone(),
                 operation: rode::sessions::Operation::Create {
+                    environment: Default::default(),
                     id: id.clone(),
                     name: "SSH allocation".into(),
                     plan: Box::new(plan.clone()),
@@ -1231,6 +1233,7 @@ Inputs: {:?}",
     wait_output(&old_view, "LEGACY_READY", &runtime);
     drop(old_view);
     let response = request(rode::sessions::Operation::Create {
+        environment: Default::default(),
         allocation: None,
         id: rode_session::new_id().unwrap(),
         name: "Updated terminal".into(),
@@ -1300,7 +1303,9 @@ Inputs: {:?}",
     );
     assert!(current.contents().contains("UPDATED_SURVIVED"));
     wait("new cleanup", &|| {
-        !runtime.join("protocol-4/socket").exists()
+        !runtime
+            .join(format!("protocol-{}/socket", rode_session::PROTOCOL))
+            .exists()
     });
     let response = request(rode::sessions::Operation::List).unwrap();
     assert!(
@@ -1340,6 +1345,7 @@ fn native_terminal_start(
             request: rode::project::Request::Sessions {
                 root: plan.root.clone(),
                 operation: rode::sessions::Operation::Create {
+                    environment: Default::default(),
                     allocation: None,
                     persistent: true,
                     id: rode_session::new_id().unwrap(),

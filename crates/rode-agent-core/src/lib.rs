@@ -5,10 +5,12 @@
 //! preparation and transport are injected; this crate has no GUI, SSH, filesystem
 //! helper, credential manager or model-server dependency.
 #![warn(missing_docs)]
+pub mod attachment;
 pub mod controls;
 pub mod history;
 pub mod personality;
 pub mod protocol;
+pub mod queue;
 pub mod service;
 use anyhow::{Result, ensure};
 pub use personality::Personality;
@@ -17,8 +19,8 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 /// Automatic executable marker resolved by the host adapter before agent execution.
 pub const AUTO_CODEX: &str = "@rode/codex";
-/// Default inbound chat JSON line limit; explicit history connections allow 2 MiB.
-pub const LINE_LIMIT: usize = 256 * 1024;
+/// Bounded agent JSON line limit, including submitted image content.
+pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
 /// Maximum submitted chat prompt size in bytes.
 pub const PROMPT_LIMIT: usize = 32 * 1024;
 

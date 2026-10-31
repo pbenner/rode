@@ -159,7 +159,9 @@ fn main() { println!("ready"); }
                 time.sleep(0.7)
                 key("End", ("Control_L",))
                 text("\n## Unsaved section\n")
-                key("grave", ("Control_L",))  # Hide the terminal before rendering the fixture.
+                key(
+                    "t", ("Control_L", "Shift_L")
+                )  # Hide the terminal before rendering the fixture.
                 key("r", ("Control_L", "Shift_L"))
                 wait_for(
                     lambda: (

@@ -265,7 +265,10 @@ impl EditorApp {
         self.workbench.prefs = prefs.clone();
         self.workbench.draft = prefs;
         self.workbench.save_preferences();
-        if self.workbench.panel == Some(Panel::Python)
+        if self.workbench.panel == Some(Panel::Environment) {
+            self.refresh_runtimes(ctx);
+        }
+        if self.workbench.panel == Some(Panel::Environment)
             || self.documents.iter().any(|d| {
                 crate::languages::detect(d.path.as_deref()).is_some_and(|l| l.id == "python")
             })

@@ -6,6 +6,7 @@
 //! window-owned.
 
 mod code_tools;
+mod environment;
 mod git;
 mod monitoring;
 mod python;
@@ -14,7 +15,7 @@ mod workspace;
 use super::*;
 use crate::project::{self, Diagnostic};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 pub(super) use workspace::Surface;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,7 +23,8 @@ pub(super) enum Panel {
     Git,
     Monitor,
     Problems,
-    Python,
+    Environment,
+    Tasks,
     Settings,
     Agent,
     Debug,
@@ -33,7 +35,8 @@ impl Panel {
             Self::Git => "SOURCE CONTROL",
             Self::Monitor => "SYSTEM MONITOR",
             Self::Problems => "PROBLEMS",
-            Self::Python => "PYTHON ENVIRONMENT",
+            Self::Environment => "ENVIRONMENT",
+            Self::Tasks => "TASKS",
             Self::Settings => "PROJECT SETTINGS",
             Self::Agent => "AGENT CHAT",
             Self::Debug => "DEBUGGER",
@@ -45,6 +48,7 @@ impl Panel {
 #[serde(default)]
 pub(super) struct Preferences {
     python: String,
+    environment: crate::environment::Settings,
     ruff: String,
     format_on_save: bool,
     check_on_save: bool,
@@ -62,6 +66,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             python: "auto".into(),
+            environment: Default::default(),
             ruff: String::new(),
             format_on_save: true,
             check_on_save: true,
@@ -106,6 +111,9 @@ pub(super) enum ToolJob {
         operation: String,
     },
     Monitor,
+    Runtimes {
+        settings: crate::environment::Settings,
+    },
     Git(GitJob),
     Environment {
         activate: bool,
@@ -144,6 +152,8 @@ pub(super) struct Workbench {
     pub panel: Option<Panel>,
     pub surface: Surface,
     pub detached: bool,
+    pub tools_hidden: bool,
+    last_tool: Option<workspace::ToolTab>,
     preferences: BTreeMap<String, Preferences>,
     pub preferences_pending: bool,
     key: String,
@@ -151,12 +161,16 @@ pub(super) struct Workbench {
     draft: Preferences,
     epoch: u64,
     python: python::State,
+    environment: environment::State,
     code_tools: code_tools::State,
     monitoring: monitoring::State,
     git: git::State,
 }
 
 impl Workbench {
+    pub(super) fn environment_settings(&self) -> &crate::environment::Settings {
+        &self.prefs.environment
+    }
     pub(super) fn slurm_allocation(&self) -> &crate::slurm::Allocation {
         &self.prefs.slurm_allocation
     }
@@ -224,12 +238,16 @@ impl Workbench {
         let panel = self.panel;
         let surface = self.surface;
         let detached = self.detached;
+        let tools_hidden = self.tools_hidden;
+        let last_tool = self.last_tool;
         *self = Self {
             preferences,
             preferences_pending: pending,
             panel,
             surface,
             detached,
+            tools_hidden,
+            last_tool,
             ..Default::default()
         };
     }
@@ -306,7 +324,8 @@ impl EditorApp {
                 Panel::Git => self.git_ui(ui, ctx),
                 Panel::Monitor => self.monitor_ui(ui),
                 Panel::Problems => self.problems_ui(ui, ctx),
-                Panel::Python => self.python_ui(ui, ctx),
+                Panel::Environment => self.environment_ui(ui, ctx),
+                Panel::Tasks => self.tasks_ui(ui, ctx),
                 Panel::Settings => self.settings_ui(ui, ctx),
                 Panel::Agent | Panel::Debug => unreachable!(),
             });
@@ -320,10 +339,13 @@ impl EditorApp {
             );
             return;
         }
+        self.workbench.last_tool = Some(workspace::ToolTab::Panel(panel));
         if self.workbench.detached
             && self.workbench.panel == Some(panel)
             && self.workbench.surface == Surface::Tools
         {
+            self.workbench.tools_hidden = false;
+            ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
             return;
         }
@@ -336,8 +358,9 @@ impl EditorApp {
         if panel == Panel::Git && self.workbench.panel.is_some() {
             self.refresh_git(ctx);
         }
-        if panel == Panel::Python && self.workbench.panel.is_some() {
+        if matches!(panel, Panel::Environment | Panel::Tasks) && self.workbench.panel.is_some() {
             self.refresh_environment(false, ctx);
+            self.refresh_runtimes(ctx);
         }
         if panel == Panel::Agent && self.workbench.panel.is_some() {
             self.agents.focus = true;
@@ -571,6 +594,21 @@ impl EditorApp {
         ctx: &egui::Context,
     ) {
         match job {
+            ToolJob::Runtimes { settings } => {
+                self.workbench.environment.busy = false;
+                if settings != self.workbench.prefs.environment {
+                    self.refresh_runtimes(ctx);
+                    return;
+                }
+                match result {
+                    Ok(project::Response::Runtimes(runtimes)) => {
+                        self.workbench.environment.runtimes = runtimes;
+                        self.workbench.environment.error.clear();
+                    }
+                    Err(error) => self.workbench.environment.error = error,
+                    _ => self.workbench.environment.error = "Invalid runtime response".into(),
+                }
+            }
             ToolJob::Extension {
                 revision,
                 operation,
@@ -599,64 +637,11 @@ impl EditorApp {
                 self.workbench.monitoring.monitor_error.clear();
                 match result {
                     Ok(project::Response::Monitor(sample)) => {
-                        let previous = self.workbench.monitoring.monitor.as_ref();
-                        self.workbench.monitoring.cpu_usage = sample
-                            .cpus
-                            .iter()
-                            .map(|cpu| {
-                                previous
-                                    .and_then(|p| p.cpus.iter().find(|c| c.name == cpu.name))
-                                    .map(|old| {
-                                        let total = cpu.total.saturating_sub(old.total);
-                                        let idle = cpu.idle.saturating_sub(old.idle);
-                                        if total == 0 {
-                                            0.
-                                        } else {
-                                            100. * total.saturating_sub(idle) as f32 / total as f32
-                                        }
-                                    })
-                                    .unwrap_or(0.)
-                            })
-                            .collect();
-                        if let (Some(old), Some(last)) =
-                            (previous, self.workbench.monitoring.monitor_last)
-                        {
-                            let seconds = last.elapsed().as_secs_f32().max(0.01);
-                            self.workbench.monitoring.network_rate = (
-                                sample.net_received.saturating_sub(old.net_received) as f32
-                                    / seconds,
-                                sample.net_sent.saturating_sub(old.net_sent) as f32 / seconds,
-                            );
-                        }
-                        if previous.is_some() {
-                            history(
-                                &mut self.workbench.monitoring.cpu_history,
-                                self.workbench
-                                    .monitoring
-                                    .cpu_usage
-                                    .first()
-                                    .copied()
-                                    .unwrap_or(0.),
-                            );
-                        }
-                        let used = 100.
-                            * (1.
-                                - sample.memory_available as f32
-                                    / sample.memory_total.max(1) as f32);
-                        history(&mut self.workbench.monitoring.memory_history, used);
-                        for gpu in &sample.gpus {
-                            if let Some(usage) = gpu.usage {
-                                history(
-                                    self.workbench
-                                        .monitoring
-                                        .gpu_history
-                                        .entry(gpu.name.clone())
-                                        .or_default(),
-                                    usage,
-                                );
-                            }
-                        }
-                        self.workbench.monitoring.monitor = Some(sample);
+                        self.workbench.monitoring.record(
+                            sample,
+                            Instant::now(),
+                            Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30)),
+                        );
                     }
                     Err(error) => self.workbench.monitoring.monitor_error = error,
                     _ => {
@@ -866,12 +851,6 @@ impl EditorApp {
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
-fn history(history: &mut VecDeque<f32>, value: f32) {
-    history.push_back(value);
-    if history.len() > 120 {
-        history.pop_front();
-    }
-}
 fn bytes(value: u64) -> String {
     if value >= 1024 * 1024 * 1024 {
         format!("{:.1} GiB", value as f64 / 1073741824.)
@@ -879,57 +858,6 @@ fn bytes(value: u64) -> String {
         format!("{:.1} MiB", value as f64 / 1048576.)
     } else {
         format!("{:.1} KiB", value as f64 / 1024.)
-    }
-}
-
-fn metric(
-    ui: &mut egui::Ui,
-    name: &str,
-    value: f32,
-    detail: String,
-    data: &VecDeque<f32>,
-    palette: theme::Palette,
-) {
-    ui.add_space(9.);
-    ui.horizontal_wrapped(|ui| {
-        ui.label(
-            RichText::new(name)
-                .monospace()
-                .strong()
-                .color(palette.accent),
-        );
-        ui.label(RichText::new(detail).monospace().small());
-    });
-    ui.add(
-        egui::ProgressBar::new((value / 100.).clamp(0., 1.))
-            .fill(palette.accent)
-            .desired_height(6.),
-    );
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 42.), Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2., palette.background);
-    for i in 1..4 {
-        let y = rect.top() + rect.height() * i as f32 / 4.;
-        painter.line_segment(
-            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-            Stroke::new(0.5_f32, palette.border),
-        );
-    }
-    if data.len() > 1 {
-        let points: Vec<_> = data
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                egui::pos2(
-                    rect.left() + rect.width() * index as f32 / (data.len() - 1) as f32,
-                    rect.bottom() - rect.height() * value.clamp(0., 100.) / 100.,
-                )
-            })
-            .collect();
-        painter.add(egui::Shape::line(
-            points,
-            Stroke::new(1.5_f32, palette.accent),
-        ));
     }
 }
 
@@ -1123,7 +1051,7 @@ mod tests {
         assert!(app.terminal.is_none());
         assert!(app.workbench.preferences.is_empty());
         let labels = panel_text(&mut app, &ctx);
-        assert!(labels.contains("SYS // LIVE"), "{labels}");
+        assert!(labels.contains("Host overview"), "{labels}");
         assert!(labels.contains("LOCAL HOST"), "{labels}");
         assert!(!labels.contains("Open a project"), "{labels}");
 
@@ -1167,17 +1095,20 @@ mod tests {
         let labels = panel_text(&mut app, &ctx);
         assert!(labels.contains("Connect or reconnect"), "{labels}");
         assert!(labels.contains("monitor.invalid"), "{labels}");
-        assert!(!labels.contains("SYS // LIVE"), "{labels}");
+        assert!(!labels.contains("Host overview"), "{labels}");
 
         app.workspace.as_mut().unwrap().connected = true;
         assert!(app.monitor_ready());
         assert!(!app.project_ready());
         app.workbench.monitoring.monitor_busy = true;
-        app.workbench.monitoring.monitor = Some(project::Monitor {
-            hostname: "old-host".into(),
-            ..Default::default()
-        });
-        app.workbench.monitoring.cpu_history.push_back(42.);
+        app.workbench.monitoring.record(
+            project::Monitor {
+                hostname: "old-host".into(),
+                ..Default::default()
+            },
+            Instant::now(),
+            Duration::from_secs(2),
+        );
         app.workbench.reset_monitor();
         let old_generation = app.generation;
         app.generation += 1;
@@ -1194,7 +1125,7 @@ mod tests {
         app.poll(&ctx);
         assert!(!app.workbench.monitoring.monitor_busy);
         assert!(app.workbench.monitoring.monitor.is_none());
-        assert!(app.workbench.monitoring.cpu_history.is_empty());
+        assert!(app.workbench.monitoring.history.is_empty());
         assert!(app.workbench.monitoring.monitor_last.is_none());
     }
     #[test]

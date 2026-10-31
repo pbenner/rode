@@ -72,6 +72,8 @@ impl EditorApp {
         }
         self.workbench.panel = Some(Panel::Debug);
         self.workbench.surface = workbench::Surface::Tools;
+        self.workbench.tools_hidden = false;
+        self.remember_tool_tab();
         if self
             .debugger
             .client

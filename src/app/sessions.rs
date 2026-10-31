@@ -282,6 +282,13 @@ impl EditorApp {
                 );
                 self.new_terminal_environment();
                 self.activate_python(ctx);
+                if let Ok(exports) = self.workbench.environment_settings().exports()
+                    && !exports.is_empty()
+                    && let Some(terminal) = &self.terminal
+                    && let Err(error) = terminal.send((exports + "\n").into_bytes())
+                {
+                    self.notify(error.to_string(), true);
+                }
                 self.dialog = Dialog::None;
                 Terminal::focus(ctx);
             }
@@ -360,6 +367,7 @@ impl EditorApp {
                 plan: Box::new(plan),
                 policy,
                 python,
+                environment: Box::new(self.workbench.environment_settings().clone()),
                 persistent,
                 allocation,
             },

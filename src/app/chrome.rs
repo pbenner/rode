@@ -49,20 +49,10 @@ impl EditorApp {
                     if roomy {
                         ui.label(palette.tag("RODE 0.1"));
                     }
-                    let python = self.workbench_python_label();
-                    let py_label = if roomy {
-                        python.clone()
-                    } else if python.contains("venv") {
-                        "Py · venv".into()
-                    } else {
-                        "Python".into()
-                    };
-                    if ui
-                        .small_button(palette.tag(py_label))
-                        .on_hover_text(format!("{python}\nSelect project Python environment"))
-                        .clicked()
-                    {
-                        self.toggle_panel(Panel::Python, ctx);
+                    if ui.small_button(palette.tag(if roomy { "Environment" } else { "Env" }))
+                        .on_hover_text(format!("Project runtimes and variables\n{}", self.workbench_python_label()))
+                        .clicked() {
+                        self.toggle_panel(Panel::Environment, ctx);
                     }
                     let count = self.current_issue_count();
                     if ui

@@ -88,6 +88,18 @@ impl EditorApp {
         if !self.project_ready() {
             return;
         }
+        let exports = match self.workbench.prefs.environment.exports() {
+            Ok(exports) => exports,
+            Err(error) => {
+                self.notify(error.to_string(), true);
+                return;
+            }
+        };
+        let command = if exports.is_empty() {
+            command
+        } else {
+            format!("( {exports} {command}; )")
+        };
         self.show_terminal = true;
         self.terminal_intent();
         if self.session_busy()
@@ -174,12 +186,20 @@ impl EditorApp {
             };
             args[0] = environment.executable.clone();
         }
+        args[0] = self.workbench.prefs.environment.program(&args[0]);
         let mut command = args
             .iter()
             .map(|arg| ssh::quote(if arg == "{path}" { path } else { arg }))
             .collect::<Vec<_>>()
             .join(" ");
-        if args[0] == "tsx" {
+        if template[0] == "tsx"
+            && !self
+                .workbench
+                .prefs
+                .environment
+                .runtimes
+                .contains_key("tsx")
+        {
             // Probe on the project host, inside the terminal's active sandbox.
             let executable = ssh::quote(&format!("{root}/node_modules/.bin/tsx"));
             let rest = args[1..]

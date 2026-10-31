@@ -127,7 +127,10 @@ struct Pipe {
 impl rode_agent_core::Transport for Pipe {
     fn send(&self, message: &Value) -> Result<()> {
         let mut bytes = serde_json::to_vec(message)?;
-        ensure!(bytes.len() < 256 * 1024, "Agent input exceeds 256 KiB");
+        ensure!(
+            bytes.len() < rode_agent_core::LINE_LIMIT,
+            "Agent input exceeds 4 MiB"
+        );
         bytes.push(b'\n');
         self.input
             .try_send(bytes)
