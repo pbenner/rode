@@ -289,3 +289,48 @@ fn actual_sandbox_encloses_kernel_and_its_file_operations_without_network_sharin
     );
     kernel.stop();
 }
+
+#[test]
+fn default_python_kernel_uses_the_selected_interpreter_despite_a_shadowing_kernelspec() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(python) = interpreter() else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let kernels = root.path().join("jupyter/kernels/python3");
+    std::fs::create_dir_all(&kernels).unwrap();
+    std::fs::write(kernels.join("kernel.json"), serde_json::json!({
+        "argv": ["/nonexistent/foreign-python", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+        "display_name": "Foreign Python", "language": "python"
+    }).to_string()).unwrap();
+    let launcher = root.path().join("selected-python");
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nexport JUPYTER_PATH={}\nexec {} \"$@\"\n",
+            rode::ssh::quote(&root.path().join("jupyter").to_string_lossy()),
+            rode::ssh::quote(&python)
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+    let mut kernel = Kernel::start(
+        plan,
+        None,
+        launcher.to_string_lossy().into(),
+        "python3".into(),
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    kernel
+        .run(vec![Run {
+            cell: String::new(),
+            uid: 1,
+            version: 0,
+            code: "import sys; print(sys.executable)".into(),
+        }])
+        .unwrap();
+    let events = wait(&mut kernel, 1);
+    assert!(events.iter().any(|event| matches!(event, Event::Output{output,..} if output["text"].as_str().is_some_and(|text| text.trim() == python))));
+}

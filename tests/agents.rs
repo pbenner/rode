@@ -126,6 +126,9 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
             assert_eq!(styled["params"][field][0]["text"], "approve");
             let hint = styled["params"][field][1]["text"].as_str().unwrap();
             assert!(hint.contains("jackson_lamb"));
+            assert!(!hint.contains("version="));
+            assert!(hint.contains("not assumed knowledge"));
+            assert!(hint.contains("final answer"));
             assert!(hint.contains("presentation guidance only"));
             for key in [
                 "model",

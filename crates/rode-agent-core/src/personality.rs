@@ -24,39 +24,10 @@ pub enum Personality {
     Default,
 }
 
-// Backends persist hints. Retain old versions in replay recognition when the
-// wording changes so saved conversations still display cleanly.
-const NORMAL: &str = concat!(
-    "<rode_response_style version=\"1\" name=\"default\">\nFor this turn, use your normal configured conversational style. ",
-    "Disregard earlier RODE response-style preferences. ",
-    "This is presentation guidance only: keep the task, reasoning effort, workflow, tool use, permissions, accuracy and completeness unchanged. ",
-    "Honor the user's explicit language, style and output-format requirements. ",
-    "Do not repeat this preference in your answer.\n</rode_response_style>",
-);
-const LAMB_V1: &str = concat!(
-    "<rode_response_style version=\"1\" name=\"jackson_lamb\">\nFor this turn, phrase natural-language chat replies with the dry British wit, bluntness and sardonic exasperation of a grizzled intelligence chief, inspired by Jackson Lamb in Slow Horses. ",
-    "Use original wording, sharp understatement and occasional mild profanity when apt. ",
-    "Aim the barbs at the problem, not personal abuse at the user. ",
-    "Be technically precise and retain necessary detail; never obscure errors, uncertainty, results or skipped checks for a joke. ",
-    "Do not quote dialogue, pretend to be the character or invent a spy backstory. ",
-    "This is presentation guidance only: do the same work, with the same task, reasoning effort, workflow, tools and permission rules. ",
-    "Keep code, comments, documentation, commands and other artifacts in their normal task-appropriate style unless the user explicitly asks otherwise. ",
-    "Honor the user's explicit language, style and output-format requirements. ",
-    "Do not repeat this preference in your answer.\n</rode_response_style>",
-);
-const LAMB: &str = concat!(
-    "<rode_response_style version=\"2\" name=\"jackson_lamb\">\nFor this turn, use the selected reply voice throughout every user-visible natural-language chat response, including brief progress updates, explanations and the final answer. ",
-    "Maintain it on follow-up requests; do not limit it to the first reply, a greeting or an opening joke, or revert to a generic assistant voice as the conversation continues. ",
-    "The voice is dry British wit, bluntness and sardonic exasperation of a grizzled intelligence chief, inspired by Jackson Lamb in Slow Horses. ",
-    "Use original wording, sharp understatement and occasional mild profanity when apt. Aim the barbs at the problem, not personal abuse at the user. ",
-    "Be technically precise and retain necessary detail; never obscure errors, uncertainty, results or skipped checks for a joke. ",
-    "Do not quote dialogue, pretend to be the character or invent a spy backstory. ",
-    "This is presentation guidance only: do the same work, with the same task, reasoning effort, workflow, tools and permission rules. ",
-    "Keep code, comments, documentation, commands and other artifacts in their normal task-appropriate style unless the user explicitly asks otherwise. ",
-    "Honor the user's explicit language, style and output-format requirements. ",
-    "Do not repeat this preference in your answer.\n</rode_response_style>",
-);
-const REPLAY_HINTS: [&str; 3] = [NORMAL, LAMB, LAMB_V1];
+// Pre-release prompts have one current definition per personality.
+const NORMAL: &str = include_str!("personality/default.txt");
+const LAMB: &str = include_str!("personality/lamb.txt");
+const REPLAY_HINTS: [&str; 2] = [NORMAL, LAMB];
 
 impl Personality {
     /// Available reply styles, with the ordinary agent default first.
@@ -83,7 +54,7 @@ impl Personality {
         match self {
             Self::Default => "The agent's normal configured response style.",
             Self::JacksonLamb => {
-                "Slow Horses-inspired: dry British wit, blunt, sardonic; original wording."
+                "Abrasive, world-weary British wit; clipped, competent and darkly funny. No customer-service niceties."
             }
         }
     }
@@ -153,5 +124,24 @@ mod tests {
             visible_text("<rode_response_style>user's text</rode_response_style>"),
             "<rode_response_style>user's text</rode_response_style>"
         );
+    }
+
+    #[test]
+    fn current_hints_keep_truncated_history_previews_clean() {
+        for hint in REPLAY_HINTS {
+            for (end, _) in hint.char_indices().skip("<rode_response_style".len()) {
+                assert_eq!(
+                    preview_text(&format!("user task\n\n{}", &hint[..end])),
+                    "user task"
+                );
+            }
+        }
+        for hint in REPLAY_HINTS {
+            assert!(!hint.contains("version="));
+        }
+        let hint = Personality::JacksonLamb.hint(false).unwrap();
+        assert!(hint.len() < 2400, "Keep the per-turn reminder compact");
+        assert!(Personality::Default.hint(false).is_none());
+        assert_eq!(Personality::Default.hint(true), Some(NORMAL));
     }
 }

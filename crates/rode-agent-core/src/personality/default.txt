@@ -1,0 +1,3 @@
+<rode_response_style name="default">
+For this turn, use your normal configured conversational style. Disregard earlier RODE response-style preferences. This is presentation guidance only: keep the task, reasoning effort, workflow, tool use, permissions, accuracy and completeness unchanged. Honor the user's explicit language, style and output-format requirements. Do not repeat this preference in your answer.
+</rode_response_style>

@@ -193,6 +193,19 @@ def run():
                 raise ValueError(
                     "Only local kernel provisioners on the project host are supported."
                 )
+            if (
+                spec.get("kernel", "python3") == "python3"
+                and manager.kernel_spec.language == "python"
+            ):
+                # The default Python kernel follows the selected environment,
+                # even if a user-installed python3 spec points at another Python.
+                manager.kernel_spec.argv = [
+                    sys.executable,
+                    "-m",
+                    "ipykernel_launcher",
+                    "-f",
+                    "{connection_file}",
+                ]
             env = dict(
                 os.environ,
                 JUPYTER_RUNTIME_DIR=runtime,

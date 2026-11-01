@@ -273,6 +273,10 @@ pub struct Environment {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Environments {
+    /// Installed local-provisioner kernels visible to the selected interpreter.
+    pub kernels: Vec<KernelSpec>,
+    /// Optional discovery/dependency diagnostic, without blocking environment selection.
+    pub kernel_error: String,
     /// Bounded detected conventional project environments.
     pub candidates: Vec<Environment>,
     /// Resolved selected Python executable.
@@ -283,6 +287,16 @@ pub struct Environments {
     pub prefix: String,
     /// Selected interpreter's `sys.base_prefix`, for virtual-environment detection.
     pub base_prefix: String,
+}
+/// One installed Jupyter kernelspec on the project host.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct KernelSpec {
+    /// Jupyter's stable kernelspec name.
+    pub name: String,
+    /// Human-readable menu label.
+    pub display_name: String,
+    /// Declared kernel language.
+    pub language: String,
 }
 /// Normalized source diagnostic. Rows and character columns are one-based; end positions are
 /// tool-derived and may equal the start for point diagnostics.
@@ -584,7 +598,11 @@ fn environments(root: &str, selected: &str) -> Result<Environments> {
     }
     let python = python_path(&root, selected);
     let mut command = Command::new(&python);
-    command.current_dir(root).args(["-c", "import json,sys;print(json.dumps(dict(executable=sys.executable,version=sys.version.split()[0],prefix=sys.prefix,base_prefix=sys.base_prefix)))"]);
+    let probe = format!(
+        "{}\nexec(project_environment_probe())",
+        include_str!("environment_probe.py")
+    );
+    command.current_dir(root).args(["-c", &probe]);
     let mut result: Environments =
         serde_json::from_str(&run(command, vec![], Duration::from_secs(10))?.checked()?)?;
     result.candidates = candidates;

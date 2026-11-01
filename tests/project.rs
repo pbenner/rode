@@ -240,6 +240,8 @@ fn environments_are_created_detected_and_selected_on_both_backends() {
         assert!(environment.executable.contains(".venv/bin/python"));
         assert_ne!(environment.prefix, environment.base_prefix);
         assert!(environment.candidates.iter().any(|c| c.name == ".venv"));
+        assert!(environment.kernels.is_empty());
+        assert!(environment.kernel_error.contains("jupyter_client"));
         assert!(
             if peer {
                 remote(&create)
@@ -578,5 +580,43 @@ fn shell_formatter_preserves_invalid_buffers_and_reports_positions() {
             previous = Some(serde_json::to_value(result).unwrap());
             assert!(!path.exists());
         }
+    }
+}
+
+#[test]
+fn installed_kernel_discovery_matches_on_native_and_python_hosts_without_starting_kernels() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("jupyter_client");
+    fs::create_dir(&package).unwrap();
+    fs::write(package.join("__init__.py"), "").unwrap();
+    fs::write(package.join("kernelspec.py"), r#"
+class KernelSpecManager:
+    def find_kernel_specs(self):
+        return dict(python3='fixture', julia='fixture', cloud='fixture', broken='fixture')
+    def get_kernel_spec(self, name):
+        if name == 'broken': raise ValueError('broken spec')
+        class Spec:
+            display_name = 'Fixture ' + name
+            language = 'python' if name == 'python3' else 'julia'
+            metadata = {'kernel_provisioner': {'provisioner_name': 'cloud' if name == 'cloud' else 'local-provisioner'}}
+        return Spec()
+"#).unwrap();
+    let request = Request::Environments {
+        root: directory.path().to_string_lossy().into(),
+        selected: String::new(),
+    };
+    for response in [project::local(&request).unwrap(), remote(&request).unwrap()] {
+        let Response::Environments(info) = response else {
+            panic!()
+        };
+        assert!(info.kernel_error.is_empty());
+        assert_eq!(
+            info.kernels
+                .iter()
+                .map(|k| k.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["julia", "python3"]
+        );
+        assert_eq!(info.kernels[0].display_name, "Fixture julia");
     }
 }

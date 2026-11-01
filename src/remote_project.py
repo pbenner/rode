@@ -623,7 +623,7 @@ def project_handle(request):
                     [
                         python,
                         "-c",
-                        "import json,sys;print(json.dumps(dict(executable=sys.executable,version=sys.version.split()[0],prefix=sys.prefix,base_prefix=sys.base_prefix)))",
+                        project_environment_probe(),  # noqa: F821 - concatenated environment_probe.py
                     ],
                     root,
                     timeout=10,

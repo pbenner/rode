@@ -85,7 +85,11 @@ impl View {
     }
     pub fn new(book: Notebook, images: Arc<markdown::Images>, shutdowns: Shutdowns) -> Self {
         let active = book.cells.first().map(|c| c.uid).unwrap_or(0);
-        let kernel_name = book.kernel();
+        let kernel_name = if book.language() == "python" {
+            "python3".into()
+        } else {
+            book.kernel()
+        };
         let (tx, rx) = mpsc::channel();
         Self {
             book,
@@ -830,6 +834,9 @@ impl EditorApp {
         else {
             return false;
         };
+        if self.python_environments().is_none() && self.python_environment_error().is_empty() {
+            self.refresh_environment(false, ctx);
+        }
         view.pictures(ctx);
         let palette = self.themes.active().palette;
         let font_size = self.font_size;
@@ -996,19 +1003,50 @@ impl EditorApp {
                         ui.colored_label(palette.muted, &self.sessions.slurm_error);
                     }
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Kernel");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut view.kernel_name)
-                                .desired_width(130.)
-                                .char_limit(128),
-                        );
-                        if ui
-                            .small_button("Use kernel")
-                            .on_hover_text("Use an installed kernelspec; stops the current kernel")
-                            .clicked()
-                        {
+                        ui.label("Python environment");
+                        let previous = self.terminal_python_selection();
+                        ui.push_id(("notebook-python", id), |ui| self.python_environment_picker(ui, ctx));
+                        if previous != self.terminal_python_selection() {
+                            view.detach("Notebook environment changed");
+                            view.kernel_name = "python3".into();
                             action = Some(Action::Kernel);
                         }
+                        if ui.add_enabled(!self.python_environment_busy(), egui::Button::new("Refresh kernels")).clicked() {
+                            self.refresh_environment(false, ctx);
+                        }
+                        if self.python_environment_busy() { ui.spinner(); }
+                    });
+                    if !self.python_environment_error().is_empty() {
+                        ui.colored_label(palette.error, self.python_environment_error());
+                    }
+                    if let Some(env) = self.python_environments() {
+                        ui.small(&env.executable);
+                        if !env.kernel_error.is_empty() { ui.colored_label(palette.muted, &env.kernel_error); }
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Kernel");
+                        let previous = view.kernel_name.clone();
+                        egui::ComboBox::from_id_salt(("notebook-kernel", id))
+                            .width(300.)
+                            .selected_text(if view.kernel_name == "python3" {
+                                "Python · selected environment".into()
+                            } else {
+                                self.python_environments()
+                                    .and_then(|env| env.kernels.iter().find(|k| k.name == view.kernel_name))
+                                    .map(|k| k.display_name.clone())
+                                    .unwrap_or_else(|| view.kernel_name.clone())
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut view.kernel_name, "python3".into(), "Python · selected environment");
+                                if let Some(env) = self.python_environments() {
+                                    for kernel in &env.kernels {
+                                        if kernel.name != "python3" {
+                                            ui.selectable_value(&mut view.kernel_name, kernel.name.clone(), format!("{} ({})", kernel.display_name, kernel.name));
+                                        }
+                                    }
+                                }
+                            });
+                        if previous != view.kernel_name { action = Some(Action::Kernel); }
                         ui.label(
                             palette.tag(
                                 view.kernel
@@ -1329,6 +1367,26 @@ fn output_text(output: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn python_notebooks_default_to_the_environment_without_rewriting_saved_metadata() {
+        for (language, saved, expected) in [
+            ("python", "old-venv", "python3"),
+            ("julia", "julia-1.12", "julia-1.12"),
+        ] {
+            let mut book = Notebook::default();
+            book.set_kernel(saved).unwrap();
+            book.data["metadata"]["language_info"] = serde_json::json!({"name": language});
+            let original = book.serialize().unwrap();
+            let view = View::new(
+                book,
+                Arc::new(markdown::Images::default()),
+                Shutdowns::default(),
+            );
+            assert_eq!(view.kernel_name, expected);
+            assert_eq!(view.book.serialize().unwrap(), original);
+            assert!(view.kernel.is_none());
+        }
+    }
     #[test]
     fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images() {
         let ctx = egui::Context::default();

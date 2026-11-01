@@ -29,12 +29,23 @@ impl Default for State {
 }
 
 impl EditorApp {
-    pub(in crate::app) fn python_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        ui.heading("Project interpreter");
+    pub(in crate::app) fn python_environments(&self) -> Option<&project::Environments> {
+        self.workbench.python.env.as_ref()
+    }
+    pub(in crate::app) fn python_environment_busy(&self) -> bool {
+        self.workbench.python.env_busy
+    }
+    pub(in crate::app) fn python_environment_error(&self) -> &str {
+        &self.workbench.python.env_error
+    }
+    pub(in crate::app) fn python_environment_picker(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) {
         let mut selected = self.workbench.prefs.python.clone();
         egui::ComboBox::from_id_salt("python-environment")
-            .width(ui.available_width())
+            .width(ui.available_width().min(380.))
             .selected_text(if selected == "auto" {
                 "Auto · project .venv, then system"
             } else if selected.is_empty() {
@@ -71,6 +82,12 @@ impl EditorApp {
             self.workbench.save_preferences();
             self.refresh_environment(true, ctx);
         }
+    }
+
+    pub(in crate::app) fn python_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let palette = self.themes.active().palette;
+        ui.heading("Project interpreter");
+        self.python_environment_picker(ui, ctx);
         ui.label("Custom interpreter or environment folder (on this host)");
         ui.add(
             egui::TextEdit::singleline(&mut self.workbench.draft.python)

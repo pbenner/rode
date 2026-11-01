@@ -14,6 +14,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    click,
     close_window,
     display,
     focus_window,
@@ -141,6 +142,12 @@ def run(remote=False):
                 key("space", ("Control_L",))
                 key("e")
                 screenshot(window, label + "-opened.png")
+                click(640, 251)
+                screenshot(window, label + "-environment-picker.png")
+                key("Escape")
+                click(510, 302)
+                screenshot(window, label + "-kernel-picker.png")
+                key("Escape")
                 assert json.loads(source.read_text()) == original, (
                     "Opening a notebook changed its source"
                 )

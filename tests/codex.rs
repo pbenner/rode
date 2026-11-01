@@ -208,6 +208,7 @@ fn codex_turn(program: &str, isolated: bool) {
             .join("\n");
         assert!(text.contains(task), "{latest}");
         assert!(text.contains("name=\"jackson_lamb\""), "{latest}");
+        assert!(!text.contains("<rode_response_style version="), "{latest}");
         assert_eq!(text.matches("<rode_response_style ").count(), 1, "{latest}");
     }
     let temp = tempfile::tempdir().unwrap();
