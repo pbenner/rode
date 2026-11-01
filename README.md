@@ -1,19 +1,20 @@
 # RODE
 
-A lightweight native Rust code editor for local and SSH projects, with on-demand tools, persistent terminals and configurable sandboxing.
+A lightweight native Rust code editor for local and SSH projects, with persistent work sessions and configurable project-wide sandboxing. Tools start on demand, background work is bounded, and there is no automatic project-wide indexing.
 
-- **[Terminals that survive editor exit](docs/terminals.md).** Enable **Persist**, keep shells running through editor exit or SSH loss, and reattach later—even from multiple RODE windows. Native Rust implementation; no tmux/screen dependency.
-- **[Remote projects through your SSH setup](docs/remote.md).** Use existing OpenSSH aliases, keys and jump hosts. Browse and edit remote folders while Git, tools and debuggers run where the files live.
+- **[Work that survives editor exit](docs/terminals.md).** Enable persistence separately for terminals, coding agents, notebook kernels and debuggers, locally or over SSH. Reattach after editor exit or SSH loss with running work, kernel variables and debugger pause state retained. Terminals also support multiple attached windows without tmux/screen.
+- **[Remote projects through your SSH setup](docs/remote.md).** Use existing OpenSSH aliases, keys and jump hosts. File access and project shells reuse the authenticated connection; Git, tools and debuggers run where the files live.
 - **[One sandbox policy for the project](docs/sandbox.md).** Configure filesystem grants locally or over SSH; editor I/O, shells, agents and tools share the active policy. Unavailable sandboxing is clearly labelled normal mode.
-- **[Background agents inside the sandbox](docs/agents.md).** Use Codex, local models through Ollama, or ACP agents locally and over SSH. Enable **Persist** to keep tasks running after exit and reattach through **Running**. Browse saved chats, control model/reasoning/permissions, and install Codex without root, VS Code or Node.js. Approvals cannot widen the active sandbox.
-- **[Slurm GPU allocations](docs/slurm.md).** Request resources for an interactive shell or a persistent reservation. Run notebook kernels and debuggers in a selected allocation; retain their queues, variables and pause state across desktop/SSH disconnects and reattach from Sessions. Release resources after confirmation. Host CPU/GPU telemetry is available separately.
+- **[Coding agents on the project host](docs/agents.md).** Use Codex, local models through Ollama, or ACP agents. Browse saved conversations and control model, reasoning and tool permissions. Approvals cannot widen the active project sandbox.
+- **[Slurm CPU/GPU allocations](docs/slurm.md).** Request resources for interactive shells, notebook kernels and debuggers. Run on compute nodes through the existing SSH connection, with persistent reservations for longer work.
+- **Scientific and technical workspace.** Run [Jupyter notebooks](docs/notebooks.md), preview [Markdown](docs/markdown.md), build [LaTeX](docs/latex.md), and prepare [Marp slides](docs/marp.md). Inspect [images](docs/images.md), [PDFs](docs/pdf.md) and [binaries with hex editing and analysis](docs/binary.md) in the editor.
 - **[Encrypted local and remote projects](docs/encrypted-projects.md).** Open gocryptfs storage as a normal project; locking requires active project jobs to stop.
 
 Also included:
 
 - [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md).
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
-- [Jupyter notebooks](docs/notebooks.md), [Markdown](docs/markdown.md), [Marp slides](docs/marp.md), [LaTeX](docs/latex.md), [images](docs/images.md), [PDFs](docs/pdf.md), and [hex editing / binary analysis](docs/binary.md).
+- On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 
 ![RODE](assets/carbon.png)
 
