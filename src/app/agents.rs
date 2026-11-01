@@ -21,6 +21,7 @@ mod runtime;
 
 pub(super) struct Agents {
     pub chat: Chat,
+    catalog: Option<agent::controls::Catalog>,
     preferences: Preferences,
     config: Config,
     key: String,
@@ -55,6 +56,7 @@ impl Agents {
             .unwrap_or_default();
         Self {
             chat: Chat::default(),
+            catalog: None,
             preferences,
             config: Config::default(),
             key: String::new(),
@@ -205,6 +207,7 @@ impl EditorApp {
                 .unwrap_or_else(|_| "[]".into());
             self.agents.argument_error.clear();
             self.agents.key = key;
+            self.agents.catalog = None;
         }
         if !self.tools_visible()
             || self.workbench.panel != Some(Panel::Agent)
@@ -231,6 +234,20 @@ impl EditorApp {
         }
         let was_busy = self.agents.chat.busy;
         self.agents.chat.poll();
+        if self
+            .agents
+            .catalog
+            .as_ref()
+            .is_some_and(|catalog| !catalog.matches(&self.agents.config))
+        {
+            self.agents.catalog = None;
+        }
+        if let Some(catalog) = &mut self.agents.catalog {
+            catalog.poll();
+            if catalog.busy() {
+                ctx.request_repaint_after(Duration::from_millis(250));
+            }
+        }
         if let Some(error) = self.agents.chat.take_persistence_error() {
             self.abort_session_quit(error, ctx);
         }
@@ -316,6 +333,7 @@ impl EditorApp {
     }
 
     pub(super) fn stop_project_agent(&mut self) {
+        self.agents.catalog = None;
         self.agents.queue.clear();
         self.agents.runtime.reset();
         self.agents.browser = None;
@@ -329,6 +347,7 @@ impl EditorApp {
     }
 
     pub(super) fn leave_project_agent(&mut self) {
+        self.agents.catalog = None;
         self.agents.runtime.reset();
         self.agents.browser = None;
         self.agents.history_open = false;
@@ -336,7 +355,8 @@ impl EditorApp {
     }
 
     /// Clean exit lets owned setup workers release temporary files and locks.
-    pub(super) fn cancel_agent_installation(&self) {
+    pub(super) fn cancel_agent_installation(&mut self) {
+        self.agents.catalog = None;
         self.agents.runtime.cancel_all();
         self.agents.chat.cancel_startup_for_exit();
         for chat in &self.agents.retired {
@@ -414,6 +434,7 @@ impl EditorApp {
             content.max.y = (queue_rect.top() - 6.).max(content.top());
         }
         let mut send = false;
+        let mut discover_models = false;
         let mut attach = false;
         let mut stop = false;
         let mut new_chat = false;
@@ -609,7 +630,7 @@ impl EditorApp {
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width().min(380.), 26.),
                         Layout::left_to_right(Align::Center),
-                        |ui| controls::buttons(ui, &mut agents.config, &agents.chat, read_only, isolated),
+                        |ui| discover_models = controls::buttons(ui, &mut agents.config, &agents.chat, agents.catalog.as_ref(), read_only, isolated),
                     );
                 });
             });
@@ -772,6 +793,13 @@ impl EditorApp {
         }
         if attach {
             self.set_dialog(Dialog::AgentAttachLocal);
+        }
+        if discover_models {
+            let context = ctx.clone();
+            self.agents.catalog = Some(agent::controls::discover(
+                self.agent_launch(),
+                Arc::new(move || context.request_repaint()),
+            ));
         }
         if send {
             if self.agents.runtime.installing() {

@@ -398,6 +398,11 @@ try:
                         )
             response(request, {"configOptions": controls()})
         elif method == "model/list":
+            if (root / "model-catalog-error").exists():
+                emit(
+                    {"id": request["id"], "error": {"code": -32601, "message": "No model catalog"}}
+                )
+                continue
             models = (
                 []
                 if params.get("cursor")

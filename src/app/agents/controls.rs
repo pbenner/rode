@@ -1,11 +1,12 @@
 //! Compact native model/permission popovers shared by the chat providers.
-//! Provider metadata is read from the already-started chat; drawing these
-//! controls never probes an executable, a remote host or a model server.
+//! Opening Model can request metadata independently of the first chat message.
 //! Child choices use native submenus: a ComboBox would replace the parent in
 //! egui's single remembered-popup slot and disappear before selection.
 
 use crate::agent::{
-    Access, Approval, Config, Personality, Provider, controls::Control, protocol::Chat,
+    Access, Approval, Config, Personality, Provider,
+    controls::{Catalog, Control},
+    protocol::Chat,
 };
 use eframe::egui;
 use serde_json::Value;
@@ -34,9 +35,19 @@ pub(super) fn buttons(
     ui: &mut egui::Ui,
     config: &mut Config,
     chat: &Chat,
+    catalog: Option<&Catalog>,
     read_only: bool,
     isolated: bool,
-) {
+) -> bool {
+    let catalog = catalog.filter(|catalog| catalog.matches(config));
+    let models = if chat.controls_match(config) && !chat.models.is_empty() {
+        chat.models.as_slice()
+    } else {
+        catalog
+            .map(|catalog| catalog.models.as_slice())
+            .unwrap_or_default()
+    };
+    let mut discover = false;
     let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.).max(60.);
     let model = if config.provider == Provider::Acp {
         chat.controls
@@ -74,12 +85,12 @@ pub(super) fn buttons(
                     .char_limit(256),
             );
             if config.provider == Provider::Codex {
-                if chat.controls_match(config) && !chat.models.is_empty() {
+                if !models.is_empty() {
                     egui::ScrollArea::vertical()
                         .id_salt("codex-model-picker")
                         .max_height(180.)
                         .show(ui, |ui| {
-                            for model in &chat.models {
+                            for model in models {
                                 if ui
                                     .selectable_label(
                                         config.model == model.value.id,
@@ -93,7 +104,30 @@ pub(super) fn buttons(
                             }
                         });
                 } else {
-                    ui.small("Model choices load after the first message. A custom ID can be entered now.");
+                    match catalog {
+                        None => {
+                            discover = true;
+                            ui.small("Loading model choices…");
+                        }
+                        Some(catalog) if catalog.busy() => {
+                            ui.small("Loading model choices…");
+                        }
+                        Some(catalog) if catalog.error.is_none() => {
+                            ui.small(
+                                "This agent did not advertise model choices. Enter a custom ID.",
+                            );
+                        }
+                        Some(_) => {}
+                    }
+                }
+                if let Some(catalog) = catalog
+                    && !catalog.busy()
+                    && (catalog.error.is_some() || catalog.models.is_empty())
+                {
+                    if let Some(error) = &catalog.error {
+                        ui.small(error);
+                    }
+                    discover = ui.small_button("Retry model discovery").clicked();
                 }
             } else {
                 ui.small("Enter a model installed on the configured local server.");
@@ -103,9 +137,8 @@ pub(super) fn buttons(
             }
             ui.separator();
             ui.label("Reasoning effort");
-            let advertised = chat.controls_match(config)
-                && config.provider == Provider::Codex
-                && chat.models.iter().any(|m| {
+            let advertised = config.provider == Provider::Codex
+                && models.iter().any(|m| {
                     (m.value.id == config.model() || (config.model().is_empty() && m.default))
                         && !m.efforts.is_empty()
                 });
@@ -117,27 +150,24 @@ pub(super) fn buttons(
                 };
                 choices(ui, selected, |ui| {
                     ui.selectable_value(&mut config.reasoning_effort, String::new(), "Default");
-                    if chat.controls_match(config) {
-                        let model = chat
-                            .models
-                            .iter()
-                            .find(|m| m.value.id == config.model())
-                            .or_else(|| {
-                                config
-                                    .model()
-                                    .is_empty()
-                                    .then(|| chat.models.iter().find(|m| m.default))
-                                    .flatten()
-                            });
-                        if let Some(model) = model {
-                            for effort in &model.efforts {
-                                ui.selectable_value(
-                                    &mut config.reasoning_effort,
-                                    effort.id.clone(),
-                                    &effort.name,
-                                )
-                                .on_hover_text(&effort.description);
-                            }
+                    let model = models
+                        .iter()
+                        .find(|m| m.value.id == config.model())
+                        .or_else(|| {
+                            config
+                                .model()
+                                .is_empty()
+                                .then(|| models.iter().find(|m| m.default))
+                                .flatten()
+                        });
+                    if let Some(model) = model {
+                        for effort in &model.efforts {
+                            ui.selectable_value(
+                                &mut config.reasoning_effort,
+                                effort.id.clone(),
+                                &effort.name,
+                            )
+                            .on_hover_text(&effort.description);
                         }
                     }
                 });
@@ -209,6 +239,7 @@ pub(super) fn buttons(
         }
         ui.small("Changes apply before the next message.");
     });
+    discover
 }
 
 fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::Ui)) {
@@ -299,6 +330,118 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
             config
                 .acp_options
                 .insert(control.id.clone(), selected.into());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::controls::{Model, OptionValue};
+
+    fn frame(
+        ctx: &egui::Context,
+        config: &mut Config,
+        chat: &Chat,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_space(size.y - 160.);
+                    ui.horizontal(|ui| buttons(ui, config, chat, None, false, false));
+                });
+            },
+        )
+    }
+
+    fn position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() / 2.)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing control: {label}"))
+    }
+
+    fn click(
+        ctx: &egui::Context,
+        config: &mut Config,
+        chat: &Chat,
+        size: egui::Vec2,
+        pos: egui::Pos2,
+    ) -> egui::FullOutput {
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                config,
+                chat,
+                size,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        frame(ctx, config, chat, size, vec![])
+    }
+
+    #[test]
+    fn model_and_reasoning_menus_keep_advertised_choices_selectable() {
+        for size in [egui::vec2(1100., 900.), egui::vec2(390., 600.)] {
+            let ctx = egui::Context::default();
+            let mut config = Config::default();
+            let mut chat = Chat::default();
+            chat.models = (0..8)
+                .map(|index| Model {
+                    value: OptionValue {
+                        id: format!("model-{index}"),
+                        name: format!("Model {index}"),
+                        description: String::new(),
+                    },
+                    default: index == 0,
+                    efforts: ["low", "medium", "high", "xhigh", "max", "ultra"]
+                        .into_iter()
+                        .map(|id| OptionValue {
+                            id: id.into(),
+                            name: id.into(),
+                            description: String::new(),
+                        })
+                        .collect(),
+                })
+                .collect();
+            frame(&ctx, &mut config, &chat, size, vec![]);
+            let output = frame(&ctx, &mut config, &chat, size, vec![]);
+            let pos = position(&output, "Model: default");
+            let output = click(&ctx, &mut config, &chat, size, pos);
+            let pos = position(&output, "Model 1");
+            click(&ctx, &mut config, &chat, size, pos);
+            assert_eq!(config.model, "model-1");
+            let output = frame(&ctx, &mut config, &chat, size, vec![]);
+            let pos = position(&output, "Model: model-1");
+            let output = click(&ctx, &mut config, &chat, size, pos);
+            let pos = position(&output, "Default");
+            let output = click(&ctx, &mut config, &chat, size, pos);
+            let pos = position(&output, "ultra");
+            click(&ctx, &mut config, &chat, size, pos);
+            assert_eq!(config.reasoning_effort, "ultra");
+            assert!(!chat.connected());
+            assert!(chat.messages.is_empty());
         }
     }
 }

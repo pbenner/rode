@@ -3,13 +3,16 @@
 //! # Design decisions
 //!
 //! Model IDs and ACP options come from the active process, never a hard-coded
-//! vendor catalog. Unsupported controls are omitted. Discovery happens during
-//! the first submitted conversation, and metadata is not persisted as settings.
+//! vendor catalog. Unsupported controls are omitted. Discovery can run without
+//! submitting a conversation, and metadata is not persisted as settings.
 //! Only explicit user choices are saved. Protocol updates are acknowledged
 //! before a queued prompt is sent; they cannot expand the enclosing sandbox.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+mod catalog;
+pub use catalog::Catalog;
 
 /// Maximum selectors/model entries retained from an agent.
 pub const CONTROL_LIMIT: usize = 32;

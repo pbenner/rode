@@ -110,7 +110,7 @@ def send(root, message, first=False):
     if first:
         # Shift+Enter stays in the composer and does not start a process.
         key("Return", ("Shift_L",))
-        assert not (root / "agent-rpc.jsonl").exists()
+        assert not any(m.get("method") in ("turn/start", "session/prompt") for m in rpc(root))
         key("BackSpace")
     key("Return")
     wait_for(lambda: sent(root, message), "Composer did not submit: " + message)
@@ -236,7 +236,35 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 "Default personality was not saved",
             )
             long_composer(root, window, prompt)
+            # Discover and select models/efforts before the first prompt. The
+            # temporary catalog connection must never create a conversation.
+            click(1090, 752)
+            wait_for(
+                lambda: sum(m.get("method") == "model/list" for m in rpc(root)) == 2,
+                "A new chat did not load the complete model catalog",
+            )
+            screenshot(window, "new-chat-model-controls.png")
+            assert all(
+                m.get("method") in ("initialize", "initialized", "model/list") for m in rpc(root)
+            )
+            click(1090, 633)
+            wait_for(
+                lambda: agent_preferences(preferences).get("model") == "fixture-deep",
+                "A model could not be selected before the first message",
+            )
+            key("Escape")
+            click(1090, 752)
+            click(1075, 693)
+            click(960, 744)
+            wait_for(
+                lambda: agent_preferences(preferences).get("reasoning_effort") == "high",
+                "Reasoning effort could not be selected before the first message",
+            )
+            key("Escape")
             send(root, "first\nsecond line", first=True)
+            first_turn = next(m for m in rpc(root) if m.get("method") == "turn/start")
+            assert first_turn["params"]["model"] == "fixture-deep"
+            assert first_turn["params"]["effort"] == "high"
             scope = json.loads((root / "agent-scope.json").read_text())
             assert scope["cwd"] == str(root)
             info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
@@ -248,7 +276,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             styled = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert styled["params"]["input"][0]["text"] == "second"
             assert 'name="jackson_lamb"' in styled["params"]["input"][1]["text"]
-            assert sum(m.get("method") == "initialize" for m in rpc(root)) == 1
+            assert sum(m.get("method") == "initialize" for m in rpc(root)) == 2
             # Recall is local editing: preserve a draft while browsing both ways,
             # then modify an older prompt and submit it only after explicit Enter.
             click(1280, 785)

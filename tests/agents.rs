@@ -260,6 +260,65 @@ fn both_protocols_stream_keep_context_and_relay_explicit_approvals() {
 }
 
 #[test]
+fn codex_models_and_reasoning_load_without_starting_a_conversation() {
+    for isolated in [false, true] {
+        let (_temp, root, program) = fixture();
+        let launch = launch(&root, &program, Provider::Codex, isolated);
+        let mut catalog = rode::agent::controls::discover(launch.clone(), Arc::new(|| {}));
+        let until = Instant::now() + Duration::from_secs(10);
+        while catalog.busy() {
+            catalog.poll();
+            assert!(Instant::now() < until, "Model discovery timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(catalog.error.is_none(), "{:?}", catalog.error);
+        assert_eq!(catalog.models.len(), 2);
+        assert_eq!(catalog.models[1].value.id, "fixture-deep");
+        assert_eq!(catalog.models[1].efforts[1].id, "high");
+        let calls = log(&root);
+        let methods: Vec<_> = calls
+            .iter()
+            .filter_map(|call| call["method"].as_str())
+            .collect();
+        assert_eq!(
+            methods,
+            ["initialize", "initialized", "model/list", "model/list"]
+        );
+        let mut config = launch.config.clone();
+        config.model = "fixture-deep".into();
+        config.reasoning_effort = "high".into();
+        assert!(catalog.matches(&config));
+        config.codex = "/different/agent".into();
+        assert!(!catalog.matches(&config));
+    }
+}
+
+#[test]
+fn model_discovery_errors_finish_without_submitting_a_prompt() {
+    let (_temp, root, program) = fixture();
+    fs::write(root.join("model-catalog-error"), "").unwrap();
+    let mut launch = launch(&root, &program, Provider::Codex, false);
+    let mut catalog = rode::agent::controls::discover(launch.clone(), Arc::new(|| {}));
+    let until = Instant::now() + Duration::from_secs(10);
+    while catalog.busy() {
+        catalog.poll();
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(catalog.error.as_deref(), Some("No model catalog"));
+    assert!(catalog.models.is_empty());
+    assert!(log(&root).iter().all(|call| matches!(
+        call["method"].as_str(),
+        Some("initialize" | "initialized" | "model/list")
+    )));
+    launch.config.codex = "invalid\0program".into();
+    let mut catalog = rode::agent::controls::discover(launch, Arc::new(|| {}));
+    catalog.poll();
+    assert!(!catalog.busy());
+    assert!(catalog.error.is_some());
+}
+
+#[test]
 fn codex_model_reasoning_and_access_changes_apply_to_the_next_turn() {
     let (_temp, root, program) = fixture();
     let mut launch = launch(&root, &program, Provider::Codex, false);
