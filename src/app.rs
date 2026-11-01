@@ -1055,12 +1055,10 @@ impl EditorApp {
                 Request::ReadBinary { path: path.clone() }
             } else if crate::images::format_for(&path).is_some() {
                 Request::ReadImage { path: path.clone() }
+            } else if self.feature(crate::extensions::Feature::Binary) {
+                Request::ReadAuto { path: path.clone() }
             } else {
-                if self.feature(crate::extensions::Feature::Binary) {
-                    Request::ReadAuto { path: path.clone() }
-                } else {
-                    Request::Read { path: path.clone() }
-                }
+                Request::Read { path: path.clone() }
             };
             self.dispatch(request, Job::Open(path), ctx);
         }
@@ -3537,12 +3535,10 @@ impl EditorApp {
                 self.background_agents_dialog(ui, ctx);
             } else if self.dialog == Dialog::TerminalExit {
                 self.terminal_exit_dialog(ui, ctx);
+            } else if self.dialog == Dialog::Folder {
+                self.folder_dialog(ui, ctx);
             } else {
-                if self.dialog == Dialog::Folder {
-                    self.folder_dialog(ui, ctx);
-                } else {
-                    self.path_dialog(ui, ctx);
-                }
+                self.path_dialog(ui, ctx);
             }
             if sizing {
                 self.dialog_focus = focus;

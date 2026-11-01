@@ -137,14 +137,22 @@ def run(remote=False):
                 time.sleep(1)
                 focus_window(window)
                 open_file("demo.ipynb")
+                title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                host_offset = (44 if "[Sandbox]" in title else 74) if remote else 0
+
+                def document_click(x, y):
+                    # Remote projects add the host banner and, on fallback,
+                    # the sandbox-unavailable reason above notebook controls.
+                    click(x, y + host_offset)
+
                 # Select Code explicitly: opening the notebook may already have
                 # hidden the SSH terminal, so toggling it can cover the notebook.
                 key("space", ("Control_L",))
                 key("e")
                 screenshot(window, label + "-opened.png")
-                click(390, 208)
+                document_click(390, 208)
                 screenshot(window, label + "-settings.png")
-                click(390, 208)
+                document_click(390, 208)
                 assert json.loads(source.read_text()) == original, (
                     "Opening a notebook changed its source"
                 )
@@ -229,9 +237,9 @@ def run(remote=False):
                 text("new.ipynb")
                 key("Return")
                 wait_for(lambda: (project / "new.ipynb").exists(), "New notebook save failed")
-                click(610, 149)
+                document_click(610, 149)
                 text("inserted_code = 7")
-                click(710, 149)
+                document_click(710, 149)
                 text("Inserted markdown")
                 key("s", ("Control_L",))
 
@@ -247,7 +255,7 @@ def run(remote=False):
                 wait_for(inserted, "Toolbar cell insertion or editor focus failed")
                 screenshot(window, label + "-inserted-cells.png")
                 # Insert between existing cells, rather than appending to the notebook.
-                click(465, 359)
+                document_click(465, 359)
                 text("Between cells")
                 key("s", ("Control_L",))
 

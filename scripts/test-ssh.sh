@@ -85,7 +85,9 @@ case "${RODE_SSH_RUN_TRANSPORT:-1}" in
             transport+=(--test ssh_roundtrip "${RODE_SSH_TEST_FILTER:-}" -- --ignored --nocapture)
         fi
         if ! "${transport[@]}"; then
-            cat "$test_dir/sshd.log" >&2
+            # Keep the Rust assertion visible in the bounded CI output. The
+            # complete daemon log is retained by cleanup in its own artifact.
+            tail -n 80 "$test_dir/sshd.log" >&2
             exit 1
         fi
         ;;

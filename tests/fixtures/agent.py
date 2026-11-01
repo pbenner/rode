@@ -474,7 +474,14 @@ try:
                 except OSError:
                     finish("Write blocked by the project sandbox.")
             elif message == "wait":
-                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                child = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(60)",
+                        str(root / "agent-child.pid"),
+                    ]
+                )
                 (root / "agent-child.pid").write_text(str(child.pid))
                 reply("Working on a long task…")
             elif message == "queue-gated":

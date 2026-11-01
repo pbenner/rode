@@ -3,8 +3,10 @@
 
 import ctypes
 import hashlib
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -21,6 +23,7 @@ from ui_harness import (
     display,
     focus_window,
     key,
+    request_close,
     screenshot,
     text,
     x11,
@@ -43,6 +46,40 @@ def command(value):
     text(value)
     key("Return")
     time.sleep(0.3)
+
+
+def cleanup_result(cipher, remote, environment):
+    """Check the fixture's real host lock result; namespace restrictions must fail closed."""
+    command = [str(BINARY), "--vault-helper"]
+    if remote:
+        command = [
+            "ssh",
+            "-F",
+            os.environ["RODE_TEST_SSH_CONFIG"],
+            "-T",
+            "rode-test",
+            shlex.join(["python3", "-u", "-c", (ROOT / "src/remote_vault.py").read_text()]),
+        ]
+    request = dict(
+        settings=dict(cipherdir=str(cipher), program="/usr/bin/true", unmount_program=""),
+        password="",
+        create=False,
+        lock_only=True,
+    )
+    result = subprocess.run(
+        command,
+        input=json.dumps(request) + "\n",
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=15,
+        check=True,
+    )
+    reply = json.loads(result.stdout)
+    assert reply["kind"] == "closed", reply
+    if not reply["locked"]:
+        assert reply["message"].startswith("Cannot verify other mount namespaces"), reply
+    return reply
 
 
 def run(remote=False):
@@ -140,7 +177,23 @@ def run(remote=False):
                     lambda: "unsaved-vault-marker" in source.read_text(),
                     "Unlock failure lost the dirty source buffer",
                 )
-                close_window(window, process)
+                # An ordinary failed mount still requires verified cleanup.
+                # Hardened hosts can deny /proc namespace inspection; only that
+                # explicit refusal permits expecting the exit guard here.
+                cleanup = cleanup_result(cipher, remote, environment)
+                (ARTIFACTS / f"{label}-cleanup.json").write_text(json.dumps(cleanup, indent=2))
+                if cleanup["locked"]:
+                    close_window(window, process)
+                else:
+                    request_close(window)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    else:
+                        raise AssertionError("RODE exited without verified encrypted cleanup")
+                    screenshot(window, label + "-cleanup-blocked.png")
+                    print(label + ": namespace inspection refused; close correctly stayed blocked.")
                 for path in (base / "data").rglob("*"):
                     if path.is_file():
                         assert b"RODEUiSecret4821" not in path.read_bytes(), path

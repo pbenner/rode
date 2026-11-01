@@ -1142,20 +1142,27 @@ impl EditorApp {
                     let frame=egui::Frame::new().fill(if active {palette.raised} else {palette.panel}).stroke(Stroke::new(1_f32,if active {palette.accent} else {palette.border})).inner_margin(8.).outer_margin(egui::Margin::symmetric(10,5));
                     frame.show(ui,|ui|{ui.set_min_width(ui.available_width());
                         ui.push_id(("notebook-cell",id,uid),|ui|{
-                            ui.horizontal_wrapped(|ui|{
-                                if ui.selectable_label(active,format!("Cell {}",at+1)).clicked(){view.active=uid;view.focus=Some(uid);}
-                                let mut kind=cell.kind().to_owned();egui::ComboBox::from_id_salt("kind").width(96.).selected_text(&kind).show_ui(ui,|ui|{for value in ["code","markdown","raw"]{ui.selectable_value(&mut kind,value.into(),value);}});
+                            cell_toolbar(ui, |ui|{
+                                if ui.add(egui::Button::new(format!("Cell {}",at+1)).selected(active).frame(false).min_size(egui::vec2(52.,28.))).clicked(){view.active=uid;view.focus=Some(uid);}
+                                let mut kind=cell.kind().to_owned();egui::ComboBox::from_id_salt("kind").width(108.).selected_text(&kind).show_ui(ui,|ui|{for value in ["code","markdown","raw"]{ui.selectable_value(&mut kind,value.into(),value);}});
                                 if kind!=cell.kind(){action=Some(Action::Kind(at,kind));}
                                 if cell.kind()=="code" {
+                                    if ui.add_enabled(!view.kernel.as_ref().is_some_and(Kernel::busy),IconButton::new(Icon::Play,"Run").min_size(egui::vec2(68.,28.))).on_hover_text("Run cell").clicked(){view.active=uid;action=Some(Action::Run(false));}
+                                } else if cell.kind()=="markdown" {
+                                    if ui.add(egui::Button::new(if state.previewing {"Edit"} else {"Preview"}).min_size(egui::vec2(68.,28.))).clicked(){state.previewing = !state.previewing;view.active=uid;view.focus=Some(uid);}
+                                } else {
+                                    ui.allocate_space(egui::vec2(68.,28.));
+                                }
+                                if ui.add_enabled(at>0,egui::Button::new("Up")).on_hover_text("Move cell up").clicked(){action=Some(Action::Move(at,-1));}
+                                if ui.add_enabled(at+1<cell_count,egui::Button::new("Down")).on_hover_text("Move cell down").clicked(){action=Some(Action::Move(at,1));}
+                                if ui.button("Delete").on_hover_text("Delete cell").clicked(){action=Some(Action::Delete(at));}
+                                if cell.kind()=="code" {
+                                    if ui.button("Clear").on_hover_text("Clear cell outputs").clicked(){action=Some(Action::Clear(Some(at)));}
                                     let running=view.kernel.as_ref().is_some_and(|k|k.running_uid()==Some(uid));
-                                    ui.label(palette.tag(if running {"[*]".into()} else {format!("[{}]",cell.data["execution_count"].as_u64().map(|n|n.to_string()).unwrap_or_default())}));
-                                    if ui.add_enabled(!view.kernel.as_ref().is_some_and(Kernel::busy),icons::IconButton::icon(Icon::Play,"Run cell")).clicked(){view.active=uid;action=Some(Action::Run(false));}
-                                } else if cell.kind()=="markdown" && ui.small_button(if state.previewing {"Edit"} else {"Preview"}).clicked(){state.previewing = !state.previewing;view.active=uid;view.focus=Some(uid);}
-                                if ui.add_enabled(at>0,egui::Button::new("Up").small()).clicked(){action=Some(Action::Move(at,-1));}
-                                if ui.add_enabled(at+1<cell_count,egui::Button::new("Down").small()).clicked(){action=Some(Action::Move(at,1));}
-                                if ui.small_button("Delete").clicked(){action=Some(Action::Delete(at));}
-                                if cell.kind()=="code"&&ui.small_button("Clear").clicked(){action=Some(Action::Clear(Some(at)));}
+                                    ui.label(palette.tag(if running {"[*]".into()} else {format!("[{}]",cell.data["execution_count"].as_u64().map(|n|n.to_string()).unwrap_or_default())})).on_hover_text("Execution count");
+                                }
                             });
+                            ui.add_space(8.);
                             if cell.kind()=="markdown"&&state.previewing {
                                 let preview=state.preview.get_or_insert_with(||markdown::Preview::new(view.images.clone()));
                                 let mut embedded=HashMap::new();let mut attachment_data=HashMap::new();
@@ -1199,13 +1206,12 @@ impl EditorApp {
                         });
                     });
                     ui.push_id(("insert-cell", id, uid), |ui| {
-                        ui.add_space(4.);
-                        ui.horizontal(|ui| {
-                            ui.add_space(18.);
-                            if ui.small_button("+ Code cell").on_hover_text("Insert a code cell here").clicked() { action=Some(Action::Add("code",at+1)); }
-                            if ui.small_button("+ Markdown cell").on_hover_text("Insert a text cell here").clicked() { action=Some(Action::Add("markdown",at+1)); }
+                        egui::Frame::new().inner_margin(egui::Margin {left:18,right:18,top:4,bottom:8}).show(ui, |ui| {
+                            cell_toolbar(ui, |ui| {
+                                if ui.button("+ Code cell").on_hover_text("Insert a code cell here").clicked() { action=Some(Action::Add("code",at+1)); }
+                                if ui.button("+ Markdown cell").on_hover_text("Insert a text cell here").clicked() { action=Some(Action::Add("markdown",at+1)); }
+                            });
                         });
-                        ui.add_space(8.);
                     });
                     state.height=(ui.cursor().top()-top).max(60.);y+=state.height;
                 }
@@ -1330,6 +1336,16 @@ impl EditorApp {
         !source
     }
 }
+fn cell_toolbar(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.scope(|ui| {
+        // Set the row height before layout so selectors, labels and buttons share a centre line.
+        ui.spacing_mut().interact_size.y = 28.;
+        ui.spacing_mut().button_padding = egui::vec2(8., 4.);
+        ui.spacing_mut().item_spacing = egui::vec2(6., 6.);
+        ui.horizontal_wrapped(add_contents);
+    });
+}
+
 fn image_bundle(bundle: &Value) -> Option<(String, String)> {
     for (mime, path) in [("image/png", "output.png"), ("image/jpeg", "output.jpg")] {
         if let Ok(data) = notebook::multiline(&bundle[mime])

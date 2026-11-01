@@ -200,7 +200,13 @@ def measure(label, command, env=None, timeout=300, group="commands"):
                 process.wait()
                 code = 124
     elapsed = round(time.monotonic() - start, 2)
-    print(logfile.read_text(errors="replace")[-24000:], flush=True)
+    with logfile.open("rb") as output:
+        start_output = output.read(12000)
+        rest = output.read(12001)
+        if len(rest) > 12000:
+            output.seek(-12000, os.SEEK_END)
+            rest = b"\n... middle omitted; full output is in the log artifact ...\n" + output.read()
+        print((start_output + rest).decode(errors="replace"), flush=True)
     print(f"{label}: {state} in {elapsed}s (log: {logfile.relative_to(ROOT)})", flush=True)
     print("::endgroup::", flush=True)
     record = dict(name=label, status=state, seconds=elapsed, command=command)
@@ -218,6 +224,10 @@ def run_suite(name):
     env.setdefault("RODE_TEST_BINARY", str(ROOT / "target/ci/rode"))
     env.setdefault("RODE_SSH_TEST_BINARY", str(ROOT / "target/ci/tests/ssh_roundtrip"))
     env.setdefault("RODE_TEST_SESSION_HELPER", str(ROOT / "target/ci/rode-sessiond-static"))
+    # Transferred Rust tests live in tests/, away from the bundled helper.
+    # Service-backed agents/history use application discovery, while direct
+    # transport fixtures use RODE_TEST_SESSION_HELPER. Both need the same build.
+    env.setdefault("RODE_SESSION_HELPER", env["RODE_TEST_SESSION_HELPER"])
     env.setdefault("RODE_TEST_RUFF", str(ROOT / "target/ci/tools/ruff"))
     env.setdefault("RODE_SESSION_DIR", str(ROOT / "target/ci-results" / name / "sessions"))
     env.setdefault("RODE_CI_SSH_LOG_DIR", str(ROOT / "target/ci-results" / name))

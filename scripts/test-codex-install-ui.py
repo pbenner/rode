@@ -77,6 +77,14 @@ def idle(base):
 with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
     version = json.loads((ROOT / "packaging/codex.json").read_text())["version"]
     root = Path(directory)
+    # A developer checkout may have a prepared runtime beside target/debug.
+    # Exercise a fresh installation without discovering that unrelated bundle.
+    binary = root / "bin/rode"
+    binary.parent.mkdir()
+    try:
+        os.link(BINARY, binary)
+    except OSError:
+        shutil.copy2(BINARY, binary)
     project = root / "project"
     project.mkdir()
     auth = root / "codex-config"
@@ -108,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
     window = None
     with (ARTIFACTS / "install.log").open("w") as log:
         process = subprocess.Popen(
-            [str(BINARY), str(project)], env=environment, stdout=log, stderr=log
+            [str(binary), str(project)], env=environment, stdout=log, stderr=log
         )
         try:
             for _ in range(150):
