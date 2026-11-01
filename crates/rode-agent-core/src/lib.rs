@@ -55,6 +55,7 @@ impl Approval {
             Self::Never => "Never ask",
         }
     }
+    /// Translate approval policy to Codex launch terminology without changing outer host grants.
     pub(crate) fn codex(self) -> &'static str {
         match self {
             Self::Ask => "on-request",
@@ -84,6 +85,7 @@ impl Access {
             Self::Full => "Full access",
         }
     }
+    /// Translate tool access to Codex's inner sandbox mode; the captured host policy still applies.
     pub(crate) fn codex(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",

@@ -42,6 +42,8 @@ impl Layout {
     }
 }
 
+/// Convert supported Markdown events into one themed selectable text layout,
+/// including nested emphasis, lists, tables, links and inline/fenced code.
 pub(super) fn layout(ui: &egui::Ui, text: &str, palette: theme::Palette) -> LayoutJob {
     let body = egui::TextStyle::Body.resolve(ui.style());
     let mut out = Layout {

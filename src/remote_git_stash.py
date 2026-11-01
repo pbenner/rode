@@ -9,6 +9,7 @@ class StashTransaction:
     """A Git-owned lock lease which aborts when its controlling stdin disappears."""
 
     def __init__(self, root, tip, deleting):
+        """Start git update-ref with bounded reply buffering; acquiring the transaction locks happens on entry."""
         import queue
         import subprocess
         import tempfile
@@ -45,6 +46,7 @@ class StashTransaction:
         self.replies = queue.Queue(maxsize=4)
 
         def read():
+            """Collect only the expected bounded transaction acknowledgements into the reply queue."""
             for _ in range(4):
                 line = self.process.stdout.readline(256)
                 self.replies.put(line)
@@ -55,6 +57,7 @@ class StashTransaction:
         self.reader.start()
 
     def __enter__(self):
+        """Prepare a no-dereference transaction against the captured stash tip, acquiring Git writer locks."""
         try:
             self.send(f"option no-deref\nstart\n{self.operation} refs/stash {self.tip}\nprepare\n")
             self.acknowledge("start: ok")
@@ -65,10 +68,12 @@ class StashTransaction:
             raise
 
     def send(self, command):
+        """Write and flush one transaction command to the owned Git process."""
         self.process.stdin.write(command.encode())
         self.process.stdin.flush()
 
     def acknowledge(self, expected):
+        """Wait at most 120 seconds for the expected reply; include bounded stderr on a protocol mismatch."""
         reply = self.replies.get(timeout=120)
         if reply.rstrip() != expected.encode():
             self.errors.seek(0)
@@ -76,12 +81,14 @@ class StashTransaction:
             raise ValueError(f"Git metadata is busy or the stash transaction failed: {detail}")
 
     def finish(self, commit):
+        """Commit or abort the prepared transaction, then release the child and pipe resources."""
         operation = "commit" if commit else "abort"
         self.send(operation + "\n")
         self.acknowledge(operation + ": ok")
         self.__exit__(None, None, None)
 
     def __exit__(self, *_args):
+        """Close stdin to abort unfinished work and reap the owned process, escalating termination if needed."""
         import os
         import signal
         import subprocess
@@ -127,6 +134,7 @@ def git_stash(request, root):
             return output
 
     def read(path):
+        """Read at most 8 MiB of regular Git metadata; return None for absence and reject other file types."""
         try:
             if not stat.S_ISREG(path.lstat().st_mode):
                 raise ValueError("Git metadata must be a regular file")
@@ -139,6 +147,7 @@ def git_stash(request, root):
             return None
 
     def replace(path, data):
+        """Publish metadata through a synced neighboring file while preserving its existing permission bits."""
         try:
             metadata = path.lstat()
         except FileNotFoundError:
@@ -157,6 +166,7 @@ def git_stash(request, root):
             Path(name).unlink(missing_ok=True)
 
     def drop():
+        """Remove only the captured reflog entry under Git locks; reject changed identities and unsupported backends."""
         if os.environ.get("GIT_NAMESPACE"):
             raise ValueError("Namespaced stash removal is unsupported; use the Git terminal")
         storage = git(root, ["config", "--get", "extensions.refStorage"])  # noqa: F821
@@ -216,6 +226,7 @@ def git_stash(request, root):
                 update = f"{tip} {'0' * width} refs/stash\n"
 
                 def hook(phase):
+                    """Run the reference-transaction hook with the captured last-entry deletion on stdin."""
                     return git(
                         root,
                         ["hook", "run", "--ignore-missing", "reference-transaction", "--", phase],

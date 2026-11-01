@@ -23,6 +23,8 @@ Also included:
 ```sh
 cargo install --locked --path .
 rode /path/to/project
+# Or open a file directly (its folder becomes the workspace):
+rode /path/to/project/main.py
 # Or connect to a remote computer:
 rode --ssh user@host --remote-path '~/project'
 ```

@@ -5,6 +5,7 @@
 //! already-running terminal without an explicit action.
 use super::*;
 
+/// Cached interpreter discovery plus a separate explicit virtual-environment creation form.
 pub(super) struct State {
     pub(super) env: Option<project::Environments>,
     pub(super) env_busy: bool,
@@ -29,15 +30,20 @@ impl Default for State {
 }
 
 impl EditorApp {
+    /// Borrow the last successful host interpreter probe; absence also covers a probe not yet run.
     pub(in crate::app) fn python_environments(&self) -> Option<&project::Environments> {
         self.workbench.python.env.as_ref()
     }
+    /// Report a discovery request currently in flight.
     pub(in crate::app) fn python_environment_busy(&self) -> bool {
         self.workbench.python.env_busy
     }
+    /// Expose the last discovery error independently of a retained successful result.
     pub(in crate::app) fn python_environment_error(&self) -> &str {
         &self.workbench.python.env_error
     }
+    /// Apply an interpreter selection, invalidate tool settings and refresh discovery;
+    /// changing the selector leaves an existing debugger attachment before reuse.
     pub(in crate::app) fn python_environment_picker(
         &mut self,
         ui: &mut egui::Ui,
@@ -84,6 +90,7 @@ impl EditorApp {
         }
     }
 
+    /// Render interpreter inspection and explicit environment creation controls on the project host.
     pub(in crate::app) fn python_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.heading("Project interpreter");
@@ -194,6 +201,7 @@ impl EditorApp {
             });
         }
     }
+    /// Render Python task shortcuts; commands execute only after an explicit action.
     pub(in crate::app) fn python_tasks_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.horizontal_wrapped(|ui| {
@@ -254,6 +262,8 @@ impl EditorApp {
             .color(palette.muted),
         );
     }
+    /// Probe the selected project interpreter on a worker, deduplicating concurrent probes.
+    /// `activate` clears the previous probe and records an activation intent in the reply.
     pub(in crate::app) fn refresh_environment(&mut self, activate: bool, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Python)
             || self.workbench.python.env_busy
@@ -277,6 +287,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Return the selected interpreter marker, or `off` when the Python feature is disabled.
     pub(in crate::app) fn terminal_python_selection(&self) -> String {
         if self.feature(crate::extensions::Feature::Python) {
             self.workbench.prefs.python.clone()
@@ -284,9 +295,12 @@ impl EditorApp {
             "off".into()
         }
     }
+    /// Apply the discovered interpreter only where automatic shell activation is permitted.
     pub(in crate::app) fn activate_python(&mut self, ctx: &egui::Context) {
         self.activate_python_impl(ctx, false);
     }
+    /// Send a host-quoted activation command after shell startup. Native terminals
+    /// retain their original environment unless `force` records an explicit activation action.
     pub(in crate::app) fn activate_python_impl(&mut self, _ctx: &egui::Context, force: bool) {
         if !self.feature(crate::extensions::Feature::Python) {
             return;
@@ -336,6 +350,7 @@ impl EditorApp {
             self.notify(error.to_string(), true);
         }
     }
+    /// Resolve the discovered executable or configured marker for a future agent launch.
     pub(in crate::app) fn agent_python(&self) -> String {
         if !self.feature(crate::extensions::Feature::Python) {
             return "off".into();
@@ -347,24 +362,7 @@ impl EditorApp {
             .map(|env| env.executable.clone())
             .unwrap_or_else(|| self.workbench.prefs.python.clone())
     }
-    pub(in crate::app) fn workbench_python_label(&self) -> String {
-        self.workbench
-            .python
-            .env
-            .as_ref()
-            .map(|e| {
-                format!(
-                    "Py {}{}",
-                    e.version,
-                    if e.prefix != e.base_prefix {
-                        " · venv"
-                    } else {
-                        ""
-                    }
-                )
-            })
-            .unwrap_or_else(|| "Python".into())
-    }
+    /// Clear the new terminal's recorded interpreter so initial environment setup can run once.
     pub(in crate::app) fn new_terminal_environment(&mut self) {
         if let Some(terminal) = &mut self.terminal {
             terminal.python = None;

@@ -1,5 +1,5 @@
 //! Short-lived model discovery using the captured project-host transport.
-use super::{Model, identifier, models};
+use super::{Model, ModelPages};
 use crate::{Config, Event, Launch, Provider, Session};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -20,7 +20,7 @@ pub struct Catalog {
     initialized: bool,
     next_id: u64,
     pending: Option<u64>,
-    cursors: Vec<String>,
+    pages: ModelPages,
 }
 
 impl Catalog {
@@ -53,7 +53,7 @@ impl Catalog {
             initialized: false,
             next_id: 0,
             pending: None,
-            cursors: vec![],
+            pages: ModelPages::default(),
         }
     }
 
@@ -132,22 +132,7 @@ impl Catalog {
             return self.call("model/list", json!({"limit":32,"includeHidden":false}));
         }
         let result = &value["result"];
-        for model in models(result) {
-            if self.models.len() >= 128 {
-                break;
-            }
-            if !self.models.iter().any(|m| m.value.id == model.value.id) {
-                self.models.push(model);
-            }
-        }
-        if let Some(cursor) = result["nextCursor"]
-            .as_str()
-            .filter(|s| identifier(s, false))
-            && self.cursors.len() < 3
-            && self.models.len() < 128
-            && !self.cursors.iter().any(|c| c == cursor)
-        {
-            self.cursors.push(cursor.into());
+        if let Some(cursor) = self.pages.append(&mut self.models, result) {
             self.call(
                 "model/list",
                 json!({"limit":32,"includeHidden":false,"cursor":cursor}),

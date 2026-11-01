@@ -6,10 +6,12 @@
 use super::*;
 use crate::marp::{self, Destination, Format, Invocation, Settings};
 
+/// Worker output distinguishes a decoded preview snapshot from a completed export reply.
 pub(super) enum Completed {
     Preview(crate::pdf::Loaded, String),
     Export(marp::Reply),
 }
+/// Same-document slide preview and export state, each with an independent token and cancellation flag.
 pub(super) struct View {
     pub showing: bool,
     pub pdf: Option<pdf_view::PdfView>,
@@ -43,6 +45,7 @@ impl Default for View {
     }
 }
 impl View {
+    /// Cancel only preview/page work and invalidate its reply token while retaining the current preview.
     pub fn stop_render(&mut self) {
         if self.busy {
             self.attempted = None;
@@ -54,6 +57,7 @@ impl View {
             pdf.invalidate();
         }
     }
+    /// Cancel preview/export work and release preview state when its owning context is discarded.
     pub fn invalidate(&mut self) {
         self.stop_render();
         self.attempted = None;
@@ -72,6 +76,7 @@ impl Drop for View {
 }
 
 impl EditorApp {
+    /// Create an unsaved slide-source document from the bundled template without invoking Marp.
     pub(super) fn new_marp(&mut self) {
         if !self.feature(crate::extensions::Feature::Marp) {
             self.notify("Enable Marp presentations in Extensions.", false);
@@ -85,6 +90,7 @@ impl EditorApp {
         doc.lines = doc.text.lines().count();
         doc.marp = Some(View::default());
     }
+    /// Switch a Markdown document between source and slide view, preserving its source buffer.
     pub(super) fn toggle_marp(&mut self, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Marp) {
             self.notify("Enable Marp presentations in Extensions.", false);
@@ -111,6 +117,7 @@ impl EditorApp {
             self.focus_editor(ctx);
         }
     }
+    /// Cancel obsolete or hidden preview work instead of continuing background rendering on each edit.
     pub(super) fn marp_tick(&mut self) {
         for (index, doc) in self.documents.iter_mut().enumerate() {
             if let Some(view) = &mut doc.marp
@@ -126,6 +133,7 @@ impl EditorApp {
             }
         }
     }
+    /// Render the cached slide preview and explicit rebuild/export controls for the active document.
     pub(super) fn marp_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let id = self.documents[self.active].id;
@@ -245,6 +253,7 @@ impl EditorApp {
             self.marp_render_page(id, page, entry, ctx);
         }
     }
+    /// Open the export destination picker for an explicitly selected presentation format.
     pub(super) fn marp_export(&mut self, id: u64, format: Format) {
         if !self.feature(crate::extensions::Feature::Marp) {
             self.notify("Enable Marp presentations in Extensions.", false);
@@ -260,6 +269,7 @@ impl EditorApp {
         }
         self.set_dialog(Dialog::MarpExport(id, format));
     }
+    /// Validate the selected host destination before queuing a captured presentation export.
     pub(super) fn marp_export_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let Dialog::MarpExport(id, format) = self.dialog else {
             return;
@@ -446,6 +456,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Accept preview/export results only for the captured document, source and request identity.
     pub(super) fn marp_complete(
         &mut self,
         id: u64,
@@ -553,6 +564,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Schedule a cancellable render of one page from the retained slide-preview PDF.
     pub(super) fn marp_page(
         &mut self,
         id: u64,

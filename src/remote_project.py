@@ -75,6 +75,7 @@ def project_run(args, root=None, text="", timeout=20, env=None, cancel=None):
     overflow = threading.Event()
 
     def drain(pipe, buffer):
+        """Drain one output stream concurrently, flagging overflow beyond the shared command byte limit."""
         try:
             while True:
                 data = pipe.read(65536)
@@ -88,6 +89,7 @@ def project_run(args, root=None, text="", timeout=20, env=None, cancel=None):
             pipe.close()
 
     def write():
+        """Feed the captured UTF-8 source and close stdin even when the child stops reading."""
         try:
             process.stdin.write(text.encode("utf-8"))
         except (BrokenPipeError, OSError):
@@ -328,6 +330,7 @@ def project_analyze(request, root):
         )
 
     def execute(args, source):
+        """Invoke the selected Ruff command with project environment and an actionable missing-tool error."""
         try:
             return project_run(command + args, root, source, env=env)
         except OSError as error:
@@ -458,6 +461,7 @@ def project_monitor(root):
         pass
 
     def numeric(value):
+        """Parse a GPU numeric field, returning None for unsupported or unavailable driver output."""
         try:
             return float(value)
         except ValueError:

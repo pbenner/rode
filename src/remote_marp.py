@@ -29,12 +29,14 @@ def marp_coordinator():
     # SSH teardown may signal the command before its stdin reader sees EOF.
     # Keep the coordinator alive long enough to close Marp's detached browser.
     def stop(_signal, _frame):
+        """Mark the presentation operation cancelled when a termination signal arrives."""
         cancelled.set()
 
     signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGTERM, stop)
 
     def control():
+        """Cancel on control-channel input or EOF without retaining Python buffered-stdin locks."""
         os.read(sys.stdin.fileno(), 1)
         cancelled.set()
 
@@ -54,6 +56,7 @@ def marp_coordinator():
     root = Path(request["root"]).expanduser().resolve(strict=True)
 
     def resolve(value):
+        """Expand the requested host path relative to the captured project root."""
         path = Path(value).expanduser()
         return path if path.is_absolute() else root / path
 
@@ -162,6 +165,7 @@ def marp_coordinator():
         overflow = threading.Event()
 
         def drain(pipe, result):
+            """Drain one subprocess output pipe and flag the 8 MiB limit before retaining further bytes."""
             try:
                 while data := pipe.read(65536):
                     result.extend(data)
@@ -172,6 +176,7 @@ def marp_coordinator():
                 pipe.close()
 
         def feed():
+            """Feed the captured source bytes to the renderer and close stdin even if it exits early."""
             try:
                 process.stdin.write(text)
             except (BrokenPipeError, OSError):

@@ -13,6 +13,7 @@ mod tree;
 pub(super) use bindings::Action as NavAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Logical focus destination shared by keyboard routing, zoom and detached viewports.
 pub(super) enum Pane {
     Explorer,
     Editor,
@@ -28,6 +29,8 @@ impl Pane {
         egui::Id::new(("pane-focus", self.index()))
     }
 }
+/// Per-window focus intent, measured pane rectangles and shortcut-style state.
+/// Layout measurements are rebuilt each frame; remembered focus survives asynchronous opens.
 pub(super) struct State {
     pub bindings: bindings::Bindings,
     pub editing: editing::State,
@@ -188,6 +191,7 @@ impl List {
 }
 
 impl EditorApp {
+    /// Route pane/leader commands only when modal barriers and native terminal input permit them.
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused)
             || self.dialog != Dialog::None
@@ -204,6 +208,7 @@ impl EditorApp {
             self.navigate(action, ctx);
         }
     }
+    /// Apply one typed navigation action through existing app/domain operations.
     pub(super) fn navigate(&mut self, action: NavAction, ctx: &egui::Context) {
         use NavAction::*;
         self.navigation.used = true;
@@ -384,6 +389,7 @@ impl EditorApp {
             Pane::Menus => true,
         }
     }
+    /// Record focus intent and reveal the requested surface before focusing its native widget.
     pub(super) fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
         if self.workbench.detached {
             let target = if matches!(pane, Pane::Tools | Pane::Terminal) {
@@ -489,6 +495,7 @@ impl EditorApp {
             );
         }
     }
+    /// Render the same focus/zoom commands exposed by keyboard navigation.
     pub(super) fn navigation_menu(&mut self, response: &egui::Response) {
         self.navigation.remembered[Pane::Menus.index()] = Some(response.id);
         if self.navigation.pending == Some(Pane::Menus) {
@@ -496,6 +503,7 @@ impl EditorApp {
             self.navigation.pending = None;
         }
     }
+    /// Resolve deferred focus using this frame's measured panes and owning viewport.
     pub(super) fn navigation_finish(&mut self, ctx: &egui::Context) {
         let modal = self.dialog != Dialog::None
             || self.pending.is_some()

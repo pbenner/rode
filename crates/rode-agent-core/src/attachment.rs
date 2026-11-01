@@ -78,6 +78,8 @@ impl Attachment {
         Ok(())
     }
 
+    /// Encode validated captured content as ACP or Codex prompt blocks; image bytes
+    /// remain portable and document text is labeled with its original display filename.
     pub(crate) fn blocks(&self, acp: bool) -> Vec<Value> {
         match self {
             Self::Image {

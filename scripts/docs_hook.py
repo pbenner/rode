@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def on_page_markdown(markdown, **_kwargs):
     # Source links work on GitHub; generated references use their site URLs.
+    """Rewrite repository-relative references to the matching generated documentation-site locations."""
     for source, destination in {
         "../themes/README.md": "theme-format.md",
         "../docs/syntax-themes.md": "syntax-themes.md",
@@ -19,6 +20,7 @@ def on_page_markdown(markdown, **_kwargs):
 
 
 def on_files(files, config):
+    """Export canonical theme definitions, image assets and example notebooks into the MkDocs file set."""
     files.append(
         File.generated(config, "theme-format.md", content=(ROOT / "themes/README.md").read_text())
     )

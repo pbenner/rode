@@ -31,6 +31,8 @@ pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool)
     });
 }
 
+/// Edit model/reasoning and permission selectors using only metadata matching the
+/// current provider/configuration. Return whether Model requested separate discovery.
 pub(super) fn buttons(
     ui: &mut egui::Ui,
     config: &mut Config,

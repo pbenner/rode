@@ -7,6 +7,7 @@ use super::*;
 use crate::binary::{self, Buffer, Report};
 
 #[derive(Clone, Copy, PartialEq)]
+/// Selected static inspection mode; switching views never executes the inspected binary.
 enum View {
     Hex,
     Overview,
@@ -18,12 +19,15 @@ enum View {
     Disassembly,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// Snapshot version and decoder parameters required to accept an asynchronous analysis result.
 struct AnalysisKey {
     version: u64,
     offset: usize,
     bits: u32,
 }
 type AnalysisResult = (AnalysisKey, Arc<Report>, Vec<binary::Instruction>);
+/// Editable byte buffer and cached static report, sharing memory accounting with
+/// analysis/save snapshots; rendered row caches are invalidated by version/filter changes.
 pub(super) struct HexView {
     pub buffer: Buffer,
     pub report: Arc<Report>,
@@ -50,6 +54,7 @@ pub(super) struct HexView {
     analysis_serial: u64,
 }
 impl HexView {
+    /// Initialize byte editing and inspection from a bounded loaded snapshot without executing it.
     pub fn new(loaded: binary::Loaded) -> Self {
         let bits = if loaded.report.bits == 32 { 32 } else { 64 };
         Self {
@@ -90,6 +95,7 @@ impl HexView {
         self.reveal = true;
         self.nibble = None;
     }
+    /// Start at most one off-thread report/disassembly job using immutable captured bytes.
     fn analyze(&mut self, ctx: &egui::Context) {
         if self.worker.is_some() {
             return;
@@ -129,6 +135,8 @@ impl HexView {
             ctx.request_repaint();
         });
     }
+    /// Accept the object report only for matching bytes. Keep decoded instructions
+    /// only if their offset and decoder mode also match the current selection.
     fn complete_analysis(&mut self, (key, report, instructions): AnalysisResult) {
         if key.version != self.version {
             return;
@@ -146,6 +154,7 @@ impl HexView {
     }
 }
 impl EditorApp {
+    /// Queue a policy-scoped binary read or select an already open matching hex tab.
     pub(super) fn open_hex(&mut self, path: String, ctx: &egui::Context) {
         self.editor_intent();
         if !self.feature(crate::extensions::Feature::Binary) {
@@ -186,6 +195,7 @@ impl EditorApp {
             );
         }
     }
+    /// Submit immutable edited bytes through protected binary saving with the captured revision.
     pub(super) fn save_hex(&mut self, id: u64, path: String, save_as: bool, ctx: &egui::Context) {
         let Some(doc) = self.documents.iter_mut().find(|d| d.id == id && !d.saving) else {
             return;
@@ -215,6 +225,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Render the active hex/inspection view and apply explicit edit/save/reload actions.
     pub(super) fn hex_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         if self
             .documents

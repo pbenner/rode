@@ -26,11 +26,14 @@ pub(crate) const HOST: Script = Script {
     source: crate::files::REMOTE_HELPER,
 };
 
+/// Embedded helper name/source streamed through an exact-read stdin prelude;
+/// helper source stays out of SSH process arguments and staged scripts remove themselves.
 pub(crate) struct Script {
     name: &'static str,
     source: &'static str,
 }
 impl Script {
+    /// Return the short quoted remote Python loader command; pair it with `input` for helper source and protocol bytes.
     pub fn command(&self) -> String {
         format!(
             "python3 -u -c {} {}",

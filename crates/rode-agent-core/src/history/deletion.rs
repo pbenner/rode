@@ -4,6 +4,8 @@ use super::*;
 
 const DELETE_LIMIT: usize = 4096;
 
+/// Bounded deletion discovery/protection snapshot and sequential mutation cursor.
+/// Discover all relevant pages and protect open descendants/ancestors before removal.
 pub(super) struct Deletion {
     target: Option<String>,
     protected: BTreeSet<String>,
@@ -98,6 +100,8 @@ impl Browser {
         )
     }
 
+    /// Validate a discovered page, deduplicate captured identities and advance bounded
+    /// pagination before any bulk mutation changes the backend list.
     pub(super) fn deleted_list(&mut self, result: &Value) -> Result<()> {
         let acp = self.launch.config.provider == Provider::Acp;
         let rows = result[if acp { "sessions" } else { "data" }]
@@ -231,6 +235,7 @@ impl Browser {
         }
     }
 
+    /// Revalidate the captured conversation's host/project and idle state immediately before deletion.
     pub(super) fn delete_read(&mut self, result: &Value) -> Result<()> {
         let deletion = self
             .deletion
@@ -253,6 +258,7 @@ impl Browser {
         self.call("thread/delete", json!({"threadId":id}), Call::Delete)
     }
 
+    /// Expand the protected ancestor set of open conversations before allowing descendant-deleting operations.
     pub(super) fn delete_protect(&mut self, result: &Value) -> Result<()> {
         let deletion = self
             .deletion
@@ -282,6 +288,7 @@ impl Browser {
         self.delete_next()
     }
 
+    /// Count an acknowledged removal once and advance to the next captured target.
     pub(super) fn deleted(&mut self) -> Result<()> {
         let deletion = self
             .deletion
@@ -294,6 +301,7 @@ impl Browser {
         self.delete_next()
     }
 
+    /// Remove backend-deleted rows and queued descendants without issuing a second deletion.
     pub(super) fn deleted_notification(&mut self, params: &Value) {
         if let Some(id) = params["threadId"].as_str() {
             self.entries.retain(|entry| entry.id != id);
@@ -323,6 +331,8 @@ impl Browser {
         Ok(false)
     }
 
+    /// Handle deletion-specific absence/unsupported-backend replies; return whether this
+    /// error belonged to deletion, retaining unacknowledged rows when an operation fails.
     pub(super) fn delete_error(&mut self, call: Call, error: &Value) -> Result<bool> {
         if !matches!(
             call,

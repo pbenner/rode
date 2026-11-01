@@ -9,6 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Move graceful DAP disconnect to a worker, drain output in batches and then
+/// request scoped transport teardown. Clear `closing` only after this sequence finishes;
+/// `terminate` controls whether the debuggee is ended rather than detached.
 pub(super) fn start(session: Session, sequence: u64, terminate: bool, closing: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let disconnect = json!({
@@ -56,6 +59,7 @@ pub(super) fn start(session: Session, sequence: u64, terminate: bool, closing: A
         closing.store(false, Ordering::Release);
     });
 }
+/// Drain pending transport events while waiting at most the supplied duration for supervision to finish.
 fn wait_finished(session: &Session, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {

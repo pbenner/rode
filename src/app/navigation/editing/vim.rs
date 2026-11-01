@@ -72,6 +72,7 @@ impl State {
         }
         self.replace(text, range, selected, String::new(), native)
     }
+    /// Interpret a Vim text command within the bound source editor, retaining incomplete operator/count state.
     pub(super) fn vim_char(
         &mut self,
         ctx: &egui::Context,
@@ -323,6 +324,7 @@ impl State {
         false
     }
     #[allow(clippy::too_many_arguments)] // Keyboard context and outputs are shared with the character dispatcher.
+    /// Interpret non-text Vim keys using the same native selection and edit-event machinery.
     pub(super) fn vim_key(
         &mut self,
         ctx: &egui::Context,

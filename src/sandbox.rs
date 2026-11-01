@@ -430,6 +430,8 @@ impl Plan {
         }
     }
 
+    /// Run an adapter coordinator under this captured active plan with cancellation;
+    /// a failure never retries the request outside its sandbox.
     pub(crate) fn extension_request(
         &self,
         request: &crate::project::Request,
@@ -438,6 +440,8 @@ impl Plan {
         let (command, _helper) = self.coordinator_command("--extension-helper")?;
         crate::extensions::execute(command, request, cancel)
     }
+    /// Prepare a policy-scoped helper command and return its binary lease alongside it.
+    /// The caller must retain that lease until the launched helper no longer uses the file.
     pub(crate) fn coordinator_command(
         &self,
         flag: &str,

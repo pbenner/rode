@@ -51,6 +51,7 @@ def run():
     root = os.path.realpath(os.path.expanduser(spec["root"]))
 
     def program(value):
+        """Expand a compute-host executable path against the captured root while preserving bare PATH names."""
         value = os.path.expanduser(value.strip())
         return os.path.join(root, value) if "/" in value and not os.path.isabs(value) else value
 

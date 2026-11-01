@@ -6,6 +6,8 @@
 use super::*;
 
 impl EditorApp {
+    /// Cancel native close until the shared quit guards accept it. Wait for save
+    /// acknowledgements before retrying a pending quit, then honor runtime/encrypted cleanup.
     pub(super) fn handle_close_request(&mut self, ctx: &egui::Context) {
         if self.quitting {
             return;
@@ -37,6 +39,7 @@ impl EditorApp {
 pub(in crate::app) mod tests {
     use super::*;
 
+    /// Inject a native close event through the same lifecycle method used by the desktop backend.
     pub(in crate::app) fn native_close(
         app: &mut EditorApp,
         ctx: &egui::Context,

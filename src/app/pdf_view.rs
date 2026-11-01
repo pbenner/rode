@@ -7,6 +7,7 @@ use super::*;
 use crate::pdf;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Which vertical edge to reveal after a page turn; page numbers themselves are one-based.
 pub(super) enum PageEntry {
     #[default]
     Start,
@@ -14,12 +15,15 @@ pub(super) enum PageEntry {
 }
 
 #[derive(Default)]
+/// Gesture accumulation and cooldown timestamps that prevent one wheel gesture skipping pages.
 struct PageScroll {
     accumulated: f32,
     last_input: Option<f64>,
     last_turn: Option<f64>,
 }
 impl PageScroll {
+    /// Convert accumulated edge scrolling into at most one adjacent one-based page request
+    /// while respecting gesture direction, idle reset and page-turn cooldown.
     fn turn(
         &mut self,
         delta: f32,
@@ -62,6 +66,7 @@ impl PageScroll {
     }
 }
 
+/// Retained encoded PDF plus one displayed page texture and a cancellable requested-page token.
 pub(super) struct PdfView {
     pub source: Arc<pdf::Source>,
     pub page: usize,
@@ -73,6 +78,7 @@ pub(super) struct PdfView {
     entry: PageEntry,
 }
 impl PdfView {
+    /// Initialize the viewer from a bounded, already rendered page snapshot.
     pub fn new(loaded: pdf::Loaded) -> Self {
         Self {
             source: loaded.source,
@@ -85,9 +91,11 @@ impl PdfView {
             entry: PageEntry::Start,
         }
     }
+    /// Clone the cancellation flag that the current page worker must observe.
     pub fn cancellation(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
     }
+    /// Cancel page work, advance the token and retain the last displayed page as the stable view.
     pub fn invalidate(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.token = self.token.wrapping_add(1);
@@ -96,6 +104,7 @@ impl PdfView {
         self.scroll.reset();
         self.entry = PageEntry::Start;
     }
+    /// Invalidate old page work before installing a successfully reloaded PDF and page image.
     pub fn replace(&mut self, loaded: pdf::Loaded) {
         self.invalidate();
         self.source = loaded.source;
@@ -103,6 +112,7 @@ impl PdfView {
         self.requested = loaded.page;
         self.image.replace(loaded.pixels);
     }
+    /// Render PDF navigation and the current image; return page/reload intents to the owning app.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -249,6 +259,7 @@ impl Drop for PdfView {
 }
 
 impl EditorApp {
+    /// Render the active PDF and dispatch requested page turns/reloads after releasing its borrow.
     pub(super) fn pdf_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         let Some(doc) = self
             .documents
@@ -308,6 +319,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Schedule a bounded page render with captured document version, request token and cancellation.
     pub(super) fn pdf_page(
         &mut self,
         id: u64,
@@ -330,6 +342,7 @@ impl EditorApp {
             self.notify(error, true);
         }
     }
+    /// Reload the bound PDF through its original host/policy while retaining the old view on failure.
     pub(super) fn reload_pdf(&mut self, id: u64, ctx: &egui::Context) {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;

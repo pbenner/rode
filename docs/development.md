@@ -1,6 +1,6 @@
 # Development
 
-Start with the [source architecture and maintenance guide](architecture.md) for module responsibilities, host boundaries and lifecycle contracts. Its [design decisions and tradeoffs](architecture.md#design-decisions-and-tradeoffs) explain why the boundaries exist and point to the owning modules' in-source rationale. Public Rust types, fields and methods have API documentation; both library crates warn on missing public documentation. When revisiting a design choice, update its rationale and consequences alongside the code.
+Start with the [source architecture and maintenance guide](architecture.md) for module responsibilities, host boundaries and lifecycle contracts. Its [design decisions and tradeoffs](architecture.md#design-decisions-and-tradeoffs) explain why the boundaries exist and point to the owning modules' in-source rationale. Public Rust types, fields and methods have API documentation; all four library crates warn on missing public documentation. When revisiting a design choice, update its rationale and consequences alongside the code.
 
 Build the public documentation with `scripts/uvx.sh --from mkdocs==1.6.1 mkdocs build --strict`. Repository-relative links to files outside `docs/` must also be exported or rewritten in `scripts/docs_hook.py`; file existence alone does not make them part of the published site.
 
@@ -11,7 +11,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 RODE_TEST_RUFF=/path/to/ruff cargo test --workspace --all-targets
 ```
 
-Open `target/doc/rode/index.html` for editor services and `target/doc/rode_session/index.html` for the native terminal service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
+Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_agent_core/index.html` for agent protocols, `target/doc/rode_runtime_core/index.html` for notebook/debugger controllers, and `target/doc/rode_session/index.html` for the native host service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
+
+The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; Python helper docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
+
+Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
 
 ## CI tiers and timings
 

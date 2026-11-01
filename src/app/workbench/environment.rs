@@ -3,6 +3,8 @@ use super::*;
 use crate::environment::{self, Settings};
 
 #[derive(Default)]
+/// Project-keyed environment edit draft and cached runtime probes; separate from
+/// the settings already applied to new tools and terminals.
 pub(super) struct State {
     key: Option<String>,
     draft: Settings,
@@ -14,6 +16,7 @@ pub(super) struct State {
 }
 
 impl EditorApp {
+    /// Reveal the interpreter section in Environment, refreshing discovery when it is already open.
     pub(in crate::app) fn open_python_environment(&mut self, ctx: &egui::Context) {
         self.workbench.environment.open_python = true;
         if self.workbench.panel == Some(Panel::Environment) {
@@ -24,6 +27,7 @@ impl EditorApp {
         }
     }
 
+    /// Queue at most one runtime-version probe using captured applied environment settings.
     pub(in crate::app) fn refresh_runtimes(&mut self, ctx: &egui::Context) {
         if self.workbench.environment.busy || !self.project_ready() {
             return;
@@ -40,6 +44,8 @@ impl EditorApp {
         );
     }
 
+    /// Edit literal project variables/runtime overrides and apply them after validation;
+    /// existing terminal processes retain their original environment.
     pub(in crate::app) fn environment_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let key = self.workbench.key.clone();
         let state = &mut self.workbench.environment;
@@ -191,6 +197,7 @@ impl EditorApp {
         }
     }
 
+    /// Render explicit run/build/test entry points for the active project and language.
     pub(in crate::app) fn tasks_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Project tasks");
         ui.label("Commands run in the project terminal on this host, with the saved Environment settings.");

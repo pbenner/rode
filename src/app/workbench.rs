@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 pub(super) use workspace::Surface;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Tool-view identity used by tabs, commands and feature gates; it carries no running job.
 pub(super) enum Panel {
     Git,
     Monitor,
@@ -46,14 +47,19 @@ impl Panel {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
+/// Serializable settings for one host/project key. `prefs` is applied state;
+/// `draft` can change independently until settings are accepted.
 pub(super) struct Preferences {
+    /// Host interpreter selection: `auto`, an explicit path, or an empty system selection.
     python: String,
     environment: crate::environment::Settings,
     ruff: String,
     format_on_save: bool,
     check_on_save: bool,
     live_checks: bool,
+    /// Requested sampling seconds, clamped to 1–30 when scheduling host telemetry.
     monitor_interval: u64,
+    /// Requested grants; only the prepared workspace plan establishes actual isolation.
     sandbox: sandbox::Options,
     slurm_queue: String,
     slurm_cancel: String,
@@ -83,6 +89,7 @@ impl Default for Preferences {
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// Selected source-control view; each view has a separately refreshed cached result.
 enum GitTab {
     #[default]
     Changes,
@@ -96,6 +103,7 @@ enum GitTab {
 }
 
 #[derive(Clone, Debug)]
+/// Captured Git completion intent, including the path/staging side of a requested diff.
 pub(super) enum GitJob {
     Root,
     Status,
@@ -105,6 +113,8 @@ pub(super) enum GitJob {
     Mutate { label: String, clear_message: bool },
 }
 #[derive(Clone, Debug)]
+/// UI completion metadata for a project-service request. Analysis carries the
+/// submitted document/version/epoch so stale replies cannot overwrite newer edits.
 pub(super) enum ToolJob {
     Extension {
         revision: u64,
@@ -134,10 +144,12 @@ pub(super) enum ToolJob {
     },
 }
 #[derive(Clone)]
+/// Diagnostics for one source version; later edits make this snapshot obsolete.
 struct Issues {
     version: u64,
     items: Vec<Diagnostic>,
 }
+/// Cached text and visibility of a path-specific staged or working-tree diff.
 struct Diff {
     path: String,
     staged: bool,
@@ -157,8 +169,11 @@ pub(super) struct Workbench {
     preferences: BTreeMap<String, Preferences>,
     pub preferences_pending: bool,
     key: String,
+    /// Applied settings used when capturing a new tool invocation.
     prefs: Preferences,
+    /// Editable form state; invalid or unapplied edits must not affect running jobs.
     draft: Preferences,
+    /// Tool-setting generation paired with document versions on analysis requests.
     epoch: u64,
     python: python::State,
     environment: environment::State,
@@ -168,23 +183,30 @@ pub(super) struct Workbench {
 }
 
 impl Workbench {
+    /// Return the applied literal variables and runtime overrides for newly launched tools.
     pub(super) fn environment_settings(&self) -> &crate::environment::Settings {
         &self.prefs.environment
     }
+    /// Return saved allocation defaults; this does not create a scheduler reservation.
     pub(super) fn slurm_allocation(&self) -> &crate::slurm::Allocation {
         &self.prefs.slurm_allocation
     }
+    /// Apply allocation defaults to both settings copies and queue a preference-map update.
     pub(super) fn save_slurm_allocation(&mut self, settings: crate::slurm::Allocation) {
         self.prefs.slurm_allocation = settings.clone();
         self.draft.slurm_allocation = settings;
         self.save_preferences();
     }
+    /// Return applied debugger launch/attach configurations for this project.
     pub(super) fn debugger_settings(&self) -> &crate::debugger::Settings {
         &self.prefs.debugger
     }
+    /// Borrow the live debugger settings for an edit that must subsequently be committed.
     pub(super) fn edit_debugger_settings(&mut self) -> &mut crate::debugger::Settings {
         &mut self.prefs.debugger
     }
+    /// Validate edited debugger settings before persistence. Failure restores the last
+    /// accepted draft and returns the validation error.
     pub(super) fn commit_debugger_settings(&mut self) -> anyhow::Result<()> {
         if let Err(error) = self.prefs.debugger.validate() {
             self.prefs.debugger = self.draft.debugger.clone();
@@ -194,18 +216,22 @@ impl Workbench {
         self.save_preferences();
         Ok(())
     }
+    /// Replace both debugger settings copies and mark project preferences for persistence.
     pub(super) fn save_debugger_settings(&mut self, settings: crate::debugger::Settings) {
         self.prefs.debugger = settings.clone();
         self.draft.debugger = settings;
         self.save_preferences();
     }
 
+    /// Return the applied compiler, build and preview settings for LaTeX operations.
     pub(super) fn latex_settings(&self) -> &crate::latex::Settings {
         &self.prefs.latex
     }
+    /// Replace a document's diagnostics with issues tied to the supplied source version.
     pub(super) fn set_build_issues(&mut self, id: u64, version: u64, items: Vec<Diagnostic>) {
         self.code_tools.issues.insert(id, Issues { version, items });
     }
+    /// Return applied presentation settings without launching the installed renderer.
     pub(super) fn marp_settings(&self) -> &crate::marp::Settings {
         &self.prefs.marp
     }
@@ -218,6 +244,7 @@ impl Workbench {
         self.code_tools.observed = None;
         self.code_tools.unavailable_tools.clear();
     }
+    /// Restore the saved per-project settings map; transient tool state starts empty.
     pub(super) fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         Self {
             preferences: storage
@@ -227,11 +254,13 @@ impl Workbench {
             ..Default::default()
         }
     }
+    /// Serialize the settings map into shared preference storage without runtime state.
     pub(super) fn store(&self, storage: &mut dyn eframe::Storage) {
         if let Ok(text) = serde_json::to_string(&self.preferences) {
             storage.set_string("project_preferences", text);
         }
     }
+    /// Discard project runtime caches while retaining saved preferences and workspace-view choices.
     pub(super) fn reset_project(&mut self) {
         let preferences = std::mem::take(&mut self.preferences);
         let pending = self.preferences_pending;
@@ -251,9 +280,12 @@ impl Workbench {
             ..Default::default()
         };
     }
+    /// Clear host telemetry and rate baselines when changing execution hosts.
     pub(super) fn reset_monitor(&mut self) {
         self.monitoring = Default::default();
     }
+    /// Snapshot applied settings under the current project key and flag an asynchronous save.
+    /// An empty key means no project settings may be persisted yet.
     fn save_preferences(&mut self) {
         if self.key.is_empty() {
             return;
@@ -265,24 +297,13 @@ impl Workbench {
 }
 
 impl EditorApp {
+    /// Report a source-control confirmation that must participate in global input guards.
     pub(super) fn workbench_modal(&self) -> bool {
         self.workbench.git.confirm.is_some()
     }
 
-    pub(super) fn current_issue_count(&self) -> usize {
-        self.documents
-            .iter()
-            .map(|d| {
-                self.workbench
-                    .code_tools
-                    .issues
-                    .get(&d.id)
-                    .filter(|i| i.version == d.edit_version)
-                    .map_or(0, |i| i.items.len())
-            })
-            .sum()
-    }
-
+    /// Render the active enabled tool view after checking host/project readiness.
+    /// Monitoring needs only a connected host; project tools need a prepared project.
     pub(in crate::app) fn workbench_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let Some(panel) = self.workbench.panel else {
             return;
@@ -331,6 +352,8 @@ impl EditorApp {
             });
     }
 
+    /// Select or hide a tool panel, refreshing its cached data when appropriate.
+    /// An already selected detached panel is revealed and focused instead of hidden.
     pub(super) fn toggle_panel(&mut self, panel: Panel, ctx: &egui::Context) {
         if !self.panel_enabled(panel) {
             self.notify(
@@ -375,6 +398,9 @@ impl EditorApp {
         );
     }
 
+    /// Capture host, policy, generation, cancellation and encrypted-mount ownership,
+    /// then run a blocking project request off the UI thread. Only telemetry bypasses
+    /// the project sandbox; replies return through the generation-tagged event channel.
     pub(in crate::app) fn dispatch_tool(
         &mut self,
         request: project::Request,
@@ -470,6 +496,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Require a prepared, connected project and no encrypted-project lock in progress.
     pub(in crate::app) fn project_ready(&self) -> bool {
         !self.vaults.locking
             && self
@@ -477,6 +504,7 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(|w| w.ready && w.connected)
     }
+    /// Allow local host sampling without a project; SSH sampling requires its connection.
     fn monitor_ready(&self) -> bool {
         !self.vaults.locking
             && self
@@ -484,6 +512,7 @@ impl EditorApp {
                 .as_ref()
                 .is_none_or(|w| w.remote.is_none() || w.connected)
     }
+    /// Copy the selected project root, or an empty string when no workspace exists.
     pub(in crate::app) fn root(&self) -> String {
         self.workspace
             .as_ref()
@@ -491,6 +520,8 @@ impl EditorApp {
             .unwrap_or_default()
     }
 
+    /// Schedule visible host/Git refreshes and debounced source diagnostics.
+    /// Use cached timestamps and in-flight flags to avoid launching work every frame.
     pub(super) fn workbench_tick(&mut self, ctx: &egui::Context) {
         if self.feature(crate::extensions::Feature::Monitor)
             && self.tools_visible()
@@ -587,6 +618,8 @@ impl EditorApp {
             }
         }
     }
+    /// Apply a current-generation tool reply after its domain-specific identity checks;
+    /// format/check replies additionally validate the submitted source and tool epoch.
     pub(super) fn handle_tool(
         &mut self,
         job: ToolJob,
@@ -808,6 +841,8 @@ impl EditorApp {
         }
     }
 
+    /// Reload only bound, clean text documents after project mutations; dirty or
+    /// saving buffers retain their local contents and preview tabs keep their own reload paths.
     pub(super) fn reload_clean_documents(&mut self, ctx: &egui::Context) {
         let jobs: Vec<_> = self
             .documents
@@ -861,6 +896,8 @@ fn bytes(value: u64) -> String {
     }
 }
 
+/// Edit requested sandbox grants. The host preparation probe separately determines
+/// whether those requested options can become an active execution plan.
 pub(super) fn sandbox_options_ui(ui: &mut egui::Ui, options: &mut sandbox::Options) {
     ui.checkbox(
         &mut options.enabled,
@@ -1265,6 +1302,7 @@ mod tests {
             false,
             Default::default(),
             true,
+            None,
             &ctx,
         );
         assert_eq!(app.documents[0].id, id);

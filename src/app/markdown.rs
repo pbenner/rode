@@ -18,6 +18,7 @@ const MAX_IMAGES: usize = 16;
 const SCHEME: &str = "rode-markdown://";
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+/// Recognize supported Markdown filename extensions without reading the filesystem.
 pub(super) fn is_path(path: &str) -> bool {
     PathBuf::from(path)
         .extension()
@@ -30,6 +31,7 @@ pub(super) fn is_path(path: &str) -> bool {
         })
 }
 
+/// Versioned custom-loader entry; ready textures retain their decoded-memory accounting.
 enum Image {
     Pending,
     Ready {
@@ -39,6 +41,8 @@ enum Image {
     Error(String),
 }
 #[derive(Default)]
+/// Shared loader for application-owned Markdown URIs only. It never falls back
+/// to filesystem, HTTP or data-URL loaders outside the project read policy.
 pub(super) struct Images(Mutex<HashMap<String, Image>>);
 impl TextureLoader for Images {
     fn id(&self) -> &str {
@@ -82,6 +86,7 @@ impl TextureLoader for Images {
     }
 }
 
+/// Unsaved-source preview cache with cancellable linked assets and theme-dependent rendering.
 pub(super) struct Preview {
     pub(in crate::app) showing: bool,
     pub token: u64,
@@ -96,6 +101,7 @@ pub(super) struct Preview {
     appearance: Option<(String, u32, [u32; 2])>,
 }
 impl Preview {
+    /// Create an inert preview backed by the application's scoped image loader.
     pub(in crate::app) fn new(images: Arc<Images>) -> Self {
         Self {
             showing: false,
@@ -111,6 +117,7 @@ impl Preview {
             appearance: None,
         }
     }
+    /// Cancel pending asset reads, release owned loader URIs and reset rendered source/cache state.
     fn clear(&mut self) {
         self.cancelled.store(true, Ordering::Release);
         for uri in self.uris.drain(..) {
@@ -121,10 +128,12 @@ impl Preview {
         self.warnings.clear();
         self.error = None;
     }
+    /// Clear prepared content and its source key so the next visible frame prepares a new snapshot.
     pub(super) fn invalidate(&mut self) {
         self.clear();
         self.key = None;
     }
+    /// Prepare a source/version/path snapshot and return scoped URI/path pairs needing image reads.
     pub(in crate::app) fn prepare(
         &mut self,
         version: u64,
@@ -133,6 +142,8 @@ impl Preview {
     ) -> Vec<(String, String)> {
         self.prepare_embedded(version, path, text, &HashMap::new())
     }
+    /// Prepare bounded Markdown with notebook-embedded assets, registering only owned
+    /// image URIs; callers perform returned host reads outside rendering.
     pub(in crate::app) fn prepare_embedded(
         &mut self,
         version: u64,
@@ -174,6 +185,7 @@ impl Preview {
             }
         }
     }
+    /// Publish a decoded asset only if its URI still belongs to the current prepared preview.
     pub(in crate::app) fn complete(
         &mut self,
         uri: String,
@@ -204,9 +216,11 @@ impl Preview {
             .insert(uri, image);
         self.cache.clear_scrollable(); // Recalculate layout when image dimensions arrive.
     }
+    /// Expose the current preparation's cancellation flag to captured image workers.
     pub(in crate::app) fn cancelled(&self) -> Arc<AtomicBool> {
         self.cancelled.clone()
     }
+    /// Render prepared Markdown inline, suitable for a notebook cell whose parent owns scrolling.
     pub(in crate::app) fn inline_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -229,6 +243,7 @@ impl Preview {
             .find(|(_, clicked)| **clicked)
             .map(|(url, _)| url.clone())
     }
+    /// Render prepared document Markdown with its own viewport and appearance-aware layout cache.
     pub(in crate::app) fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -476,6 +491,7 @@ fn file_target(base: &str, target: &str) -> Result<String, String> {
 }
 
 impl EditorApp {
+    /// Return the active Markdown preview to source mode without replacing its source text.
     pub(super) fn markdown_source(&mut self) {
         if let Some(view) = self
             .documents
@@ -493,6 +509,7 @@ impl EditorApp {
             preview.showing = false;
         }
     }
+    /// Switch source/preview mode using the unsaved buffer and preserve native source editor state.
     pub(super) fn toggle_markdown(&mut self, ctx: &egui::Context) {
         if self.feature(crate::extensions::Feature::Marp)
             && self.documents.get(self.active).is_some_and(|doc| {
@@ -527,6 +544,7 @@ impl EditorApp {
             self.focus_editor(ctx);
         }
     }
+    /// Prepare and render the active source snapshot, dispatching bounded linked-image reads as needed.
     pub(super) fn markdown_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         if self.documents[self.active].recovery.is_some() {
             return false;
@@ -712,6 +730,7 @@ impl EditorApp {
             }
         });
     }
+    /// Retrieve and decode one preview asset using captured host, policy, document and request identity.
     pub(super) fn markdown_image(
         &mut self,
         id: u64,

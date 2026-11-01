@@ -42,6 +42,8 @@ pub struct Budget {
     pub io: Mutex<()>,
 }
 impl Budget {
+    /// Atomically reserve decoded bytes within the shared retained-preview budget;
+    /// return a lease whose final drop releases the exact reservation, or fail before allocation.
     pub(crate) fn reserve(self: &Arc<Self>, bytes: usize) -> Result<Lease> {
         let mut used = self.used.load(Ordering::Acquire);
         loop {

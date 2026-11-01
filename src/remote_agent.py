@@ -105,6 +105,7 @@ def run():
     closed = threading.Event()
 
     def stop(*_args):
+        """Request shutdown of the owned child process group and unblock forwarding cleanup."""
         closed.set()
         try:
             os.killpg(child.pid, signal.SIGTERM)
@@ -115,6 +116,7 @@ def run():
         signal.signal(sig, stop)
 
     def forward():
+        """Forward bounded buffered client lines until EOF, then terminate the owned group."""
         try:
             while True:
                 data = source.readline()

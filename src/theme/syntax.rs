@@ -150,6 +150,8 @@ fn presets() -> &'static two_face::theme::EmbeddedLazyThemeSet {
     PRESETS.get_or_init(two_face::theme::extra)
 }
 
+/// Load embedded and bounded custom syntax palettes once, returning recoverable warnings
+/// separately from usable entries; the UI-following choice is always available.
 pub(super) fn load(directory: &Path) -> (Vec<SyntaxPalette>, Vec<String>) {
     let mut entries = vec![SyntaxPalette {
         id: "ui".into(),
@@ -215,6 +217,7 @@ pub(super) fn load(directory: &Path) -> (Vec<SyntaxPalette>, Vec<String>) {
     (entries, warnings)
 }
 
+/// Allocate a new in-process syntax identity so frame caches cannot reuse an obsolete palette.
 pub(super) fn generation() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -289,6 +292,8 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
     }
 }
 
+/// Return a frame-cached syntax layout keyed by source, language, font size and
+/// palette generation, keeping syntax color selection independent of interface themes.
 pub(super) fn highlight(
     ctx: &egui::Context,
     code: &str,

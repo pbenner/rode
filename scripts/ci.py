@@ -30,14 +30,17 @@ TEST_BINARIES = {
 
 
 def ui(name, **env):
+    """Describe one isolated native UI command, its environment overrides and 240-second deadline."""
     return ([sys.executable, f"scripts/test-{name}-ui.py"], env, 240)
 
 
 def rust(name, **env):
+    """Describe one prebuilt integration-test executable and its 300-second deadline."""
     return ([f"target/ci/tests/{name}", "--nocapture"], env, 300)
 
 
 def remote(group, transport=False):
+    """Wrap a suite in the private SSH fixture, explicitly selecting whether transport tests run."""
     return (
         ["bash", "scripts/test-ssh.sh", sys.executable, "scripts/ci.py", "run", group],
         {"RODE_SSH_RUN_TRANSPORT": "1" if transport else "0"},
@@ -220,6 +223,7 @@ def measure(label, command, env=None, timeout=300, group="commands"):
 
 
 def run_suite(name):
+    """Validate the selected bundle tools, isolate host-specific settings and run each command with timing/deadline logs."""
     env = dict(os.environ)
     env.setdefault("RODE_TEST_BINARY", str(ROOT / "target/ci/rode"))
     env.setdefault("RODE_SSH_TEST_BINARY", str(ROOT / "target/ci/tests/ssh_roundtrip"))
@@ -277,6 +281,7 @@ def bundle():
 
 
 def main():
+    """Dispatch suite inspection, PR selection, bundle publication or one bounded command from the CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     run = commands.add_parser("run")

@@ -15,7 +15,8 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | Source | Responsibility |
 | --- | --- |
 | `src/main.rs`, `src/lib.rs` | CLI/helper dispatch, native startup, library entry points |
-| `src/app.rs`, `src/app/lifecycle.rs` | Documents, selected workspace, guarded actions, worker dispatch/results, native exit |
+| `src/app.rs`, `src/app/lifecycle.rs` | Documents, selected workspace, guarded actions and native window lifecycle |
+| `src/app/workers.rs`, `src/app/dialogs.rs`, `src/app/appearance.rs` | Captured file/decode jobs and result routing, guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/navigation/` | Pane focus, validated shortcut presets, explorer keys and native source-editing modes |
 | `src/app/workbench.rs`, `src/app/workbench/` | Captured project preferences, Git, code tools, environments, monitoring and settings panels |
@@ -32,11 +33,11 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs`, `src/app/agents/background.rs` | Project-host preparation, disposable agent attachment, live-session discovery, history and permission/question UI |
 | `crates/rode-session/src/agents.rs`, `agents/transport.rs` | Headless agent ownership, fixed sandbox/executable/environment, controller leases, bounded subprocess I/O and lifetime cleanup |
 | `src/agent/personality.rs` | Bounded response-style hints, explicit default resets and display-only history cleanup; independent of tools and execution policies |
-| `src/agent/controls.rs`, `src/app/agents/controls.rs` | Bounded backend model/capability discovery and shared native model/access selectors |
+| `crates/rode-agent-core/src/controls.rs`, `controls/catalog.rs`, `src/agent/controls.rs`, `src/app/agents/controls.rs` | Shared bounded model paging, metadata-only discovery and native model/access selectors |
 | `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `src/remote_debugger.py` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
 | `src/images.rs`, `src/pdf.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, memory leases, retained snapshots and specialized tabs |
 | `src/app/markdown.rs` | Unsaved-source Markdown rendering and sandbox-aware linked assets |
-| `src/notebook/`, `src/notebook.rs`, `src/notebook_kernel.py`, `src/app/notebook_view.rs` | Metadata-preserving notebook model, versioned execution and native cells/outputs |
+| `src/notebook/`, `src/notebook.rs`, `src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` modules and Python peers | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
 | `src/slurm.rs`, `src/slurm/`, `src/app/sessions/allocation.rs`, `src/remote_sessions.py` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
@@ -46,7 +47,9 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 
 ## Design decisions and tradeoffs
 
-The choices below explain the current implementation. Each named module also has a **Design decisions** section in its in-source rustdoc, so the reasoning is visible beside the code it constrains. The sections below describe consequences as well as benefits; they are not a list of proposed features.
+The choices below explain the current implementation. Module-level rustdoc records ownership and local constraints; the main service modules also include **Design decisions** sections beside the code they constrain. The sections below describe consequences as well as benefits; they are not a list of proposed features.
+
+Keep the desktop coordinator focused on application state and shared lifecycle guards. File/decode dispatch belongs in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules and retain their existing Rust module/test paths.
 
 ### Native UI and work on demand
 
@@ -188,9 +191,62 @@ File/project operations use tagged JSON request/reply shapes. Long-lived agent/k
 
 Input, output, frames, directory rows, subprocess duration and retained document data have explicit limits near their implementation. Reject over-limit input with a useful error; do not bypass an active policy or retry on the desktop. When changing a schema, update both native and Python peers and use the [relevant parity, sandbox and SSH tests](development.md).
 
+## Following an operation through the code
+
+The internal entry points below are included by `--document-private-items`. Their comments describe when work is merely queued, which identity must match a reply, and which owner must remain alive. Start at these entry points before changing a feature's rendering or transport.
+
+| Operation | Entry points and completion path | Contract to preserve |
+| --- | --- | --- |
+| Open a document | `app/workers.rs`: `open_file` → `dispatch` → `poll` | Capture the selected host and actual plan before reading; a late reply cannot bind a tab to another workspace. |
+| Save or format | `app.rs`: `save_document`; `workbench/code_tools.rs`: `save_with_tools`, `analyze_document`; `workbench.rs`: `handle_tool` | `false` from `save_with_tools` delegates to ordinary saving. Analysis accepts only its submitted source/version/epoch. Save acknowledgement advances the saved baseline, preserving newer typing. |
+| Run a notebook | `notebook_view.rs`: `run_notebook`, `poll_notebooks`, `View::sync`; `notebook/kernel.rs` and `runtime.rs` | Parsing/viewing does not start execution. Outputs bind to captured cell/source versions. Accepted structured edits serialize through the document's normal save path. |
+| Stop a notebook | `notebook_view/shutdowns.rs`: `Shutdowns::stop`, `poll`; `sessions/runtimes/ending.rs`: `Queue` | Stopping or removing a tab does not discard cleanup ownership. Confirmed termination retains its original host even if discovery or the project view changes. |
+| Submit queued chat | `app/agents/queue.rs`: `Queue`; `app/agents.rs`: `flush_queue`, `poll_agents`; `rode-agent-core::queue`; `rode-session/src/agents.rs` | UI edits transfer once accepted by the bounded transport. The native controller owns scheduling and attachment payloads after detachment. A failed command must remain visible and retryable. |
+| Attach a running job | `app/agents/background.rs`, `app/sessions/runtimes.rs`; the host stores' `find`/`attach` methods | Discovery does not create computation. ID and original policy must match; only one controlling agent/runtime attachment is accepted. Terminal views have their separate shared-PTY contract. |
+| Change interpreter/settings | `workbench/python.rs`: `python_environment_picker`; `workbench/settings.rs`; `Workbench::invalidate_tools` | Applied settings and form drafts are distinct. New jobs capture accepted settings; existing processes retain their environment unless an explicit supported operation changes it. |
+| Refresh telemetry | `Workbench::workbench_tick` → `dispatch_tool` → `monitoring::State::record` → `monitoring/dashboard.rs` | Rendering uses cached successful samples. Rate baselines use successful sample times, not failed-request scheduling times. Missing measurements remain gaps. |
+| Navigate debugger source | `app/debugging/navigation.rs`: `Target`, `resolve_debug_source`; `debugging::State::source_version` | A source jump belongs to a stopped inspection epoch and the original host. Resume, changed source or a failed read cannot trigger a stale jump or local fallback. |
+| Change appearance | `app/appearance.rs`: `select_theme`, `select_syntax_theme`, `persist_theme_choice`, `set_ui_scale` | Applying appearance is immediate; saving is a separate queued preference edit. Interface scale, editor font size and syntax selection are independent. |
+| Close or lock | `app/lifecycle.rs`: `handle_close_request`; `app.rs`: `guarded`; `sessions.rs`: `quit_terminals`; `vaults.rs`: `lock_encrypted`, `poll_vaults` | Native close and menu Quit share guards. A queued lifetime mutation or unmount request is not completed cleanup. Failed cleanup keeps the window and truthful mount state available. |
+
+### Units, identities and absence
+
+These conventions prevent otherwise plausible changes from silently retargeting work:
+
+| Value | Meaning |
+| --- | --- |
+| `Document::id`, notebook cell `uid`, native runtime ID | Stable identity within its owning lifetime. Vector indices, visible row indices and display names are not substitutes. |
+| Document `edit_version`, cell `version`, cell `outputs_version` | Independent source/output revisions used by captured work and render caches. A save acknowledgement is not itself a source edit. |
+| Native source selections and editing motions | Zero-based character offsets. UTF-8 byte offsets are converted at string slicing or diagnostic/match boundaries. |
+| Source diagnostics, displayed cursor locations and PDF page numbers | One-based positions. Binary offsets are zero-based bytes; UI dimensions are logical points. |
+| Monitoring values | Utilization is a percentage in 0–100; memory sizes are bytes and network rates are bytes/second. `None` means unavailable, rather than a measured zero. |
+| `Instant` timestamps versus creation timestamps | `Instant` measures local monotonic elapsed time and never crosses the wire. Service metadata records creation in Unix seconds. |
+| Requested sandbox options versus `Plan::active` | Options describe desired grants. Only the prepared plan describes effective enforcement, including an explicit host-capability fallback. |
+| Start/stop/persistence request acceptance | Ownership transferred to a worker/controller. Callers still poll for startup errors or lifetime acknowledgement before reporting completion or exiting. |
+| No cached result versus an empty successful result | A probe may not have run, may be pending or may have failed. Preserve errors and pending flags separately from a valid empty list. |
+
+### Python entry points and composition
+
+`files::REMOTE_HELPER` is the authoritative concatenation order. It embeds sandbox policy, then `remote_sandbox.py`, `environment_probe.py`, `remote_project.py`, `remote_git_stash.py`, `remote_sessions.py`, `remote_extensions.py`, `remote_marp.py` and `remote_latex.py`, followed by the language catalogue and `remote_files.py` dispatcher. Function globals are resolved in that assembled interpreter; some fragments intentionally use services defined elsewhere in the composition. Preserve both the ordering and the final protocol-only stdout.
+
+| Helper | Invocation and ownership |
+| --- | --- |
+| Assembled file helper | One selected-host file/project request and JSON reply. Adapter/build entry points can use a retained stdin lifeline for cancellation. |
+| `remote_agent.py` | Captured subprocess launch followed by bounded forwarded input. EOF/signals stop only the owned child group. |
+| `remote_debugger.py` | Coordinator for DAP and its integrated PTYs. Reader/writer threads isolate pipe backpressure; terminal requests use literal arguments. |
+| `notebook_kernel.py` | One Jupyter bridge with bounded execution-tagged output. Interrupt/control input remains independent of queued execution; EOF owns kernel cleanup. |
+| `remote_codex.py` | Explicit verified deployment/setup of the optional native runtime, separate from conversation execution. |
+| `remote_vault.py` | Mount verification and lease broker. Retained references and normal unmount determine the truthful lock result. |
+| `slurm/step.py` | Revalidates the captured allocation on the login host, then replaces itself with a stdio compute step. The compute bootstrap resolves Python under the compute host's policy. |
+| `ssh/python_stage.py` | Writes and execs the staged helper, removing its temporary source before execution while preserving subsequent protocol bytes. |
+
+Worker callbacks document their EOF, byte-bound and cleanup behavior beside the implementation. Do not turn a read-only discovery helper into an execution path, print diagnostics into a protocol stream, or resolve remote executable paths using the desktop filesystem.
+
 ## Documentation maintenance
 
 Document a public item's behavior, units, indexing, side effects and lifetime where those affect its use. State error/absence semantics when an empty result differs from failure, and explain whether a function blocks or merely queues work. Use module comments for shared invariants instead of repeating them on every private getter.
+
+Apply the same contract to internal APIs shared between modules: state types, UI entry points, worker dispatch/completion methods and lifetime operations. Small private formatting helpers and trait implementations can rely on the owning module/type contract when an additional comment would only repeat the code. A private item's visibility is not a reason to omit its cancellation, indexing or ownership requirements.
 
 Private comments should explain ordering and ownership that the code alone cannot show: lock publication, stale-result rejection, preserved source snapshots and signal scope. Keep comments close to that decision and update them when behavior changes. Rustdoc links and missing public docs are checked in CI. Python helper docstrings describe their host/protocol contracts; the existing Ruff checks remain the formatting/lint workflow.
 

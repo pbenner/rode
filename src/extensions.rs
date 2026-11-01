@@ -570,6 +570,8 @@ impl Reply {
 pub fn run(root: &str, invocation: &Invocation) -> Result<Reply> {
     run_cancellable(root, invocation, &std::sync::atomic::AtomicBool::new(false))
 }
+/// Validate a versioned adapter invocation and run literal arguments in its host root
+/// with bounded JSON I/O, deadline and scoped cancellation.
 pub(crate) fn run_cancellable(
     root: &str,
     invocation: &Invocation,
@@ -628,6 +630,7 @@ pub fn coordinator() -> Result<()> {
     serde_json::to_writer(std::io::stdout().lock(), &reply)?;
     Ok(())
 }
+/// Run the prepared adapter coordinator command with a single framed project request.
 pub(crate) fn execute(
     command: std::process::Command,
     request: &crate::project::Request,
@@ -636,6 +639,8 @@ pub(crate) fn execute(
     execute_with_prelude(command, request, cancel, vec![])
 }
 
+/// Prepend staged SSH helper bytes before the JSON request, then enforce coordinator
+/// deadline/cancellation/output bounds and validate its JSON reply.
 pub(crate) fn execute_with_prelude(
     command: std::process::Command,
     request: &crate::project::Request,

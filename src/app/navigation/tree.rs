@@ -6,6 +6,7 @@
 
 use super::*;
 #[derive(Default)]
+/// Explorer keyboard selection, bounded type-ahead prefix and scroll-reveal state.
 pub(in crate::app) struct Selection {
     pub path: Option<String>,
     prefix: String,
@@ -15,6 +16,8 @@ pub(in crate::app) struct Selection {
     pub height: f32,
 }
 impl EditorApp {
+    /// Handle explorer keys only while its pane owns focus, selecting cached rows
+    /// and delegating opens/listings through the ordinary host-aware app paths.
     pub(in crate::app) fn tree_keyboard(&mut self, ctx: &egui::Context) {
         let id = Pane::Explorer.id();
         if !ctx.memory(|m| m.has_focus(id)) || self.tree_rows.is_empty() {

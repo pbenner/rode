@@ -70,15 +70,24 @@ fn run_step(step: usize) {
             }
         )
     )
-    process = subprocess.Popen([str(BINARY), directory], env=environment, stdout=log, stderr=log)
+    # Launch the actual CLI with a file, without a picker that could hide a
+    # startup regression. The restart below separately covers directory input.
+    process = subprocess.Popen([str(BINARY), str(path)], env=environment, stdout=log, stderr=log)
     try:
         window = wait_for_window(process, ARTIFACTS / "app.log")
         focus_window(window)
+        deadline = time.monotonic() + 20
+        while True:
+            assert_running(process, ARTIFACTS / "app.log")
+            attributes = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+            if Path(directory).name in attributes and "[Opening project]" not in attributes:
+                break
+            if time.monotonic() >= deadline:
+                screenshot(window, "startup-failure.png")
+                raise AssertionError("File startup did not prepare its containing directory")
+            time.sleep(0.05)
         time.sleep(0.4)
-        screenshot(window, "welcome.png")
-        key("p", ("Control_L",))
-        text("main.rs")
-        key("Return")
+        screenshot(window, "startup-file.png")
         time.sleep(0.5)
         screenshot(window, "opened.png")
         click(600, 180)

@@ -12,9 +12,13 @@ use std::sync::{Condvar, atomic::AtomicUsize};
 mod transport;
 
 #[derive(Default)]
+/// Host registry of complete agent controllers; discovery is read-only and exclusive
+/// attachments borrow controllers without taking ownership of persistent work.
 pub(super) struct Store {
     jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
 }
+/// Mutex-protected published controller state, revision and controlling-view flags.
+/// The worker owns protocol progression; views receive bounded state updates.
 struct Shared {
     state: State,
     revision: u64,
@@ -23,18 +27,21 @@ struct Shared {
     finished: bool,
     changed: Instant,
 }
+/// Controller worker ownership and bounded input queue, retained independently of any GUI socket.
 struct Job {
     shared: Mutex<Shared>,
     changed: Condvar,
     input: mpsc::SyncSender<Work>,
     created: Instant,
 }
+/// Serialized controller mutation, output wake or controlling-view disconnect event.
 enum Work {
     Action(Box<Action>),
     Wake,
     Detached,
 }
 impl Store {
+    /// Report an unfinished controller that must keep the host service alive.
     pub fn live(&self) -> bool {
         self.jobs
             .lock()
@@ -42,6 +49,7 @@ impl Store {
             .values()
             .any(|job| !job.shared.lock().unwrap().finished)
     }
+    /// Return metadata sorted by creation time, reaping finished records after their short grace period.
     pub fn list(&self) -> Vec<Info> {
         let mut jobs = self.jobs.lock().unwrap();
         jobs.retain(|_, job| {
@@ -54,6 +62,7 @@ impl Store {
         infos.sort_by_key(|info| info.created);
         infos
     }
+    /// Resolve a captured ID only under its original sandbox-policy fingerprint; reject absence or mismatch.
     fn find(&self, id: &str, policy: &str) -> Result<Arc<Job>> {
         let job = self
             .jobs
@@ -68,6 +77,8 @@ impl Store {
         );
         Ok(job)
     }
+    /// Queue explicit controller termination; success acknowledges queue ownership,
+    /// not completion of process-tree cleanup.
     pub fn end(&self, id: &str, policy: &str) -> Result<()> {
         let job = self.find(id, policy)?;
         if job.shared.lock().unwrap().finished {
@@ -77,6 +88,9 @@ impl Store {
             .try_send(Work::Action(Box::new(Action::End)))
             .context("Background agent command queue is full or disconnected")
     }
+    /// Validate bounded launch metadata and reserve a registry slot before starting its worker.
+    /// An existing ID with the same policy returns its current metadata; a different policy
+    /// fails. The returned starting record is not proof that subprocess startup succeeded.
     pub fn create(&self, spec: Spec) -> Result<Info> {
         ensure!(
             valid_id(&spec.id) && valid_name(&spec.name),
@@ -185,6 +199,9 @@ impl Store {
         std::thread::spawn(move || run(job, commands, spec, registry));
         Ok(info)
     }
+    /// Serve a blocking bidirectional attachment under one exclusive controlling lease.
+    /// A second controller is rejected; disconnect releases the lease and applies the
+    /// record's persistence policy rather than transferring process ownership to the view.
     pub fn attach(&self, mut stream: UnixStream, id: &str, policy: &str) -> Result<()> {
         let job = self.find(id, policy)?;
         {
@@ -596,6 +613,8 @@ fn configure(
     Ok(())
 }
 
+/// Find the service generation owning this captured ID and bridge bounded stdio
+/// messages through its authenticated local socket; require the original policy.
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     let launcher = Launcher {
         executable: current_executable()?,

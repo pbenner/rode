@@ -13,6 +13,8 @@ use std::collections::VecDeque;
 mod allocation;
 mod runtimes;
 #[derive(Clone)]
+/// Stable window view identity/order and optional host-owned terminal metadata;
+/// view keys and native service IDs describe different lifetimes.
 pub(super) struct Meta {
     pub key: String,
     pub(super) order: usize,
@@ -76,11 +78,13 @@ mod tests {
         }
     }
 }
+/// A hidden terminal view retained in this window while another terminal is selected.
 struct Attached {
     meta: Meta,
     terminal: Terminal,
 }
 #[derive(Clone)]
+/// Captured terminal/scheduler completion intent carried by generation-tagged worker events.
 pub(super) enum Job {
     List,
     Create { persistent: bool },
@@ -90,6 +94,7 @@ pub(super) enum Job {
     Release,
     Persistence,
 }
+/// Captured identity for a destructive shell or scheduler action awaiting explicit confirmation.
 enum Confirm {
     End {
         id: String,
@@ -101,6 +106,8 @@ enum Confirm {
     Release(slurm::Job),
 }
 #[derive(Default)]
+/// Window terminal views, host discovery caches and serialized lifetime mutations.
+/// Pending creation/persistence/shutdown work participates in normal exit guards.
 pub(super) struct Sessions {
     runtimes: runtimes::Browser,
     pub active: Option<Meta>,
@@ -127,16 +134,19 @@ pub(super) struct Sessions {
     allocation_error: String,
 }
 impl Sessions {
+    /// Check active and hidden views by stable window-local view key.
     pub(super) fn has_view(&self, key: &str) -> bool {
         self.active.as_ref().is_some_and(|m| m.key == key)
             || self.other.iter().any(|slot| slot.meta.key == key)
     }
 
+    /// Count active and retained hidden terminal views, excluding unattached host sessions.
     pub(super) fn view_count(&self) -> usize {
         self.other.len() + usize::from(self.active.is_some())
     }
 }
 impl EditorApp {
+    /// Wrap through retained views in creation order without recreating their PTYs.
     pub(in crate::app) fn cycle_terminal(&mut self, direction: isize, ctx: &egui::Context) {
         let mut views: Vec<_> = self
             .sessions
@@ -170,6 +180,7 @@ impl EditorApp {
             Terminal::focus(ctx);
         }
     }
+    /// Report a running terminal in either the active or retained hidden views.
     pub(super) fn has_live_terminal_views(&self) -> bool {
         self.terminal.as_ref().is_some_and(Terminal::is_alive)
             || self
@@ -195,9 +206,11 @@ impl EditorApp {
             .as_ref()
             .and_then(|workspace| workspace.remote.clone())
     }
+    /// Report an application quit currently waiting for owned lifetime acknowledgements.
     pub(super) fn session_exit_pending(&self) -> bool {
         self.sessions.quit_waiting
     }
+    /// Cancel a waiting exit and retain its failure as a visible notice instead of silently closing.
     pub(super) fn abort_session_quit(&mut self, error: String, ctx: &egui::Context) {
         if self.sessions.quit_waiting {
             self.sessions.quit_waiting = false;
@@ -206,9 +219,11 @@ impl EditorApp {
         }
         self.notify(error, true);
     }
+    /// Report serialized terminal creation/control work that prevents a conflicting lifetime action.
     pub(super) fn session_busy(&self) -> bool {
         self.sessions.starting || self.sessions.busy
     }
+    /// Check the selected native terminal's negotiated in-place lifetime-toggle capability.
     pub(super) fn terminal_persistence_supported(&self) -> bool {
         self.sessions
             .active
@@ -216,6 +231,7 @@ impl EditorApp {
             .and_then(|meta| meta.native.as_ref())
             .is_some_and(|info| info.persistence_supported)
     }
+    /// Include pending terminal/runtime creation, lifetime changes and cleanup in the exit barrier.
     pub(super) fn sessions_need_exit_check(&self) -> bool {
         self.sessions.starting
             || self.sessions.persistence_pending
@@ -233,6 +249,7 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(|c| c.lifetime_pending())
     }
+    /// Discard project discovery/view state while retaining approved runtime termination workers.
     pub(super) fn session_context_reset(&mut self) {
         let runtimes = self.sessions.runtimes.take_shutdowns();
         self.sessions = Sessions {
@@ -240,6 +257,7 @@ impl EditorApp {
             ..Sessions::default()
         };
     }
+    /// Register a new window-local terminal identity and make its view active.
     pub(super) fn add_terminal_view(&mut self, terminal: Terminal, key: String, name: String) {
         self.sessions.view_next += 1;
         self.adopt_terminal(
@@ -252,6 +270,7 @@ impl EditorApp {
             },
         );
     }
+    /// Select an existing terminal while retaining the previously active view for later switching.
     pub(super) fn adopt_terminal(&mut self, terminal: Terminal, meta: Meta) {
         if let Some(old) = self.terminal.take() {
             old.set_visible(false);
@@ -272,6 +291,7 @@ impl EditorApp {
         self.sessions.active = Some(meta);
         self.show_terminal = true;
     }
+    /// Create a window-owned fallback shell subject to the view bound and captured project policy.
     pub(super) fn new_temporary_terminal(&mut self, ctx: &egui::Context) {
         self.terminal_intent();
         if self.sessions.other.len() >= 15 {
@@ -315,9 +335,11 @@ impl EditorApp {
             Err(error) => self.notify(format!("{error:#}"), true),
         }
     }
+    /// Request a native host shell explicitly allowed to survive its last view closing.
     pub(super) fn new_persistent_terminal(&mut self, ctx: &egui::Context) {
         self.create_native_terminal(true, ctx);
     }
+    /// Request a native host shell whose default lifetime ends after its last view closes.
     pub(super) fn new_terminal(&mut self, ctx: &egui::Context) {
         self.create_native_terminal(false, ctx);
     }
@@ -448,6 +470,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Open terminal/runtime/scheduler discovery and queue independent metadata refreshes.
     pub(super) fn open_sessions(&mut self, ctx: &egui::Context) {
         self.set_dialog(Dialog::Sessions);
         self.refresh_sessions(ctx);
@@ -458,6 +481,8 @@ impl EditorApp {
         self.sessions.last = Some(Instant::now());
         self.session_request(service::Operation::List, Job::List, ctx);
     }
+    /// Queue one scheduler listing or an already confirmed captured-job cancellation;
+    /// GPU allocation counts remain distinct from host utilization telemetry.
     pub(super) fn refresh_slurm(&mut self, cancel: Option<String>, ctx: &egui::Context) {
         if self.sessions.slurm_busy {
             return;
@@ -507,6 +532,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Drain runtime completions, advance waiting exits and refresh visible session/scheduler caches.
     pub(super) fn session_tick(&mut self, ctx: &egui::Context) {
         self.poll_runtimes(ctx);
         if self.sessions.quit_waiting
@@ -610,6 +636,8 @@ impl EditorApp {
             Err(error) => self.notify(format!("{error:#}"), true),
         }
     }
+    /// Release the matching window attachment and select another retained view if available;
+    /// the host session follows its acknowledged persistence policy.
     pub(super) fn remove_view(&mut self, key: &str) {
         self.sessions.other.retain(|slot| slot.meta.key != key);
         if self
@@ -626,6 +654,7 @@ impl EditorApp {
             }
         }
     }
+    /// Release an explicitly persistent attachment; temporary views require their confirmation path.
     pub(super) fn detach_terminal(&mut self, ctx: &egui::Context) {
         if let Some(active) = self.sessions.active.clone() {
             if self.terminal.as_ref().is_some_and(Terminal::persistent) {
@@ -637,6 +666,8 @@ impl EditorApp {
             }
         }
     }
+    /// Request an in-place lifetime change only for a live capable native terminal,
+    /// retaining the pending acknowledgement before close/disconnect can proceed.
     pub(super) fn toggle_terminal_persistence(&mut self, ctx: &egui::Context) {
         if self.session_busy() {
             return;
@@ -665,6 +696,7 @@ impl EditorApp {
         self.session_request(operation, Job::Persistence, ctx);
         Terminal::focus(ctx);
     }
+    /// Apply a current-context terminal/scheduler reply and clear its matching in-flight state.
     pub(super) fn handle_session(
         &mut self,
         job: Job,
@@ -801,6 +833,7 @@ impl EditorApp {
             self.quit_terminals(ctx);
         }
     }
+    /// Render cached terminals, runtimes and scheduler jobs with explicit attach/end/release actions.
     pub(super) fn sessions_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.heading("Terminals & Slurm");
@@ -1096,6 +1129,7 @@ impl EditorApp {
             });
         }
     }
+    /// Render window-owned terminal views using their stable keys and retained creation order.
     pub(super) fn terminal_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mut slots: Vec<_> = self
             .sessions
@@ -1136,6 +1170,7 @@ impl EditorApp {
                 });
             });
     }
+    /// Retain at most eight commands while a native terminal starts; report overflow without execution.
     pub(super) fn queue_terminal_command(&mut self, command: String, ctx: &egui::Context) {
         if self.sessions.queued.len() >= 8 {
             self.notify(
@@ -1153,6 +1188,8 @@ impl EditorApp {
         self.quitting = true;
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
+    /// Release foreground views/controllers and wait for lifetime acknowledgements before
+    /// normal exit; persistent host work follows its existing acknowledged policy.
     pub(super) fn quit_terminals(&mut self, ctx: &egui::Context) {
         if !self
             .debugger
@@ -1170,6 +1207,7 @@ impl EditorApp {
             self.final_quit(ctx);
         }
     }
+    /// Keep pending exit cleanup visible and expose failures while the window still owns its work.
     pub(super) fn terminal_exit_dialog(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
         self.sessions.quit_waiting = true;
         ui.heading("Closing RODE");

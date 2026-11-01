@@ -4,6 +4,8 @@
 //! cursors. Convert to byte offsets only at string slicing boundaries; do not use display
 //! columns as byte indices.
 use super::*;
+/// Borrowed UTF-8 source adapter whose motions and ranges use character offsets;
+/// byte conversion happens only at string slicing boundaries.
 pub(super) struct Text<'a> {
     pub text: &'a str,
     pub len: usize,

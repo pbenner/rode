@@ -6,6 +6,8 @@
 use super::*;
 
 #[derive(Default)]
+/// Versioned diagnostics, debounce timestamps and in-flight/tool-availability caches
+/// for this workspace; none of these transient values are preferences.
 pub(super) struct State {
     pub(super) issues: HashMap<u64, Issues>,
     pub(super) checking: HashSet<u64>,
@@ -16,6 +18,8 @@ pub(super) struct State {
 }
 
 impl EditorApp {
+    /// List only diagnostics for current document versions and route selected one-based locations
+    /// back to the source editor; explicit check/format buttons queue host work.
     pub(in crate::app) fn problems_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.horizontal_wrapped(|ui| {
@@ -84,6 +88,8 @@ impl EditorApp {
         ui.add_space(12.);
         ui.label(RichText::new("Python: Ruff. Go: gofmt. JS/TS/web: Prettier. C/C++/Java/C#: clang-format. Shell: shfmt. Rust: rustfmt. Tools must be installed on the project host; configure automatic checks in Settings.").small().color(palette.muted));
     }
+    /// Send a task to the prepared project terminal, creating it asynchronously if needed.
+    /// Apply literal environment exports in a subshell so task overrides do not mutate the shell.
     pub(in crate::app) fn send_project_command(&mut self, command: String, ctx: &egui::Context) {
         if !self.project_ready() {
             return;
@@ -118,6 +124,8 @@ impl EditorApp {
         }
         Terminal::focus(ctx);
     }
+    /// Dispatch the active document to its notebook/LaTeX/language run or build path
+    /// using the selected project host and installed tool configuration.
     pub(in crate::app) fn run_active(&mut self, build: bool, ctx: &egui::Context) {
         if self
             .documents
@@ -215,6 +223,9 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Return whether a supported format/check path took responsibility for this save.
+    /// `false` lets the caller use the ordinary protected save; `true` includes a save
+    /// already in flight. Capture the expected revision before dispatching analysis.
     pub(in crate::app) fn save_with_tools(
         &mut self,
         id: u64,
@@ -281,6 +292,9 @@ impl EditorApp {
         true
     }
     #[allow(clippy::too_many_arguments)]
+    /// Submit an unsaved source snapshot with document version and tool epoch.
+    /// `save = None` checks/formats only; `Some(None)` creates a new destination and
+    /// `Some(Some(revision))` requests a conflict-checked save after accepted analysis.
     pub(in crate::app) fn analyze_document(
         &mut self,
         id: u64,
@@ -406,6 +420,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Queue manual checking, formatting or safe fixes for the active editable source document.
     pub(in crate::app) fn format_active(&mut self, format: bool, fix: bool, ctx: &egui::Context) {
         if let Some(doc) = self.documents.get(self.active) {
             if self.workbench.code_tools.checking.contains(&doc.id) || doc.saving {
@@ -421,6 +436,7 @@ impl EditorApp {
             self.analyze_document(doc.id, path, None, format, fix, true, ctx);
         }
     }
+    /// Select a stable document and translate a one-based diagnostic row/column into a source selection.
     pub(in crate::app) fn jump_to_issue(&mut self, id: u64, row: usize, column: usize) {
         if let Some(index) = self.documents.iter().position(|d| d.id == id) {
             self.active = index;
@@ -435,6 +451,7 @@ impl EditorApp {
             doc.selection = Some((offset, offset));
         }
     }
+    /// Return diagnostics only when their captured source version matches this document.
     pub(in crate::app) fn document_issues(&self, doc: &Document) -> Vec<Diagnostic> {
         self.workbench
             .code_tools

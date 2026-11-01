@@ -6,6 +6,7 @@
 //! independently of the retained PDF viewer.
 use super::*;
 
+/// One explicit build request, captured token/cancellation and retained compiler output/PDF location.
 pub(super) struct State {
     busy: bool,
     token: u64,
@@ -33,9 +34,11 @@ impl Default for State {
     }
 }
 impl EditorApp {
+    /// Reveal the cached build log without starting a compiler.
     pub(super) fn show_latex_output(&mut self) {
         self.latex.output_open = true;
     }
+    /// Cancel the active build, invalidate its token and clear any pending diagnostic jump.
     pub(super) fn stop_latex(&mut self) {
         if self.latex.busy {
             self.status = "LaTeX build stopped".into();
@@ -45,6 +48,8 @@ impl EditorApp {
         self.latex.busy = false;
         self.latex.pending_jump = None;
     }
+    /// Require saved project sources, validate settings and queue a cancellable host build;
+    /// `preview` requests opening its successful PDF after the completion checks.
     pub(super) fn build_latex(&mut self, preview: bool, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Latex) {
             self.notify("Enable LaTeX tools in View → Extensions.", false);
@@ -132,6 +137,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Apply a current build reply and versioned source diagnostics, retaining compiler errors for inspection.
     pub(super) fn complete_latex(
         &mut self,
         token: u64,
@@ -228,6 +234,7 @@ impl EditorApp {
             self.open_file(path, ctx);
         }
     }
+    /// Open the last successful build PDF through the active host-aware read path.
     pub(super) fn open_latex_pdf(&mut self, ctx: &egui::Context) {
         if let Some(path) = self.latex.last_pdf.clone() {
             self.latex.output_open = false;
@@ -239,6 +246,7 @@ impl EditorApp {
             );
         }
     }
+    /// Render explicit build, stop, preview and output controls for LaTeX source.
     pub(super) fn latex_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Latex)
             || !self
@@ -283,6 +291,7 @@ impl EditorApp {
                 });
             });
     }
+    /// Render cached compiler output and defer selected diagnostic navigation to the owning document.
     pub(super) fn latex_window(&mut self, ctx: &egui::Context) {
         if let Some((path, row, column)) = self.latex.pending_jump.clone() {
             if let Some(doc) = self

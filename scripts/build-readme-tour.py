@@ -91,10 +91,12 @@ SCENES = [
 
 
 def run(*args):
+    """Run a literal external-tool argument list and stop publication immediately on failure."""
     subprocess.run(args, check=True)
 
 
 def main():
+    """Validate native captures and compose the captioned GIF, MP4 and still artifacts with bounded scene durations."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("captures", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "assets")

@@ -834,6 +834,8 @@ pub fn run(command: Command, input: Vec<u8>, timeout: Duration) -> Result<Output
     run_controlled(command, input, timeout, &AtomicBool::new(false), false)
 }
 
+/// Run an owned command with concurrent bounded I/O, cancellation and a deadline.
+/// `lifeline` retains stdin after the initial payload so helper cleanup follows channel loss.
 pub(crate) fn run_controlled(
     command: Command,
     input: Vec<u8>,
@@ -851,6 +853,8 @@ pub(crate) fn run_controlled(
         Duration::ZERO,
     )
 }
+/// Use explicit per-stream output-byte bounds and termination grace before scoped
+/// process-group escalation; return captured exit/output only after pipe cleanup.
 pub(crate) fn run_controlled_limited(
     command: Command,
     input: Vec<u8>,
@@ -1172,9 +1176,19 @@ impl GitFile {
             || self.worktree == 'U'
             || matches!((self.index, self.worktree), ('A', 'A') | ('D', 'D'))
     }
-    /// Return whether the entry has staged changes rather than only untracked/ignored state.
+    /// Return whether the index contains resolved staged changes. Unmerged
+    /// entries have conflict stages, not changes ready for a normal commit.
     pub fn staged(&self) -> bool {
-        ![' ', '?', '!'].contains(&self.index)
+        !self.conflict() && ![' ', '?', '!'].contains(&self.index)
+    }
+    /// Return whether a resolved tracked path differs between the index and
+    /// working tree. Untracked files and unresolved conflicts are separate states.
+    pub fn unstaged(&self) -> bool {
+        !self.conflict() && ![' ', '?', '!'].contains(&self.worktree)
+    }
+    /// Return whether Git reports a path that has not been added to the index.
+    pub fn untracked(&self) -> bool {
+        self.index == '?' && self.worktree == '?'
     }
 }
 /// Parse `git status --porcelain=v1 -z --branch`, preserving unquoted filenames and rename

@@ -1,3 +1,5 @@
+//! Debugger UI lifecycle and stale-source regressions using deterministic controller fixtures.
+
 use super::*;
 
 #[test]

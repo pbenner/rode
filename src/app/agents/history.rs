@@ -8,6 +8,7 @@ use crate::{
 use eframe::egui::{self, Align, Layout, RichText, Sense, Stroke};
 
 #[derive(Default)]
+/// History interaction intent returned to the owner after rendering cached entries.
 pub(super) struct Action {
     pub refresh: bool,
     pub more: bool,
@@ -17,11 +18,14 @@ pub(super) struct Action {
 }
 
 #[derive(Clone)]
+/// Deletion confirmation target: one captured conversation identity or the project history set.
 pub(super) enum Delete {
     One { id: String, title: String },
     All,
 }
 
+/// Render bounded cached metadata and return explicit refresh/resume/deletion actions.
+/// Filtering never queries the host, and busy/current sessions cannot be deleted here.
 pub(super) fn ui(
     ui: &mut egui::Ui,
     browser: Option<&Browser>,

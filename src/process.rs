@@ -144,6 +144,7 @@ pub struct Writer {
     input: SyncSender<Vec<u8>>,
     limit: usize,
 }
+/// Serialize one UTF-8 JSON message plus newline, rejecting payloads at the 16 MiB process-input bound.
 pub(crate) fn encode_request(message: &Value) -> Result<Vec<u8>> {
     let mut bytes = serde_json::to_vec(message)?;
     ensure!(
@@ -238,6 +239,7 @@ impl Session {
     pub fn send(&self, message: &Value) -> Result<()> {
         self.writer().send(message)
     }
+    /// Report completed transport supervision, distinct from a stop merely having been requested.
     pub(crate) fn is_finished(&self) -> bool {
         self.control.finished.load(Ordering::Acquire)
     }
@@ -448,6 +450,8 @@ fn run_session(
     Ok(())
 }
 
+/// Resolve path-like programs relative to the captured host root, otherwise search
+/// PATH and the host's local bin before leaving the bare command for spawn diagnostics.
 pub(crate) fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
     if program.contains('/') || program.starts_with('~') {
         let path = files::expand_home(program);

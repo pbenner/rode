@@ -6,6 +6,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use rode_agent_core::attachment::{self, Attachment};
 
 #[derive(Default)]
+/// Composer-owned attachment snapshots plus a rotating request token
+/// that prevents a late file read from crossing into a replacement conversation.
 pub(in crate::app) struct State {
     pub files: Vec<Attachment>,
     pub pending: bool,
@@ -13,18 +15,21 @@ pub(in crate::app) struct State {
     token: u64,
 }
 impl State {
+    /// Release captured files and invalidate every earlier attachment request token.
     pub fn clear(&mut self) {
         self.files.clear();
         self.pending = false;
         self.error.clear();
         self.token = self.token.wrapping_add(1);
     }
+    /// Start a new attachment read and return the token required by its completion.
     pub fn begin(&mut self) -> u64 {
         self.token = self.token.wrapping_add(1);
         self.pending = true;
         self.error.clear();
         self.token
     }
+    /// Accept only the current token and validate the combined attachment budget before replacement.
     pub fn finish(&mut self, token: u64, result: Result<Attachment, String>) {
         if self.token != token {
             return;
@@ -42,6 +47,7 @@ impl State {
             Err(error) => self.error = error,
         }
     }
+    /// Reserve one compact row only when files, a pending read or an error are present.
     pub fn height(&self) -> f32 {
         if self.pending || !self.files.is_empty() || !self.error.is_empty() {
             30.
@@ -49,6 +55,7 @@ impl State {
             0.
         }
     }
+    /// Render attachment summaries and explicit removal controls from cached payloads.
     pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool) {
         if self.height() == 0. {
             return;
@@ -107,6 +114,8 @@ impl State {
 }
 
 impl EditorApp {
+    /// Queue one bounded file read with a composer token. `local` selects an explicit
+    /// desktop attachment; host attachments remain inside the current project policy.
     pub(in crate::app) fn attach_agent_file(
         &mut self,
         path: String,

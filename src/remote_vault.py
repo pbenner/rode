@@ -42,6 +42,7 @@ def mount_entry(text, point):
     """Decode a mount-table entry for an exact mountpoint."""
 
     def decode(value):
+        """Decode the octal path escapes used in Linux mountinfo fields."""
         return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), value)
 
     for line in text.splitlines():
@@ -56,6 +57,7 @@ def foreign_mount(name, point):
     """Detect references to this encrypted mount in other process namespaces."""
 
     def references(table, ignored_point=None):
+        """Detect another gocryptfs mount of this filesystem, optionally excluding the expected mount point."""
         for line in table.splitlines():
             left, separator, right = line.partition(" - ")
             fields, tail = left.split(), right.split()
@@ -114,6 +116,7 @@ def run_tool(program, args, password="", timeout=60):
     errors = bytearray()
 
     def read_errors():
+        """Drain mount-tool stderr up to 64 KiB and kill its owned group if diagnostics exceed that bound."""
         while True:
             block = process.stderr.read(4096)
             if not block:
@@ -368,6 +371,7 @@ def main():
     mount = None
 
     def terminate(_signal, _frame):
+        """Translate a termination signal into the broker loop EOF cleanup path."""
         raise EOFError
 
     signal.signal(signal.SIGTERM, terminate)

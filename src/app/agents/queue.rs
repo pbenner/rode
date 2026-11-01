@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 
 const LIMIT: usize = 16;
 
+/// One stable queued prompt and its captured attachment payloads or hosted display filenames.
 struct Prompt {
     id: u64,
     text: String,
@@ -13,12 +14,16 @@ struct Prompt {
     files: Vec<String>,
 }
 
+/// Unsent local text edit for a stable queue item; editing holds automatic dispatch.
 struct Edit {
     id: u64,
     text: String,
 }
 
 #[derive(Default)]
+/// Presentation mirror and pending edit commands for a host-owned prompt queue.
+/// The direct transport path also uses local submission gating; hosted dispatch
+/// remains the controller's responsibility after the GUI detaches.
 pub(super) struct Queue {
     prompts: VecDeque<Prompt>,
     serial: u64,
@@ -32,6 +37,7 @@ pub(super) struct Queue {
     recall: VecDeque<String>,
 }
 
+/// Deferred queue-row interaction, applied after rendering releases its item borrow.
 enum Action {
     Edit(u64),
     Save,
@@ -41,10 +47,12 @@ enum Action {
 }
 
 impl Queue {
+    /// Report whether the currently displayed pending-prompt list is empty.
     pub fn is_empty(&self) -> bool {
         self.prompts.is_empty()
     }
 
+    /// Reset local queue presentation, pending commands, reply gating and recall state.
     pub fn clear(&mut self) {
         self.prompts.clear();
         self.commands.clear();
@@ -57,12 +65,14 @@ impl Queue {
         self.recall.clear();
     }
 
+    /// Pause a nonempty queue once, recording a host command when the controller owns dispatch.
     pub fn pause(&mut self) {
         if !self.is_empty() && !self.paused {
             self.set_paused(true);
         }
     }
 
+    /// Update the local pause indicator and enqueue the corresponding hosted control change.
     fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
         if self.hosted {
@@ -70,21 +80,28 @@ impl Queue {
                 .push_back(rode_agent_core::queue::Action::Pause { paused });
         }
     }
+    /// Mark this queue as mirrored host state before transferring locally queued operations.
     pub fn set_hosted(&mut self) {
         self.hosted = true;
     }
+    /// Report whether queue scheduling is owned by the native controller.
     pub fn hosted(&self) -> bool {
         self.hosted
     }
+    /// Borrow the oldest unsent host queue mutation without consuming it.
     pub fn command(&self) -> Option<&rode_agent_core::queue::Action> {
         self.commands.front()
     }
+    /// Consume a queue mutation only after the transport has accepted it.
     pub fn command_sent(&mut self) {
         self.commands.pop_front();
     }
+    /// Return the stable first pending-item ID for matching a submission acknowledgement.
     pub fn head_id(&self) -> Option<u64> {
         self.prompts.front().map(|p| p.id)
     }
+    /// Reconcile an acknowledged host queue snapshot, preserving local edit state when
+    /// its item still matches and adding newly dispatched prompts to local recall once.
     pub fn sync(&mut self, view: &rode_agent_core::queue::View, busy: bool) {
         if self.hosted
             && self.observed_ack.as_deref() == Some(view.acknowledged.as_str())
@@ -140,6 +157,7 @@ impl Queue {
         }
     }
 
+    /// Check the 16-item local queue bound before accepting another captured prompt.
     pub fn can_push(&self) -> bool {
         self.prompts.len() < LIMIT
     }
@@ -153,6 +171,8 @@ impl Queue {
     pub fn push(&mut self, text: String) -> anyhow::Result<()> {
         self.push_with_attachments(text, vec![])
     }
+    /// Validate prompt/attachment budgets, allocate an ID and retain captured payloads;
+    /// hosted queues additionally record a Push command for acknowledged transfer.
     pub fn push_with_attachments(
         &mut self,
         text: String,
@@ -178,6 +198,7 @@ impl Queue {
         Ok(())
     }
 
+    /// Return the direct-path head text only when unpaused, unedited and not awaiting a reply.
     pub fn next(&self) -> Option<&str> {
         if self.paused || self.edit.is_some() || self.waiting_for_reply {
             return None;
@@ -185,6 +206,7 @@ impl Queue {
         self.prompts.front().map(|prompt| prompt.text.as_str())
     }
 
+    /// Borrow the first queued prompt's captured payloads; hosted mirrors may contain filenames only.
     pub fn next_attachments(&self) -> &[rode_agent_core::attachment::Attachment] {
         self.prompts
             .front()
@@ -192,14 +214,17 @@ impl Queue {
             .unwrap_or_default()
     }
 
+    /// Report the local reply gate used to prevent duplicate direct-path submissions.
     pub fn waiting_for_reply(&self) -> bool {
         self.waiting_for_reply
     }
 
+    /// Hold local dispatch while an accepted prompt awaits its reply.
     pub fn submitted(&mut self) {
         self.waiting_for_reply = true;
     }
 
+    /// Release the local reply gate after completion; pause/error policy is handled separately.
     pub fn finished(&mut self) {
         self.waiting_for_reply = false;
     }
@@ -212,6 +237,7 @@ impl Queue {
         }
     }
 
+    /// Reserve a bounded queue panel height in logical UI points, including any active edit form.
     pub fn height(&self) -> f32 {
         if self.is_empty() {
             0.
@@ -221,6 +247,8 @@ impl Queue {
         }
     }
 
+    /// Render pending prompts and capture pause/edit/remove/reorder commands;
+    /// disabling the view keeps the queue visible without accepting mutations.
     pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool) {
         let mut action = None;
         ui.add_enabled_ui(enabled, |ui| {

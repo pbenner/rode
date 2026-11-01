@@ -116,7 +116,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "RODE — native Rust editor\n\nUsage: rode [DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--sandbox]\n\nSSH aliases and settings from ~/.ssh/config are honored.\nRemote file access requires python3; authentication happens in the terminal.\nThemes: phosphor (default), carbon, code-dark, matrix, amber, ice, neon, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
+            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--sandbox]\n\nA local file opens in a tab with its containing directory as the workspace.\nSSH aliases and settings from ~/.ssh/config are honored.\nRemote file access requires python3; authentication happens in the terminal.\nThemes: phosphor (default), carbon, code-dark, matrix, amber, ice, neon, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
         );
         println!(
             "\nOptional Codex runtime: rode --codex [ARGUMENTS], e.g. rode --codex login.\nInstall rode-codex or supply an installed Codex executable."

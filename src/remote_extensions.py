@@ -42,6 +42,7 @@ def extension_coordinator():
 
     def control():
         # Avoid holding Python's buffered-stdin lock during normal shutdown.
+        """Cancel the adapter when the control channel receives a byte or closes, avoiding buffered-stdin locks."""
         os.read(sys.stdin.fileno(), 1)  # noqa: F821
         cancel.set()
 

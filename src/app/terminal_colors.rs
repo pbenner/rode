@@ -45,6 +45,7 @@ struct Overrides {
 }
 
 #[derive(Default)]
+/// Per-interface-theme terminal override cache plus explicit pending scalar preference edits.
 pub(super) struct State {
     pub(super) open: bool,
     themes: BTreeMap<String, Overrides>,
@@ -52,6 +53,7 @@ pub(super) struct State {
 }
 
 impl State {
+    /// Overlay saved terminal swatches/contrast on installed theme defaults without changing theme files.
     pub(super) fn load(storage: Option<&dyn Storage>, themes: &theme::Themes) -> Self {
         let mut state = Self::default();
         for theme in &themes.entries {
@@ -110,6 +112,7 @@ impl State {
         }
     }
 
+    /// Render terminal color controls and retain only explicit edits for field-level preference merging.
     pub(super) fn show(&mut self, ctx: &egui::Context, theme: &theme::Theme) {
         if !self.open {
             return;

@@ -50,6 +50,7 @@ def latex_main(root, path, settings):
     from pathlib import Path
 
     def resolve(base, value):
+        """Expand a host path relative to the selected base without resolving it on the desktop."""
         value = Path(value).expanduser()
         return value if value.is_absolute() else base / value
 
@@ -219,12 +220,14 @@ def latex_coordinator():
     cancelled = threading.Event()
 
     def stop(_signal, _frame):
+        """Mark the render operation cancelled when a termination signal arrives."""
         cancelled.set()
 
     signal.signal(signal.SIGHUP, stop)
     signal.signal(signal.SIGTERM, stop)
 
     def control():
+        """Mark cancellation when the control channel receives a byte or reaches EOF."""
         os.read(sys.stdin.fileno(), 1)
         cancelled.set()
 
@@ -236,6 +239,7 @@ def latex_coordinator():
         raise ValueError("LaTeX sources must be regular files up to 8 MiB.")
 
     def resolve(base, value):
+        """Expand a render path relative to its captured host-side base directory."""
         path = Path(value).expanduser()
         return path if path.is_absolute() else base / path
 

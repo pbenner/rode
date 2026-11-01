@@ -221,6 +221,7 @@ def run():
     pending = deque()
 
     def read_adapter():
+        """Decode adapter DAP frames and publish messages, EOF or protocol errors to the coordinator."""
         try:
             while (message := read_dap(adapter.stdout)) is not None:
                 incoming.put(("adapter", message))
@@ -229,6 +230,7 @@ def run():
             incoming.put(("error", str(error)))
 
     def read_errors():
+        """Convert bounded adapter stderr lines into DAP output events; reject oversized lines."""
         while line := adapter.stderr.readline(8193):
             if len(line) > 8192:
                 incoming.put(("error", "Adapter stderr line exceeds 8 KiB."))
@@ -245,6 +247,7 @@ def run():
             )
 
     def write_adapter():
+        """Write queued JSON as byte-counted DAP frames without blocking the coordinator loop."""
         while not stop.is_set():
             try:
                 message = writes.get(timeout=0.05)
@@ -262,6 +265,7 @@ def run():
                 return
 
     def read_client():
+        """Read bounded client JSON lines and always publish EOF so owner cleanup can run."""
         try:
             while line := sys.stdin.buffer.readline(256 * 1024 + 1):
                 if len(line) > 256 * 1024:
@@ -282,6 +286,7 @@ def run():
     )
 
     def start_terminal(body, ident):
+        """Validate literal runInTerminal arguments and start an owned PTY in the captured host environment."""
         if body.get("kind", "integrated") != "integrated" or body.get(
             "argsCanBeInterpretedByShell"
         ):
@@ -320,6 +325,7 @@ def run():
         terminals[ident] = (master, child, inputs)
 
         def write_terminal():
+            """Drain queued terminal input to its PTY master while the coordinator and child remain alive."""
             while not stop.is_set() and child.poll() is None:
                 try:
                     data = inputs.get(timeout=0.05)
@@ -335,6 +341,7 @@ def run():
         emit(dict(kind="terminal", id=ident, title=body.get("title", "Debug program")[:120]))
 
         def read_terminal():
+            """Forward PTY output as base64 events, reap the child and report its terminal identity on exit."""
             try:
                 while not stop.is_set():
                     if not select.select([master], [], [], 0.05)[0]:

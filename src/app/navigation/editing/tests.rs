@@ -1,3 +1,5 @@
+//! Regressions for native source edit/undo behavior under Emacs and Vim input translation.
+
 use super::*;
 #[test]
 fn motions_use_character_indices_and_word_classes() {

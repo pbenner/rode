@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 
 #[derive(Clone, Copy)]
+/// Repository-native vector icon identity; glyphs render consistently without icon-font dependencies.
 pub(super) enum Icon {
     Files,
     Search,
@@ -51,6 +52,7 @@ pub(super) enum Icon {
 }
 
 impl Icon {
+    /// Paint this icon into the supplied logical-point rectangle using a single themed stroke color.
     pub(super) fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
         let size = rect.width().min(rect.height());
         let canvas = Canvas {
@@ -410,6 +412,7 @@ pub(super) struct IconButton<'a> {
     min_size: Vec2,
 }
 impl<'a> IconButton<'a> {
+    /// Create a labeled accessible icon button; sizing follows the containing UI style.
     pub(super) fn new(icon: Icon, label: &'a str) -> Self {
         Self {
             icon,
@@ -430,26 +433,32 @@ impl<'a> IconButton<'a> {
             ..Self::new(icon, label)
         }
     }
+    /// Add a displayed shortcut hint without installing or consuming that keyboard binding.
     pub(super) fn shortcut(mut self, shortcut: &'a str) -> Self {
         self.shortcut = shortcut;
         self
     }
+    /// Set selected visual state independently of the action performed when clicked.
     pub(super) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
     }
+    /// Override the label/icon tint while retaining the normal button interaction colors.
     pub(super) fn color(mut self, color: Color32) -> Self {
         self.tint = Some(color);
         self
     }
+    /// Elide an overlong label to fit available width instead of wrapping the action row.
     pub(super) fn truncate(mut self) -> Self {
         self.truncate = true;
         self
     }
+    /// Set the icon square size in logical points.
     pub(super) fn icon_size(mut self, size: f32) -> Self {
         self.size = size;
         self
     }
+    /// Set a minimum logical-point interaction rectangle without changing icon geometry.
     pub(super) fn min_size(mut self, size: Vec2) -> Self {
         self.min_size = size;
         self
@@ -525,10 +534,12 @@ impl Widget for IconButton<'_> {
     }
 }
 
+/// Render a compact icon-only action with its accessible label as the tooltip.
 pub(super) fn small(ui: &mut Ui, icon: Icon, label: &str) -> Response {
     ui.add_sized([26., 18.], IconButton::icon(icon, label).icon_size(14.))
 }
 
+/// Render an icon-labeled native submenu using egui's shared menu hierarchy.
 pub(super) fn submenu<R>(
     ui: &mut Ui,
     icon: Icon,
@@ -550,6 +561,7 @@ pub(super) fn submenu<R>(
     egui::containers::menu::SubMenu::new().show(ui, &output.response, contents);
 }
 
+/// Render the open-editors overflow menu with a stable accessible button label.
 pub(super) fn overflow(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Response {
     let id = ui.next_auto_id().with("editors-menu-icon");
     let (response, _) = egui::containers::menu::MenuButton::from_button(

@@ -8,6 +8,8 @@ use std::{
     sync::atomic::{AtomicU32, AtomicUsize},
 };
 
+/// Captured host launch policy/executable/environment and a count of active owned
+/// process workers; spawning threads outlive the pipes to preserve sandbox parent lifetime.
 pub(super) struct Factory {
     pub spec: Spec,
     pub active: Arc<AtomicUsize>,
@@ -93,6 +95,7 @@ impl rode_agent_core::Factory for Factory {
         Ok(rode_agent_core::Session::new(pipe))
     }
 }
+/// Shared idempotent signal state for only this transport's owned child process group.
 struct Control {
     pid: AtomicU32,
     alive: AtomicBool,
@@ -119,6 +122,7 @@ impl Control {
         });
     }
 }
+/// Bounded agent input/event channels; the spawning worker retains actual child ownership.
 struct Pipe {
     input: mpsc::SyncSender<Vec<u8>>,
     events: mpsc::Receiver<rode_agent_core::Event>,

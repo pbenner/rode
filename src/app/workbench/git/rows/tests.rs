@@ -1,3 +1,5 @@
+//! Rendered Git-row geometry and action-target regressions across compact and wide panes.
+
 use super::*;
 use egui::{Context, Event, FullOutput, PointerButton, Pos2, Rect};
 
@@ -89,6 +91,124 @@ fn fixture() -> Vec<GitFile> {
             }
         })
         .collect()
+}
+
+#[test]
+fn file_actions_match_staged_unstaged_and_unmerged_states() {
+    // Expected actions are working diff, staged diff, stage, unstage, discard.
+    for (status, expected) in [
+        ("M ", [false, true, false, true, false]),
+        ("A ", [false, true, false, true, false]),
+        ("D ", [false, true, false, true, false]),
+        ("R ", [false, true, false, true, false]),
+        ("T ", [false, true, false, true, false]),
+        (" M", [true, false, true, false, true]),
+        (" D", [true, false, true, false, true]),
+        (" T", [true, false, true, false, true]),
+        (" A", [true, false, true, false, false]),
+        ("MM", [true, true, true, true, true]),
+        ("AM", [true, true, true, true, true]),
+        ("RM", [true, true, true, true, true]),
+        ("MD", [true, true, true, true, true]),
+        ("??", [true, false, true, false, false]),
+        ("!!", [false, false, false, false, false]),
+        ("UU", [true, false, true, false, false]),
+        ("AA", [true, false, true, false, false]),
+        ("DD", [true, false, true, false, false]),
+        ("AU", [true, false, true, false, false]),
+        ("UA", [true, false, true, false, false]),
+        ("DU", [true, false, true, false, false]),
+        ("UD", [true, false, true, false, false]),
+    ] {
+        let (_, files) = crate::project::parse_status(&format!("{status} file.txt\0"));
+        for (action, enabled) in ACTIONS.into_iter().zip(expected) {
+            assert_eq!(action.enabled(&files[0]), enabled, "{status:?}: {action:?}");
+        }
+    }
+}
+
+#[test]
+fn disabled_file_actions_cannot_dispatch_from_rows_or_compact_menus() {
+    for (status, expected) in [
+        ("M ", [false, true, false, true, false]),
+        ("MM", [true, true, true, true, true]),
+        ("??", [true, false, true, false, false]),
+        ("UU", [true, false, true, false, false]),
+    ] {
+        let (_, files) = crate::project::parse_status(&format!("{status} file.txt\0"));
+        for width in [360., 1200.] {
+            for (action, enabled) in ACTIONS.into_iter().zip(expected) {
+                let ctx = Context::default();
+                theme::install(&ctx, theme::Palette::default());
+                frame(&ctx, &files, width, vec![]);
+                let (mut output, _, _) = frame(&ctx, &files, width, vec![]);
+                if width < 500. && !matches!(action, Action::Stage | Action::Diff) {
+                    click(&ctx, &files, width, labels(&output, "More")[0]);
+                    output = frame(&ctx, &files, width, vec![]).0;
+                }
+                let target = labels(&output, action.label(&files[0]))[0];
+                assert_eq!(
+                    click(&ctx, &files, width, target),
+                    enabled.then_some((0, action)),
+                    "{status:?}, width {width}: {action:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn actual_git_transitions_distinguish_staging_from_conflict_resolution() {
+    use std::process::Command;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let git = |args: &[&str], success: bool| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), success, "{args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-b", "main"], true);
+    git(&["config", "user.name", "RODE test"], true);
+    git(&["config", "user.email", "rode@example.invalid"], true);
+    let status = || crate::project::parse_status(&git(&["status", "--porcelain=v1", "-z"], true)).1;
+    let file = root.join("tracked.txt");
+    std::fs::write(&file, "base\n").unwrap();
+    assert!(status()[0].untracked());
+    git(&["add", "."], true);
+    assert!(status()[0].staged());
+    assert!(!Action::Stage.enabled(&status()[0]));
+    git(&["commit", "-m", "Base"], true);
+    std::fs::write(&file, "working change\n").unwrap();
+    assert!(status()[0].unstaged());
+    assert!(!status()[0].staged());
+    git(&["add", "."], true);
+    assert!(!Action::Stage.enabled(&status()[0]));
+    std::fs::write(&file, "more working changes\n").unwrap();
+    let partial = status().remove(0);
+    assert!(partial.staged() && partial.unstaged());
+    assert!(Action::Stage.enabled(&partial) && Action::Unstage.enabled(&partial));
+    git(&["restore", "--staged", "--worktree", "."], true);
+
+    git(&["switch", "-c", "other"], true);
+    std::fs::write(&file, "other branch\n").unwrap();
+    git(&["commit", "-am", "Other"], true);
+    git(&["switch", "main"], true);
+    std::fs::write(&file, "main branch\n").unwrap();
+    git(&["commit", "-am", "Main"], true);
+    git(&["merge", "--no-edit", "other"], false);
+    let conflict = status().remove(0);
+    assert!(conflict.conflict());
+    assert!(!conflict.staged());
+    assert!(Action::Stage.enabled(&conflict));
+    assert!(!Action::Unstage.enabled(&conflict));
+    assert!(!Action::Discard.enabled(&conflict));
 }
 
 #[test]

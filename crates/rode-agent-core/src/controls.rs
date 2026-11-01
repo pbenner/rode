@@ -16,6 +16,8 @@ pub use catalog::Catalog;
 
 /// Maximum selectors/model entries retained from an agent.
 pub const CONTROL_LIMIT: usize = 32;
+const MODEL_LIMIT: usize = 128;
+const MODEL_PAGE_LIMIT: usize = 4;
 /// A stable bounded identifier suitable for a saved option or model name.
 pub(crate) fn identifier(value: &str, empty: bool) -> bool {
     (empty || !value.is_empty()) && value.len() <= 256 && !value.chars().any(char::is_control)
@@ -56,7 +58,7 @@ pub(crate) fn models(result: &Value) -> Vec<Model> {
         .as_array()
         .into_iter()
         .flatten()
-        .take(128)
+        .take(MODEL_LIMIT)
         .filter_map(|m| {
             let id = m["model"].as_str().or_else(|| m["id"].as_str())?;
             if !identifier(id, false) || m["hidden"] == true {
@@ -87,6 +89,42 @@ pub(crate) fn models(result: &Value) -> Vec<Model> {
             })
         })
         .collect()
+}
+
+/// Shared paging policy for chat discovery and metadata-only connections.
+/// Keep stable model order while bounding entries, requests and cursor cycles.
+#[derive(Default)]
+pub(crate) struct ModelPages {
+    cursors: Vec<String>,
+}
+impl ModelPages {
+    /// Reset seen pagination cursors before beginning a new model-discovery sequence.
+    pub(crate) fn clear(&mut self) {
+        self.cursors.clear();
+    }
+
+    /// Append visible unique models and return the next cursor, if still bounded.
+    pub(crate) fn append(&mut self, catalog: &mut Vec<Model>, result: &Value) -> Option<String> {
+        for model in models(result) {
+            if catalog.len() >= MODEL_LIMIT {
+                break;
+            }
+            if !catalog.iter().any(|entry| entry.value.id == model.value.id) {
+                catalog.push(model);
+            }
+        }
+        let cursor = result["nextCursor"]
+            .as_str()
+            .filter(|cursor| identifier(cursor, false))?;
+        if self.cursors.len() >= MODEL_PAGE_LIMIT - 1
+            || catalog.len() >= MODEL_LIMIT
+            || self.cursors.iter().any(|seen| seen == cursor)
+        {
+            return None;
+        }
+        self.cursors.push(cursor.into());
+        Some(cursor.into())
+    }
 }
 
 /// One supported ACP select/boolean capability, including current backend state.
@@ -209,6 +247,51 @@ pub(crate) fn acp(result: &Value) -> Vec<Control> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn model_pages_preserve_order_and_stop_duplicates_cycles_and_excess_pages() {
+        let mut pages = ModelPages::default();
+        let mut catalog = vec![];
+        for page in 0..MODEL_PAGE_LIMIT {
+            let next = pages.append(
+                &mut catalog,
+                &json!({
+                    "data": [{"model":"shared"}, {"model":format!("page-{page}")}],
+                    "nextCursor": format!("cursor-{page}")
+                }),
+            );
+            assert_eq!(next.is_some(), page + 1 < MODEL_PAGE_LIMIT);
+        }
+        assert_eq!(
+            catalog
+                .iter()
+                .map(|model| model.value.id.as_str())
+                .collect::<Vec<_>>(),
+            ["shared", "page-0", "page-1", "page-2", "page-3"]
+        );
+        pages.clear();
+        assert_eq!(
+            pages
+                .append(&mut catalog, &json!({"nextCursor":"again"}))
+                .as_deref(),
+            Some("again")
+        );
+        assert!(
+            pages
+                .append(&mut catalog, &json!({"nextCursor":"again"}))
+                .is_none()
+        );
+        pages.clear();
+        let data: Vec<_> = (0..200)
+            .map(|index| json!({"model":format!("model-{index}")}))
+            .collect();
+        assert!(
+            pages
+                .append(&mut catalog, &json!({"data":data,"nextCursor":"too-many"}))
+                .is_none()
+        );
+        assert_eq!(catalog.len(), MODEL_LIMIT);
+    }
 
     #[test]
     fn unknown_types_and_invalid_choices_never_become_controls() {

@@ -1,3 +1,5 @@
+//! Real staged-helper execution and exact preservation of following protocol bytes.
+
 use super::*;
 use std::{
     fs,

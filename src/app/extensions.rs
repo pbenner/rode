@@ -6,6 +6,7 @@
 use super::*;
 use crate::extensions::{self as api, Feature};
 
+/// Desktop-installed manifest registry, explicit settings editor and cancellable adapter work state.
 pub(super) struct Extensions {
     pub registry: api::Registry,
     install_path: String,
@@ -17,6 +18,7 @@ pub(super) struct Extensions {
     pub cancel: Arc<AtomicBool>,
 }
 impl Extensions {
+    /// Load bounded installed manifests and saved enablement; loading alone never runs adapter executables.
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         let preferences = storage
             .and_then(|s| s.get_string(api::STORAGE_KEY))
@@ -35,13 +37,16 @@ impl Extensions {
     }
 }
 impl EditorApp {
+    /// Cancel captured adapter jobs and rotate the flag so future work has a fresh lifetime.
     pub(super) fn cancel_extensions(&mut self) {
         self.extensions.cancel.store(true, Ordering::Release);
         self.extensions.cancel = Arc::new(AtomicBool::new(false));
     }
+    /// Read effective bundled-feature enablement from the current registry.
     pub(super) fn feature(&self, feature: Feature) -> bool {
         self.extensions.registry.feature(feature)
     }
+    /// Map optional tool views to their bundled feature gate; core views have no extra gate.
     pub(super) fn panel_feature(panel: Panel) -> Option<Feature> {
         match panel {
             Panel::Git => Some(Feature::Git),
@@ -51,9 +56,11 @@ impl EditorApp {
             _ => None,
         }
     }
+    /// Allow core panels and only enabled optional feature panels.
     pub(super) fn panel_enabled(&self, panel: Panel) -> bool {
         Self::panel_feature(panel).is_none_or(|f| self.feature(f))
     }
+    /// Persist explicitly changed extension preferences; retain pending state when storage is absent.
     pub(super) fn persist_extensions<S: eframe::Storage + ?Sized>(
         &mut self,
         storage: Option<&mut S>,
@@ -70,6 +77,8 @@ impl EditorApp {
             self.extensions.registry.pending = false;
         }
     }
+    /// Change feature enablement, invalidate source-tool epochs and cancel affected owned work
+    /// without replacing source buffers or abandoning protected save acknowledgements.
     pub(super) fn set_extension(&mut self, id: &str, enabled: bool) {
         self.cancel_extensions();
         self.extensions.registry.set_enabled(id, enabled);
@@ -119,6 +128,7 @@ impl EditorApp {
             }
         }
     }
+    /// Explain a disabled specialized viewer while preserving access to the underlying document state.
     pub(super) fn disabled_document_ui(&self, ui: &mut egui::Ui) -> bool {
         let Some(doc) = self.documents.get(self.active) else {
             return false;
@@ -145,6 +155,7 @@ impl EditorApp {
         }
         false
     }
+    /// Render installed/native feature controls and explicit manifest/settings operations.
     pub(super) fn extensions_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Extensions");
         ui.label("Bundled native features and API v1 project-host tool adapters.");
@@ -270,6 +281,7 @@ impl EditorApp {
         self.extensions.registry = registry;
         self.workbench.invalidate_tools();
     }
+    /// Validate and dispatch an explicit installed-adapter command using its captured registry revision.
     pub(super) fn extension_command(
         &mut self,
         extension: &str,
@@ -313,6 +325,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Render retained adapter output independently of whether its configuration dialog is open.
     pub(super) fn extension_windows(&mut self, ctx: &egui::Context) {
         if self.extensions.output_open {
             egui::Window::new("Extension output")

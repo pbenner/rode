@@ -125,7 +125,7 @@ pub struct Chat {
     deadline: Option<Instant>,
     last_stderr: String,
     serial: u64,
-    model_cursors: Vec<String>,
+    model_pages: controls::ModelPages,
     settings_attempts: usize,
     /// A restored/styled context needs an explicit normal-tone hint when Default is selected.
     response_style_context: bool,
@@ -450,7 +450,7 @@ impl Chat {
         self.last_stderr.clear();
         self.models.clear();
         self.controls.clear();
-        self.model_cursors.clear();
+        self.model_pages.clear();
         self.response_style_context = false;
     }
 
@@ -727,22 +727,7 @@ impl Chat {
             }
             Call::Interrupt => {}
             Call::Models => {
-                for model in controls::models(result) {
-                    if self.models.len() >= 128 {
-                        break;
-                    }
-                    if !self.models.iter().any(|m| m.value.id == model.value.id) {
-                        self.models.push(model);
-                    }
-                }
-                if let Some(cursor) = result["nextCursor"]
-                    .as_str()
-                    .filter(|s| controls::identifier(s, false))
-                    && self.model_cursors.len() < 3
-                    && !self.model_cursors.iter().any(|s| s == cursor)
-                    && self.models.len() < 128
-                {
-                    self.model_cursors.push(cursor.into());
+                if let Some(cursor) = self.model_pages.append(&mut self.models, result) {
                     self.call(
                         "model/list",
                         json!({"limit":32,"includeHidden":false,"cursor":cursor}),

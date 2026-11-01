@@ -389,6 +389,9 @@ pub fn execute(command: Command, invocation: &Invocation, cancel: &AtomicBool) -
     execute_with_prelude(command, invocation, cancel, vec![])
 }
 
+/// Run a captured presentation renderer invocation after an optional helper prelude,
+/// with explicit cancellation, output limits and termination grace; decode only a
+/// successful coordinator reply.
 pub(crate) fn execute_with_prelude(
     command: Command,
     invocation: &Invocation,

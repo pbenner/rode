@@ -13,9 +13,13 @@ use std::sync::Condvar;
 const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 const NOTEBOOK_LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Default)]
+/// Host registry of retained notebook/debugger controllers; completed persistent state
+/// can remain discoverable until an explicit End removes it.
 pub(super) struct Store {
     jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
 }
+/// Mutex-protected runtime view, stable-cell outputs, terminal parsers and replay
+/// events, published under one revision for the exclusive controlling view.
 struct Shared {
     view: View,
     cells: BTreeMap<String, Cell>,
@@ -26,19 +30,26 @@ struct Shared {
     ever_attached: bool,
     finished: bool,
 }
+/// Runtime worker ownership with separate stop, discard and completed flags:
+/// ending computation and removing retained discoverable state are different operations.
 struct Job {
     shared: Mutex<Shared>,
     changed: Condvar,
     input: mpsc::SyncSender<Envelope>,
+    /// Ask the worker to stop its controller, without discarding retained output by itself.
     stop: AtomicBool,
+    /// Remove the registry record after cleanup, including completed persistent runtimes.
     discard: AtomicBool,
+    /// The controller worker has finished; only then can final registry removal be immediate.
     completed: AtomicBool,
     created: Instant,
 }
 impl Store {
+    /// Report any retained runtime record, including completed persistent inspection/output state.
     pub fn live(&self) -> bool {
         !self.jobs.lock().unwrap().is_empty()
     }
+    /// Return retained runtime metadata sorted by creation time without starting a controller.
     pub fn list(&self) -> Vec<Info> {
         let mut infos: Vec<_> = self
             .jobs
@@ -50,6 +61,7 @@ impl Store {
         infos.sort_by_key(|i| i.created);
         infos
     }
+    /// Resolve a captured ID only under its original sandbox-policy fingerprint; reject absence or mismatch.
     fn find(&self, id: &str, policy: &str) -> Result<Arc<Job>> {
         ensure!(valid_id(id), "Invalid runtime ID");
         let job = self
@@ -65,6 +77,8 @@ impl Store {
         );
         Ok(job)
     }
+    /// Signal termination and discard of retained state; running controller cleanup is
+    /// asynchronous, while already completed records can be removed immediately.
     pub fn end(&self, id: &str, policy: &str) -> Result<()> {
         let job = self.find(id, policy)?;
         job.discard.store(true, Ordering::Release);
@@ -75,6 +89,9 @@ impl Store {
         }
         Ok(())
     }
+    /// Validate bounded launch metadata and reserve a registry slot before starting its worker.
+    /// An existing ID with the same policy returns its current metadata; a different policy
+    /// fails. The returned starting record is not proof that subprocess startup succeeded.
     pub fn create(&self, spec: Spec) -> Result<Info> {
         ensure!(
             spec.sources.len() <= 128
@@ -233,6 +250,9 @@ impl Store {
         });
         Ok(info)
     }
+    /// Serve a blocking bidirectional attachment under one exclusive controlling lease.
+    /// A second controller is rejected; disconnect releases the lease and applies the
+    /// record's persistence policy rather than transferring process ownership to the view.
     pub fn attach(&self, mut stream: UnixStream, id: &str, policy: &str) -> Result<()> {
         let job = self.find(id, policy)?;
         {
@@ -866,6 +886,8 @@ fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T>
     Ok(serde_json::from_slice(&bytes[1..])?)
 }
 
+/// Find the service generation owning this captured ID and bridge bounded stdio
+/// messages through its authenticated local socket; require the original policy.
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     let launcher = Launcher {
         executable: current_executable()?,

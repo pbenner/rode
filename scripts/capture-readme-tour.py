@@ -64,6 +64,7 @@ SCENES = (
 
 
 def wait_for(check, message, timeout=30):
+    """Poll a fixture condition until its deadline, raising the supplied diagnostic when it never becomes true."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check():
@@ -73,6 +74,7 @@ def wait_for(check, message, timeout=30):
 
 
 def main():
+    """Create isolated demo projects and deterministic service fixtures, capture native views and clean up owned processes."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "target/readme-demo/captures")
     options = parser.parse_args()
@@ -189,12 +191,14 @@ def main():
         )
 
         def command(value):
+            """Invoke a typed application command through the real command palette and allow a render pass."""
             ui.key("p", ("Control_L", "Shift_L"))
             ui.text(value)
             ui.key("Return")
             time.sleep(0.4)
 
         def open_file(name):
+            """Focus the editor and select a fixture document through the native file picker."""
             ui.key("space", ("Control_L",))
             ui.key("e")
             ui.key("p", ("Control_L",))
@@ -203,12 +207,14 @@ def main():
             time.sleep(0.5)
 
         def capture(window, name):
+            """Move the pointer outside the editor, capture its native window and announce the artifact name."""
             ui.xtest.XTestFakeMotionEvent(ui.display, -1, 1500, 1020, 0)
             ui.x11.XFlush(ui.display)
             ui.screenshot(window, name + ".png")
             print(f"Captured {name}", flush=True)
 
         def sessions():
+            """Read this isolated fixture host service metadata without attaching to or creating a terminal."""
             reply = subprocess.check_output(
                 [str(binary), "--session-service", "request"],
                 input='{"action":"list"}',
@@ -220,6 +226,7 @@ def main():
 
         @contextmanager
         def editor(args, env, name):
+            """Own one demo process/window, capturing failures and reaping only that process on every exit path."""
             with (options.output / f"{name}.log").open("w") as log:
                 process = subprocess.Popen(
                     [str(binary), *args, "--theme", "carbon"], env=env, stdout=log, stderr=log
@@ -268,6 +275,7 @@ def main():
                 command("Notebook: Run all cells")
 
                 def plot_saved():
+                    """Save notebook state and report a real PNG output, surfacing kernel errors instead of waiting indefinitely."""
                     ui.key("s", ("Control_L",))
                     outputs = json.loads(notebook.read_text())["cells"][0]["outputs"]
                     errors = [output for output in outputs if output["output_type"] == "error"]
@@ -340,6 +348,7 @@ def main():
         ) as window:
 
             def connected():
+                """Wait for the SSH fixture title to confirm prepared sandbox state rather than an opening project."""
                 info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
                 return "[Sandbox]" in info and "[Opening project]" not in info
 

@@ -6,6 +6,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Typed navigation/editor command identity shared by bindings and menu labels.
 pub(in crate::app) enum Action {
     Left,
     Down,
@@ -159,6 +160,7 @@ pub(super) const ACTIONS: &[(Action, &str, &str, &str)] = &[
 
 const DEFAULT_LEADER: &str = "Ctrl+Space";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Selected Standard, Emacs or Vim shortcut profile; source text still uses the native editor.
 pub(in crate::app) enum Style {
     #[default]
     Standard,
@@ -226,6 +228,8 @@ impl Style {
         }
     }
 }
+/// Validated per-style profiles and an unapplied style draft; saved changes are
+/// field-merged preferences, while active input state belongs to navigation/editing.
 pub(in crate::app) struct Bindings {
     profiles: [Profile; 3],
     style: Style,
@@ -309,6 +313,7 @@ impl Bindings {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One exact key/modifier combination, optionally requiring an already accepted leader.
 pub(in crate::app) struct Chord {
     pub key: Key,
     pub modifiers: egui::Modifiers,
@@ -381,6 +386,8 @@ struct Entry {
     pending: bool,
     repair: bool,
 }
+/// One style's validated leader and action bindings, with independent editable drafts
+/// and repair flags for malformed persisted values.
 pub(in crate::app) struct Profile {
     style: Style,
     pub leader: Chord,
@@ -633,6 +640,7 @@ impl Profile {
 mod tests {
     use super::*;
     #[derive(Default)]
+    /// In-memory preference fixture for profile validation and independent shortcut-persistence tests.
     pub(super) struct Storage(pub(super) std::collections::BTreeMap<String, String>);
     impl eframe::Storage for Storage {
         fn get_string(&self, key: &str) -> Option<String> {

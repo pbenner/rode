@@ -52,6 +52,8 @@ fn hook(root: &Path, phase: &str, update: &[u8]) -> Result<Output> {
 fn object(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
+/// Apply an immutable stash object and/or remove only the captured selector/object
+/// pair. Pop reports partial success if apply succeeded but safe removal did not.
 pub(super) fn execute(root: &Path, action: Action, reference: &str, oid: &str) -> Result<Output> {
     ensure!(object(oid), "Invalid stash object ID");
     let index: usize = reference

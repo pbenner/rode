@@ -24,6 +24,7 @@ mod vim;
 use text::Text;
 const LIMIT: usize = 8 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Transient Vim editing mode; its cursor/selection changes still use native TextEdit history.
 pub(super) enum Mode {
     #[default]
     Normal,
@@ -57,6 +58,7 @@ pub(in crate::app) struct State {
     pub(super) notice: Option<String>,
 }
 impl State {
+    /// Drop a partial operator/count/command when context or input permission changes.
     pub(in crate::app) fn cancel_sequence(&mut self) {
         self.count = 0;
         self.operator = None;
@@ -96,6 +98,7 @@ impl State {
             ),
         }
     }
+    /// Bind editing state to a document/style, discarding pending input while preserving the register.
     pub(in crate::app) fn bind(&mut self, id: u64, style: Style) {
         if self.doc != Some(id) || self.style != style {
             let register = std::mem::take(&mut self.register);
@@ -601,6 +604,7 @@ fn key_event_undo(redo: bool) -> egui::Event {
 }
 
 impl EditorApp {
+    /// Return the active source-style mode indicator for the editor chrome.
     pub(in crate::app) fn editing_hint<'a>(&self, hint: &'a str) -> &'a str {
         match (self.navigation.bindings.style(), hint) {
             (Style::Emacs, "Ctrl+N") => "",
@@ -614,6 +618,7 @@ impl EditorApp {
             _ => hint,
         }
     }
+    /// Navigate the configured source search in either direction using character cursor offsets.
     pub(in crate::app) fn style_find_match(&mut self, reverse: bool, ctx: &egui::Context) {
         if self.styled_source().is_none() || self.find.is_empty() {
             return;
@@ -676,6 +681,7 @@ impl EditorApp {
             && !self.vaults.locking
             && !egui::Popup::is_any_open(ctx)
     }
+    /// Replay deferred native edit events only into the same eligible document and shortcut style.
     pub(in crate::app) fn replay_style_input(&mut self, ctx: &egui::Context) {
         let id = self.styled_source().map(|(id, _)| id);
         let allowed = self.editing_allowed(ctx);
@@ -683,6 +689,8 @@ impl EditorApp {
             .editing
             .replay(ctx, id, self.navigation.bindings.style(), allowed);
     }
+    /// Translate supported Emacs/Vim input into the existing source edit/undo path;
+    /// modal barriers, terminal focus and unsupported document modes keep their normal input.
     pub(in crate::app) fn editing_shortcuts(&mut self, ctx: &egui::Context) {
         let style = self.navigation.bindings.style();
         if style == Style::Standard || !self.editing_allowed(ctx) {

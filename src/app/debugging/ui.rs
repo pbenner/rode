@@ -3,6 +3,7 @@
 use super::*;
 use std::collections::BTreeSet;
 
+/// Deferred debugger command selected during rendering, applied by the owner afterward.
 pub(super) enum Action {
     Start,
     Stop,
@@ -13,6 +14,7 @@ pub(super) enum Action {
     Evaluate(String),
 }
 #[derive(Default)]
+/// Collected protocol/configuration/inspection intents; sets deduplicate requests from visible rows.
 pub(super) struct Actions {
     pub commands: Vec<Action>,
     pub variables: BTreeSet<i64>,
@@ -22,12 +24,14 @@ pub(super) struct Actions {
     pub breakpoints: BTreeSet<String>,
     pub errors: Vec<String>,
 }
+/// Borrowed host readiness, sandbox mode and theme needed for inspection presentation.
 pub(super) struct Context<'a> {
     pub host: &'a str,
     pub ready: bool,
     pub sandbox: bool,
     pub palette: theme::Palette,
 }
+/// Render cached debugger state and return mutations/inspection requests without performing host I/O.
 pub(super) fn show(
     ui: &mut egui::Ui,
     state: &mut State,

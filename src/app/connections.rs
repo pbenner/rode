@@ -6,6 +6,8 @@
 //! host/project after preparation; recovery metadata alone never authorizes a save.
 use super::*;
 
+/// Former remote path/revision and exact connection identity retained after disconnect.
+/// This is display/reconnect metadata, never authorization for current file I/O.
 pub(super) struct Recovery {
     pub path: String,
     revision: Option<String>,
@@ -51,6 +53,8 @@ impl EditorApp {
         }
     }
 
+    /// Allow recovery binding only when all tabs are unbound and the explicit profile matches
+    /// the previous connection/project identity.
     pub(super) fn can_resume_ssh(&self, profile: &Profile) -> bool {
         self.workspace.is_none()
             && self.documents.iter().all(|doc| doc.path.is_none())
@@ -59,6 +63,8 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(|last| connection_key(last) == connection_key(profile))
     }
+    /// Reconnect the selected/last profile, using common dirty-buffer guards when local
+    /// state cannot safely be treated as recovery for that same connection.
     pub(super) fn reconnect_ssh(&mut self, ctx: &egui::Context) {
         let profile = self
             .workspace
@@ -79,6 +85,8 @@ impl EditorApp {
             self.set_dialog(Dialog::Connect);
         }
     }
+    /// Unbind remote paths before invalidating host work and dropping transport ownership;
+    /// retain buffers and recovery metadata for Save As or an explicit matching reconnect.
     pub(super) fn detach_ssh(&mut self, ctx: &egui::Context) {
         let Some(remote) = self.workspace.as_ref().and_then(|w| w.remote.clone()) else {
             return;
@@ -128,6 +136,7 @@ impl EditorApp {
         self.status = "SSH disconnected · local mode".into();
         self.focus_editor(ctx);
     }
+    /// Restore bound paths/revisions only for recovery records matching the prepared connection identity.
     pub(super) fn restore_ssh_buffers(&mut self) {
         let Some(remote) = self
             .workspace

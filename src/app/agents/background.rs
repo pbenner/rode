@@ -4,7 +4,11 @@ use super::*;
 use rode_agent_core::service::Info;
 use std::sync::mpsc;
 
+mod rows;
+
 #[derive(Default)]
+/// Cached live-agent discovery and at most one captured worker; confirmed End
+/// requests keep their original host identity across project changes.
 pub(super) struct Running {
     items: Vec<Info>,
     pending: Option<mpsc::Receiver<Result<rode_session::Response, String>>>,
@@ -30,6 +34,7 @@ impl Running {
         };
     }
 }
+/// Render the acknowledged lifetime toggle and submit an explicit in-place policy change.
 pub(super) fn persistence(
     ui: &mut egui::Ui,
     chat: &mut Chat,
@@ -58,6 +63,7 @@ pub(super) fn persistence(
     { chat.notice(&error.to_string()); }
 }
 impl EditorApp {
+    /// Open live-session discovery and request metadata without starting a coding agent.
     pub(in crate::app) fn open_background_agents(&mut self, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Agents) {
             return;
@@ -65,6 +71,7 @@ impl EditorApp {
         self.set_dialog(Dialog::AgentSessions);
         self.refresh_background_agents(None, ctx);
     }
+    /// Queue either read-only discovery or an already confirmed termination on the captured host.
     fn refresh_background_agents(&mut self, end: Option<Info>, ctx: &egui::Context) {
         if self.agents.running.pending.is_some() {
             return;
@@ -93,6 +100,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Drain discovery/mutation acknowledgements and preserve shutdown errors for a waiting exit.
     pub(super) fn poll_background_agents(&mut self, ctx: &egui::Context) {
         let result = self
             .agents
@@ -143,37 +151,50 @@ impl EditorApp {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
+    /// Render cached live sessions and their compatibility constraints; attachments
+    /// retain the original project/sandbox identity and End requires confirmation.
     pub(in crate::app) fn background_agents_dialog(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
     ) {
         let palette = self.themes.active().palette;
-        ui.heading("Running agents");
         let (root, host, _) = self.agent_location();
         let launch = self.agent_launch();
         let mode = launch.plan.label();
-        ui.label(palette.tag(host));
-        ui.add(egui::Label::new(format!("Current project: {root}")).wrap());
-        ui.label(format!("Current mode: {mode}"));
-        ui.label("Persist keeps work running after its controlling view closes. Attach requires the original project and sandbox settings. Only one window can control a chat. Permission requests wait for you; they are never automatically approved.");
-        if ui
-            .add_enabled(
-                self.agents.running.pending.is_none(),
-                egui::Button::new("Refresh"),
-            )
-            .clicked()
-        {
-            self.refresh_background_agents(None, ctx);
-        }
+        ui.horizontal(|ui| {
+            ui.heading("Running agents");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        self.agents.running.pending.is_none(),
+                        egui::Button::new("Refresh"),
+                    )
+                    .clicked()
+                {
+                    self.refresh_background_agents(None, ctx);
+                }
+                if self.agents.running.pending.is_some() {
+                    ui.spinner();
+                }
+            });
+        });
+        ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
+        ui.add(egui::Label::new(format!("Current project: {root}")).truncate())
+            .on_hover_text(&root);
+        ui.add(egui::Label::new(RichText::new("Live chats on this host. Attach uses the original project and sandbox.").small().color(palette.muted)).wrap())
+            .on_hover_text("Persist keeps work running after its controlling view closes. Only one window can control a chat. Permission requests wait for you; they are never automatically approved.");
         if let Some(info) = self.agents.running.confirm.clone() {
             ui.separator();
-            ui.colored_label(
-                palette.error,
-                format!(
-                    "End agent '{}' in {}? This stops its current task and tools.",
-                    info.name, info.root
-                ),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "End agent '{}' in {}? This stops its current task and tools.",
+                        info.name, info.root
+                    ))
+                    .color(palette.error),
+                )
+                .wrap(),
             );
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
@@ -195,71 +216,63 @@ impl EditorApp {
             ui.colored_label(palette.error, &self.agents.running.error);
         }
         let policy = crate::sessions::fingerprint(&launch.plan);
-        let mut attach = None;
-        egui::ScrollArea::vertical()
+        let context = rows::Context {
+            current: self
+                .agents
+                .chat
+                .native_id()
+                .filter(|_| self.agents.chat.connected() || self.agents.chat.busy),
+            root: &root,
+            policy: &policy,
+            mode,
+            can_leave: !self.agents.chat.busy || self.agents.chat.persistent(),
+        };
+        let selected = egui::ScrollArea::vertical()
             .id_salt("running-agents")
-            .max_height((ctx.content_rect().height() - 380.).clamp(140., 520.))
+            .auto_shrink([false, true])
+            .min_scrolled_height(0.)
+            .max_height((ctx.content_rect().height() - 300.).clamp(140., 520.))
             .show(ui, |ui| {
                 if self.agents.running.items.is_empty() {
-                    ui.label("No running agents on this host. Saved conversations are available through History.");
+                    ui.add_space(16.);
+                    ui.strong("No running agents on this host");
+                    ui.add(
+                        egui::Label::new("Saved conversations are available through History.")
+                            .wrap(),
+                    );
+                    ui.add_space(16.);
                 }
-                for info in self.agents.running.items.clone() {
-                    let current = self.agents.chat.native_id() == Some(info.id.as_str())
-                        && (self.agents.chat.connected() || self.agents.chat.busy);
-                    let compatible = info.root == root && info.policy == policy;
-                    let can_leave = !self.agents.chat.busy || self.agents.chat.persistent();
-                    let enabled = current || (compatible && !info.attached && can_leave);
-                    ui.group(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.strong(&info.name);
-                            ui.small(info.provider.label());
-                            ui.small(if info.persistent { "PERSISTENT" } else { "UNTIL VIEW CLOSES" });
-                            if ui
-                                .add_enabled(enabled, egui::Button::new(if current { "Show chat" } else { "Attach" }))
-                                .on_disabled_hover_text("See the explanation below this agent.")
-                                .clicked()
-                            {
-                                if current {
-                                    self.dialog = Dialog::None;
-                                    self.workbench.panel = Some(Panel::Agent);
-                                    self.focus_pane(navigation::Pane::Tools, ctx);
-                                } else {
-                                    attach = Some(info.clone());
-                                }
-                            }
-                            if ui.button("End").clicked() {
-                                self.agents.running.confirm = Some(info.clone());
-                            }
-                        });
-                        ui.label(palette.tag(format!("Agent mode: {}", info.mode)));
-                        ui.add(egui::Label::new(format!("Project: {}", info.root)).wrap());
-                        ui.label(&info.status);
-                        if !enabled {
-                            ui.strong("Cannot attach yet");
-                            if info.root != root {
-                                ui.add(egui::Label::new("Different project: open the agent's project shown above with its original sandbox settings.").wrap());
-                            } else if info.policy != policy {
-                                if info.mode != mode {
-                                    let action = if info.mode.starts_with("NORMAL MODE") {
-                                        "Reopen this project with sandboxing off."
-                                    } else {
-                                        "Reopen this project with sandboxing on and its original access settings."
-                                    };
-                                    ui.add(egui::Label::new(format!("Different sandbox mode: this agent uses {}, but this window uses {mode}. {action} A running agent cannot move into or out of a sandbox.", info.mode)).wrap());
-                                } else {
-                                    ui.add(egui::Label::new("Different sandbox settings: the mode matches, but the original access policy does not. Restore the original folder access, read-only and network settings in View → Project settings / sandbox access.").wrap());
-                                }
-                            }
-                            if info.attached {
-                                ui.add(egui::Label::new("Controlled by another RODE window: detach it there before attaching here. Hiding the chat panel does not detach it.").wrap());
-                            }
-                            if !can_leave {
-                                ui.add(egui::Label::new("Your current chat is working with Persist off. Enable Persist or stop its current turn before switching to this agent.").wrap());
-                            }
-                        }
-                    });
+                rows::show(ui, &self.agents.running.items, &context, palette)
+            })
+            .inner;
+        let mut attach = None;
+        if let Some((id, action)) = selected {
+            match action {
+                rows::Action::Show => {
+                    self.dialog = Dialog::None;
+                    self.workbench.panel = Some(Panel::Agent);
+                    self.focus_pane(navigation::Pane::Tools, ctx);
                 }
-            });
+                rows::Action::Attach => {
+                    attach = self
+                        .agents
+                        .running
+                        .items
+                        .iter()
+                        .find(|info| info.id == id)
+                        .cloned();
+                }
+                rows::Action::End => {
+                    self.agents.running.confirm = self
+                        .agents
+                        .running
+                        .items
+                        .iter()
+                        .find(|info| info.id == id)
+                        .cloned();
+                }
+            }
+        }
         if let Some(info) = attach {
             let launch = self.agent_launch();
             let wake = ctx.clone();

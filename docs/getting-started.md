@@ -9,7 +9,11 @@ Install a stable Rust toolchain (Rust 1.88 or newer), then:
 ```sh
 cargo install --locked --path .
 rode /path/to/project
+# Or open one existing file directly:
+rode /path/to/project/main.py
 ```
+
+A directory opens as a project. A file opens immediately in its normal editor or preview, with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
 
 This installs **both `rode` and `rode-sessiond`** into Cargo's binary directory, normally `~/.cargo/bin`, without root access. RODE discovers the sibling helper for SSH persistent terminals on compatible Linux hosts. For older/different Linux hosts, build a static helper with `scripts/build-sessiond.sh`; see [terminal setup](terminals.md#remote-helper-and-packaging).
 
@@ -29,7 +33,7 @@ Earlier Linux release smoke measurements (before the persistent-terminal service
 
 ## First project
 
-Launch `rode /path/to/project`, or use **File → Open project folder**. Use **Ctrl+P** to open a file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
+Launch `rode /path/to/project`, open a file directly with `rode /path/to/file`, or use **File → Open project folder**. Use **Ctrl+P** to open another file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
 
 Use **New** in the terminal header for multiple native shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). Enable **Persist** for shells that should survive exit; new shells default to ending when their last view closes.
 

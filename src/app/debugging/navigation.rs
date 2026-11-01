@@ -2,6 +2,7 @@
 //! resume. Serialize debugger-owned source opens; editor I/O stays host-aware.
 use super::*;
 
+/// Deferred host source location tied to one stopped inspection epoch; coordinates are one-based.
 pub(super) struct Target {
     path: String,
     row: usize,
@@ -10,6 +11,7 @@ pub(super) struct Target {
     requested: bool,
 }
 impl Target {
+    /// Capture a source location and stopped epoch before a potentially asynchronous file open.
     pub(super) fn new(path: String, row: usize, column: usize, epoch: u64) -> Self {
         Self {
             path,
@@ -21,6 +23,8 @@ impl Target {
     }
 }
 impl EditorApp {
+    /// Complete at most one host-aware source read while the same pause/frame epoch
+    /// remains current; resume, supersession or a failed read cancels the pending jump.
     pub(super) fn resolve_debug_source(&mut self, client: &Client, ctx: &egui::Context) {
         if client.phase != Phase::Paused
             || self

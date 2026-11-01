@@ -6,6 +6,7 @@
 use super::*;
 
 impl EditorApp {
+    /// Edit a project settings draft and validate/apply explicit changes before invalidating tool epochs.
     pub(in crate::app) fn settings_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.heading("Code tools");
@@ -229,6 +230,7 @@ impl EditorApp {
             };
         }
     }
+    /// Queue changed project settings and sandbox defaults in shared preference storage.
     pub(in crate::app) fn persist_project_preferences(
         &mut self,
         storage: Option<&mut (dyn eframe::Storage + 'static)>,
@@ -250,6 +252,8 @@ impl EditorApp {
             );
         }
     }
+    /// Select host/project-keyed settings after preparation, retain the actual requested
+    /// sandbox options and refresh only tools needed by the visible context.
     pub(in crate::app) fn load_project_tools(&mut self, ctx: &egui::Context) {
         let Some(w) = &self.workspace else {
             return;
@@ -279,6 +283,7 @@ impl EditorApp {
             self.refresh_git(ctx);
         }
     }
+    /// Serialize the host transport identity and project path into the settings-map key.
     pub(in crate::app) fn project_settings_key(&self, path: &str, remote: bool) -> String {
         let host = self
             .workspace
@@ -296,6 +301,7 @@ impl EditorApp {
             });
         serde_json::to_string(&(host, path)).unwrap_or_default()
     }
+    /// Return requested grants saved for exactly this host/project, or None if none were recorded.
     pub(in crate::app) fn saved_sandbox_for(
         &self,
         path: &str,
@@ -306,6 +312,7 @@ impl EditorApp {
             .get(&self.project_settings_key(path, remote))
             .map(|p| p.sandbox.clone())
     }
+    /// Collect saved project policies only for the currently selected local or SSH host identity.
     pub(in crate::app) fn sandbox_policies_for_host(
         &self,
         remote: bool,
@@ -325,6 +332,7 @@ impl EditorApp {
             })
             .collect()
     }
+    /// Return configured queue/cancel executables, substituting squeue/scancel for blank overrides.
     pub(in crate::app) fn slurm_programs(&self) -> (String, String) {
         (
             if self.workbench.prefs.slurm_queue.trim().is_empty() {
@@ -339,6 +347,7 @@ impl EditorApp {
             },
         )
     }
+    /// Edit host-side Slurm executable/wrapper paths in the uncommitted project settings draft.
     pub(in crate::app) fn slurm_settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Slurm executable paths / wrappers", |ui| {
             ui.label("Programs on the project host; wrappers may load site modules.");

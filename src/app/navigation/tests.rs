@@ -1,3 +1,5 @@
+//! Pane focus, leader routing and modal/terminal input-boundary regressions.
+
 use super::*;
 #[test]
 fn defaults_avoid_alt_and_require_the_prefix_for_typing_keys() {

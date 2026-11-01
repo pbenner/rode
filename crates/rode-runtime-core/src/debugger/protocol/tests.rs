@@ -1,3 +1,5 @@
+//! DAP capability, request ordering, backpressure and stopped-epoch inspection regressions.
+
 use super::*;
 fn event(client: &mut Client, name: &str, body: Value) {
     client

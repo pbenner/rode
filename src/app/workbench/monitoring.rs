@@ -3,27 +3,39 @@
 use super::*;
 use std::collections::VecDeque;
 
+mod dashboard;
+
 const HISTORY_LIMIT: usize = 120;
 
 #[derive(Default)]
+/// Bounded successful telemetry snapshots and derived rate baselines. Request timing
+/// is separate from sample timing so failed polls do not corrupt CPU/network deltas.
 pub(super) struct State {
     pub(super) monitor: Option<project::Monitor>,
     pub(super) monitor_busy: bool,
+    /// Last request completion for scheduling, including failures; not the rate baseline.
     pub(super) monitor_last: Option<Instant>,
     pub(super) monitor_error: String,
     cpu_usage: Vec<Option<f32>>,
     pub(super) history: VecDeque<Reading>,
+    /// Received/sent bytes per second from two recent successful counter snapshots.
     network_rate: Option<(f32, f32)>,
 }
 
+/// One monotonic-time chart sample; utilization values are percentages in 0–100
+/// and None represents missing data, not measured zero activity.
 pub(super) struct Reading {
+    /// Successful collection time, used directly for chart spacing and rate deltas.
     at: Instant,
     cpu: Option<f32>,
     busiest: Option<f32>,
+    /// Used physical RAM as a percentage, rather than a byte count.
     memory: Option<f32>,
     gpus: Vec<GpuReading>,
 }
 
+/// One device-order sample identified by its name; duplicate model names remain
+/// independent through their device index.
 struct GpuReading {
     name: String,
     usage: Option<f32>,
@@ -31,6 +43,9 @@ struct GpuReading {
 }
 
 impl State {
+    /// Derive CPU percentages and network bytes/second from a recent successful sample,
+    /// then append bounded history. Counter resets, zero deltas and long pauses produce
+    /// unavailable rates instead of invented zeroes; callers provide increasing sample times.
     pub(super) fn record(&mut self, sample: project::Monitor, now: Instant, interval: Duration) {
         // Request scheduling also advances on errors. Rates must use the last successful sample.
         let elapsed = self.history.back().map(|r| now.duration_since(r.at));
@@ -88,23 +103,27 @@ impl State {
     }
 }
 
+/// Convert a byte/count ratio to a clamped percentage; a zero total means unavailable.
 fn percentage(used: u64, total: u64) -> Option<f32> {
     (total > 0).then(|| (100. * used as f64 / total as f64).clamp(0., 100.) as f32)
 }
 
+/// Reject nonfinite measurements and clamp valid driver values to the chart range.
 fn valid_percentage(value: f32) -> Option<f32> {
     value.is_finite().then(|| value.clamp(0., 100.))
 }
 
+/// Format a percentage or explicit unavailable text for both legends and current readings.
 fn percent_label(value: Option<f32>) -> String {
     value.map_or_else(|| "Unavailable".into(), |v| format!("{v:.1}%"))
 }
 
 impl EditorApp {
+    /// Render cached host metadata, responsive chart cards and expandable details;
+    /// sampling is scheduled separately by the visible-workbench tick.
     pub(in crate::app) fn monitor_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         let state = &self.workbench.monitoring;
-        let secondary = secondary_color(palette);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Host overview").size(18.).color(palette.text));
             if state.monitor_busy {
@@ -148,102 +167,10 @@ impl EditorApp {
             ));
         });
         let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
-        let times: Vec<_> = state.history.iter().map(|r| r.at).collect();
-        let series = |name, color, values| Series {
-            name,
-            color,
-            values,
-        };
-        card(ui, palette, |ui| {
-            heading(ui, "CPU", latest.cpu, palette);
-            let curves = [
-                series(
-                    "Overall",
-                    palette.accent,
-                    state.history.iter().map(|r| r.cpu).collect(),
-                ),
-                series(
-                    "Busiest core",
-                    secondary,
-                    state.history.iter().map(|r| r.busiest).collect(),
-                ),
-            ];
-            legend(ui, &curves);
-            chart(ui, &times, &curves, interval, palette);
-            ui.label(format!(
-                "{} logical cores",
-                sample.cpus.len().saturating_sub(1)
-            ));
-            ui.collapsing("Per-core activity", |ui| {
-                let columns = if ui.available_width() >= 650. {
-                    4
-                } else if ui.available_width() >= 330. {
-                    2
-                } else {
-                    1
-                };
-                let width = (ui.available_width() - (columns - 1) as f32 * 8.) / columns as f32;
-                egui::Grid::new("core-meters")
-                    .num_columns(columns)
-                    .spacing([8., 6.])
-                    .show(ui, |ui| {
-                        for (index, value) in state.cpu_usage.iter().skip(1).enumerate() {
-                            ui.add(
-                                egui::ProgressBar::new(value.unwrap_or(0.) / 100.)
-                                    .fill(palette.accent)
-                                    .desired_width(width)
-                                    .text(format!("CPU {index} · {}", percent_label(*value))),
-                            );
-                            if (index + 1) % columns == 0 {
-                                ui.end_row();
-                            }
-                        }
-                    });
-            });
-        });
-        for (index, gpu) in sample.gpus.iter().enumerate() {
-            card(ui, palette, |ui| {
-                heading(ui, &gpu.name, gpu.usage.and_then(valid_percentage), palette);
-                // Keep identical models independent; the backend's device order identifies each GPU.
-                let readings: Vec<_> = state
-                    .history
-                    .iter()
-                    .map(|r| r.gpus.get(index).filter(|g| g.name == gpu.name))
-                    .collect();
-                let curves = [
-                    series(
-                        "GPU usage",
-                        palette.accent,
-                        readings.iter().map(|g| g.and_then(|g| g.usage)).collect(),
-                    ),
-                    series(
-                        "VRAM",
-                        secondary,
-                        readings.iter().map(|g| g.and_then(|g| g.memory)).collect(),
-                    ),
-                ];
-                legend(ui, &curves);
-                chart(ui, &times, &curves, interval, palette);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(match gpu.memory_used.zip(gpu.memory_total) {
-                        Some((used, total)) if total > 0 => {
-                            format!("VRAM {} / {}", bytes(used), bytes(total))
-                        }
-                        _ => "VRAM unavailable".into(),
-                    });
-                    ui.label(gpu.temperature.filter(|v| v.is_finite()).map_or_else(
-                        || "Temperature unavailable".into(),
-                        |v| format!("{v:.0} °C"),
-                    ));
-                    ui.label(
-                        gpu.power
-                            .filter(|v| v.is_finite())
-                            .map_or_else(|| "Power unavailable".into(), |v| format!("{v:.1} W")),
-                    );
-                });
-            });
-        }
+        ui.add_space(12.);
+        dashboard::show(ui, state, interval, palette);
         if sample.gpus.is_empty() || !sample.gpu_note.is_empty() {
+            ui.add_space(12.);
             card(ui, palette, |ui| {
                 if sample.gpus.is_empty() {
                     ui.label("No GPU telemetry available on this host.");
@@ -253,29 +180,7 @@ impl EditorApp {
                 }
             });
         }
-        card(ui, palette, |ui| {
-            heading(ui, "Memory", latest.memory, palette);
-            let curves = [series(
-                "RAM",
-                palette.accent,
-                state.history.iter().map(|r| r.memory).collect(),
-            )];
-            chart(ui, &times, &curves, interval, palette);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "RAM {} / {}",
-                    bytes(sample.memory_total.saturating_sub(sample.memory_available)),
-                    bytes(sample.memory_total)
-                ));
-                if sample.swap_total > 0 {
-                    ui.label(format!(
-                        "Swap {} / {}",
-                        bytes(sample.swap_total.saturating_sub(sample.swap_free)),
-                        bytes(sample.swap_total)
-                    ));
-                }
-            });
-        });
+        ui.add_space(12.);
         card(ui, palette, |ui| {
             ui.label(RichText::new("Network & storage").size(15.));
             ui.label(state.network_rate.map_or_else(
@@ -305,6 +210,32 @@ impl EditorApp {
                 );
             }
         });
+        ui.collapsing("Per-core activity", |ui| {
+            let columns = if ui.available_width() >= 650. {
+                4
+            } else if ui.available_width() >= 330. {
+                2
+            } else {
+                1
+            };
+            let width = (ui.available_width() - (columns - 1) as f32 * 8.) / columns as f32;
+            egui::Grid::new("core-meters")
+                .num_columns(columns)
+                .spacing([8., 6.])
+                .show(ui, |ui| {
+                    for (index, value) in state.cpu_usage.iter().skip(1).enumerate() {
+                        ui.add(
+                            egui::ProgressBar::new(value.unwrap_or(0.) / 100.)
+                                .fill(palette.accent)
+                                .desired_width(width)
+                                .text(format!("CPU {index} · {}", percent_label(*value))),
+                        );
+                        if (index + 1) % columns == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        });
         ui.collapsing("Processes · CPU lifetime average", |ui| {
             let command_width = (ui.available_width() - 165.).max(30.);
             egui::Grid::new("process-table")
@@ -330,8 +261,8 @@ impl EditorApp {
     }
 }
 
+/// Frame content within the available column width; the caller owns spacing between cards.
 fn card(ui: &mut egui::Ui, palette: theme::Palette, contents: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(10.);
     egui::Frame::new()
         .fill(palette.panel)
         .stroke(Stroke::new(1_f32, palette.border))
@@ -343,24 +274,42 @@ fn card(ui: &mut egui::Ui, palette: theme::Palette, contents: impl FnOnce(&mut e
         });
 }
 
+/// Reserve equal-height title/value regions so long device names and unavailable
+/// measurements cannot shift chart baselines across a row.
 fn heading(ui: &mut egui::Ui, title: &str, value: Option<f32>, palette: theme::Palette) {
     ui.horizontal(|ui| {
-        let width = (ui.available_width() - 140.).max(20.);
-        ui.add_sized(
-            [width, 30.],
-            egui::Label::new(RichText::new(title).size(15.).color(palette.text)).truncate(),
-        )
-        .on_hover_text(title);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new(percent_label(value))
-                    .size(if value.is_some() { 26. } else { 16. })
-                    .color(palette.text),
-            );
-        });
+        let width = (ui.available_width() - 128.).max(20.);
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, 34.),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(width);
+                ui.set_min_height(34.);
+                ui.add(
+                    egui::Label::new(RichText::new(title).size(15.).color(palette.text))
+                        .truncate()
+                        .show_tooltip_when_elided(false),
+                )
+                .on_hover_text(title);
+            },
+        );
+        ui.allocate_ui_with_layout(
+            egui::vec2(120., 34.),
+            Layout::right_to_left(Align::Center),
+            |ui| {
+                ui.set_min_height(34.);
+                ui.label(
+                    RichText::new(percent_label(value))
+                        .size(if value.is_some() { 26. } else { 16. })
+                        .color(palette.text),
+                );
+            },
+        );
     });
 }
 
+/// Named percentage samples aligned positionally with the chart timestamps;
+/// None breaks a curve rather than interpolating an unavailable reading.
 struct Series<'a> {
     name: &'a str,
     color: egui::Color32,
@@ -381,24 +330,42 @@ fn secondary_color(palette: theme::Palette) -> egui::Color32 {
         .unwrap()
 }
 
+/// Render equal-width series labels with full tooltips when compact columns elide text.
 fn legend(ui: &mut egui::Ui, series: &[Series<'_>]) {
-    ui.horizontal_wrapped(|ui| {
+    let count = series.len().max(1);
+    let width =
+        (ui.available_width() - (count - 1) as f32 * ui.spacing().item_spacing.x) / count as f32;
+    ui.horizontal(|ui| {
         for series in series {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(16., 14.), Sense::hover());
-            ui.painter().line_segment(
-                [rect.left_center(), rect.right_center()],
-                Stroke::new(2_f32, series.color),
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 20.),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_min_width(width);
+                    ui.set_min_height(20.);
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(16., 14.), Sense::hover());
+                    ui.painter().line_segment(
+                        [rect.left_center(), rect.right_center()],
+                        Stroke::new(2_f32, series.color),
+                    );
+                    let label = format!(
+                        "{} {}",
+                        series.name,
+                        percent_label(series.values.last().copied().flatten())
+                    );
+                    ui.add(
+                        egui::Label::new(RichText::new(&label).size(12.))
+                            .truncate()
+                            .show_tooltip_when_elided(false),
+                    )
+                    .on_hover_text(label);
+                },
             );
-            ui.label(format!(
-                "{} {}",
-                series.name,
-                percent_label(series.values.last().copied().flatten())
-            ));
-            ui.add_space(8.);
         }
     });
 }
 
+/// Format elapsed seconds into compact seconds/minutes/hours labels.
 fn duration_label(seconds: f32) -> String {
     let seconds = seconds.round() as u64;
     if seconds >= 3600 {
@@ -428,6 +395,8 @@ fn segments(times: &[Instant], values: &[Option<f32>], gap: Duration) -> Vec<Vec
     result
 }
 
+/// Paint a 16:9 percentage plot with fixed axis gutters and real timestamp spacing.
+/// Missing values and long sampling gaps split curves; hovering inspects the nearest sample.
 fn chart(
     ui: &mut egui::Ui,
     times: &[Instant],
@@ -435,15 +404,11 @@ fn chart(
     interval: Duration,
     palette: theme::Palette,
 ) {
-    let height = if ui.available_width() < 450. {
-        130.
-    } else {
-        155.
-    };
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height + 30.),
-        Sense::hover(),
-    );
+    // The plot itself is 16:9; reserve the same axis gutters at every width.
+    let width = ui.available_width();
+    let plot_height = (width - 50.).max(1.) * 9. / 16.;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, plot_height + 32.), Sense::hover());
     let plot = egui::Rect::from_min_max(
         rect.min + egui::vec2(42., 8.),
         rect.max - egui::vec2(8., 24.),
@@ -576,6 +541,119 @@ fn chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_reflows_without_stretching_plots_or_misaligning_cards() {
+        for gpu_count in [0, 4] {
+            let mut state = State::default();
+            let mut reading = sample(100);
+            reading.gpus = (0..gpu_count)
+                .map(|index| project::Gpu {
+                    name: format!("GPU {index}: a long descriptive device name"),
+                    usage: (index != 1).then_some(60.),
+                    memory_used: Some(200),
+                    memory_total: Some(1000),
+                    ..Default::default()
+                })
+                .collect();
+            let interval = Duration::from_secs(2);
+            let now = Instant::now() - interval;
+            state.record(reading, now, interval);
+            let mut next = state.monitor.clone().unwrap();
+            next.cpus = sample(if gpu_count == 0 { 100 } else { 200 }).cpus;
+            state.record(next, now + interval, interval);
+            let palette = theme::Palette::default();
+            for (width, columns) in [(320., 1), (780., 2), (1200., 3), (2200., 3)] {
+                let ctx = egui::Context::default();
+                theme::install(&ctx, palette);
+                let origin = std::cell::Cell::new(egui::Pos2::ZERO);
+                let frame = || {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 2600.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                let bounds = ui.max_rect();
+                                origin.set(ui.next_widget_position());
+                                dashboard::show(ui, &state, interval, palette);
+                                assert!(
+                                    ui.min_rect().right() <= bounds.right() + 1.,
+                                    "Dashboard overflow at {width}"
+                                );
+                            });
+                        },
+                    )
+                };
+                frame();
+                let output = frame();
+                let plots: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == palette.background && rect.rect.height() < 600. =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(plots.len(), gpu_count + 2, "Missing plots at {width}");
+                for plot in &plots {
+                    assert!(
+                        (plot.aspect_ratio() - 16. / 9.).abs() < 0.01,
+                        "Stretched plot at {width}: {plot:?}"
+                    );
+                    assert!(plot.width() <= 560.);
+                }
+                let mut starts: Vec<f32> = vec![];
+                for plot in &plots {
+                    if !starts.iter().any(|x| (x - plot.left()).abs() < 1.) {
+                        starts.push(plot.left());
+                    }
+                }
+                let columns = columns.min(gpu_count + 2);
+                assert_eq!(
+                    starts.len(),
+                    columns,
+                    "Wrong column count at {width}: {starts:?}"
+                );
+                for row in plots.chunks(columns) {
+                    assert!(
+                        row.iter()
+                            .all(|plot| (plot.top() - row[0].top()).abs() < 1.),
+                        "Charts in the same row are misaligned at {width}: {row:?}"
+                    );
+                }
+                let cards: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.fill == palette.panel => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(cards.len(), gpu_count + 2);
+                assert!(
+                    (cards[0].top() - origin.get().y).abs() < 1.,
+                    "Gap above the dashboard at {width}: {:?}",
+                    cards[0]
+                );
+                for row in cards.chunks(columns) {
+                    assert!(
+                        row.iter()
+                            .all(|card| (card.height() - row[0].height()).abs() < 1.),
+                        "Cards in the same row have uneven heights at {width}: {row:?}"
+                    );
+                }
+            }
+        }
+    }
 
     fn sample(ticks: u64) -> project::Monitor {
         project::Monitor {

@@ -2,6 +2,7 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 impl EditorApp {
+    /// Bind debugger coordinator terminal events to window PTY views using their stable stream identities.
     pub(super) fn handle_debug_terminal(
         &mut self,
         event: DebugEvent,

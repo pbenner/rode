@@ -11,6 +11,8 @@ const TAB_MIN: f32 = 140.0;
 const TAB_MAX: f32 = 260.0;
 
 #[derive(Default)]
+/// Window-local tab overflow, reveal and focus state. Stable document IDs,
+/// rather than vector positions, survive tab reordering.
 pub(super) struct Tabs {
     active: Option<u64>,
     reveal: Option<u64>,
@@ -19,14 +21,18 @@ pub(super) struct Tabs {
     width: f32,
 }
 impl Tabs {
+    /// Discard a pending editor focus transfer when another interaction takes ownership.
     pub(in crate::app) fn cancel_focus(&mut self) {
         self.focus = None;
     }
 }
 #[derive(Clone, Copy)]
+/// Stable document identity carried through a tab drag-and-drop operation.
 struct TabDrag(u64);
 
 impl EditorApp {
+    /// Render a fixed-height footer, reserving the right edge for the appearance menu
+    /// and document metadata before truncating connection/status text into the remainder.
     pub(super) fn statusbar(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let roomy = ctx.content_rect().width() >= 1100.;
@@ -41,35 +47,20 @@ impl EditorApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let full_theme = format!("Theme: {}", self.themes.active().name);
                     let label = elide(&full_theme, if roomy { 26 } else { 18 });
-                    ui.menu_button(palette.tag(label), |ui| self.appearance_menu(ui, ctx))
-                        .response
+                    // The compact footer has 19 points of content height; normal
+                    // menu-button padding would extend below the window edge.
+                    egui::containers::menu::MenuButton::from_button(
+                        egui::Button::new(palette.tag(label))
+                            .small()
+                            .min_size(egui::vec2(0., 19.)),
+                    )
+                        .ui(ui, |ui| self.appearance_menu(ui, ctx))
+                        .0
                         .on_hover_text(format!(
                             "{full_theme}\nSyntax: {}\nChange interface or syntax theme · saved automatically", self.themes.active_syntax().name
                         ));
                     if roomy {
                         ui.label(palette.tag("RODE 0.1"));
-                    }
-                    if ui.small_button(palette.tag(if roomy { "Environment" } else { "Env" }))
-                        .on_hover_text(format!("Project runtimes and variables\n{}", self.workbench_python_label()))
-                        .clicked() {
-                        self.toggle_panel(Panel::Environment, ctx);
-                    }
-                    let count = self.current_issue_count();
-                    if ui
-                        .small_button(
-                            RichText::new(format!("! {count}"))
-                                .monospace()
-                                .size(11.)
-                                .color(if count > 0 {
-                                    palette.error
-                                } else {
-                                    palette.muted
-                                }),
-                        )
-                        .on_hover_text("Problems")
-                        .clicked()
-                    {
-                        self.toggle_panel(Panel::Problems, ctx);
                     }
                     if let Some(doc) = self.documents.get(self.active) {
                         if let Some(book)=&doc.notebook {ui.label(palette.tag(format!("Notebook · {} cells",book.book.cells.len())));}
@@ -157,12 +148,15 @@ impl EditorApp {
             });
     }
 
+    /// Copy the selected project terminal or SSH authentication terminal's visible contents.
     pub(super) fn copy_terminal_output(&self, ctx: &egui::Context) {
         if let Some(terminal) = self.terminal.as_ref().or(self.ssh_master.as_ref()) {
             ctx.copy_text(terminal.contents());
         }
     }
 
+    /// Render terminal controls with persistence anchored at the right edge;
+    /// compact widths move secondary actions into the overflow menu.
     pub(super) fn terminal_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let wide = ui.available_width() >= 700.;
@@ -286,10 +280,12 @@ impl EditorApp {
         });
     }
 
+    /// Request that the next tab-strip layout scroll the given document into view.
     pub(super) fn reveal_tab(&mut self, id: u64) {
         self.tabs.reveal = Some(id);
     }
 
+    /// Wrap the active tab index in either direction and transfer focus to its editor.
     pub(super) fn cycle_tab(&mut self, direction: isize, ctx: &egui::Context) {
         if self.documents.is_empty() {
             return;
@@ -299,6 +295,8 @@ impl EditorApp {
         self.tabs.reveal = Some(self.documents[self.active].id);
         self.focus_editor(ctx);
     }
+    /// Request source-editor focus for the active document, including a later frame
+    /// when a closing modal still blocks the editor layer.
     pub(super) fn focus_editor(&mut self, ctx: &egui::Context) {
         if self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal() {
             return;
@@ -318,6 +316,7 @@ impl EditorApp {
             ctx.request_repaint();
         }
     }
+    /// Consume the pending document focus request only when this editor can accept input.
     pub(super) fn take_editor_focus(&mut self, ui: &egui::Ui, ctx: &egui::Context) -> Option<u64> {
         self.tabs.focus?;
         if self.dialog != Dialog::None
@@ -336,6 +335,7 @@ impl EditorApp {
         }
     }
 
+    /// Move a stable document ID around another tab while preserving the selected document.
     pub(super) fn reorder_tab(&mut self, source: u64, target: u64, after: bool) {
         if source == target {
             return;
@@ -356,6 +356,8 @@ impl EditorApp {
         self.tabs.reveal = active;
     }
 
+    /// Lay out bounded-width tabs with independent select/close/drag targets;
+    /// keep the active or explicitly revealed tab reachable during overflow.
     pub(super) fn tab_strip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let active = self.documents.get(self.active).map(|d| d.id);
@@ -736,6 +738,7 @@ fn elide(text: &str, limit: usize) -> String {
     }
 }
 
+/// Paint an elided label within the supplied width and retain full text in its tooltip.
 pub(super) fn bounded_label(
     ui: &mut egui::Ui,
     text: RichText,

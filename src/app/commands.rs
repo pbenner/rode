@@ -72,6 +72,7 @@ enum PaletteAction {
 }
 
 impl EditorApp {
+    /// Render filtered typed commands and execute the selected action through the existing domain guards.
     pub(super) fn command_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.label(palette.tag("COMMAND PALETTE"));

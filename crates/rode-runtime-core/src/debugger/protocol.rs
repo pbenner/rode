@@ -27,6 +27,8 @@ pub enum Phase {
     Ended,
 }
 #[derive(Clone)]
+/// Expected reply kind plus any stopped inspection epoch; stale epoch replies
+/// cannot populate handles belonging to a later pause or selected frame.
 enum Pending {
     Initialize,
     Launch,
@@ -43,6 +45,7 @@ enum Pending {
     Evaluate(u64, Option<usize>),
 }
 impl Pending {
+    /// Identify stopped-state queries that must be invalidated on resume/frame changes.
     fn epoch(&self) -> Option<u64> {
         match self {
             Self::PauseThreads(e)
@@ -68,6 +71,7 @@ pub struct Verified {
     pub id: Option<i64>,
 }
 const MAX_REQUESTS: usize = super::REQUEST_LIMIT;
+/// Pre-encoded bounded request retained across transport backpressure, keyed to its pending sequence.
 struct Outgoing {
     sequence: u64,
     bytes: Vec<u8>,
@@ -215,6 +219,7 @@ impl Client {
         session.send(&serde_json::to_value(Command::Start { launch: start })?)?;
         Ok(Self::new(Some(session), settings))
     }
+    /// Create inert protocol state around an optional owned coordinator session and captured settings.
     fn new(session: Option<process::Session>, settings: Settings) -> Self {
         Self {
             session,
@@ -272,6 +277,8 @@ impl Client {
         self.next += 1;
         seq
     }
+    /// Reserve a sequence/pending kind and encode a bounded request before enqueueing it;
+    /// transport backpressure retains the same bytes rather than duplicating requests.
     fn request(&mut self, command: &str, arguments: Value, pending: Pending) -> Result<()> {
         ensure!(
             self.pending.len() < MAX_REQUESTS && self.queue.len() < MAX_REQUESTS,
@@ -302,6 +309,8 @@ impl Client {
             self.output.drain(..end);
         }
     }
+    /// Remove matching queued requests and pending identities; replies to already
+    /// sent requests are subsequently ignored because their sequence is no longer pending.
     fn cancel_requests(&mut self, filter: impl Fn(&Pending) -> bool) {
         self.queue.retain(|item| {
             !self
@@ -311,6 +320,7 @@ impl Client {
         });
         self.pending.retain(|_, (pending, _)| !filter(pending));
     }
+    /// Advance the stopped epoch, cancel obsolete queued inspection and clear frame-bound handles.
     fn invalidate_inspection(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
         self.cancel_requests(|pending| pending.epoch().is_some());
@@ -320,6 +330,7 @@ impl Client {
         self.navigation = None;
         self.watch_values.fill(String::new());
     }
+    /// Invalidate all stopped inspection and clear the retained stack when execution resumes.
     fn clear_pause(&mut self) {
         self.invalidate_inspection();
         self.frames.clear();
@@ -452,6 +463,8 @@ impl Client {
     pub fn sync_breakpoints(&mut self, path: &str) -> Result<()> {
         self.set_breakpoints(path, false)
     }
+    /// Send the complete enabled breakpoint set for a source, retaining requested lines
+    /// so verification replies can be mapped back to the correct configuration.
     fn set_breakpoints(&mut self, path: &str, configuring: bool) -> Result<()> {
         if !self.initialized || self.phase == Phase::Ended {
             return Ok(());
@@ -501,6 +514,7 @@ impl Client {
         self.breakpoints.remove(path);
         Ok(())
     }
+    /// Complete adapter configuration only after every outstanding initial configuration reply has arrived.
     fn configured(&mut self) -> Result<()> {
         if self.configuring > 0 {
             self.configuring -= 1;
@@ -513,6 +527,7 @@ impl Client {
         }
         Ok(())
     }
+    /// Dispatch a decoded DAP response or event; unsupported message kinds do not mutate inspection state.
     fn handle(&mut self, message: Value) -> Result<()> {
         match message["type"].as_str() {
             Some("response") => self.handle_response(&message),
@@ -520,6 +535,7 @@ impl Client {
             _ => Ok(()),
         }
     }
+    /// Match request sequence and stopped epoch before interpreting capabilities, handles or control results.
     fn handle_response(&mut self, message: &Value) -> Result<()> {
         let sequence = message["request_seq"].as_u64().unwrap_or(0);
         let Some((pending, _)) = self.pending.remove(&sequence) else {
@@ -686,6 +702,7 @@ impl Client {
         }
         Ok(())
     }
+    /// Apply adapter lifecycle/output/pause events and schedule bounded follow-up inspection.
     fn handle_event(&mut self, message: &Value) -> Result<()> {
         let body = &message["body"];
         match message["event"].as_str().unwrap_or("") {
@@ -946,6 +963,7 @@ impl Drop for Client {
         self.stop();
     }
 }
+/// Bound retained adapter arrays recursively, truncating large strings and excessive nesting.
 fn array(body: &Value, key: &str, limit: usize) -> Vec<Value> {
     fn bound(v: &Value, depth: usize) -> Value {
         if depth > 8 {

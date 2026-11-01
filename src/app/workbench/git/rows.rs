@@ -5,6 +5,7 @@ use eframe::egui::{self, Align, Button, Layout, RichText, Ui, Vec2};
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Deferred file-row intent; the owning panel resolves the selected cached file before mutation.
 pub(super) enum Action {
     Open,
     Diff,
@@ -27,11 +28,32 @@ impl Action {
         }
     }
 
-    fn enabled(self, file: &GitFile) -> bool {
+    /// Match actions to the index/worktree state; partially staged files can
+    /// expose both sides, while conflicts use the whole-file resolution path.
+    pub(super) fn enabled(self, file: &GitFile) -> bool {
         match self {
+            Self::Diff | Self::Stage => file.unstaged() || file.untracked() || file.conflict(),
             Self::StagedDiff | Self::Unstage => file.staged(),
-            Self::Discard => file.index != '?',
-            _ => true,
+            // Restore the existing index path, rather than new/renamed paths
+            // or unmerged entries that require a different resolution command.
+            Self::Discard => file.unstaged() && matches!(file.worktree, 'M' | 'T' | 'D'),
+            Self::Open => true,
+        }
+    }
+
+    fn disabled_hint(self, file: &GitFile) -> &'static str {
+        match self {
+            Self::Stage => "No unstaged or untracked changes to stage.",
+            Self::Diff => "No working-tree changes to show.",
+            Self::StagedDiff | Self::Unstage if file.conflict() => {
+                "Resolve and stage this conflict first."
+            }
+            Self::StagedDiff | Self::Unstage => "No staged changes for this file.",
+            Self::Discard if file.conflict() => {
+                "Resolve this conflict before discarding working-tree changes."
+            }
+            Self::Discard => "Discard requires a tracked modification, deletion or type change.",
+            Self::Open => "Open file / resolve conflicts",
         }
     }
 
@@ -55,6 +77,23 @@ const ACTIONS: [Action; 5] = [
     Action::Discard,
 ];
 
+/// Share state gates and explanations between the row and its compact menu.
+fn action_button(ui: &mut Ui, file: &GitFile, action: Action, size: Vec2) -> egui::Response {
+    let disabled_hint = if ui.is_enabled() {
+        action.disabled_hint(file)
+    } else {
+        "Wait for the current Git operation to finish."
+    };
+    ui.add_enabled(
+        action.enabled(file),
+        Button::new(action.label(file)).min_size(size),
+    )
+    .on_hover_text(action.hint())
+    .on_disabled_hover_text(disabled_hint)
+}
+
+/// Render virtualized file rows with measured stable action columns; return the selected
+/// file index and intent, using an overflow menu when the pane is compact.
 pub(super) fn show(
     ui: &mut Ui,
     files: &[GitFile],
@@ -156,15 +195,13 @@ pub(super) fn show(
                                     if compact && !matches!(action, Action::Diff | Action::Stage) {
                                         continue;
                                     }
-                                    if ui
-                                        .add_enabled(
-                                            action.enabled(file),
-                                            Button::new(action.label(file))
-                                                .min_size(Vec2::new(widths[column], height)),
-                                        )
-                                        .on_hover_text(action.hint())
-                                        .on_disabled_hover_text(action.hint())
-                                        .clicked()
+                                    if action_button(
+                                        ui,
+                                        file,
+                                        action,
+                                        Vec2::new(widths[column], height),
+                                    )
+                                    .clicked()
                                     {
                                         selected = Some((index, action));
                                     }
@@ -177,14 +214,7 @@ pub(super) fn show(
                                         for action in
                                             [Action::StagedDiff, Action::Unstage, Action::Discard]
                                         {
-                                            if ui
-                                                .add_enabled(
-                                                    action.enabled(file),
-                                                    Button::new(action.label(file)),
-                                                )
-                                                .on_hover_text(action.hint())
-                                                .on_disabled_hover_text(action.hint())
-                                                .clicked()
+                                            if action_button(ui, file, action, Vec2::ZERO).clicked()
                                             {
                                                 selected = Some((index, action));
                                                 ui.close();

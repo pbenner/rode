@@ -7,6 +7,8 @@ use super::*;
 use crate::vault::{self, Client};
 use std::sync::atomic::AtomicUsize;
 
+/// RAII count of captured operations that may still use the decrypted mount;
+/// dropping the last guard allows the lock sequence to proceed.
 pub(super) struct Work(Arc<AtomicUsize>);
 impl Drop for Work {
     fn drop(&mut self) {
@@ -14,6 +16,8 @@ impl Drop for Work {
     }
 }
 #[derive(Default)]
+/// Staged/active verified mount leases and lock-form state. Closing leases and
+/// work counters remain window-owned until normal unmount is acknowledged.
 pub(super) struct State {
     pub active: Option<Client>,
     pub pending: Option<Client>,
@@ -35,19 +39,23 @@ pub(super) struct State {
     pub message: String,
 }
 impl State {
+    /// Retain decrypted-mount work ownership before spawning a background operation.
     pub(super) fn work(&self) -> Work {
         self.work.fetch_add(1, Ordering::AcqRel);
         Work(self.work.clone())
     }
+    /// Retain an unfinished mount client for asynchronous release rather than forgetting its lease.
     pub(super) fn release(&mut self, client: Client) {
         if client.finished {
             return;
         }
         self.closing.push((client, false));
     }
+    /// Report required lock/release work that normal exit must not abandon.
     pub(super) fn cleanup_pending(&self) -> bool {
         self.needs_lock || !self.closing.is_empty()
     }
+    /// Transfer a staged or active lease only when its root and host match the project being prepared.
     pub(super) fn take_project(&mut self, root: &str, remote: Option<&Remote>) -> Option<Client> {
         if self
             .staged
@@ -67,6 +75,7 @@ impl State {
     }
 }
 impl EditorApp {
+    /// Display verified unlocked/unknown state without treating transport loss as a successful lock.
     pub(super) fn encrypted_banner(&mut self, ctx: &egui::Context) {
         let Some(info) = self
             .vaults
@@ -103,6 +112,7 @@ impl EditorApp {
                 });
             });
     }
+    /// Cancel the current unlock/create presentation and release any unfinished staged client.
     pub(super) fn cancel_encrypted_dialog(&mut self) {
         self.vaults.password.clear();
         self.vaults.confirmation.clear();
@@ -110,6 +120,7 @@ impl EditorApp {
             self.vaults.release(client);
         }
     }
+    /// Open encrypted-project controls without implicitly creating or unlocking a filesystem.
     pub(super) fn encrypted_dialog(&mut self) {
         if !self.vaults.needs_lock {
             self.vaults.remote = self
@@ -189,6 +200,8 @@ impl EditorApp {
             Err(error) => self.notify(format!("{error:#}"), true),
         }
     }
+    /// Begin guarded locking only after owned jobs/views can stop; `quitting` requests
+    /// exit after verified cleanup, while unknown or busy state keeps the window recoverable.
     pub(super) fn lock_encrypted(&mut self, quitting: bool, ctx: &egui::Context) {
         if self.vaults.active.is_none() {
             return;
@@ -230,6 +243,8 @@ impl EditorApp {
         self.set_dialog(Dialog::Encrypted);
         ctx.request_repaint();
     }
+    /// Advance unlock/lease/unmount acknowledgements, waiting for tracked work and
+    /// controller cleanup before sending lock; failures never publish a locked state.
     pub(super) fn poll_vaults(&mut self, ctx: &egui::Context) {
         if self.vaults.locking
             && !self.vaults.lock_sent
@@ -473,6 +488,7 @@ impl EditorApp {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+    /// Render cached encrypted-project state and explicit create/unlock/lock operations; passwords are not saved.
     pub(super) fn encrypted_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Encrypted projects · gocryptfs");
         ui.small("Files are encrypted as they are written. Only the unlocked mount exposes plaintext. Passwords are never saved.");

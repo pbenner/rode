@@ -12,6 +12,8 @@ use std::{
 };
 
 #[derive(Default)]
+/// Explicit runtime setup and cached availability probe; cancelled workers remain
+/// owned until temporary files and cross-window installation locks are released.
 pub(super) struct Runtime {
     job: Option<install::Job>,
     retired: Vec<install::Job>,
@@ -39,11 +41,13 @@ impl Runtime {
         self.checked = None;
     }
 
+    /// Release retired setup jobs only after they leave their working state.
     pub fn poll(&mut self) {
         self.retired
             .retain(|job| matches!(job.state(), install::State::Working { .. }));
     }
 
+    /// Include both current and cancelled-but-retiring installation jobs in the exit guard.
     pub fn pending(&self) -> bool {
         self.installing()
             || self
@@ -52,6 +56,7 @@ impl Runtime {
                 .any(|job| matches!(job.state(), install::State::Working { .. }))
     }
 
+    /// Signal setup/probe cancellation without waiting on their worker threads.
     pub fn cancel_all(&self) {
         if let Some((_, cancel)) = &self.probe {
             cancel.store(true, Ordering::Release);

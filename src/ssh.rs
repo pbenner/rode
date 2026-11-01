@@ -333,6 +333,8 @@ impl Remote {
         serde_json::from_slice(&output).context("Invalid response from remote host. Check that python3 is available and non-interactive shell startup prints no banners.")
     }
 
+    /// Send a cancellable adapter request over this existing SSH master, applying the
+    /// captured active host plan and refusing fresh-login or desktop execution fallback.
     pub(crate) fn extension_request(
         &self,
         request: &crate::project::Request,

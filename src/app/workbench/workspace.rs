@@ -3,6 +3,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The single selected content surface; detached tools retain this same underlying state.
 pub(in crate::app) enum Surface {
     #[default]
     Editor,
@@ -11,16 +12,19 @@ pub(in crate::app) enum Surface {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Remembered tool destination restored when the tools/terminal surface is shown again.
 pub(in crate::app) enum ToolTab {
     Terminal,
     Panel(Panel),
 }
 
 impl EditorApp {
+    /// Return the stable native viewport identity shared by detached project tools.
     pub(in crate::app) fn tools_viewport() -> egui::ViewportId {
         egui::ViewportId::from_hash_of("rode-project-tools")
     }
 
+    /// Record source-editor focus intent and select the docked editor without discarding tool state.
     pub(in crate::app) fn editor_intent(&mut self) {
         if !self.workbench.detached {
             self.remember_tool_tab();
@@ -29,6 +33,7 @@ impl EditorApp {
         self.navigation.editor_intent();
     }
 
+    /// Select and reveal the terminal surface while preserving its running shell.
     pub(in crate::app) fn terminal_intent(&mut self) {
         self.workbench.surface = Surface::Terminal;
         self.workbench.last_tool = Some(ToolTab::Terminal);
@@ -36,6 +41,7 @@ impl EditorApp {
         self.navigation.terminal_intent();
     }
 
+    /// Remember the selected tool/terminal before leaving it; the editor does not replace that choice.
     pub(in crate::app) fn remember_tool_tab(&mut self) {
         let tab = match self.workbench.surface {
             Surface::Tools => self.workbench.panel.map(ToolTab::Panel),
@@ -47,6 +53,7 @@ impl EditorApp {
         }
     }
 
+    /// Hide or restore the last tool surface, updating pane focus and detached-window visibility.
     pub(in crate::app) fn toggle_sidebar(&mut self, ctx: &egui::Context) {
         let visible = self.tool_surface();
         self.navigation.zoom = None;
@@ -85,6 +92,7 @@ impl EditorApp {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
+    /// Report effective tool visibility, including detached and zoomed-pane state.
     pub(in crate::app) fn tools_visible(&self) -> bool {
         !self.workbench.tools_hidden
             && self.workbench.surface == Surface::Tools
@@ -92,6 +100,7 @@ impl EditorApp {
             && (self.workbench.detached || self.navigation.visible(navigation::Pane::Tools))
     }
 
+    /// Report effective terminal visibility without inferring whether its shell is still alive.
     pub(in crate::app) fn terminal_visible(&self) -> bool {
         !self.workbench.tools_hidden
             && self.workbench.surface == Surface::Terminal
@@ -103,6 +112,7 @@ impl EditorApp {
         self.tools_visible() || self.terminal_visible()
     }
 
+    /// Block input when an application modal belongs to another native viewport.
     pub(in crate::app) fn foreign_modal(&self, ctx: &egui::Context) -> bool {
         let owner = if self.dialog != Dialog::None || self.pending.is_some() {
             Some(self.dialog_viewport)
@@ -216,6 +226,7 @@ impl EditorApp {
         }
     }
 
+    /// Render one docked editor/tool/terminal surface with common focus and navigation boundaries.
     pub(in crate::app) fn workspace_content(&mut self, ctx: &egui::Context) {
         if self.navigation.zoom == Some(navigation::Pane::Explorer) {
             return;
@@ -237,6 +248,8 @@ impl EditorApp {
         }
     }
 
+    /// Render the existing live tools in a separate viewport; closing it follows docking/visibility
+    /// behavior rather than spawning or destroying another controller.
     pub(in crate::app) fn detached_tools(&mut self, ctx: &egui::Context) {
         if !self.workbench.detached {
             return;

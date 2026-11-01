@@ -3,6 +3,7 @@ mod ending;
 use super::*;
 use rode_runtime_core::service::{Info, Kind};
 #[derive(Default)]
+/// Cached host runtime list, one discovery request and independent confirmed termination work.
 pub(super) struct Browser {
     items: Vec<Info>,
     pending: Option<mpsc::Receiver<Result<rode_session::Response, String>>>,
@@ -16,6 +17,7 @@ pub(super) struct Browser {
     debugger: bool,
 }
 impl Browser {
+    /// Report confirmed runtime mutations that must survive context reset and delay normal exit.
     pub(super) fn shutdown_pending(&self) -> bool {
         self.endings.as_ref().is_some_and(ending::Queue::busy)
     }
@@ -28,14 +30,17 @@ impl Browser {
     }
 }
 impl EditorApp {
+    /// Discover detached debuggers for the current policy, attaching directly only when unambiguous.
     pub(in crate::app) fn find_debugger_runtime(&mut self, ctx: &egui::Context) {
         self.sessions.runtimes.debugger = true;
         self.refresh_background_runtimes(ctx);
     }
+    /// Discover detached kernels for a captured notebook path and current project policy.
     pub(in crate::app) fn find_notebook_runtime(&mut self, path: String, ctx: &egui::Context) {
         self.sessions.runtimes.document = Some(path);
         self.refresh_background_runtimes(ctx);
     }
+    /// Queue read-only metadata discovery without creating a notebook kernel or debugger.
     pub(in crate::app) fn refresh_background_runtimes(&mut self, ctx: &egui::Context) {
         if self.sessions.runtimes.pending.is_some() {
             return;
@@ -57,6 +62,8 @@ impl EditorApp {
             wake.request_repaint();
         });
     }
+    /// Drain discovery and independent shutdown acknowledgements; only matching runtime
+    /// identities attach, and failed termination cancels a waiting application exit.
     pub(super) fn poll_runtimes(&mut self, ctx: &egui::Context) {
         if let Some(endings) = &mut self.sessions.runtimes.endings {
             let result = endings.poll();
@@ -170,6 +177,7 @@ impl EditorApp {
             }
         }
     }
+    /// Render cached retained runtimes and capture explicit attachment/confirmed-end requests.
     pub(super) fn runtimes_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.separator();
         ui.heading("Notebook kernels & debuggers");

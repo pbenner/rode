@@ -221,6 +221,7 @@ def slurm_service(request, root):
     cancel = request["cancel_program"]
 
     def program(value):
+        """Resolve path-like scheduler executables on the project host; leave bare commands for PATH lookup."""
         return (
             globals()["project_resolve"](root, value)
             if "/" in value or value.startswith("~")
@@ -246,6 +247,7 @@ def slurm_service(request, root):
     jobs = []
 
     def valid_id(value):
+        """Accept only bounded Slurm job, array-task or heterogeneous-component identifiers for cancellation."""
         import re
 
         return bool(re.fullmatch(r"[0-9]{1,20}(?:_[0-9]{1,20})?(?:\+[0-9]{1,20})?", value))

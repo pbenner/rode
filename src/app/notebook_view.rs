@@ -5,6 +5,8 @@
 //! cleanup follows project/interpreter/tab lifecycle and never affects persistent project
 //! terminals.
 mod shutdowns;
+mod source;
+mod ui;
 use super::*;
 use crate::notebook::{
     self, Cell, Notebook,
@@ -13,12 +15,14 @@ use crate::notebook::{
 use serde_json::{Value, json};
 pub(super) use shutdowns::Shutdowns;
 
+/// Decoded output-image state; a ready texture retains its shared decoded-memory lease.
 enum Picture {
     Pending,
     Ready(egui::TextureHandle, Arc<crate::images::Lease>),
     Error(String),
 }
 #[derive(Clone)]
+/// Captured cell/output or Markdown request identity used to reject stale image decodes.
 enum Target {
     Output {
         uid: u64,
@@ -31,16 +35,19 @@ enum Target {
         uri: String,
     },
 }
+/// Worker result addressed to a stable cell/output identity instead of its current position.
 struct PictureResult {
     target: Target,
     result: Result<crate::images::Decoded, String>,
 }
+/// Captured image input and cancellation handle for off-thread decoding or host retrieval.
 struct PictureJob {
     target: Target,
     encoded: Option<(String, String)>,
     path: String,
     cancel: Arc<AtomicBool>,
 }
+/// Per-cell rendering measurements and optional Markdown preview, keyed by stable cell UID.
 struct CellUi {
     height: f32,
     previewing: bool,
@@ -56,6 +63,8 @@ impl Default for CellUi {
     }
 }
 
+/// One notebook's structured model, kernel attachment and versioned render caches.
+/// The shared shutdown registry outlives this view when a kernel still needs host cleanup.
 pub(super) struct View {
     pub book: Notebook,
     source_mode: bool,
@@ -80,9 +89,11 @@ pub(super) struct View {
     reveal: bool,
 }
 impl View {
+    /// Report whether the ordinary text editor currently owns the raw notebook JSON.
     pub(in crate::app) fn source_mode(&self) -> bool {
         self.source_mode
     }
+    /// Create a structured notebook view and focus its first cell; execution starts only on Run.
     pub fn new(book: Notebook, images: Arc<markdown::Images>, shutdowns: Shutdowns) -> Self {
         let active = book.cells.first().map(|c| c.uid).unwrap_or(0);
         let kernel_name = if book.language() == "python" {
@@ -115,18 +126,23 @@ impl View {
             reveal: false,
         }
     }
+    /// Resolve the stable active cell UID to its current position after insertions or reordering.
     fn active_index(&self) -> Option<usize> {
         self.book.cells.iter().position(|c| c.uid == self.active)
     }
+    /// Report a selected compute allocation; this does not imply a kernel is running.
     pub(in crate::app) fn uses_slurm(&self) -> bool {
         self.execution_target.is_some()
     }
+    /// Report an unacknowledged kernel lifetime operation that normal exit must drain.
     pub(in crate::app) fn lifetime_pending(&self) -> bool {
         self.kernel.as_ref().is_some_and(Kernel::pending)
     }
+    /// Expose the host runtime identity once kernel creation or attachment has established it.
     pub(in crate::app) fn native_id(&self) -> Option<&str> {
         self.kernel.as_ref().and_then(Kernel::native_id)
     }
+    /// Stop the current kernel before changing its captured local/Slurm execution target.
     fn set_execution_target(&mut self, target: Option<crate::slurm::Target>) {
         if self.execution_target != target {
             self.stop("Execution target changed");
@@ -135,6 +151,7 @@ impl View {
             self.error.clear();
         }
     }
+    /// Transfer kernel shutdown ownership to the window registry and clear display-update bindings.
     fn stop(&mut self, reason: &str) {
         if let Some(kernel) = self.kernel.take() {
             self.shutdowns.stop(kernel);
@@ -143,6 +160,8 @@ impl View {
         self.display_ids.clear();
         self.pending_clear.clear();
     }
+    /// Release this attachment, retaining persistent host computation; nonpersistent kernels
+    /// are handed to the shutdown registry until termination is acknowledged.
     fn detach(&mut self, reason: &str) {
         if let Some(kernel) = self.kernel.take() {
             if !kernel.persistent() {
@@ -153,9 +172,12 @@ impl View {
         self.display_ids.clear();
         self.pending_clear.clear();
     }
+    /// Return the current raw-JSON editing mode for execution guards.
     fn source(&mut self) -> bool {
         self.source_mode
     }
+    /// Serialize structured edits into the document and advance its source version only on change.
+    /// On a size/serialization failure, restore the last parseable source and stop its kernel.
     fn sync(&mut self, doc: &mut Document) -> bool {
         match self.book.serialize() {
             Ok(text) => {
@@ -179,15 +201,18 @@ impl View {
             }
         }
     }
+    /// Forget display-ID update destinations belonging to a removed or reset cell.
     fn drop_displays(&mut self, uid: u64) {
         self.display_ids.retain(|_, targets| {
             targets.retain(|(owner, _, _)| *owner != uid);
             !targets.is_empty()
         });
     }
+    /// Release cached output textures for one cell after its output identity changes.
     fn invalidate_pictures(&mut self, uid: u64) {
         self.pictures.retain(|(owner, _, _), _| *owner != uid);
     }
+    /// Drain decoded-image replies and accept only destinations whose cell/output tokens still match.
     fn pictures(&mut self, ctx: &egui::Context) {
         while let Ok(PictureResult { target, result }) = self.rx.try_recv() {
             match target {
@@ -256,6 +281,8 @@ enum Action {
 }
 
 impl EditorApp {
+    /// Attach an existing host kernel to an open notebook using its original project policy.
+    /// Retain the host's captured interpreter and detach the previous view according to persistence.
     pub(in crate::app) fn attach_notebook_runtime(
         &mut self,
         index: usize,
@@ -296,6 +323,7 @@ impl EditorApp {
         self.focus_editor(ctx);
         Ok(())
     }
+    /// Create an unsaved metadata-preserving notebook document without starting Jupyter.
     pub(super) fn new_notebook(&mut self) {
         if !self.feature(crate::extensions::Feature::Notebooks) {
             self.notify("Enable Jupyter notebooks in View → Extensions.", false);
@@ -312,6 +340,8 @@ impl EditorApp {
             self.notebook_shutdowns.clone(),
         ));
     }
+    /// Dispose notebook attachments when context changes. Encrypted-project locking
+    /// explicitly stops even persistent kernels; other changes honor their persistence.
     pub(super) fn stop_notebook_kernels(&mut self, reason: &str) {
         for doc in &mut self.documents {
             if let Some(view) = &mut doc.notebook {
@@ -328,6 +358,8 @@ impl EditorApp {
             }
         }
     }
+    /// Stop execution before raw-JSON editing, or parse a captured source snapshot
+    /// on a worker when returning to the structured Cells view.
     pub(super) fn toggle_notebook_source(&mut self, ctx: &egui::Context) {
         let Some(doc) = self.documents.get_mut(self.active) else {
             return;
@@ -363,6 +395,8 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
+    /// Install a parsed notebook only for the still-current document version;
+    /// parse failures preserve the user's original JSON source.
     pub(super) fn notebook_parsed(
         &mut self,
         id: u64,
@@ -395,6 +429,8 @@ impl EditorApp {
             ),
         }
     }
+    /// Validate host, source mode and execution target, then lazily start or reuse a kernel
+    /// and queue the active cell or all code cells with their captured source versions.
     pub(super) fn run_notebook(&mut self, all: bool, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Notebooks) {
             return;
@@ -555,6 +591,8 @@ impl EditorApp {
             Err(error) => view.error = format!("{error:#}"),
         }
     }
+    /// Drain kernel events and window-owned shutdowns without blocking. Apply outputs
+    /// only to matching cell versions, serialize accepted changes and report cleanup failures.
     pub(super) fn poll_notebooks(&mut self, ctx: &egui::Context) {
         for error in self.notebook_shutdowns.poll() {
             self.abort_session_quit(error, ctx);
@@ -825,895 +863,6 @@ impl EditorApp {
             }
         });
     }
-    pub(super) fn notebook_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        let index = self.active;
-        let Some(mut view) = self
-            .documents
-            .get_mut(index)
-            .and_then(|d| d.notebook.take())
-        else {
-            return false;
-        };
-        if self.python_environments().is_none() && self.python_environment_error().is_empty() {
-            self.refresh_environment(false, ctx);
-        }
-        view.pictures(ctx);
-        let palette = self.themes.active().palette;
-        let font_size = self.font_size;
-        let mut action = None;
-        let mut jobs = Vec::new();
-        let mut changed = false;
-        let mut link = None;
-        let focus = if view.source_mode {
-            false
-        } else {
-            self.take_editor_focus(ui, ctx).is_some()
-        };
-        if focus {
-            view.focus = Some(view.active);
-        }
-        let id = self.documents[index].id;
-        let path = self.documents[index]
-            .path
-            .clone()
-            .unwrap_or_else(|| self.join_root("untitled.ipynb"));
-        egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(12, 5))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if view.source_mode {
-                        ui.label(palette.tag("JSON SOURCE"));
-                        if ui.button("Back to cells").clicked() {
-                            action = Some(Action::Source);
-                        }
-                        return;
-                    }
-                    let busy = view.kernel.as_ref().is_some_and(Kernel::busy);
-                    if ui
-                        .add_enabled(!busy, IconButton::new(Icon::Play, "Run cell"))
-                        .clicked()
-                    {
-                        action = Some(Action::Run(false));
-                    }
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Run all"))
-                        .clicked()
-                    {
-                        action = Some(Action::Run(true));
-                    }
-                    if ui
-                        .add_enabled(view.kernel.is_some(), egui::Button::new("Interrupt"))
-                        .clicked()
-                    {
-                        action = Some(Action::Interrupt);
-                    }
-                    ui.separator();
-                    let insert_at = view.active_index().map_or(view.book.cells.len(), |at| at + 1);
-                    if ui.button("+ Code cell").on_hover_text("Insert a code cell below the selected cell").clicked() {
-                        action = Some(Action::Add("code", insert_at));
-                    }
-                    if ui.button("+ Markdown cell").on_hover_text("Insert a text cell below the selected cell").clicked() {
-                        action = Some(Action::Add("markdown", insert_at));
-                    }
-                    ui.menu_button("Notebook…", |ui| {
-                        if ui.button("Clear all outputs").clicked() {
-                            action = Some(Action::Clear(None));
-                            ui.close();
-                        }
-                        if ui.add_enabled(view.kernel.is_some(), egui::Button::new("Shut down kernel")).clicked() {
-                            action = Some(Action::Shutdown);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Edit JSON source").clicked() {
-                            action = Some(Action::Source);
-                            ui.close();
-                        }
-                    });
-                });
-                if !view.source_mode {
-                    ui.horizontal_wrapped(|ui| {
-                        let status = view.kernel.as_ref().map(|k| k.status.as_str()).unwrap_or("Not started");
-                        if view.kernel.as_ref().is_some_and(Kernel::busy) { ui.spinner(); }
-                        ui.label(palette.tag(status)).on_hover_text(&view.status);
-                        ui.label(if view.kernel_name == "python3" { "Python · selected environment" } else { &view.kernel_name });
-                        let execution = view.kernel.as_ref().map(|k| k.execution.clone()).unwrap_or_else(||
-                            view.execution_target.as_ref().map(|t| format!("Slurm job {}", t.id)).unwrap_or_else(|| "Project host".into()));
-                        ui.label(egui::RichText::new(execution).small().color(palette.muted));
-                    });
-                    egui::CollapsingHeader::new("Kernel settings")
-                        .id_salt(("notebook-settings", id))
-                        .show(ui, |ui| {
-
-                    ui.horizontal_wrapped(|ui| {
-                        let on = view.kernel.as_ref().map_or(view.persistent, Kernel::persistent);
-                        if ui.add_enabled(
-                            view.kernel.as_ref().is_none_or(|k| !k.pending()),
-                            egui::Button::new(if on { "Persist kernel: on" } else { "Persist kernel: off" }),
-                        ).on_hover_text("Keep the kernel, queued cells and outputs on the project host after closing this notebook, exiting RODE or losing SSH. Reattach from Sessions with the same project and sandbox.").clicked() {
-                            if !on && self.documents[index].path.is_none() {
-                                view.error = "Save this notebook before enabling persistence".into();
-                            } else if let Some(kernel) = &mut view.kernel {
-                                match kernel.set_persistent(!on) {
-                                    Ok(()) => view.persistent = !on,
-                                    Err(error) => view.error = error.to_string(),
-                                }
-                            } else {
-                                view.persistent = !on;
-                            }
-                        }
-                        if ui.button("Running kernels…").clicked() {
-                            self.open_sessions(ctx);
-                        }
-                        if view.kernel.is_none() && ui.button("Reattach kernel").clicked() {
-                            if let Some(path) = &self.documents[index].path {
-                                self.find_notebook_runtime(path.clone(), ctx);
-                            } else {
-                                view.error = "Save this notebook before reattaching a kernel".into();
-                            }
-                        }
-                        if view.kernel.as_ref().is_some_and(Kernel::persistent)
-                            && ui.add_enabled(
-                                view.kernel.as_ref().is_none_or(|k| !k.pending()),
-                                egui::Button::new("Detach kernel"),
-                            ).clicked()
-                        {
-                            view.detach("Kernel detached · Reattach from Sessions");
-                        }
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Execution target");
-                        let mut selected = view.execution_target.clone();
-                        let (queue, _) = self.slurm_programs();
-                        let runner = self.workbench.slurm_allocation().runner.clone();
-                        egui::ComboBox::from_id_salt(("notebook-execution", id))
-                            .selected_text(
-                                selected.as_ref()
-                                    .map(|t| format!("Slurm job {}", t.id))
-                                    .unwrap_or_else(|| "Project host".into()),
-                            )
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut selected, None, "Project host");
-                                if let Some(snapshot) = &self.sessions.slurm {
-                                    for job in &snapshot.jobs {
-                                        if job.state == "RUNNING"
-                                            && job.id.bytes().all(|b| b.is_ascii_digit())
-                                        {
-                                            let target = crate::slurm::Target {
-                                                id: job.id.clone(),
-                                                name: job.name.clone(),
-                                                queue: queue.clone(),
-                                                runner: runner.clone(),
-                                            };
-                                            ui.selectable_value(
-                                                &mut selected, Some(target),
-                                                format!("Job {} · {} · {}", job.id, job.nodes, job.name),
-                                            );
-                                        }
-                                    }
-                                }
-                            }).response.on_hover_text(
-                                "Changing execution target stops this kernel and clears its live variables. Run a cell to start a new kernel. Slurm kernels share the selected allocation's resources."
-                            );
-                        view.set_execution_target(selected);
-                        if ui.add_enabled(
-                            !self.sessions.slurm_busy,
-                            egui::Button::new("Refresh Slurm targets"),
-                        ).clicked() {
-                            self.refresh_slurm(None, ctx);
-                        }
-                        if ui.button("Allocate…").clicked() {
-                            self.open_slurm(ctx);
-                        }
-                        if let Some(kernel) = &view.kernel {
-                            ui.small(&kernel.execution);
-                        }
-                    });
-                    if !self.sessions.slurm_error.is_empty() {
-                        ui.colored_label(palette.muted, &self.sessions.slurm_error);
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Python environment");
-                        let previous = self.terminal_python_selection();
-                        ui.push_id(("notebook-python", id), |ui| self.python_environment_picker(ui, ctx));
-                        if previous != self.terminal_python_selection() {
-                            view.detach("Notebook environment changed");
-                            view.kernel_name = "python3".into();
-                            action = Some(Action::Kernel);
-                        }
-                        if ui.add_enabled(!self.python_environment_busy(), egui::Button::new("Refresh kernels")).clicked() {
-                            self.refresh_environment(false, ctx);
-                        }
-                        if self.python_environment_busy() { ui.spinner(); }
-                    });
-                    if !self.python_environment_error().is_empty() {
-                        ui.colored_label(palette.error, self.python_environment_error());
-                    }
-                    if let Some(env) = self.python_environments()
-                        && !env.kernel_error.is_empty() {
-                        ui.colored_label(palette.muted, &env.kernel_error);
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label("Kernel");
-                        let previous = view.kernel_name.clone();
-                        egui::ComboBox::from_id_salt(("notebook-kernel", id))
-                            .width(300.)
-                            .selected_text(if view.kernel_name == "python3" {
-                                "Python · selected environment".into()
-                            } else {
-                                self.python_environments()
-                                    .and_then(|env| env.kernels.iter().find(|k| k.name == view.kernel_name))
-                                    .map(|k| k.display_name.clone())
-                                    .unwrap_or_else(|| view.kernel_name.clone())
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut view.kernel_name, "python3".into(), "Python · selected environment");
-                                if let Some(env) = self.python_environments() {
-                                    for kernel in &env.kernels {
-                                        if kernel.name != "python3" {
-                                            ui.selectable_value(&mut view.kernel_name, kernel.name.clone(), format!("{} ({})", kernel.display_name, kernel.name));
-                                        }
-                                    }
-                                }
-                            });
-                        if previous != view.kernel_name { action = Some(Action::Kernel); }
-                    });
-                    });
-                    if self.show_find {
-                        ui.horizontal(|ui| {
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut self.find)
-                                    .hint_text("Find in cell sources…")
-                                    .desired_width(220.),
-                            );
-                            if self.find_focus {
-                                response.request_focus();
-                                self.find_focus = false;
-                            }
-                            if (ui.small_button("Next").clicked()
-                                || (response.has_focus() || response.lost_focus())
-                                    && ui.input(|i| i.key_pressed(Key::Enter)))
-                                && !self.find.is_empty()
-                            {
-                                let start = view.active_index().unwrap_or(0);
-                                if let Some((at, range)) = (0..view.book.cells.len())
-                                    .map(|n| (start + n + 1) % view.book.cells.len())
-                                    .find_map(|at| {
-                                        find_matches(
-                                            &view.book.cells[at].source,
-                                            &self.find,
-                                            self.case_sensitive,
-                                        )
-                                        .first()
-                                        .copied()
-                                        .map(|r| (at, r))
-                                    })
-                                {
-                                    let cell = &view.book.cells[at];
-                                    let a = cell.source[..range.0].chars().count();
-                                    let b = cell.source[..range.1].chars().count();
-                                    view.active = cell.uid;
-                                    view.selection = Some((cell.uid, a, b));
-                                    view.focus = Some(cell.uid);
-                                    view.reveal = true;
-                                    view.cells.entry(cell.uid).or_default().previewing = false;
-                                }
-                            }
-                            if ui.small_button("Close").clicked() {
-                                self.show_find = false;
-                            }
-                        });
-                    }
-                    if !view.error.is_empty() {
-                        ui.colored_label(palette.error, &view.error);
-                    }
-                }
-            });
-        if !view.source_mode {
-            let mut visible = HashSet::new();
-            let scroll_offset = if view.reveal {
-                view.reveal = false;
-                view.active_index().map(|at| {
-                    view.book.cells[..at]
-                        .iter()
-                        .map(|c| view.cells.get(&c.uid).map(|c| c.height).unwrap_or(150.))
-                        .sum::<f32>()
-                })
-            } else {
-                None
-            };
-            let mut scroll = egui::ScrollArea::vertical()
-                .id_salt(("notebook", id))
-                .auto_shrink([false, false]);
-            if let Some(y) = scroll_offset {
-                scroll = scroll.vertical_scroll_offset(y).animated(false);
-            }
-            let themes = &self.themes;
-            let focus_cell = view.focus;
-            let selection = view.selection;
-            scroll.show_viewport(ui,|ui,viewport|{
-                ui.spacing_mut().item_spacing.y=0.;let mut y=0.;
-                let cell_count=view.book.cells.len();
-                for at in 0..cell_count {
-                    let uid=view.book.cells[at].uid;let height=view.cells.entry(uid).or_default().height;
-                    if y+height<viewport.top()-60. || y>viewport.bottom()+60. {ui.add_space(height);y+=height;continue;}
-                    visible.insert(uid);let top=ui.cursor().top();let active=view.active==uid;
-                    let cell=&mut view.book.cells[at];let state=view.cells.get_mut(&uid).unwrap();
-                    let frame=egui::Frame::new().fill(if active {palette.raised} else {palette.panel}).stroke(Stroke::new(1_f32,if active {palette.accent} else {palette.border})).inner_margin(8.).outer_margin(egui::Margin::symmetric(10,5));
-                    frame.show(ui,|ui|{ui.set_min_width(ui.available_width());
-                        ui.push_id(("notebook-cell",id,uid),|ui|{
-                            cell_toolbar(ui, |ui|{
-                                if ui.add(egui::Button::new(format!("Cell {}",at+1)).selected(active).frame(false).min_size(egui::vec2(52.,28.))).clicked(){view.active=uid;view.focus=Some(uid);}
-                                let mut kind=cell.kind().to_owned();egui::ComboBox::from_id_salt("kind").width(108.).selected_text(&kind).show_ui(ui,|ui|{for value in ["code","markdown","raw"]{ui.selectable_value(&mut kind,value.into(),value);}});
-                                if kind!=cell.kind(){action=Some(Action::Kind(at,kind));}
-                                if cell.kind()=="code" {
-                                    if ui.add_enabled(!view.kernel.as_ref().is_some_and(Kernel::busy),IconButton::new(Icon::Play,"Run").min_size(egui::vec2(68.,28.))).on_hover_text("Run cell").clicked(){view.active=uid;action=Some(Action::Run(false));}
-                                } else if cell.kind()=="markdown" {
-                                    if ui.add(egui::Button::new(if state.previewing {"Edit"} else {"Preview"}).min_size(egui::vec2(68.,28.))).clicked(){state.previewing = !state.previewing;view.active=uid;view.focus=Some(uid);}
-                                } else {
-                                    ui.allocate_space(egui::vec2(68.,28.));
-                                }
-                                if ui.add_enabled(at>0,egui::Button::new("Up")).on_hover_text("Move cell up").clicked(){action=Some(Action::Move(at,-1));}
-                                if ui.add_enabled(at+1<cell_count,egui::Button::new("Down")).on_hover_text("Move cell down").clicked(){action=Some(Action::Move(at,1));}
-                                if ui.button("Delete").on_hover_text("Delete cell").clicked(){action=Some(Action::Delete(at));}
-                                if cell.kind()=="code" {
-                                    if ui.button("Clear").on_hover_text("Clear cell outputs").clicked(){action=Some(Action::Clear(Some(at)));}
-                                    let running=view.kernel.as_ref().is_some_and(|k|k.running_uid()==Some(uid));
-                                    ui.label(palette.tag(if running {"[*]".into()} else {format!("[{}]",cell.data["execution_count"].as_u64().map(|n|n.to_string()).unwrap_or_default())})).on_hover_text("Execution count");
-                                }
-                            });
-                            ui.add_space(8.);
-                            if cell.kind()=="markdown"&&state.previewing {
-                                let preview=state.preview.get_or_insert_with(||markdown::Preview::new(view.images.clone()));
-                                let mut embedded=HashMap::new();let mut attachment_data=HashMap::new();
-                                if let Some(attachments)=cell.data["attachments"].as_object() {for (name,bundle) in attachments {if let Some((data,path))=image_bundle(bundle) {let key=format!("attachment:{name}");embedded.insert(key.clone(),key.clone());attachment_data.insert(key,(data,path));}}}
-                                let requests=preview.prepare_embedded(cell.version,&path,&cell.source,&embedded);let token=preview.token;let cancel=preview.cancelled();
-                                for (uri,target) in requests {jobs.push(PictureJob {target:Target::Markdown {uid,token,uri},encoded:attachment_data.get(&target).cloned(),path:target,cancel:cancel.clone()});}
-                                link=preview.inline_ui(ui,font_size,palette).or(link.take());
-                            } else {
-                                let before=cell.source.clone();let lang=if cell.kind()=="code" {view.book.data["metadata"]["language_info"]["name"].as_str().unwrap_or("python")} else if cell.kind()=="markdown" {"Markdown"} else {"text"};
-                                let lang=crate::languages::all().iter().find(|l|l.id.eq_ignore_ascii_case(lang)).map(|l|l.syntax.as_str()).unwrap_or(lang);
-                                let mut layouter=|ui:&egui::Ui,text:&dyn egui::TextBuffer,wrap:f32|{let mut job=if text.as_str().len()<128*1024 {themes.highlight(ui,text.as_str(),lang,font_size)} else {egui::text::LayoutJob::simple(text.as_str().into(),FontId::monospace(font_size),palette.text,wrap)};job.wrap.max_width=wrap;ui.fonts_mut(|f|f.layout_job(job))};
-                                let edit_id=egui::Id::new(("notebook-source",id,uid));
-                                if let Some((owner,a,b))=selection && owner==uid {let mut state=egui::TextEdit::load_state(ctx,edit_id).unwrap_or_default();state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(a),egui::text::CCursor::new(b))));state.store(ctx,edit_id);view.selection=None;}
-                                if ctx.memory(|m|m.has_focus(edit_id)) && ui.input_mut(|i|i.consume_key(egui::Modifiers::SHIFT,Key::Enter)) {action=Some(if cell.kind()=="markdown" {Action::Preview(at)} else {Action::Run(false)});}
-                                let response=egui::TextEdit::multiline(&mut cell.source).id(edit_id).code_editor().font(FontId::monospace(font_size)).desired_width(f32::INFINITY).desired_rows(3).char_limit(notebook::MAX_SOURCE).layouter(&mut layouter).show(ui);
-                                if focus_cell==Some(uid) {response.response.request_focus();view.focus=None;}
-                                if response.response.has_focus(){view.active=uid;}
-                                if cell.source!=before {
-                                    if cell.source.len()>notebook::MAX_SOURCE {cell.source=before;view.error="Cell source exceeds 256 KiB.".into();} else {let source=cell.source.clone();cell.set_source(source);changed=true;}
-                                }
-                            }
-                            if cell.kind()=="code" {
-                                for (output_index,output) in cell.outputs().iter().take(notebook::MAX_OUTPUTS).enumerate() {
-                                    ui.add_space(6.);
-                                    if output["data"].get("image/png").is_some() || output["data"].get("image/jpeg").is_some() {
-                                        let key=(uid,cell.outputs_version,output_index);
-                                        if !view.pictures.contains_key(&key)&&view.pictures.len()<16 {
-                                            let Some((data,image_path))=image_bundle(&output["data"]) else {ui.label("Image output exceeds its preview limit or has invalid data; the original is preserved.");continue;};
-                                            view.pictures.insert(key,Picture::Pending);jobs.push(PictureJob {target:Target::Output {uid,version:cell.outputs_version,index:output_index},encoded:Some((data,image_path)),path:String::new(),cancel:Arc::new(AtomicBool::new(false))});
-                                        }
-                                        match view.pictures.get(&key) {Some(Picture::Ready(texture,_lease))=>{ui.add(egui::Image::new(texture).fit_to_original_size(1.).max_width(ui.available_width()).max_height(600.));},Some(Picture::Error(error))=>{ui.colored_label(palette.error,error);},Some(Picture::Pending)=>{ui.label("Loading image output…");},None=>{ui.label("Only 16 output images are previewed at once; all data is preserved.");}}
-                                    } else {
-                                        let text=output_text(output);let color=if output["output_type"]=="error"||output["name"]=="stderr" {palette.error} else {palette.text};
-                                        ui.add(egui::Label::new(RichText::new(text).monospace().color(color)).wrap().selectable(true));
-                                    }
-                                }
-                                if cell.outputs().len()>notebook::MAX_OUTPUTS {ui.small("Only the first 256 saved outputs are displayed; the rest are preserved.");}
-                            }
-                        });
-                    });
-                    ui.push_id(("insert-cell", id, uid), |ui| {
-                        egui::Frame::new().inner_margin(egui::Margin {left:18,right:18,top:4,bottom:8}).show(ui, |ui| {
-                            cell_toolbar(ui, |ui| {
-                                if ui.button("+ Code cell").on_hover_text("Insert a code cell here").clicked() { action=Some(Action::Add("code",at+1)); }
-                                if ui.button("+ Markdown cell").on_hover_text("Insert a text cell here").clicked() { action=Some(Action::Add("markdown",at+1)); }
-                            });
-                        });
-                    });
-                    state.height=(ui.cursor().top()-top).max(60.);y+=state.height;
-                }
-            });
-            for (uid, state) in &mut view.cells {
-                if !visible.contains(uid) {
-                    state.preview = None;
-                }
-            }
-            view.pictures.retain(|(uid, version, _), _| {
-                visible.contains(uid)
-                    && view
-                        .book
-                        .cells
-                        .iter()
-                        .any(|c| c.uid == *uid && c.outputs_version == *version)
-            });
-            if let Some(selected_action) = action.take() {
-                match selected_action {
-                    Action::Add(kind, at) => {
-                        if view.book.cells.len() < notebook::MAX_CELLS {
-                            let cell = Cell::new(kind);
-                            view.active = cell.uid;
-                            view.focus = Some(cell.uid);
-                            view.cells.entry(cell.uid).or_default().previewing = false;
-                            view.book.cells.insert(at, cell);
-                            view.reveal = true;
-                            changed = true;
-                        } else {
-                            view.error = "Notebook is limited to 1024 cells.".into();
-                        }
-                    }
-                    Action::Delete(at) => {
-                        let uid = view.book.cells.remove(at).uid;
-                        view.cells.remove(&uid);
-                        view.invalidate_pictures(uid);
-                        view.active = view
-                            .book
-                            .cells
-                            .get(at)
-                            .or_else(|| view.book.cells.last())
-                            .map(|c| c.uid)
-                            .unwrap_or(0);
-                        changed = true;
-                    }
-                    Action::Move(at, delta) => {
-                        let to = at.saturating_add_signed(delta);
-                        view.book.cells.swap(at, to);
-                        changed = true;
-                    }
-                    Action::Kind(at, kind) => {
-                        view.book.cells[at].change_kind(&kind);
-                        changed = true;
-                    }
-                    Action::Clear(at) => {
-                        let cell = at.and_then(|at| view.book.cells.get(at)).map(|cell| {
-                            cell.data["id"]
-                                .as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| format!("uid:{}", cell.uid))
-                        });
-                        if let Some(kernel) = &mut view.kernel
-                            && let Err(error) = kernel.clear_outputs(cell)
-                        {
-                            view.error = error.to_string();
-                        }
-                        for (index, cell) in view.book.cells.iter_mut().enumerate() {
-                            if at.is_none() || at == Some(index) {
-                                cell.clear_outputs();
-                            }
-                        }
-                        view.pictures.clear();
-                        view.display_ids.clear();
-                        changed = true;
-                    }
-                    Action::Kernel => match view.book.set_kernel(&view.kernel_name) {
-                        Ok(()) => {
-                            view.stop("Kernel changed · Run to start");
-                            changed = true;
-                        }
-                        Err(e) => view.error = e.to_string(),
-                    },
-                    Action::Interrupt => {
-                        if let Some(kernel) = &mut view.kernel
-                            && let Err(e) = kernel.interrupt()
-                        {
-                            view.error = e.to_string();
-                        }
-                    }
-                    Action::Shutdown => view.stop("Kernel shut down · Run to restart"),
-                    Action::Preview(at) => {
-                        view.cells
-                            .entry(view.book.cells[at].uid)
-                            .or_default()
-                            .previewing = true;
-                    }
-                    other => action = Some(other),
-                }
-            }
-            if changed {
-                view.sync(&mut self.documents[index]);
-            }
-        }
-        let source = view.source_mode;
-        self.notebook_picture_jobs(&view, jobs, ctx);
-        self.documents[index].notebook = Some(view);
-        match action {
-            Some(Action::Run(all)) => self.run_notebook(all, ctx),
-            Some(Action::Source) => self.toggle_notebook_source(ctx),
-            _ => {}
-        }
-        if let Some(link) = link {
-            if link.starts_with("https://")
-                || link.starts_with("http://")
-                || link.starts_with("mailto:")
-            {
-                ctx.open_url(egui::OpenUrl::new_tab(link));
-            } else {
-                self.notify("Use the explorer to open local notebook links.", false);
-            }
-        }
-        !source
-    }
 }
-fn cell_toolbar(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    ui.scope(|ui| {
-        // Set the row height before layout so selectors, labels and buttons share a centre line.
-        ui.spacing_mut().interact_size.y = 28.;
-        ui.spacing_mut().button_padding = egui::vec2(8., 4.);
-        ui.spacing_mut().item_spacing = egui::vec2(6., 6.);
-        ui.horizontal_wrapped(add_contents);
-    });
-}
-
-fn image_bundle(bundle: &Value) -> Option<(String, String)> {
-    for (mime, path) in [("image/png", "output.png"), ("image/jpeg", "output.jpg")] {
-        if let Ok(data) = notebook::multiline(&bundle[mime])
-            && data.len() <= 2 * 1024 * 1024
-        {
-            return Some((data, path.into()));
-        }
-    }
-    None
-}
-fn output_text(output: &Value) -> String {
-    let text=match output["output_type"].as_str().unwrap_or("") {
-        "stream"=>notebook::multiline(&output["text"]).unwrap_or_default(),
-        "error"=>output["traceback"].as_array().map(|lines|lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n")).filter(|s|!s.is_empty()).unwrap_or_else(||format!("{}: {}",output["ename"].as_str().unwrap_or("Error"),output["evalue"].as_str().unwrap_or(""))),
-        _=>notebook::multiline(&output["data"]["text/plain"]).or_else(|_|notebook::multiline(&output["data"]["text/markdown"])).unwrap_or_else(|_|"[Rich output has no supported text/PNG/JPEG representation; its data is preserved.]".into()),
-    };
-    let mut result = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if chars.next() == Some('[') {
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            }
-        } else if !c.is_control() || "\n\t\r".contains(c) {
-            result.push(c);
-        }
-        if result.len() >= 64 * 1024 {
-            result.push_str(
-                "\n[Output display limited to 64 KiB; full output remains in the notebook.]",
-            );
-            break;
-        }
-    }
-    result
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cell_sources_expand_to_fit_and_wheel_scrolls_the_notebook() {
-        let multiline = (0..80)
-            .map(|line| format!("# Source line {line}\n"))
-            .collect::<String>();
-        let wrapped = "A long source line should wrap inside the cell. ".repeat(100);
-        for (kind, source) in [
-            ("code", &multiline),
-            ("markdown", &wrapped),
-            ("raw", &multiline),
-        ] {
-            let ctx = egui::Context::default();
-            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            let mut app = EditorApp::new(&cc, Startup::default());
-            app.new_notebook();
-            let view = app.documents[0].notebook.as_mut().unwrap();
-            let cell = &mut view.book.cells[0];
-            cell.change_kind(kind);
-            cell.set_source(source.clone());
-            let uid = cell.uid;
-            view.cells.entry(uid).or_default().previewing = false;
-            view.focus = None;
-            let mut next = Cell::new("code");
-            next.set_source("next_cell = True".into());
-            view.book.cells.push(next);
-
-            let frame = |app: &mut EditorApp, events| {
-                ctx.run(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(800., 700.),
-                        )),
-                        events,
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            app.notebook_ui(ui, ctx);
-                        });
-                    },
-                )
-            };
-            frame(&mut app, vec![]);
-            let output = frame(&mut app, vec![]);
-            let source_text = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == source => Some(text),
-                    _ => None,
-                })
-                .expect("cell source was rendered");
-            assert!(source_text.galley.size().y > 320.);
-            let height = app.documents[0].notebook.as_ref().unwrap().cells[&uid].height;
-            assert!(
-                height >= source_text.galley.size().y,
-                "{kind} cell clips its source: cell={height}, text={}",
-                source_text.galley.size().y
-            );
-            let has_header = |output: &egui::FullOutput| {
-                output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Cell 1"))
-            };
-            assert!(has_header(&output));
-            let point = source_text.pos + egui::vec2(20., 40.);
-            frame(
-                &mut app,
-                vec![
-                    egui::Event::PointerMoved(point),
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(0., -400.),
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-            let mut output = frame(&mut app, vec![]);
-            for _ in 0..12 {
-                output = frame(&mut app, vec![]);
-            }
-            assert!(
-                !has_header(&output),
-                "Scrolling over {kind} source left the cell header fixed"
-            );
-            assert_eq!(
-                app.documents[0].notebook.as_ref().unwrap().book.cells[0].source,
-                *source
-            );
-
-            let view = app.documents[0].notebook.as_mut().unwrap();
-            view.book.cells[0].set_source("short source".into());
-            view.reveal = true;
-            frame(&mut app, vec![]);
-            frame(&mut app, vec![]);
-            assert!(
-                app.documents[0].notebook.as_ref().unwrap().cells[&uid].height < 320.,
-                "Shortened {kind} cell did not shrink"
-            );
-        }
-    }
-
-    #[test]
-    fn python_notebooks_default_to_the_environment_without_rewriting_saved_metadata() {
-        for (language, saved, expected) in [
-            ("python", "old-venv", "python3"),
-            ("julia", "julia-1.12", "julia-1.12"),
-        ] {
-            let mut book = Notebook::default();
-            book.set_kernel(saved).unwrap();
-            book.data["metadata"]["language_info"] = serde_json::json!({"name": language});
-            let original = book.serialize().unwrap();
-            let view = View::new(
-                book,
-                Arc::new(markdown::Images::default()),
-                Shutdowns::default(),
-            );
-            assert_eq!(view.kernel_name, expected);
-            assert_eq!(view.book.serialize().unwrap(), original);
-            assert!(view.kernel.is_none());
-        }
-    }
-    #[test]
-    fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_notebook();
-        app.documents[0].path = Some("/remote/work.ipynb".into());
-        app.workspace = Some(crate::app::tests::remote_workspace());
-        app.detach_ssh(&ctx);
-        app.run_notebook(false, &ctx);
-        assert!(app.documents[0].notebook.as_ref().unwrap().kernel.is_none());
-        assert!(
-            app.notice
-                .as_ref()
-                .unwrap()
-                .0
-                .contains("disconnected notebook")
-        );
-        let view = app.documents[0].notebook.as_ref().unwrap();
-        app.notebook_picture_jobs(
-            view,
-            vec![PictureJob {
-                target: Target::Markdown {
-                    uid: 1,
-                    token: 1,
-                    uri: "outside.png".into(),
-                },
-                encoded: None,
-                path: "/remote/outside.png".into(),
-                cancel: Arc::new(AtomicBool::new(false)),
-            }],
-            &ctx,
-        );
-        let result = view.rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(
-            result
-                .result
-                .err()
-                .unwrap()
-                .contains("Reconnect or Save As")
-        );
-    }
-
-    #[test]
-    fn clearing_outputs_forgets_display_targets_only_for_that_cell() {
-        let mut view = View::new(
-            Notebook::default(),
-            Arc::new(markdown::Images::default()),
-            Shutdowns::default(),
-        );
-        let uid = view.book.cells[0].uid;
-        view.display_ids.insert("clear".into(), vec![(uid, 0, 0)]);
-        view.display_ids
-            .insert("other".into(), vec![(uid + 100, 0, 0)]);
-        view.drop_displays(uid);
-        assert!(!view.display_ids.contains_key("clear"));
-        assert!(view.display_ids.contains_key("other"));
-    }
-    #[test]
-    fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let bin = root.path().join(".venv/bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let python = bin.join("python");
-        std::fs::write(&python,"#!/bin/sh\nprintf '%s\\n' '{\"kind\":\"error\",\"message\":\"missing optional packages\"}'\n").unwrap();
-        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_notebook();
-        let book = Notebook::parse(include_str!("../../tests/fixtures/notebook.ipynb")).unwrap();
-        let text = book.serialize().unwrap();
-        app.documents[0].text = text.clone();
-        app.documents[0].saved_text = text.clone();
-        app.documents[0].modified = false;
-        app.documents[0].notebook = Some(View::new(
-            book,
-            app.markdown_images.clone(),
-            app.notebook_shutdowns.clone(),
-        ));
-        app.workspace = Some(Workspace {
-            root: root.path().to_string_lossy().into(),
-            remote: None,
-            ready: true,
-            connected: true,
-            plan: sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap(),
-            sandbox_options: Default::default(),
-        });
-        app.run_notebook(true, &ctx);
-        let start = Instant::now();
-        while app.documents[0].notebook.as_ref().unwrap().error.is_empty() {
-            assert!(start.elapsed() < Duration::from_secs(5));
-            std::thread::sleep(Duration::from_millis(10));
-            app.poll_notebooks(&ctx);
-        }
-        assert_eq!(app.documents[0].text, text);
-        assert!(!app.documents[0].dirty());
-        assert_eq!(
-            app.documents[0].notebook.as_ref().unwrap().book.cells[2].outputs()[0]["text"],
-            json!(["42\n"])
-        );
-    }
-    #[test]
-    fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = tempfile::tempdir().unwrap();
-        let queue = root.path().join("queue");
-        std::fs::write(&queue, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::set_permissions(&queue, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_notebook();
-        let book = Notebook::parse(include_str!("../../tests/fixtures/notebook.ipynb")).unwrap();
-        let text = book.serialize().unwrap();
-        app.documents[0].text = text.clone();
-        app.documents[0].saved_text = text.clone();
-        let mut view = View::new(
-            book,
-            app.markdown_images.clone(),
-            app.notebook_shutdowns.clone(),
-        );
-        app.documents[0].modified = false;
-        let target = crate::slurm::Target {
-            id: "4242".into(),
-            name: "expired".into(),
-            queue: queue.to_string_lossy().into(),
-            runner: "/bin/false".into(),
-        };
-        view.set_execution_target(Some(target.clone()));
-        app.documents[0].notebook = Some(view);
-        app.workspace = Some(Workspace {
-            root: root.path().to_string_lossy().into(),
-            remote: None,
-            ready: true,
-            connected: true,
-            plan: sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap(),
-            sandbox_options: Default::default(),
-        });
-        app.run_notebook(true, &ctx);
-        let start = Instant::now();
-        while app.documents[0].notebook.as_ref().unwrap().error.is_empty() {
-            assert!(start.elapsed() < Duration::from_secs(5));
-            std::thread::sleep(Duration::from_millis(10));
-            app.poll_notebooks(&ctx);
-        }
-        let view = app.documents[0].notebook.as_mut().unwrap();
-        assert!(view.kernel.is_none());
-        assert_eq!(view.execution_target, Some(target));
-        assert!(
-            view.error.contains("no longer your running job"),
-            "{}",
-            view.error
-        );
-        view.set_execution_target(None);
-        assert!(view.error.is_empty());
-        assert!(!view.uses_slurm());
-        assert_eq!(app.documents[0].text, text);
-        assert!(!app.documents[0].dirty());
-    }
-
-    #[test]
-    fn enter_in_notebook_find_reveals_and_selects_a_matching_cell() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_notebook();
-        let book = Notebook::parse(include_str!("../../tests/fixtures/notebook.ipynb")).unwrap();
-        let expected = book.cells[1].uid;
-        app.documents[0].text = book.serialize().unwrap();
-        app.documents[0].notebook = Some(View::new(
-            book,
-            app.markdown_images.clone(),
-            app.notebook_shutdowns.clone(),
-        ));
-        app.show_find = true;
-        app.find = "counter = 40".into();
-        app.find_focus = true;
-        let frame = |app: &mut EditorApp, events| {
-            ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1200., 800.),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    app.editor(ctx);
-                },
-            )
-        };
-        frame(&mut app, vec![]);
-        frame(
-            &mut app,
-            vec![egui::Event::Key {
-                key: Key::Enter,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }],
-        );
-        assert_eq!(app.documents[0].notebook.as_ref().unwrap().active, expected);
-    }
-}
+mod tests;

@@ -27,11 +27,13 @@ use crate::{
     theme,
 };
 mod agents;
+mod appearance;
 mod binary_view;
 mod chrome;
 mod commands;
 mod connections;
 mod debugging;
+mod dialogs;
 mod extensions;
 mod file_browser;
 mod icons;
@@ -47,6 +49,7 @@ mod sessions;
 mod terminal_colors;
 mod vaults;
 mod workbench;
+mod workers;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
 use icons::{Icon, IconButton};
 use std::{
@@ -61,11 +64,13 @@ use std::{
 };
 use workbench::{Panel, ToolJob, Workbench};
 
+/// Validate the serialized map before shared preference merging accepts project settings.
 pub(crate) fn validate_project_preferences(text: &str) -> Result<(), serde_json::Error> {
     serde_json::from_str::<std::collections::BTreeMap<String, workbench::Preferences>>(text)
         .map(|_| ())
 }
 
+/// Normalize project settings through their typed defaults for field-level merge comparisons.
 pub(crate) fn project_preference_defaults(
     value: serde_json::Value,
 ) -> Result<serde_json::Value, serde_json::Error> {
@@ -76,7 +81,7 @@ pub(crate) fn project_preference_defaults(
 /// Validated command-line/startup choices consumed when creating the native editor.
 #[derive(Default)]
 pub struct Startup {
-    /// Optional initial local project directory.
+    /// Optional existing local project directory or file; a file uses its containing directory as the workspace.
     pub local: Option<PathBuf>,
     /// Optional SSH connection/profile, taking the remote startup route.
     pub remote: Option<Profile>,
@@ -89,6 +94,7 @@ pub struct Startup {
 }
 
 #[derive(Clone)]
+/// One flattened explorer entry with its visual indentation depth.
 struct TreeRow {
     entry: Entry,
     depth: usize,
@@ -97,11 +103,16 @@ struct TreeRow {
 /// Execution context selected by this window. A connected transport is not a ready project:
 /// file/tool operations wait for preparation to establish the actual plan.
 struct Workspace {
+    /// Project path interpreted on `remote`, or on the desktop for local workspaces.
     root: String,
     remote: Option<Remote>,
+    /// Transport availability; this alone does not authorize project operations.
     connected: bool,
+    /// Preparation established a root and actual execution plan for this context.
     ready: bool,
+    /// Effective policy returned by preparation, including explicit unavailable-host fallback.
     plan: sandbox::Plan,
+    /// Requested grants retained for forms and future preparation, not proof of isolation.
     sandbox_options: sandbox::Options,
 }
 
@@ -130,19 +141,25 @@ pub struct Document {
     pub revision: Option<String>,
     /// Whether a source/binary save request is in flight.
     pub saving: bool,
+    /// Cached dirty state, including structured notebook or binary edits.
     modified: bool,
+    /// Source identity for worker results; acknowledging a save does not advance it.
     edit_version: u64,
+    /// Last native source cursor position in characters; `usize::MAX` forces initial recomputation.
     last_cursor: usize,
     /// Displayed one-based source line and character column.
     pub cursor: (usize, usize),
+    /// Requested native selection as zero-based character offsets.
     selection: Option<(usize, usize)>,
     lines: usize,
 }
 
 impl Document {
+    /// Identify specialized documents whose bytes/source use a dedicated editor or preview path.
     fn is_preview(&self) -> bool {
         self.image.is_some() || self.pdf.is_some() || self.hex.is_some() || self.notebook.is_some()
     }
+    /// Report an in-flight image/PDF decode without treating source-only documents as previews.
     fn preview_loading(&self) -> bool {
         self.image.as_ref().is_some_and(|image| image.loading)
             || self.pdf.as_ref().is_some_and(|pdf| pdf.image.loading)
@@ -167,6 +184,7 @@ impl Document {
             .as_deref()
             .or_else(|| self.recovery.as_ref().map(|r| r.path.as_str()))
     }
+    /// Derive a tab label from its bound/recovery path, falling back to its stable untitled ID.
     fn name(&self) -> String {
         self.display_path()
             .map(ssh::display_name)
@@ -184,7 +202,10 @@ enum Job {
         keep_buffers: bool,
         token: u64,
         documents_at_start: Vec<(u64, u64)>,
+        /// Startup restores saved host/project grants, optionally forcing sandboxing on.
         restore_saved: Option<bool>,
+        /// Local startup file to open only after its containing project is accepted.
+        open_file: Option<String>,
     },
     Browse {
         remote: bool,
@@ -296,6 +317,7 @@ enum Action {
         response: Box<Response>,
         remote: bool,
         options: sandbox::Options,
+        open_file: Option<String>,
     },
     Project {
         path: String,
@@ -308,6 +330,7 @@ enum Action {
     LockEncrypted,
 }
 #[derive(PartialEq)]
+/// Exclusive native modal/picker intent; payloads retain the originating document identity.
 enum Dialog {
     None,
     Connect,
@@ -348,9 +371,11 @@ pub struct EditorApp {
     extensions: extensions::Extensions,
     workspace: Option<Workspace>,
     documents: Vec<Document>,
+    /// Cleanup ownership survives notebook view replacement and tab removal.
     notebook_shutdowns: notebook_view::Shutdowns,
     active: usize,
     next_id: u64,
+    /// Captured host/project generation; old workers may finish but cannot update this context.
     generation: u64,
     directories: HashMap<String, Vec<Entry>>,
     tree_rows: Vec<TreeRow>,
@@ -435,6 +460,8 @@ impl EditorApp {
         app
     }
 
+    /// Initialize settings and inert domain state from a preference snapshot, then
+    /// start only the explicit local-project or SSH startup preparation path.
     fn from_storage(
         cc: &eframe::CreationContext<'_>,
         startup: Startup,
@@ -584,52 +611,13 @@ impl EditorApp {
         app
     }
 
+    /// Replace the current transient notice with a timestamped status or error message.
     fn notify(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((text.into(), error, Instant::now()));
     }
 
-    fn select_theme(&mut self, id: &str, ctx: &egui::Context) {
-        match self.themes.select(id, ctx) {
-            Ok(()) => {
-                self.status = format!("Theme: {}", self.themes.active().name);
-                self.theme_save_pending = true;
-            }
-            Err(error) => self.notify(error.to_string(), true),
-        }
-    }
-
-    fn select_syntax_theme(&mut self, id: &str, ctx: &egui::Context) {
-        match self.themes.select_syntax(id, ctx) {
-            Ok(()) => {
-                self.status = format!("Syntax theme: {}", self.themes.active_syntax().name);
-                self.syntax_save_pending = true;
-            }
-            Err(error) => self.notify(error.to_string(), true),
-        }
-    }
-
-    fn persist_theme_choice(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
-        if !self.theme_save_pending && !self.syntax_save_pending {
-            return;
-        }
-        let save_ui = std::mem::take(&mut self.theme_save_pending);
-        let save_syntax = std::mem::take(&mut self.syntax_save_pending);
-        if let Some(storage) = storage {
-            if save_ui {
-                storage.set_string(theme::STORAGE_KEY, self.themes.active().id.clone());
-            }
-            if save_syntax {
-                storage.set_string(
-                    theme::syntax::STORAGE_KEY,
-                    self.themes.active_syntax().id.clone(),
-                );
-            }
-            storage.flush();
-        } else {
-            self.notify("Theme applied, but local preference storage is unavailable. The selection could not be saved.", true);
-        }
-    }
-
+    /// Merge this window's changed preferences through the shared persistence worker;
+    /// framework GUI state uses the private snapshot instead of replacing shared settings.
     fn persist_native(&mut self, gui: Option<&dyn eframe::Storage>) {
         use eframe::Storage;
         let Some(mut storage) = self.persistence.take() else {
@@ -663,835 +651,6 @@ impl EditorApp {
     /// Scale the whole interface relative to the monitor DPI, preserving text
     /// sizes in points and document/terminal state. An explicit reset is an edit
     /// even when this window already displays 100%: another window may differ.
-    fn set_ui_scale(&mut self, scale: f32, ctx: &egui::Context) {
-        self.ui_scale = if scale.is_finite() {
-            (scale.clamp(0.5, 2.0) * 100.).round() / 100.
-        } else {
-            1.0
-        };
-        ctx.set_zoom_factor(self.ui_scale);
-        self.ui_scale_save_pending = true;
-    }
-
-    fn persist_ui_scale(&mut self, storage: Option<&mut (dyn eframe::Storage + 'static)>) {
-        if !std::mem::take(&mut self.ui_scale_save_pending) {
-            return;
-        }
-        if let Some(storage) = storage {
-            storage.set_string("ui_scale", self.ui_scale.to_string());
-            storage.flush();
-        } else {
-            self.notify("Interface scale changed, but could not be saved.", true);
-        }
-    }
-
-    fn ui_scale_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let percent = (self.ui_scale * 100.).round() as u16;
-        // Scaling moves every widget. Use completed clicks and close the menu
-        // before the next frame applies the zoom, rather than dragging a
-        // control whose geometry changes underneath the pointer.
-        icons::submenu(
-            ui,
-            Icon::Settings,
-            &format!("Interface scale: {percent}%"),
-            |ui| {
-                ui.small("Relative to system display scaling");
-                for (icon, label, step, enabled) in [
-                    (
-                        Icon::ChevronLeft,
-                        "Smaller (5%)",
-                        -0.05,
-                        self.ui_scale > 0.5,
-                    ),
-                    (Icon::ChevronRight, "Larger (5%)", 0.05, self.ui_scale < 2.0),
-                ] {
-                    if ui
-                        .add_enabled(enabled, IconButton::new(icon, label))
-                        .clicked()
-                    {
-                        self.set_ui_scale(self.ui_scale + step, ctx);
-                        ui.close();
-                    }
-                }
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .max_height(260.)
-                    .show(ui, |ui| {
-                        for preset in [50, 75, 90, 100, 110, 125, 150, 175, 200] {
-                            let label = if preset == 100 {
-                                "100% (system default)".into()
-                            } else {
-                                format!("{preset}%")
-                            };
-                            if ui.selectable_label(percent == preset, label).clicked() {
-                                self.set_ui_scale(f32::from(preset) / 100., ctx);
-                                ui.close();
-                            }
-                        }
-                    });
-            },
-        );
-        if ui
-            .add(IconButton::new(Icon::Refresh, "Reset interface scale (100%)").shortcut("Ctrl+0"))
-            .clicked()
-        {
-            self.set_ui_scale(1., ctx);
-            ui.close();
-        }
-    }
-
-    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let mut selected = self.themes.active().id.clone();
-        egui::ScrollArea::vertical()
-            .max_height(280.0)
-            .show(ui, |ui| {
-                for entry in &self.themes.entries {
-                    ui.radio_value(&mut selected, entry.id.clone(), &entry.name);
-                }
-            });
-        if selected != self.themes.active().id {
-            self.select_theme(&selected, ctx);
-            ui.close();
-        }
-    }
-
-    fn syntax_theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let mut selected = self.themes.active_syntax().id.clone();
-        ui.label(RichText::new("Syntax colors and styles").small());
-        egui::ScrollArea::vertical()
-            .id_salt("syntax-theme-choices")
-            .max_height(280.)
-            .show(ui, |ui| {
-                for entry in &self.themes.syntax_entries {
-                    ui.radio_value(&mut selected, entry.id.clone(), &entry.name);
-                }
-            });
-        if selected != self.themes.active_syntax().id {
-            self.select_syntax_theme(&selected, ctx);
-            ui.close();
-        }
-    }
-
-    fn appearance_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.label(RichText::new("Interface theme").small());
-        self.theme_menu(ui, ctx);
-        ui.separator();
-        icons::submenu(ui, Icon::Palette, "Syntax highlighting", |ui| {
-            self.syntax_theme_menu(ui, ctx)
-        });
-    }
-
-    /// Capture host, plan, generation and resource guards before spawning blocking work. The
-    /// raw-host exceptions are preparation/discovery and explicit desktop attachment selection;
-    /// project-host file pickers retain active project restrictions.
-    fn dispatch(&mut self, request: Request, job: Job, ctx: &egui::Context) {
-        let raw = matches!(
-            &job,
-            Job::Prepare { .. }
-                | Job::Browse { .. }
-                | Job::BrowseFiles { local: true, .. }
-                | Job::AgentAttachment { local: true, .. }
-        );
-        if self.vaults.locking
-            || (!raw
-                && (self.workspace.as_ref().is_some_and(|w| !w.ready)
-                    || (self.workspace.is_none() && self.preparing)))
-        {
-            match &job {
-                Job::AgentAttachment { token, .. } => self.agents.files.finish(
-                    *token,
-                    Err("Wait for the project environment to be ready.".into()),
-                ),
-                Job::BrowseFiles { .. } => {
-                    self.file_browser.loading = false;
-                    self.file_browser.error = Some(
-                        "Wait for the project environment to be ready before browsing files."
-                            .into(),
-                    );
-                }
-                Job::List(path) => {
-                    self.loading.remove(path);
-                }
-                Job::Open(path) => {
-                    self.opening.remove(path);
-                }
-                Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
-                    if let Some(doc) = self.documents.iter_mut().find(|d| d.id == *id) {
-                        doc.saving = false;
-                    }
-                }
-                _ => {}
-            }
-            self.notify("Open a project folder and wait for its environment to be ready before accessing files.", true);
-            return;
-        }
-        let use_remote = match &job {
-            Job::Prepare { remote, .. } | Job::Browse { remote, .. } => *remote,
-            Job::BrowseFiles { local: true, .. } | Job::AgentAttachment { local: true, .. } => {
-                false
-            }
-            _ => self.workspace.as_ref().is_some_and(|w| w.remote.is_some()),
-        };
-        let remote = if use_remote {
-            self.workspace.as_ref().and_then(|w| w.remote.clone())
-        } else {
-            None
-        };
-        let plan = if raw {
-            None
-        } else {
-            self.workspace.as_ref().map(|w| w.plan.clone())
-        };
-        let mut job = job;
-        let restore_policies = if matches!(
-            job,
-            Job::Prepare {
-                restore_saved: Some(_),
-                ..
-            }
-        ) {
-            self.sandbox_policies_for_host(use_remote)
-        } else {
-            Default::default()
-        };
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
-        let generation = self.generation;
-        let image_budget = self.image_budget.clone();
-        let notebooks_enabled = self.feature(crate::extensions::Feature::Notebooks);
-        let extension_cancel = self.extensions.cancel.clone();
-        let pdf_cancel = if let Job::Reload { id, .. } = &job {
-            self.documents
-                .iter()
-                .find(|doc| doc.id == *id)
-                .and_then(|doc| doc.pdf.as_ref())
-                .map(|pdf| pdf.cancellation())
-                .unwrap_or_else(|| self.pdf_cancel.clone())
-        } else {
-            self.pdf_cancel.clone()
-        };
-        let texture_limit = ctx.input(|i| i.max_texture_side);
-        let pdf_page = if let Job::Reload { id, .. } = &job {
-            self.documents
-                .iter()
-                .find(|doc| doc.id == *id)
-                .and_then(|doc| doc.pdf.as_ref())
-                .map_or(1, |pdf| pdf.page)
-        } else {
-            1
-        };
-        let image_hint = if let Job::Reload { id, .. } = &job {
-            self.documents
-                .iter()
-                .find(|d| d.id == *id)
-                .and_then(|d| d.image.as_ref())
-                .map(|i| format!("preview.{}", i.format.to_ascii_lowercase()))
-        } else {
-            None
-        };
-        let vault_work = self.vaults.work();
-        std::thread::spawn(move || {
-            let _vault_work = vault_work;
-            let request = match (request, &job) {
-                (Request::WriteBinary { path, expected, .. }, Job::SaveBinary { bytes, .. }) => {
-                    use base64::Engine;
-                    Request::WriteBinary {
-                        path,
-                        expected,
-                        data: base64::engine::general_purpose::STANDARD.encode(bytes.as_ref()),
-                    }
-                }
-                (request, _) => request,
-            };
-            let _image_io = matches!(
-                &request,
-                Request::ReadImage { .. } | Request::ReadBinary { .. } | Request::ReadHex { .. }
-            )
-            .then(|| image_budget.io.lock().unwrap_or_else(|e| e.into_inner()));
-            let execute = |request: &Request| match &remote {
-                Some(remote) => remote.request_in(request, plan.as_ref()),
-                None => match &plan {
-                    Some(plan) => plan.local_request(request),
-                    None => files::local(request),
-                },
-            };
-            let result = execute(&request)
-                .and_then(|response| {
-                    if let Job::Prepare {
-                        restore_saved: Some(force),
-                        options,
-                        ..
-                    } = &mut job
-                    {
-                        let mut selected = restore_policies
-                            .get(&response.path)
-                            .cloned()
-                            .unwrap_or_else(|| options.clone());
-                        selected.enabled |= *force;
-                        *options = selected.clone();
-                        if selected.enabled {
-                            return execute(&Request::Prepare {
-                                path: response.path,
-                                sandbox: selected,
-                            });
-                        }
-                    }
-                    Ok(response)
-                })
-                .and_then(|mut response| {
-                    if matches!(&job, Job::AgentAttachment { .. }) {
-                        let encoded = response
-                            .binary
-                            .take()
-                            .ok_or_else(|| anyhow::anyhow!("Missing attachment bytes"))?;
-                        response.attachment = Some(
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                agents::attachments::prepare(
-                                    &response.path,
-                                    &encoded,
-                                    &image_budget,
-                                    &pdf_cancel,
-                                )
-                            }))
-                            .map_err(|_| {
-                                anyhow::anyhow!(
-                                    "Attachment conversion failed; the file may be corrupt."
-                                )
-                            })??,
-                        );
-                        return Ok(response);
-                    }
-                    if let Some(encoded) = response.binary.take() {
-                        let _binary_io = matches!(&request, Request::ReadAuto { .. })
-                            .then(|| image_budget.io.lock().unwrap_or_else(|e| e.into_inner()));
-                        anyhow::ensure!(
-                            !extension_cancel.load(Ordering::Acquire),
-                            "Extension settings changed; reopen the document."
-                        );
-                        if matches!(&request, Request::ReadHex { .. } | Request::ReadAuto { .. }) {
-                            response.hex =
-                                Some(crate::binary::Loaded::decode(&encoded, &image_budget)?);
-                        } else {
-                            response.pdf = Some(crate::pdf::load_cancellable(
-                                &encoded,
-                                pdf_page,
-                                &image_budget,
-                                texture_limit,
-                                &pdf_cancel,
-                            )?);
-                        }
-                    }
-                    if let Some(encoded) = response.image.take() {
-                        anyhow::ensure!(
-                            !extension_cancel.load(Ordering::Acquire),
-                            "Extension settings changed; reopen the image."
-                        );
-                        response.preview = Some(
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                crate::images::decode(
-                                    &encoded,
-                                    if let Some(hint) = &image_hint {
-                                        hint
-                                    } else if let Request::ReadImage { path } = &request {
-                                        path
-                                    } else {
-                                        &response.path
-                                    },
-                                    &image_budget,
-                                    texture_limit,
-                                )
-                            }))
-                            .map_err(|_| {
-                                anyhow::anyhow!("Image decoder failed; the file may be corrupt.")
-                            })??,
-                        );
-                    }
-                    if notebooks_enabled
-                        && response.hex.is_none()
-                        && crate::notebook::is_path(&response.path)
-                        && matches!(&request, Request::Read { .. } | Request::ReadAuto { .. })
-                    {
-                        response.notebook = Some(
-                            crate::notebook::Notebook::parse(&response.text)
-                                .map_err(|e| format!("{e:#}")),
-                        );
-                    }
-                    Ok(response)
-                })
-                .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::Done {
-                generation,
-                job,
-                result: Box::new(result),
-            });
-            ctx.request_repaint();
-        });
-    }
-
-    fn list(&mut self, path: String, ctx: &egui::Context) {
-        if self.loading.insert(path.clone()) {
-            self.dispatch(Request::List { path: path.clone() }, Job::List(path), ctx);
-        }
-    }
-
-    fn open_file(&mut self, path: String, ctx: &egui::Context) {
-        self.editor_intent();
-        if ctx.viewport_id() != egui::ViewportId::ROOT {
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
-        }
-        if let Some(index) = self
-            .documents
-            .iter()
-            .position(|d| d.path.as_deref() == Some(&path))
-        {
-            self.active = index;
-            self.reveal_tab(self.documents[index].id);
-            self.focus_editor(ctx);
-            return;
-        }
-        if self.opening.insert(path.clone()) {
-            let request = if crate::pdf::is_path(&path) {
-                self.status = "Opening PDF preview…".into();
-                Request::ReadBinary { path: path.clone() }
-            } else if crate::images::format_for(&path).is_some() {
-                Request::ReadImage { path: path.clone() }
-            } else if self.feature(crate::extensions::Feature::Binary) {
-                Request::ReadAuto { path: path.clone() }
-            } else {
-                Request::Read { path: path.clone() }
-            };
-            self.dispatch(request, Job::Open(path), ctx);
-        }
-    }
-
-    /// Drain a bounded batch of worker results. Reject obsolete generations/tokens first,
-    /// then apply domain-specific buffer/version checks before mutating visible state.
-    fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(receiver) = self.profiles_loading.take() {
-            match receiver.try_recv() {
-                Ok(Ok(profiles)) => self.profiles = profiles,
-                Ok(Err(error)) => self.notify(error, true),
-                Err(mpsc::TryRecvError::Empty) => self.profiles_loading = Some(receiver),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.notify("Connection profile reload failed.", true)
-                }
-            }
-        }
-        while let Ok(event) = self.rx.try_recv() {
-            match event {
-                Event::NotebookParsed {
-                    generation,
-                    id,
-                    version,
-                    result,
-                } if generation == self.generation => {
-                    self.notebook_parsed(id, version, result, ctx)
-                }
-                Event::Session {
-                    generation,
-                    job,
-                    result,
-                } if generation == self.generation => self.handle_session(job, result, ctx),
-                Event::PdfPage {
-                    generation,
-                    id,
-                    version,
-                    token,
-                    page,
-                    result,
-                } if generation == self.generation => {
-                    self.pdf_page(id, version, token, page, result)
-                }
-                Event::ProfileSaved {
-                    result,
-                    submitted,
-                    form,
-                } => {
-                    if let Some(worker) = self.profile_writer.take() {
-                        let _ = worker.join();
-                    }
-                    self.profile_saving = false;
-                    match result {
-                        Ok(profiles) => {
-                            if form == self.profile_form {
-                                self.profile_baseline = Some(*submitted);
-                            }
-                            self.profiles = profiles;
-                            self.notify(
-                                "Connection profile saved. Passwords are never stored.",
-                                false,
-                            );
-                        }
-                        Err(error) => self.notify(error, true),
-                    }
-                }
-                Event::Latex {
-                    generation,
-                    token,
-                    preview,
-                    versions,
-                    result,
-                } => {
-                    if generation == self.generation {
-                        self.complete_latex(token, preview, versions, *result, ctx);
-                    }
-                }
-                Event::Marp {
-                    generation,
-                    id,
-                    version,
-                    token,
-                    exporting,
-                    result,
-                } => {
-                    if generation == self.generation {
-                        self.marp_complete(id, version, token, exporting, *result, ctx);
-                    }
-                }
-                Event::MarpPage {
-                    generation,
-                    id,
-                    version,
-                    token,
-                    page,
-                    result,
-                } => {
-                    if generation == self.generation {
-                        self.marp_page(id, version, token, page, result);
-                    }
-                }
-                Event::MarkdownImage {
-                    generation,
-                    id,
-                    token,
-                    uri,
-                    result,
-                } if generation == self.generation => {
-                    self.markdown_image(id, token, uri, result, ctx);
-                }
-                Event::Tool {
-                    generation,
-                    job,
-                    result,
-                } if generation == self.generation => self.handle_tool(*job, *result, ctx),
-                Event::Connected { generation, result } if generation == self.generation => {
-                    match result {
-                        Ok(()) => {
-                            if let Some(workspace) = &mut self.workspace {
-                                workspace.connected = true;
-                                let root = workspace.root.clone();
-                                self.status = "SSH connected".into();
-                                let options = workspace.sandbox_options.clone();
-                                let restore = self.startup_restore.take();
-                                if self.vaults.lost && self.vaults.active.is_some() {
-                                    self.encrypted_dialog();
-                                    self.vaults.message = "SSH reconnected. Unlock the encrypted project to restore file access; unsaved buffers are preserved.".into();
-                                } else {
-                                    self.prepare_project(root, options, true, true, restore, ctx);
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            self.ssh_failed(error, ctx);
-                        }
-                    }
-                }
-                Event::Done {
-                    generation,
-                    job,
-                    result,
-                } if generation == self.generation => {
-                    match &job {
-                        Job::Prepare { token, .. } if *token != self.project_token => continue,
-                        Job::Reload { id, version }
-                            if !self
-                                .documents
-                                .iter()
-                                .any(|doc| doc.id == *id && doc.edit_version == *version) =>
-                        {
-                            continue;
-                        }
-                        Job::Browse { token, path, .. }
-                            if *token != self.folder_token
-                                || self.dialog != Dialog::Folder
-                                || *path != self.dialog_input =>
-                        {
-                            continue;
-                        }
-                        Job::BrowseFiles { token, path, .. }
-                            if !file_browser::is_file_dialog(&self.dialog)
-                                || !self.file_browser.matches(*token, path) =>
-                        {
-                            continue;
-                        }
-                        Job::BrowseFiles { .. } => self.file_browser.loading = false,
-                        Job::AgentAttachment { .. } => {}
-                        Job::Prepare { .. } => self.preparing = false,
-                        Job::Browse { .. } => self.folder_loading = false,
-                        Job::List(path) => {
-                            self.loading.remove(path);
-                        }
-                        Job::Open(path) => {
-                            self.opening.remove(path);
-                        }
-                        Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
-                            if let Some(doc) = self.documents.iter_mut().find(|d| d.id == *id) {
-                                doc.saving = false;
-                            }
-                        }
-                        Job::Reload { id, version } => {
-                            if let Some(doc) = self
-                                .documents
-                                .iter_mut()
-                                .find(|doc| doc.id == *id && doc.edit_version == *version)
-                            {
-                                if let Some(image) = &mut doc.image {
-                                    image.loading = false;
-                                }
-                                if let Some(pdf) = &mut doc.pdf {
-                                    pdf.image.loading = false;
-                                }
-                            }
-                        }
-                    }
-                    if matches!(
-                        &job,
-                        Job::List(_) | Job::Open(_) | Job::Save { .. } | Job::SaveBinary { .. }
-                    ) {
-                        self.file_browser.invalidate_rows();
-                    }
-                    if let Ok(response) = result.as_ref()
-                        && let Some(Err(error)) = &response.notebook
-                    {
-                        self.notify(format!("Notebook: {error} JSON source is available."), true);
-                    }
-                    match *result {
-                        Err(error) => {
-                            if let Job::AgentAttachment { token, .. } = job {
-                                self.agents.files.finish(token, Err(error));
-                            } else if matches!(job, Job::Browse { .. }) {
-                                self.folder_error = Some(error);
-                            } else if matches!(job, Job::BrowseFiles { .. }) {
-                                self.file_browser.error = Some(error);
-                                self.file_browser
-                                    .location
-                                    .clone_from(&self.file_browser.directory);
-                            } else {
-                                self.notify(error, true);
-                            }
-                        }
-                        Ok(response) => match job {
-                            Job::AgentAttachment { token, .. } => {
-                                self.agents.files.finish(
-                                    token,
-                                    response
-                                        .attachment
-                                        .ok_or_else(|| "Missing attachment contents".into()),
-                                );
-                                self.agents.focus = true;
-                            }
-                            Job::Reload { id, version } => {
-                                if let Some(doc) = self
-                                    .documents
-                                    .iter_mut()
-                                    .find(|d| d.id == id && d.edit_version == version && !d.dirty())
-                                {
-                                    // Read-only refreshes must not dispose a live kernel merely
-                                    // because Git or an agent finished touching other files.
-                                    if response.notebook.is_some()
-                                        && doc.notebook.is_some()
-                                        && doc.text == response.text
-                                        && doc.revision.as_deref() == Some(&response.revision)
-                                    {
-                                        continue;
-                                    }
-                                    if let Some(result) = response.notebook {
-                                        doc.notebook = result.ok().map(|book| {
-                                            notebook_view::View::new(
-                                                book,
-                                                self.markdown_images.clone(),
-                                                self.notebook_shutdowns.clone(),
-                                            )
-                                        });
-                                    }
-                                    if let Some(loaded) = response.hex {
-                                        doc.notebook = None;
-                                        doc.hex = Some(binary_view::HexView::new(loaded));
-                                        doc.pdf = None;
-                                        doc.image = None;
-                                        doc.markdown = None;
-                                    }
-                                    if let Some(loaded) = response.pdf {
-                                        if let Some(pdf) = &mut doc.pdf {
-                                            pdf.replace(loaded);
-                                        } else {
-                                            doc.pdf = Some(pdf_view::PdfView::new(loaded));
-                                        }
-                                    }
-                                    if let Some(preview) = response.preview {
-                                        if let Some(image) = &mut doc.image {
-                                            image.replace(preview);
-                                        } else {
-                                            doc.image = Some(image_view::ImageView::new(preview));
-                                        }
-                                    }
-                                    doc.text.clone_from(&response.text);
-                                    doc.saved_text = response.text;
-                                    doc.revision = Some(response.revision);
-                                    doc.lines =
-                                        doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
-                                    doc.edit_version = doc.edit_version.wrapping_add(1);
-                                }
-                            }
-                            Job::Prepare {
-                                remote,
-                                options,
-                                keep_buffers,
-                                documents_at_start,
-                                ..
-                            } => {
-                                let new_edits =
-                                    self.documents.iter().filter(|d| d.dirty()).any(|d| {
-                                        !documents_at_start.contains(&(d.id, d.edit_version))
-                                    });
-                                if !keep_buffers && new_edits {
-                                    self.pending = Some(Action::PreparedProject {
-                                        response: Box::new(response),
-                                        remote,
-                                        options,
-                                    });
-                                } else {
-                                    self.commit_project(
-                                        response,
-                                        remote,
-                                        options,
-                                        keep_buffers,
-                                        ctx,
-                                    );
-                                }
-                            }
-                            Job::BrowseFiles { .. } => self.file_browser.loaded(response),
-                            Job::Browse { .. } => {
-                                if self.folder_policy_path != response.path {
-                                    if let Some(saved) =
-                                        self.saved_sandbox_for(&response.path, self.folder_remote)
-                                    {
-                                        self.folder_sandbox = saved;
-                                    }
-                                    self.folder_policy_path.clone_from(&response.path);
-                                }
-                                self.dialog_input = response.path;
-                                self.folder_entries =
-                                    response.entries.into_iter().filter(|e| e.dir).collect();
-                                self.folder_error = None;
-                            }
-                            Job::List(path) => {
-                                if let Some(workspace) = &mut self.workspace
-                                    && workspace.root == path
-                                {
-                                    workspace.root.clone_from(&response.path);
-                                    self.expanded.insert(response.path.clone());
-                                }
-                                self.directories.insert(path, response.entries.clone());
-                                self.directories.insert(response.path, response.entries);
-                                self.tree_dirty = true;
-                            }
-                            Job::Open(_) => {
-                                if let Some(index) = self
-                                    .documents
-                                    .iter()
-                                    .position(|d| d.path.as_deref() == Some(&response.path))
-                                {
-                                    self.active = index;
-                                } else {
-                                    let id = self.next_id;
-                                    self.next_id += 1;
-                                    let lines =
-                                        response.text.bytes().filter(|b| *b == b'\n').count() + 1;
-                                    self.documents.push(Document {
-                                        recovery: None,
-                                        notebook: response.notebook.and_then(Result::ok).map(
-                                            |book| {
-                                                notebook_view::View::new(
-                                                    book,
-                                                    self.markdown_images.clone(),
-                                                    self.notebook_shutdowns.clone(),
-                                                )
-                                            },
-                                        ),
-                                        hex: response.hex.map(binary_view::HexView::new),
-                                        markdown: None,
-                                        marp: None,
-                                        image: response.preview.map(image_view::ImageView::new),
-                                        pdf: response.pdf.map(pdf_view::PdfView::new),
-                                        id,
-                                        path: Some(response.path),
-                                        saved_text: response.text.clone(),
-                                        text: response.text,
-                                        revision: Some(response.revision),
-                                        saving: false,
-                                        modified: false,
-                                        edit_version: 0,
-                                        last_cursor: usize::MAX,
-                                        cursor: (1, 1),
-                                        selection: None,
-                                        lines,
-                                    });
-                                    self.active = self.documents.len() - 1;
-                                }
-                                if self.documents.get(self.active).is_some_and(|d| {
-                                    crate::languages::detect(d.path.as_deref())
-                                        .is_some_and(|l| l.id == "python")
-                                }) {
-                                    self.refresh_environment(false, ctx);
-                                }
-                                self.status = "File loaded".into();
-                                if self.navigation.accepts_editor_focus() {
-                                    self.focus_editor(ctx);
-                                }
-                            }
-                            Job::SaveBinary { id, bytes, .. } => {
-                                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                                    if let Some(hex) = &mut doc.hex {
-                                        hex.buffer.acknowledge(bytes);
-                                        doc.modified = hex.buffer.dirty();
-                                    }
-                                    doc.path = Some(response.path);
-                                    doc.recovery = None;
-                                    doc.revision = Some(response.revision);
-                                    doc.saving = false;
-                                    self.status = format!("Saved {}", doc.name());
-                                }
-                            }
-                            Job::Save { id, text } => {
-                                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                                    doc.acknowledge_save(response.path, text, response.revision);
-                                    self.status = format!("Saved {}", doc.name());
-                                }
-                                if self.documents.get(self.active).is_some_and(|d| d.id == id) {
-                                    self.reveal_tab(id);
-                                }
-                                if let Some(root) = self.workspace.as_ref().map(|w| w.root.clone())
-                                {
-                                    self.list(root, ctx);
-                                }
-                            }
-                        },
-                    }
-                }
-                _ => {}
-            }
-        }
-        if self.ssh_master.as_ref().is_some_and(|t| !t.is_alive())
-            && self
-                .workspace
-                .as_ref()
-                .is_some_and(|w| w.remote.is_some() && w.connected)
-        {
-            self.ssh_failed("SSH connection ended. Remote tabs are retained as disconnected buffers; local files and folders are available.".into(),ctx);
-        }
-    }
-
     /// Invalidate project work and release only window-owned services. When preserving
     /// buffers, clear host bindings and retain recovery metadata rather than authorizing
     /// local saves to old remote paths.
@@ -1551,6 +710,7 @@ impl EditorApp {
         self.show_find = false;
     }
 
+    /// Cancel connection work, clear project ownership and release only this window's private SSH master.
     fn reset_workspace(&mut self) {
         self.connection_cancel.store(true, Ordering::Release);
         self.clear_project(false);
@@ -1564,6 +724,8 @@ impl EditorApp {
         self.folder_token += 1;
     }
 
+    /// Refuse disconnect while encrypted leases or lifetime mutations require attention;
+    /// otherwise unbind remote buffers through the recovery path before returning to local mode.
     fn disconnect_ssh(&mut self, ctx: &egui::Context) {
         if self.vaults.active.is_some()
             || self.vaults.pending.is_some()
@@ -1642,6 +804,7 @@ impl EditorApp {
                     .map(|d| (d.id, d.edit_version))
                     .collect(),
                 restore_saved,
+                open_file: None,
             },
             ctx,
         );
@@ -1649,12 +812,14 @@ impl EditorApp {
 
     /// Install an accepted prepared context after common guards pass. Invalidate old
     /// services/generations before starting commands for the new host and policy.
+    /// A startup file is opened through the ordinary reader only after this commit.
     fn commit_project(
         &mut self,
         response: Response,
         remote: bool,
         options: sandbox::Options,
         keep_buffers: bool,
+        open_file: Option<String>,
         ctx: &egui::Context,
     ) {
         let Some(plan) = response.project else {
@@ -1712,15 +877,20 @@ impl EditorApp {
             self.notify(plan.reason.clone(), false);
         }
         self.show_terminal |= remote || options.enabled;
-        if self.show_terminal {
+        if let Some(path) = open_file {
+            self.open_file(path, ctx);
+        } else if self.show_terminal {
             self.start_project_terminal(ctx);
         }
     }
 
+    /// Request the default nonpersistent native terminal after project preparation.
     fn start_project_terminal(&mut self, ctx: &egui::Context) {
         self.new_terminal(ctx);
     }
 
+    /// Queue selected-host project discovery with a superseding folder token; this raw-host
+    /// picker is separate from ordinary sandboxed document/file browsing.
     fn browse_folder(&mut self, path: String, ctx: &egui::Context) {
         if self.folder_remote
             && self
@@ -1746,6 +916,7 @@ impl EditorApp {
         );
     }
 
+    /// Initialize the project picker explicitly on the desktop host, even during an SSH workspace.
     fn open_local_folder_dialog(&mut self) {
         self.set_dialog(Dialog::Folder);
         self.folder_remote = false;
@@ -1756,6 +927,8 @@ impl EditorApp {
         self.folder_needs_load = true;
     }
 
+    /// Start authenticated SSH preparation for a captured profile after ownership guards;
+    /// reconnect preserves only recovery state belonging to the matching connection.
     fn connect(&mut self, profile: Profile, ctx: &egui::Context, reconnect: bool) {
         if (self.vaults.active.is_some() && !self.vaults.lost)
             || (self.vaults.cleanup_pending() && !reconnect)
@@ -1928,13 +1101,16 @@ impl EditorApp {
         }
     }
 
+    /// Execute an action already accepted by the shared guards; callers must not bypass
+    /// dirty-buffer, encrypted-mount or runtime-lifetime checks to reach this method.
     fn perform(&mut self, action: Action, ctx: &egui::Context) {
         match action {
             Action::PreparedProject {
                 response,
                 remote,
                 options,
-            } => self.commit_project(*response, remote, options, false, ctx),
+                open_file,
+            } => self.commit_project(*response, remote, options, false, open_file, ctx),
             Action::Project {
                 path,
                 remote,
@@ -1986,6 +1162,8 @@ impl EditorApp {
         }
     }
 
+    /// Switch exclusive dialog ownership, resetting the relevant picker/form state
+    /// and recording which native viewport must receive modal input.
     fn set_dialog(&mut self, dialog: Dialog) {
         if self.dialog == Dialog::Encrypted && dialog != Dialog::Encrypted && !self.vaults.locking {
             self.cancel_encrypted_dialog();
@@ -2080,6 +1258,8 @@ impl EditorApp {
         self.marp_overwrite = false;
     }
 
+    /// Join relative paths to the selected host root; absolute/home-marked paths
+    /// remain unchanged for expansion by the actual host backend.
     fn join_root(&self, path: &str) -> String {
         if path.starts_with('/') || path.starts_with('~') {
             return path.into();
@@ -2092,6 +1272,7 @@ impl EditorApp {
         format!("{}/{path}", root.trim_end_matches('/'))
     }
 
+    /// Create an unsaved source buffer with a new stable tab identity and request editor focus.
     fn new_file(&mut self) {
         self.editor_intent();
         let id = self.next_id;
@@ -2120,6 +1301,7 @@ impl EditorApp {
         self.active = self.documents.len() - 1;
     }
 
+    /// Route the active editable document to its current destination or shared Save As picker.
     fn save_active(&mut self, ctx: &egui::Context, save_as: bool) {
         if let Some(doc) = self.documents.get(self.active) {
             if doc.is_preview() && doc.hex.is_none() && doc.notebook.is_none() {
@@ -2191,6 +1373,7 @@ impl EditorApp {
         );
     }
 
+    /// Select or hide the terminal surface, lazily creating a shell only when none is owned or starting.
     fn toggle_terminal(&mut self, ctx: &egui::Context) {
         self.show_terminal = !self.terminal_visible() || self.workbench.detached;
         if self.show_terminal {
@@ -2205,6 +1388,7 @@ impl EditorApp {
         }
     }
 
+    /// Route global editor actions after honoring modal barriers and native terminal focus.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.pending.is_some()
             || self.workbench_modal()
@@ -2315,6 +1499,7 @@ impl EditorApp {
         }
     }
 
+    /// Render native app menus and workspace identity using the same guarded actions as commands.
     fn titlebar(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         egui::TopBottomPanel::top("titlebar").exact_height(48.0).frame(theme::frame(palette.panel)).show(ctx, |ui| {
@@ -2396,6 +1581,7 @@ impl EditorApp {
         });
     }
 
+    /// Display actual host/project preparation and sandbox state independently of requested settings.
     fn workspace_banner(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let Some(workspace) = &self.workspace else {
@@ -2546,6 +1732,7 @@ impl EditorApp {
         }
     }
 
+    /// Render feature-gated activity actions without treating selection as tool-process activation.
     fn activity(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         egui::SidePanel::left("activity")
@@ -2642,6 +1829,7 @@ impl EditorApp {
             });
     }
 
+    /// Render cached directory rows and explicit project actions; directory I/O is delegated to workers.
     fn explorer(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         if !self.show_explorer || !self.navigation.visible(navigation::Pane::Explorer) {
@@ -2765,6 +1953,7 @@ impl EditorApp {
         });
     }
 
+    /// Render flattened visible tree rows, maintaining stable selection and deferred open/list intents.
     fn tree(&mut self, ui: &mut egui::Ui, root: &str, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         if self.tree_dirty {
@@ -2894,6 +2083,7 @@ impl EditorApp {
         self.navigation.tree.height = output.inner_rect.height();
     }
 
+    /// Render the selected terminal surface, keeping PTY input and native focus ownership together.
     pub(in crate::app) fn terminal_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.terminal_colors.palette(self.themes.active());
         self.pane_ui(ui, navigation::Pane::Terminal);
@@ -2915,6 +2105,7 @@ impl EditorApp {
         }
     }
 
+    /// Render local/SSH project entry points when no document surface is selected.
     fn welcome(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         let top = ((ui.available_height() - 440.0) / 2.0).max(25.0);
@@ -2995,6 +2186,8 @@ impl EditorApp {
         });
     }
 
+    /// Render the active specialized or source document, retaining native edit/cursor/undo
+    /// state and updating buffer versions only for accepted source changes.
     fn editor(&mut self, ctx: &egui::Context) {
         if !self.navigation.visible(navigation::Pane::Editor) {
             return;
@@ -3336,6 +2529,7 @@ impl EditorApp {
         }
     }
 
+    /// Edit find/replace state and translate UTF-8 byte matches into native character selections.
     fn find_bar(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         let mut next = false;
@@ -3432,555 +2626,10 @@ impl EditorApp {
             self.status = format!("{} matches", matches.len());
         }
     }
-
-    fn dialogs(&mut self, ctx: &egui::Context) {
-        if ctx.viewport_id() != self.dialog_viewport {
-            return;
-        }
-        let palette = self.themes.active().palette;
-        if let Some(action) = self.pending.clone() {
-            let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
-                ui.set_width(400.0);
-                ui.heading("Keep your changes?");
-                ui.add_space(8.0);
-                ui.label(
-                    "You have unsaved edits. Save them before continuing, or discard them here.",
-                );
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    if palette.primary(ui, "Keep editing").clicked() {
-                        self.pending = None;
-                        self.focus_editor(ctx);
-                    }
-                    if ui
-                        .button(RichText::new("Discard changes").color(palette.error))
-                        .clicked()
-                    {
-                        self.pending = None;
-                        self.perform(action, ctx);
-                    }
-                });
-            });
-            if modal.should_close() {
-                self.pending = None;
-                self.focus_editor(ctx);
-            }
-            return;
-        }
-        if self.dialog == Dialog::None {
-            self.dialog_events.clear();
-            return;
-        }
-        if !self.dialog_events.is_empty() {
-            let mut events = std::mem::take(&mut self.dialog_events);
-            ctx.input_mut(|input| {
-                events.append(&mut input.events);
-                input.events = events;
-            });
-        }
-        let encrypted_dialog = self.dialog == Dialog::Encrypted;
-        let file_dialog = file_browser::is_file_dialog(&self.dialog);
-        let response = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
-            let sizing = ui.is_sizing_pass();
-            let focus = self.dialog_focus;
-            if sizing {
-                // Area's first pass is invisible and disables widgets. Keep
-                // keyboard input for its first interactive pass instead of
-                // consuming Enter against an empty command/path field.
-                self.dialog_events = ctx.input_mut(|input| {
-                    let (keyboard, other) = std::mem::take(&mut input.events)
-                        .into_iter()
-                        .partition(|event| {
-                            matches!(
-                                event,
-                                egui::Event::Text(_)
-                                    | egui::Event::Key { .. }
-                                    | egui::Event::Paste(_)
-                                    | egui::Event::Copy
-                                    | egui::Event::Cut
-                                    | egui::Event::Ime(_)
-                            )
-                        });
-                    input.events = other;
-                    keyboard
-                });
-                ctx.request_repaint();
-            }
-            ui.set_width(
-                if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions) {
-                    680_f32.min(ctx.content_rect().width() - 50.)
-                } else if self.dialog == Dialog::Connect {
-                    500.
-                } else {
-                    540.
-                },
-            );
-            if self.dialog == Dialog::Extensions {
-                self.extensions_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Encrypted {
-                self.encrypted_ui(ui, ctx);
-            } else if matches!(self.dialog, Dialog::MarpExport(..)) {
-                self.marp_export_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Connect {
-                self.connect_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Shortcuts {
-                self.help_dialog(ui);
-            } else if self.dialog == Dialog::Commands {
-                self.command_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Sessions {
-                self.sessions_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Slurm {
-                self.slurm_dialog(ui, ctx);
-            } else if self.dialog == Dialog::AgentSessions {
-                self.background_agents_dialog(ui, ctx);
-            } else if self.dialog == Dialog::TerminalExit {
-                self.terminal_exit_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Folder {
-                self.folder_dialog(ui, ctx);
-            } else {
-                self.path_dialog(ui, ctx);
-            }
-            if sizing {
-                self.dialog_focus = focus;
-            }
-        });
-        if response.should_close()
-            && !(self.dialog == Dialog::TerminalExit && self.session_exit_pending())
-            && !self.vaults.locking
-        {
-            self.dialog = Dialog::None;
-        }
-        if file_dialog && !file_browser::is_file_dialog(&self.dialog) {
-            self.file_browser.reset();
-        }
-        if self.dialog == Dialog::None {
-            if encrypted_dialog {
-                self.cancel_encrypted_dialog();
-            }
-            // egui keeps a closed modal's input barrier for one pass. Clear it
-            // promptly even when no background worker will request a repaint.
-            ctx.request_repaint();
-        }
-    }
-
-    fn connect_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        ui.label(palette.tag("REMOTE WORKSPACE"));
-        ui.heading("Connect via SSH");
-        ui.label(
-            RichText::new("OpenSSH under the hood. Your existing configuration works here.")
-                .color(palette.muted),
-        );
-        ui.add_space(12.0);
-        if !self.profiles.is_empty() || !self.aliases.is_empty() {
-            egui::ComboBox::from_id_salt("profiles")
-                .selected_text("Load a saved connection or SSH alias")
-                .width(450.0)
-                .show_ui(ui, |ui| {
-                    for profile in &self.profiles {
-                        if ui.selectable_label(false, profile.label()).clicked() {
-                            self.profile = profile.clone();
-                            self.profile_baseline = Some(profile.clone());
-                            self.profile_form += 1;
-                        }
-                    }
-                    if !self.aliases.is_empty() {
-                        ui.separator();
-                    }
-                    for alias in &self.aliases {
-                        if ui
-                            .selectable_label(false, format!("SSH config / {alias}"))
-                            .clicked()
-                        {
-                            self.profile = Profile {
-                                host: alias.clone(),
-                                ..Default::default()
-                            };
-                            self.profile_baseline = None;
-                            self.profile_form += 1;
-                        }
-                    }
-                });
-            ui.add_space(8.0);
-        }
-        egui::Grid::new("connection-fields")
-            .num_columns(2)
-            .spacing([18.0, 10.0])
-            .show(ui, |ui| {
-                for (label, field, hint) in [
-                    (
-                        "Host / alias",
-                        &mut self.profile.host,
-                        "workstation or user@host.example.org",
-                    ),
-                    (
-                        "Remote folder",
-                        &mut self.profile.root,
-                        "~/projects/my-project",
-                    ),
-                    ("Username", &mut self.profile.user, "From SSH config"),
-                    (
-                        "Port",
-                        &mut self.profile.port,
-                        "From SSH config (usually 22)",
-                    ),
-                    (
-                        "Identity file",
-                        &mut self.profile.identity,
-                        "~/.ssh/id_ed25519 (optional)",
-                    ),
-                    (
-                        "Jump host(s)",
-                        &mut self.profile.jump,
-                        "user@login-host (optional, comma-separated)",
-                    ),
-                    (
-                        "SSH config file",
-                        &mut self.profile.config,
-                        "~/.ssh/config (default)",
-                    ),
-                    (
-                        "Profile name",
-                        &mut self.profile.name,
-                        "Optional friendly name",
-                    ),
-                ] {
-                    ui.label(label);
-                    let response = ui.add(
-                        egui::TextEdit::singleline(field)
-                            // Loading saved profiles can insert a dropdown above
-                            // these fields while the user is already typing.
-                            .id(egui::Id::new(("connection-field", label)))
-                            .hint_text(hint)
-                            .desired_width(340.0),
-                    );
-                    if self.dialog_focus && label == "Host / alias" {
-                        response.request_focus();
-                        self.dialog_focus = false;
-                    }
-                    ui.end_row();
-                }
-            });
-        ui.add_space(12.0);
-        ui.checkbox(
-            &mut self.profile.sandbox.enabled,
-            "Sandbox the remote project when bwrap is available",
-        );
-        if self.profile.sandbox.enabled {
-            ui.collapsing("Sandbox access rules", |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(300.)
-                    .show(ui, |ui| {
-                        workbench::sandbox_options_ui(ui, &mut self.profile.sandbox)
-                    });
-            });
-        }
-        ui.label(RichText::new("Authentication and host-key prompts open in the terminal. Remote file access uses Python 3's standard library.").small().color(palette.muted));
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if palette.primary(ui, "Connect").clicked() {
-                match self.profile.validate() {
-                    Ok(()) => {
-                        self.dialog = Dialog::None;
-                        self.guarded(Action::Remote(self.profile.clone()), ctx);
-                    }
-                    Err(error) => self.notify(error.to_string(), true),
-                }
-            }
-            if ui
-                .add_enabled(
-                    !self.profile_saving,
-                    egui::Button::new(if self.profile_saving {
-                        "Saving…"
-                    } else {
-                        "Save profile"
-                    }),
-                )
-                .clicked()
-            {
-                if let Err(error) = self.profile.validate() {
-                    self.notify(error.to_string(), true);
-                } else {
-                    let profile = self.profile.clone();
-                    let previous = self
-                        .profile_baseline
-                        .as_ref()
-                        .filter(|p| p.label() == profile.label())
-                        .cloned();
-                    let form = self.profile_form;
-                    self.profiles_loading = None;
-                    let tx = self.tx.clone();
-                    let context = ctx.clone();
-                    self.profile_saving = true;
-                    self.profile_writer = Some(std::thread::spawn(move || {
-                        let result = ssh::save_profile(&profile, previous.as_ref())
-                            .map_err(|e| format!("{e:#}"));
-                        if let Err(error) = &result {
-                            eprintln!("Connection profile was not saved: {error}");
-                        }
-                        let _ = tx.send(Event::ProfileSaved {
-                            result,
-                            submitted: Box::new(profile),
-                            form,
-                        });
-                        context.request_repaint();
-                    }));
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                self.dialog = Dialog::None;
-            }
-        });
-    }
-
-    fn path_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.file_dialog(ui, ctx);
-    }
-
-    fn folder_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        let open_by_key = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
-        if self.folder_needs_load {
-            self.folder_needs_load = false;
-            self.browse_folder(self.dialog_input.clone(), ctx);
-        }
-        let host = self
-            .workspace
-            .as_ref()
-            .and_then(|w| w.remote.as_ref())
-            .map(|r| r.profile.endpoint())
-            .unwrap_or_default();
-        ui.label(palette.tag(if self.folder_remote {
-            format!("SSH · {host}")
-        } else {
-            "THIS MACHINE".into()
-        }));
-        ui.heading(if self.folder_remote {
-            "Open remote project folder"
-        } else {
-            "Open project folder"
-        });
-        ui.label(
-            RichText::new(
-                "Browse folders, then open the project. Absolute paths and ~/ are supported.",
-            )
-            .small()
-            .color(palette.muted),
-        );
-        let input_id = egui::Id::new("project-dialog-path");
-        if self.dialog_focus {
-            ui.memory_mut(|memory| memory.request_focus(input_id));
-            self.dialog_focus = false;
-        }
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut self.dialog_input)
-                .id(input_id)
-                .desired_width(f32::INFINITY)
-                .hint_text("Project folder"),
-        );
-        let enter = (response.has_focus() || response.lost_focus())
-            && ui.input(|i| i.key_pressed(Key::Enter));
-        let mut browse = None;
-        ui.horizontal(|ui| {
-            if ui.button("Up").clicked() {
-                browse = Some(
-                    std::path::Path::new(&self.dialog_input)
-                        .parent()
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .map(|p| p.to_string_lossy().into())
-                        .unwrap_or_else(|| "/".into()),
-                );
-            }
-            if ui.button("Browse").clicked() || enter {
-                browse = Some(self.dialog_input.clone());
-            }
-            if self.folder_loading {
-                ui.spinner();
-                ui.label(palette.tag("Loading folders…"));
-            }
-        });
-        if let Some(error) = &self.folder_error {
-            ui.label(RichText::new(error).color(palette.error));
-        }
-        let query = format!("folder:{}:{}", self.folder_token, self.show_hidden);
-        if let Some(action) = file_browser::rows(
-            ui,
-            "project-folder-browser",
-            &self.folder_entries,
-            self.show_hidden,
-            &mut self.navigation.list,
-            &query,
-            (0, false),
-            None,
-            !self.folder_loading,
-        ) {
-            browse = Some(match action {
-                file_browser::Choice::Parent => std::path::Path::new(&self.dialog_input)
-                    .parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .map_or_else(|| "/".into(), |p| p.to_string_lossy().into()),
-                file_browser::Choice::Select(entry) | file_browser::Choice::Open(entry) => {
-                    entry.path
-                }
-            });
-        }
-        if self
-            .folder_entries
-            .iter()
-            .all(|e| !self.show_hidden && e.name.starts_with('.'))
-            && !self.folder_loading
-        {
-            ui.label(palette.tag("No visible subfolders. You can open this folder."));
-        }
-        if let Some(path) = browse {
-            self.browse_folder(path, ctx);
-        }
-        ui.separator();
-        ui.checkbox(
-            &mut self.folder_sandbox.enabled,
-            "Sandbox project when bwrap is available",
-        );
-        if self.folder_sandbox.enabled {
-            ui.label(RichText::new("If sandboxing is unavailable on this host, the project opens in clearly labelled normal mode.").small().color(palette.muted));
-            ui.collapsing("Sandbox access rules", |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(260.)
-                    .show(ui, |ui| {
-                        workbench::sandbox_options_ui(ui, &mut self.folder_sandbox)
-                    });
-            });
-        }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if palette.primary(ui, "Open project  ·  Ctrl+Enter").clicked() || open_by_key {
-                let options = self.folder_sandbox.clone();
-                if let Err(error) = options.validate() {
-                    self.folder_error = Some(error.to_string());
-                } else {
-                    self.sandbox_defaults = options.clone();
-                    self.workbench.preferences_pending = true;
-                    self.dialog = Dialog::None;
-                    self.guarded(
-                        Action::Project {
-                            path: self.dialog_input.clone(),
-                            remote: self.folder_remote,
-                            options,
-                        },
-                        ctx,
-                    );
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                self.dialog = Dialog::None;
-            }
-        });
-    }
-
-    fn help_dialog(&mut self, ui: &mut egui::Ui) {
-        let palette = self.themes.active().palette;
-        ui.label(palette.tag("MAKE YOURSELF AT HOME"));
-        ui.heading("Keyboard shortcuts");
-        let focus = std::mem::take(&mut self.dialog_focus);
-        self.navigation.bindings.ui(ui, focus);
-        ui.add_space(8.0);
-        ui.collapsing("Standard editor shortcuts", |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("editor-shortcut-reference")
-                .max_height(180.)
-                .show(ui, |ui| {
-                    egui::Grid::new("shortcut-list")
-                        .spacing([32.0, 10.0])
-                        .show(ui, |ui| {
-                            for (key, description) in [
-                                ("Ctrl+Shift+P", "Command palette"),
-                                ("Ctrl+P", "Open file by path"),
-                                ("Ctrl+Shift+O", "Open project folder"),
-                                ("Ctrl+Shift+R", "Toggle Markdown preview"),
-                                ("Ctrl+N", "New file"),
-                                ("Ctrl+S", "Save file"),
-                                ("Ctrl+Shift+S", "Save to a different path"),
-                                ("Ctrl+W", "Close tab"),
-                                ("Ctrl+PageUp / Down", "Previous / next tab"),
-                                ("Ctrl+Tab", "Next tab (Shift for previous)"),
-                                ("Ctrl+Shift+A", "Agent chat"),
-                                ("Ctrl+Shift+X", "Manage extensions"),
-                                ("F5 / Shift+F5", "Debug: start/continue / stop/detach"),
-                                ("F6 / F9", "Debug: pause / toggle breakpoint"),
-                                ("F10 / F11 / Shift+F11", "Debug: step over / into / out"),
-                                ("Ctrl+B", "Toggle explorer"),
-                                (
-                                    "Ctrl+~ / Ctrl+`",
-                                    "Toggle tools sidebar (remember selected tab)",
-                                ),
-                                ("Ctrl+Shift+T", "Toggle / focus terminal"),
-                                ("Ctrl+F", "Find and replace"),
-                                ("Ctrl+Plus / Minus", "Editor font size"),
-                                ("Escape", "Close dialog / find"),
-                            ] {
-                                ui.label(RichText::new(key).monospace().color(palette.accent));
-                                ui.label(description);
-                                ui.end_row();
-                            }
-                        });
-                });
-        });
-        ui.add_space(12.0);
-        ui.label(RichText::new("On macOS use Command for editor shortcuts. Terminal keys go to the shell when it has focus. Use the Copy button to copy terminal output.").small().color(palette.muted));
-        if ui.button("Done").clicked() {
-            self.dialog = Dialog::None;
-        }
-    }
-
-    fn notice_ui(&mut self, ctx: &egui::Context) {
-        if egui::Popup::is_any_open(ctx) {
-            return;
-        }
-        let palette = self.themes.active().palette;
-        let Some((message, error, time)) = &self.notice else {
-            return;
-        };
-        if !error && time.elapsed() > Duration::from_secs(8) {
-            self.notice = None;
-            return;
-        }
-        let text = message.clone();
-        let error = *error;
-        egui::Area::new(egui::Id::new("notification"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -42.0])
-            .order(egui::Order::Tooltip)
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(palette.raised)
-                    .stroke(Stroke::new(
-                        1.0_f32,
-                        if error {
-                            palette.error
-                        } else {
-                            palette.success
-                        },
-                    ))
-                    .corner_radius(6)
-                    .inner_margin(egui::Margin::same(14))
-                    .show(ui, |ui| {
-                        ui.set_max_width(520.0);
-                        ui.horizontal_top(|ui| {
-                            ui.label(RichText::new(if error { "!" } else { "✓" }).color(
-                                if error {
-                                    palette.error
-                                } else {
-                                    palette.success
-                                },
-                            ));
-                            ui.add(egui::Label::new(text).wrap());
-                            if icons::small(ui, Icon::Close, "Dismiss notification").clicked() {
-                                self.notice = None;
-                            }
-                        });
-                    });
-            });
-    }
 }
 
+/// Recognize the platform extension shortcut even when the native backend translates it
+/// into Cut, consuming only that exact modified shortcut rather than ordinary clipboard Cut.
 fn consume_extensions_shortcut(ctx: &egui::Context) -> bool {
     ctx.input_mut(|input| {
         let shortcut = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
@@ -4167,6 +2816,7 @@ pub fn find_matches(text: &str, needle: &str, case_sensitive: bool) -> Vec<(usiz
     matches
 }
 
+/// Flatten expanded cached directories in display order while retaining each entry's indentation depth.
 fn flatten_tree(
     directories: &HashMap<String, Vec<Entry>>,
     expanded: &HashSet<String>,
@@ -4206,656 +2856,4 @@ pub fn syntax_token(path: Option<&str>) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extensions_shortcut_handles_native_cut_events_without_consuming_plain_cut() {
-        let shortcut = egui::Modifiers::CTRL | egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-        for (modifiers, events, opens, cut_remains) in [
-            (shortcut, vec![egui::Event::Cut], true, false),
-            (
-                egui::Modifiers::NONE,
-                vec![
-                    egui::Event::Cut,
-                    egui::Event::Key {
-                        key: Key::X,
-                        physical_key: None,
-                        pressed: false,
-                        repeat: false,
-                        modifiers: shortcut,
-                    },
-                ],
-                true,
-                false,
-            ),
-            (
-                egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
-                vec![egui::Event::Cut],
-                false,
-                true,
-            ),
-            (
-                shortcut | egui::Modifiers::ALT,
-                vec![egui::Event::Cut],
-                false,
-                true,
-            ),
-        ] {
-            let ctx = egui::Context::default();
-            let _ = ctx.run(
-                egui::RawInput {
-                    modifiers,
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    assert_eq!(consume_extensions_shortcut(ctx), opens);
-                    assert_eq!(
-                        ctx.input(|i| i.events.contains(&egui::Event::Cut)),
-                        cut_remains
-                    );
-                },
-            );
-        }
-    }
-
-    #[test]
-    fn terminal_navigation_reaches_the_pty_on_the_first_frame_after_focus() {
-        use portable_pty::CommandBuilder;
-        for (key, modifiers, bytes) in [
-            (Key::Tab, egui::Modifiers::NONE, b"\t".as_slice()),
-            (Key::Tab, egui::Modifiers::SHIFT, b"\x1b[Z".as_slice()),
-            (Key::ArrowUp, egui::Modifiers::NONE, b"\x1b[A".as_slice()),
-            (Key::ArrowLeft, egui::Modifiers::NONE, b"\x1b[D".as_slice()),
-            (Key::Escape, egui::Modifiers::NONE, b"\x1b".as_slice()),
-        ] {
-            let ctx = egui::Context::default();
-            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            let mut app = EditorApp::new(&cc, Startup::default());
-            app.new_file();
-            let mut command = CommandBuilder::new("python3");
-            command.args(["-u", "-c", &format!("import sys,tty;tty.setraw(0);print('READY',flush=True);data=sys.stdin.buffer.read({});print('BYTES_'+data.hex(),flush=True)", bytes.len())]);
-            app.terminal = Some(Terminal::spawn(&ctx, command, "Input recorder".into()).unwrap());
-            app.show_terminal = true;
-            app.terminal_intent();
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !app.terminal.as_ref().unwrap().contents().contains("READY") {
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            let frame = |time| egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(850., 560.),
-                )),
-                time: Some(time),
-                ..Default::default()
-            };
-            let _ = ctx.run(frame(0.), |ctx| {
-                app.workspace_content(ctx);
-                Terminal::focus(ctx);
-            });
-            let mut input = frame(0.1);
-            input.modifiers = modifiers;
-            input.events.push(egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            });
-            let _ = ctx.run(input, |ctx| {
-                app.shortcuts(ctx);
-                app.workspace_content(ctx);
-            });
-            // Back-tab navigation can schedule a focus change for the next frame.
-            let _ = ctx.run(frame(0.2), |ctx| {
-                app.shortcuts(ctx);
-                app.workspace_content(ctx);
-            });
-            assert!(
-                Terminal::focused(&ctx),
-                "{modifiers:?}+{key:?} moved terminal focus into editor controls"
-            );
-            let expected = format!(
-                "BYTES_{}",
-                bytes
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            );
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while !app
-                .terminal
-                .as_ref()
-                .unwrap()
-                .contents()
-                .contains(&expected)
-            {
-                assert!(
-                    Instant::now() < deadline,
-                    "{modifiers:?}+{key:?} did not reach the PTY"
-                );
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            assert!(app.documents[0].text.is_empty());
-        }
-    }
-
-    #[test]
-    fn edits_made_while_a_project_opens_are_not_silently_discarded() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.project_token = 1;
-        app.preparing = true;
-        // The request started with no buffers, but the user edited while waiting.
-        app.new_file();
-        app.documents[0].text = "typed during slow project opening".into();
-        let project = tempfile::tempdir().unwrap();
-        let response = files::local(&Request::Prepare {
-            path: project.path().to_string_lossy().into(),
-            sandbox: Default::default(),
-        })
-        .unwrap();
-        app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::Prepare {
-                    remote: false,
-                    options: Default::default(),
-                    keep_buffers: false,
-                    token: 1,
-                    documents_at_start: vec![],
-                    restore_saved: None,
-                },
-                result: Box::new(Ok(response)),
-            })
-            .unwrap();
-        app.poll(&ctx);
-        assert!(matches!(app.pending, Some(Action::PreparedProject { .. })));
-        assert_eq!(app.documents[0].text, "typed during slow project opening");
-        assert!(app.workspace.is_none());
-        app.pending = None; // Keep editing.
-        assert_eq!(app.documents.len(), 1);
-    }
-
-    #[test]
-    fn file_operations_wait_until_the_requested_project_environment_is_ready() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        let mut workspace = remote_workspace();
-        workspace.ready = false;
-        app.workspace = Some(workspace);
-        app.new_file();
-        app.documents[0].text = "keep edits".into();
-        app.save_document(app.documents[0].id, "/not-written.rs".into(), true, &ctx);
-        assert!(!app.documents[0].saving);
-        assert_eq!(app.documents[0].text, "keep edits");
-        assert!(
-            app.notice
-                .as_ref()
-                .is_some_and(|(text, _, _)| text.contains("environment to be ready"))
-        );
-        app.open_file("/not-read.rs".into(), &ctx);
-        assert!(app.opening.is_empty());
-        assert_eq!(app.documents.len(), 1);
-    }
-
-    pub(super) fn remote_workspace() -> Workspace {
-        let remote = Remote::new(Profile {
-            host: "test-host".into(),
-            user: "researcher".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        Workspace {
-            root: "/scratch/researcher/project".into(),
-            remote: Some(remote),
-            connected: true,
-            ready: true,
-            plan: Default::default(),
-            sandbox_options: Default::default(),
-        }
-    }
-
-    #[test]
-    fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(remote_workspace());
-        let remote = app.workspace.as_ref().unwrap().remote.clone().unwrap();
-        std::fs::write(&remote.socket, "owned connection fixture").unwrap();
-        app.new_file();
-        let doc = &mut app.documents[0];
-        doc.path = Some("/scratch/researcher/project/main.rs".into());
-        doc.revision = Some("remote revision".into());
-        doc.text = "unsaved remote edits".into();
-        doc.modified = true;
-        doc.edit_version = 3;
-        doc.selection = Some((2, 5));
-        let generation = app.generation;
-        let project_token = app.project_token;
-        let folder_token = app.folder_token;
-        let cancel = app.connection_cancel.clone();
-        app.preparing = true;
-        app.disconnect_ssh(&ctx);
-        assert!(app.workspace.is_none());
-        assert!(!app.project_ready());
-        assert!(!app.preparing);
-        assert!(cancel.load(Ordering::Acquire));
-        assert!(!remote.socket.exists());
-        assert!(app.generation > generation);
-        assert!(app.project_token > project_token);
-        assert!(app.folder_token > folder_token);
-        assert_eq!(app.documents[0].text, "unsaved remote edits");
-        assert!(app.documents[0].dirty());
-        assert_eq!(app.documents[0].edit_version, 3);
-        assert_eq!(app.documents[0].selection, Some((2, 5)));
-        assert!(app.documents[0].path.is_none());
-        assert!(app.documents[0].revision.is_none());
-        assert_eq!(app.documents[0].name(), "main.rs");
-        assert_eq!(
-            app.documents[0].display_path(),
-            Some("/scratch/researcher/project/main.rs")
-        );
-        assert!(app.pending.is_none());
-        assert!(app.ssh_master.is_none());
-        assert!(app.terminal.is_none());
-        app.tx
-            .send(Event::Connected {
-                generation,
-                result: Ok(()),
-            })
-            .unwrap();
-        app.poll(&ctx);
-        assert!(app.workspace.is_none());
-        app.set_dialog(Dialog::Folder);
-        assert!(!app.folder_remote);
-        assert_eq!(
-            app.dialog_input,
-            std::env::current_dir().unwrap().to_string_lossy()
-        );
-        app.workspace_banner(&ctx);
-        assert_eq!(app.last_window_title, "RODE");
-        app.save_document(app.documents[0].id, "/not-local.rs".into(), false, &ctx);
-        assert!(!app.documents[0].saving);
-        assert_eq!(app.documents[0].text, "unsaved remote edits");
-    }
-
-    #[test]
-    fn open_folder_defaults_to_the_remote_host_and_local_open_is_explicit() {
-        let cc = eframe::CreationContext::_new_kittest(egui::Context::default());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(remote_workspace());
-        let socket = app
-            .workspace
-            .as_ref()
-            .unwrap()
-            .remote
-            .as_ref()
-            .unwrap()
-            .socket
-            .clone();
-        app.set_dialog(Dialog::Folder);
-        assert!(app.folder_remote);
-        assert_eq!(app.dialog_input, "/scratch/researcher/project");
-        app.open_local_folder_dialog();
-        assert!(!app.folder_remote);
-        assert_eq!(
-            app.workspace
-                .as_ref()
-                .unwrap()
-                .remote
-                .as_ref()
-                .unwrap()
-                .socket,
-            socket
-        );
-    }
-
-    #[test]
-    fn project_switch_still_protects_unsaved_buffers() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(remote_workspace());
-        app.new_file();
-        app.documents[0].text = "unsaved remote edits".into();
-        app.guarded(
-            Action::Project {
-                path: "/scratch/other".into(),
-                remote: true,
-                options: Default::default(),
-            },
-            &ctx,
-        );
-        assert!(app.pending.is_some());
-        assert!(!app.preparing);
-        assert_eq!(app.documents[0].text, "unsaved remote edits");
-        assert_eq!(
-            app.workspace.as_ref().unwrap().root,
-            "/scratch/researcher/project"
-        );
-    }
-
-    #[test]
-    fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.set_dialog(Dialog::Folder);
-        let old = app.dialog_input.clone();
-        let token = app.folder_token;
-        app.set_dialog(Dialog::Open);
-        app.dialog_input = "keep-this.rs".into();
-        let response = files::Response {
-            path: "/old/folder".into(),
-            image: None,
-            binary: None,
-            pdf: None,
-            hex: None,
-            attachment: None,
-            notebook: None,
-            preview: None,
-            entries: vec![],
-            text: String::new(),
-            revision: String::new(),
-            project: None,
-            tool: None,
-        };
-        app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::Browse {
-                    remote: false,
-                    token,
-                    path: old,
-                },
-                result: Box::new(Ok(response.clone())),
-            })
-            .unwrap();
-        app.poll(&ctx);
-        assert_eq!(app.dialog_input, "keep-this.rs");
-        app.set_dialog(Dialog::Folder);
-        let old = app.dialog_input.clone();
-        let token = app.folder_token;
-        app.dialog_input = "/newly/typed/path".into();
-        app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::Browse {
-                    remote: false,
-                    token,
-                    path: old,
-                },
-                result: Box::new(Ok(response)),
-            })
-            .unwrap();
-        app.poll(&ctx);
-        assert_eq!(app.dialog_input, "/newly/typed/path");
-    }
-
-    #[derive(Default)]
-    struct MemoryStorage(HashMap<String, String>, usize);
-
-    impl eframe::Storage for MemoryStorage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
-        }
-        fn set_string(&mut self, key: &str, value: String) {
-            self.0.insert(key.into(), value);
-        }
-        fn flush(&mut self) {
-            self.1 += 1;
-        }
-    }
-
-    #[test]
-    fn interface_scale_tracks_monitor_dpi_and_preserves_editor_state() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_file();
-        app.documents[0].text = "unsaved work".into();
-        app.font_size = 19.;
-        app.set_ui_scale(0.75, &ctx);
-        let mut storage = MemoryStorage::default();
-        app.persist_ui_scale(Some(&mut storage));
-        assert_eq!(storage.0["ui_scale"], "0.75");
-        assert_eq!(storage.1, 1);
-        app.persist_ui_scale(Some(&mut storage));
-        assert_eq!(storage.1, 1, "Idle frames must not save scale repeatedly");
-        for native_dpi in [1., 2.] {
-            let mut input = egui::RawInput::default();
-            input
-                .viewports
-                .get_mut(&egui::ViewportId::ROOT)
-                .unwrap()
-                .native_pixels_per_point = Some(native_dpi);
-            let _ = ctx.run(input, |ctx| {
-                assert_eq!(ctx.pixels_per_point(), native_dpi * 0.75);
-            });
-        }
-        app.select_theme("carbon", &ctx);
-        assert_eq!(ctx.zoom_factor(), 0.75);
-        assert_eq!(app.font_size, 19.);
-        assert_eq!(app.documents[0].text, "unsaved work");
-        assert!(app.documents[0].dirty());
-        let restored_ctx = egui::Context::default();
-        let mut cc = eframe::CreationContext::_new_kittest(restored_ctx.clone());
-        // Ignore stale scale in egui's private GUI snapshot on restart.
-        restored_ctx.options_mut(|options| options.zoom_factor = 2.);
-        cc.storage = Some(&storage);
-        let restored = EditorApp::new(&cc, Startup::default());
-        assert_eq!(restored.ui_scale, 0.75);
-        let _ = restored_ctx.run(Default::default(), |ctx| {
-            assert_eq!(ctx.zoom_factor(), 0.75);
-            assert!(!ctx.options(|options| options.zoom_with_keyboard));
-        });
-        assert!(!restored.ui_scale_save_pending);
-    }
-
-    #[test]
-    fn invalid_interface_scale_uses_system_display_scaling() {
-        for invalid in ["NaN", "inf", "bad", "0", "-1", "5"] {
-            let mut storage = MemoryStorage::default();
-            storage.0.insert("ui_scale".into(), invalid.into());
-            let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
-            cc.storage = Some(&storage);
-            let app = EditorApp::new(&cc, Startup::default());
-            assert_eq!(app.ui_scale, 1., "{invalid}");
-        }
-    }
-
-    #[test]
-    fn theme_change_flushes_preferences_without_exiting_or_waiting_for_autosave() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        let mut storage = MemoryStorage::default();
-        storage.0.insert("font_size".into(), "19".into());
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(storage.1, 0);
-        app.select_theme("carbon", &ctx);
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(storage.0[theme::STORAGE_KEY], "carbon");
-        assert_eq!(storage.0["font_size"], "19");
-        assert_eq!(storage.1, 1);
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(
-            storage.1, 1,
-            "Unchanged frames must not repeatedly flush storage"
-        );
-        app.select_theme("phosphor", &ctx);
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(storage.0[theme::STORAGE_KEY], "phosphor");
-        assert_eq!(storage.1, 2);
-    }
-
-    #[test]
-    fn missing_preference_storage_reports_that_the_theme_could_not_be_saved() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.select_theme("carbon", &ctx);
-        app.persist_theme_choice(None);
-        assert_eq!(app.themes.active().id, "carbon");
-        assert!(
-            app.notice
-                .as_ref()
-                .is_some_and(|(text, error, _)| *error && text.contains("could not be saved"))
-        );
-        assert!(!app.theme_save_pending);
-    }
-
-    #[test]
-    fn theme_choice_persists_without_touching_unsaved_edits_or_font_size() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_file();
-        app.documents[0].text = "unsaved work".into();
-        app.font_size = 19.0;
-        app.select_theme("carbon", &ctx);
-        assert_eq!(app.documents.len(), 1);
-        assert_eq!(app.documents[0].text, "unsaved work");
-        assert!(app.documents[0].dirty());
-        assert_eq!(app.font_size, 19.0);
-        let mut storage = MemoryStorage::default();
-        eframe::App::save(&mut app, &mut storage);
-        let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
-        cc.storage = Some(&storage);
-        let restored = EditorApp::new(&cc, Startup::default());
-        assert_eq!(restored.themes.active().id, "carbon");
-        assert_eq!(restored.font_size, 19.0);
-        let overridden = EditorApp::new(
-            &cc,
-            Startup {
-                theme: Some("phosphor".into()),
-                ..Default::default()
-            },
-        );
-        assert_eq!(overridden.themes.active().id, "phosphor");
-    }
-
-    #[test]
-    fn syntax_selection_saves_only_its_own_preference_and_restores_independently() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        app.new_file();
-        app.documents[0].text = "unsaved text".into();
-        app.font_size = 19.;
-        let mut storage = MemoryStorage::default();
-        storage.0.insert(theme::STORAGE_KEY.into(), "neon".into());
-        app.select_syntax_theme("dracula", &ctx);
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(storage.0[theme::syntax::STORAGE_KEY], "dracula");
-        assert_eq!(storage.0[theme::STORAGE_KEY], "neon");
-        assert_eq!(storage.1, 1);
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(storage.1, 1);
-        assert_eq!(app.documents[0].text, "unsaved text");
-        assert_eq!(app.font_size, 19.);
-        assert!(app.documents[0].dirty());
-        app.select_theme("carbon", &ctx);
-        app.persist_theme_choice(Some(&mut storage));
-        assert_eq!(storage.0[theme::syntax::STORAGE_KEY], "dracula");
-        assert_eq!(app.themes.active_syntax().id, "dracula");
-        let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
-        cc.storage = Some(&storage);
-        let restored = EditorApp::new(&cc, Startup::default());
-        assert_eq!(restored.themes.active().id, "carbon");
-        assert_eq!(restored.themes.active_syntax().id, "dracula");
-        let override_app = EditorApp::new(
-            &cc,
-            Startup {
-                syntax_theme: Some("nord".into()),
-                ..Default::default()
-            },
-        );
-        assert_eq!(override_app.themes.active().id, "carbon");
-        assert_eq!(override_app.themes.active_syntax().id, "nord");
-        let fallback = EditorApp::new(
-            &cc,
-            Startup {
-                syntax_theme: Some("absent".into()),
-                ..Default::default()
-            },
-        );
-        assert_eq!(fallback.themes.active_syntax().id, "ui");
-        assert!(fallback.notice.is_some());
-    }
-
-    #[test]
-    fn save_acknowledgement_keeps_edits_typed_during_save() {
-        let mut document = Document {
-            recovery: None,
-            markdown: None,
-            marp: None,
-            image: None,
-            pdf: None,
-            hex: None,
-            notebook: None,
-            id: 1,
-            path: Some("file.rs".into()),
-            text: "newer edits".into(),
-            saved_text: "original".into(),
-            revision: Some("old".into()),
-            saving: true,
-            modified: true,
-            edit_version: 0,
-            last_cursor: usize::MAX,
-            cursor: (1, 1),
-            selection: None,
-            lines: 1,
-        };
-        document.acknowledge_save(
-            "file.rs".into(),
-            "submitted edits".into(),
-            "new revision".into(),
-        );
-        assert!(document.dirty());
-        assert!(!document.saving);
-        assert_eq!(document.text, "newer edits");
-        assert_eq!(document.revision.as_deref(), Some("new revision"));
-    }
-
-    #[test]
-    fn explorer_flattens_only_expanded_visible_folders() {
-        let entries = |path: &str, dir| Entry {
-            path: path.into(),
-            name: ssh::display_name(path).into(),
-            dir,
-        };
-        let directories = HashMap::from([
-            (
-                "/root".into(),
-                vec![
-                    entries("/root/src", true),
-                    entries("/root/.git", true),
-                    entries("/root/main.rs", false),
-                ],
-            ),
-            ("/root/src".into(), vec![entries("/root/src/lib.rs", false)]),
-        ]);
-        let mut rows = vec![];
-        flatten_tree(&directories, &HashSet::new(), "/root", 0, false, &mut rows);
-        assert_eq!(rows.len(), 2);
-        rows.clear();
-        flatten_tree(
-            &directories,
-            &HashSet::from(["/root/src".into()]),
-            "/root",
-            0,
-            true,
-            &mut rows,
-        );
-        assert_eq!(rows.len(), 4);
-        assert_eq!(rows[1].depth, 1);
-    }
-}
+mod tests;

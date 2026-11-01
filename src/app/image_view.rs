@@ -7,6 +7,8 @@
 use super::*;
 use crate::images;
 
+/// Preview interaction flags returned to its owner, including unused edge-scroll
+/// movement for PDF page navigation; no reload is performed by the renderer.
 pub(super) struct ImageResponse {
     pub reload: bool,
     /// Vertical wheel/trackpad movement left over at a page edge.
@@ -22,6 +24,8 @@ enum ScrollOrigin {
     End,
 }
 
+/// Read-only decoded preview with lazy texture upload and a retained memory lease.
+/// Fit/explicit zoom and scroll origin are local presentation state.
 pub(super) struct ImageView {
     pub original: [u32; 2],
     pub format: String,
@@ -36,6 +40,7 @@ pub(super) struct ImageView {
     pub loading: bool,
 }
 impl ImageView {
+    /// Retain decoded pixels and their lease; upload the GPU texture only on the first visible frame.
     pub fn new(decoded: images::Decoded) -> Self {
         Self {
             original: decoded.original,
@@ -51,21 +56,26 @@ impl ImageView {
             loading: false,
         }
     }
+    /// Replace successfully decoded content while preserving the user's selected zoom mode.
     pub fn replace(&mut self, decoded: images::Decoded) {
         let zoom = self.zoom;
         *self = Self::new(decoded);
         self.zoom = zoom;
     }
+    /// Multiply the displayed/explicit zoom, clamp it to 1–1600% and reveal the image start.
     pub fn zoom_by(&mut self, factor: f32) {
         self.zoom = Some((self.zoom.unwrap_or(self.displayed_zoom) * factor).clamp(0.01, 16.));
         self.reset_scroll = Some(ScrollOrigin::Start);
     }
+    /// Request the bottom edge on the next render, used when entering a previous PDF page.
     pub fn scroll_to_end(&mut self) {
         self.reset_scroll = Some(ScrollOrigin::End);
     }
+    /// Return a stable per-document preview focus identity shared by its keyboard actions.
     pub fn focus_id(id: u64) -> egui::Id {
         egui::Id::new(("image-preview", id))
     }
+    /// Render cached pixels with fit/zoom/pan controls and return reload/edge-navigation intents.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -219,6 +229,7 @@ impl ImageView {
 }
 
 impl EditorApp {
+    /// Route a zoom shortcut to the active image/PDF preview rather than source font sizing.
     pub(super) fn zoom_image_shortcut(&mut self, ctx: &egui::Context, factor: f32) -> bool {
         let Some(doc) = self.documents.get_mut(self.active) else {
             return false;
@@ -241,6 +252,7 @@ impl EditorApp {
         }
         false
     }
+    /// Queue a versioned read of the bound host path, retaining the old preview until replacement succeeds.
     pub(super) fn reload_image(&mut self, id: u64, ctx: &egui::Context) {
         let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) else {
             return;

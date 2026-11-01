@@ -10,6 +10,7 @@ const MIN_HEIGHT: f32 = 118.;
 const WARNING_HEIGHT: f32 = 22.;
 const TRANSCRIPT_MIN_HEIGHT: f32 = 160.;
 
+/// Window-local composer height, drag state and prompt recall; resizing does not submit text.
 pub(super) struct State {
     /// Preferred height without the optional unsaved-file row. Keep it when a
     /// temporarily small window clamps the actual panel or history hides input.
@@ -38,6 +39,7 @@ struct Recall {
     position: usize,
 }
 
+/// Logical-point rectangles reserved for transcript/content and composer input in the current frame.
 pub(super) struct Layout {
     pub content: Rect,
     pub input: Rect,
@@ -45,10 +47,12 @@ pub(super) struct Layout {
 }
 
 impl State {
+    /// Reserve the measured attachment row before computing available transcript and input space.
     pub fn set_attachment_height(&mut self, height: f32) {
         self.attachment_height = height;
     }
 
+    /// Leave prompt-history navigation while preserving the separately retained sent prompts.
     pub fn reset_recall(&mut self) {
         self.recall = None;
     }
@@ -60,11 +64,13 @@ impl State {
         }
     }
 
+    /// Drop sent-prompt recall when switching conversations.
     pub fn clear_history(&mut self) {
         self.reset_recall();
         self.history.clear();
     }
 
+    /// Rebuild local prompt recall from bounded accepted message texts.
     pub fn restore_history(&mut self, messages: impl Iterator<Item = String>) {
         self.clear_history();
         for text in messages {
@@ -150,6 +156,8 @@ impl State {
             egui::Event::Key { key: pressed, pressed: true, modifiers: egui::Modifiers::NONE, .. } if *pressed == key)));
     }
 
+    /// Allocate transcript and composer regions within the available bounds, preserving
+    /// the preferred height when compact windows temporarily clamp the actual input.
     pub fn layout(
         &mut self,
         ui: &mut egui::Ui,

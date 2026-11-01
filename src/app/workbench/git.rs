@@ -7,6 +7,8 @@ use super::*;
 mod rows;
 
 #[derive(Clone)]
+/// Confirmed Git mutation payload. Stash actions capture both selector and immutable
+/// object ID so a refreshed/reordered stash list cannot retarget removal.
 pub(super) enum Mutation {
     Command(Vec<String>),
     Stash {
@@ -21,6 +23,8 @@ impl From<Vec<String>> for Mutation {
     }
 }
 
+/// Cached host Git results and unapplied forms; a single busy gate serializes requests
+/// and confirmations retain their original mutation payload.
 pub(super) struct State {
     pub(super) git_root: String,
     pub(super) git_busy: bool,
@@ -79,6 +83,7 @@ impl Default for State {
 }
 
 impl EditorApp {
+    /// Render cached source-control views and explicit host actions without running Git during layout.
     pub(in crate::app) fn git_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.horizontal_wrapped(|ui| {
@@ -273,6 +278,7 @@ impl EditorApp {
         });
         ui.label(RichText::new("Network commands use existing credentials and stop if input is required. Use Git terminal for interactive prompts.").small().color(palette.muted));
     }
+    /// Render bounded working-tree/index rows and defer file-specific actions until selection completes.
     pub(in crate::app) fn git_changes_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.label(
@@ -280,16 +286,50 @@ impl EditorApp {
                 .small()
                 .color(palette.muted),
         );
+        let ready = !self.workbench.git.git_busy;
+        let stageable = self
+            .workbench
+            .git
+            .files
+            .iter()
+            .any(|file| rows::Action::Stage.enabled(file));
+        let staged = self
+            .workbench
+            .git
+            .files
+            .iter()
+            .any(project::GitFile::staged);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Stage all").clicked() {
+            if ui
+                .add_enabled(ready && stageable, egui::Button::new("Stage all"))
+                .on_disabled_hover_text(if ready {
+                    "No unstaged or untracked changes to stage."
+                } else {
+                    "Wait for the current Git operation to finish."
+                })
+                .clicked()
+            {
                 self.git_mutate(strings(&["add", "--all"]), "Stage all", ctx);
             }
-            if ui.button("Unstage all").clicked() {
+            if ui
+                .add_enabled(ready && staged, egui::Button::new("Unstage all"))
+                .on_disabled_hover_text(if ready {
+                    "No staged changes to unstage."
+                } else {
+                    "Wait for the current Git operation to finish."
+                })
+                .clicked()
+            {
                 self.git_mutate(self.unstage_args(None), "Unstage all", ctx);
             }
             ui.label(format!("{} changed", self.workbench.git.files.len()));
         });
-        if let Some((index, action)) = rows::show(ui, &self.workbench.git.files, palette) {
+        let selected = ui
+            .add_enabled_ui(ready, |ui| {
+                rows::show(ui, &self.workbench.git.files, palette)
+            })
+            .inner;
+        if let Some((index, action)) = selected {
             let file = self.workbench.git.files[index].clone();
             match action {
                 rows::Action::Open => self.open_file(
@@ -333,13 +373,27 @@ impl EditorApp {
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
+        let conflicts = self
+            .workbench
+            .git
+            .files
+            .iter()
+            .any(project::GitFile::conflict);
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.workbench.git.amend, "Amend last commit");
+            let hint = if !ready {
+                "Wait for the current Git operation to finish."
+            } else if conflicts {
+                "Resolve and stage all conflicts before committing."
+            } else {
+                "Enter a commit message."
+            };
             if ui
                 .add_enabled(
-                    !self.workbench.git.commit_message.trim().is_empty(),
+                    ready && !conflicts && !self.workbench.git.commit_message.trim().is_empty(),
                     egui::Button::new("Commit staged"),
                 )
+                .on_disabled_hover_text(hint)
                 .clicked()
             {
                 let mut args = strings(&["commit", "-m"]);
@@ -384,6 +438,7 @@ impl EditorApp {
             });
         }
     }
+    /// Request the selected path's staged or working-tree diff under the captured project policy.
     pub(in crate::app) fn git_file_diff(
         &mut self,
         file: &project::GitFile,
@@ -419,6 +474,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Render cached commit metadata and explicit show/history actions.
     pub(in crate::app) fn git_history_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let data = self.workbench.git.git_tab_data.clone();
         for line in data.lines() {
@@ -475,6 +531,7 @@ impl EditorApp {
             );
         }
     }
+    /// Render cached local/remote branch identities and guarded branch mutations.
     pub(in crate::app) fn git_branches_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         for line in self.workbench.git.git_tab_data.clone().lines() {
             let fields: Vec<_> = line.split('\0').collect();
@@ -538,6 +595,7 @@ impl EditorApp {
             self.git_mutate(args, "Create branch", ctx);
         }
     }
+    /// Render cached stash selector/object identities; destructive operations retain both for confirmation.
     pub(in crate::app) fn git_stash_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.text_edit_singleline(&mut self.workbench.git.stash_message);
         if ui.button("Stash changes + untracked files").clicked() {
@@ -586,10 +644,24 @@ impl EditorApp {
             });
         }
     }
+    /// Render cached Git diff/output and confirmation windows belonging to the current tool viewport.
     pub(in crate::app) fn workbench_windows(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         if let Some(mut diff) = self.workbench.git.diff.take() {
             if diff.open {
+                let action = if diff.staged {
+                    rows::Action::Unstage
+                } else {
+                    rows::Action::Stage
+                };
+                let file = self
+                    .workbench
+                    .git
+                    .files
+                    .iter()
+                    .find(|f| f.path == diff.path);
+                let available = file.is_some_and(|file| action.enabled(file));
+                let conflict = file.is_some_and(project::GitFile::conflict);
                 egui::Window::new(format!(
                     "{} diff · {}",
                     if diff.staged {
@@ -606,9 +678,11 @@ impl EditorApp {
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .add_enabled(
-                                !self.workbench.git.git_busy,
+                                !self.workbench.git.git_busy && available,
                                 egui::Button::new(if diff.staged {
                                     "Unstage file"
+                                } else if conflict {
+                                    "Mark resolved"
                                 } else {
                                     "Stage file"
                                 }),
@@ -642,7 +716,7 @@ impl EditorApp {
                             for (label, patch) in project::hunk_patches(&diff.text) {
                                 if ui
                                     .add_enabled(
-                                        !self.workbench.git.git_busy,
+                                        !self.workbench.git.git_busy && available && !conflict,
                                         egui::Button::new(format!(
                                             "{} {label}",
                                             if diff.staged { "Unstage" } else { "Stage" }
@@ -714,6 +788,8 @@ impl EditorApp {
             });
         }
     }
+    /// Serialize a literal-argument Git request against the discovered repository root
+    /// and return its captured completion intent through the project worker.
     pub(in crate::app) fn git_command(
         &mut self,
         args: Vec<String>,
@@ -736,6 +812,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Discover the repository root first, then refresh bounded NUL-delimited status metadata.
     pub(in crate::app) fn refresh_git(&mut self, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Git) {
             return;
@@ -762,6 +839,7 @@ impl EditorApp {
             );
         }
     }
+    /// Queue only the selected Git view's bounded metadata command.
     pub(in crate::app) fn refresh_git_tab(&mut self, ctx: &egui::Context) {
         let args = match self.workbench.git.git_tab {
             GitTab::Changes => {
@@ -788,6 +866,7 @@ impl EditorApp {
         };
         self.git_command(args, GitJob::Tab, None, ctx);
     }
+    /// Require saved buffers and dispatch a stash action against its captured selector and object ID.
     fn git_stash(
         &mut self,
         action: project::StashAction,
@@ -825,6 +904,8 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Refuse source/index-changing commands while editor buffers are dirty, then dispatch
+    /// with a mutation label for refresh and commit-message acknowledgement handling.
     pub(in crate::app) fn git_mutate(
         &mut self,
         args: Vec<String>,
@@ -868,6 +949,7 @@ impl EditorApp {
             ctx,
         );
     }
+    /// Build the unstage command for a normal or unborn branch, optionally limiting it to one path.
     pub(in crate::app) fn unstage_args(&self, path: Option<&str>) -> Vec<String> {
         if self.workbench.git.branch.starts_with("No commits yet")
             || self.workbench.git.branch.starts_with("Initial commit")
@@ -886,6 +968,8 @@ impl EditorApp {
             strings(&["reset", "--mixed", "HEAD"])
         }
     }
+    /// Apply the matching serialized Git reply, refresh affected cached views and
+    /// reload only clean documents after acknowledged mutations.
     pub(in crate::app) fn handle_git(
         &mut self,
         job: GitJob,

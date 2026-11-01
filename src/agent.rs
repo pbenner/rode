@@ -24,6 +24,7 @@ pub struct Launch {
 }
 
 impl Launch {
+    /// Adapt the captured desktop host context to the headless controller through an injected transport factory.
     fn core(&self) -> rode_agent_core::Launch {
         rode_agent_core::Launch {
             config: self.config.clone(),
@@ -39,6 +40,7 @@ impl Launch {
         }
     }
 }
+/// Desktop local/SSH transport factory that preserves the captured project-host policy.
 struct HostFactory(Launch);
 impl rode_agent_core::Factory for HostFactory {
     fn start(
@@ -81,6 +83,8 @@ impl Session {
         let argv = launch.config.argv()?;
         Self::with_arguments(launch, argv, LINE_LIMIT, wake)
     }
+    /// Start a separately supervised metadata/history connection with its smaller line budget;
+    /// this path omits conversation-start arguments and never submits a prompt.
     pub(crate) fn history(
         launch: Launch,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
@@ -88,6 +92,7 @@ impl Session {
         let argv = launch.config.arguments(false)?;
         Self::with_arguments(launch, argv, 2 * 1024 * 1024, wake)
     }
+    /// Start the shared supervised process transport using captured arguments and protocol line bound.
     fn with_arguments(
         launch: Launch,
         argv: Vec<String>,

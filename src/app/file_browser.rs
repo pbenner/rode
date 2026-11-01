@@ -96,6 +96,7 @@ impl State {
     }
 }
 #[derive(Clone)]
+/// Deferred shared-picker row action; selection alone does not open or mutate a host file.
 pub(super) enum Choice {
     Select(Entry),
     Open(Entry),
@@ -254,6 +255,7 @@ pub(super) fn rows(
     action
 }
 
+/// Identify file/hex/save/attachment dialogs that share the asynchronous bounded picker.
 pub(super) fn is_file_dialog(dialog: &Dialog) -> bool {
     matches!(
         dialog,
@@ -272,6 +274,8 @@ fn parent(path: &str) -> String {
 }
 
 impl EditorApp {
+    /// Queue a directory listing with picker token and captured location; ordinary host
+    /// file pickers use the active plan, while explicit desktop attachments use local scope.
     pub(super) fn browse_files(&mut self, path: String, ctx: &egui::Context) {
         let browser = &mut self.file_browser;
         browser.token = browser.token.wrapping_add(1);
@@ -313,6 +317,7 @@ impl EditorApp {
         self.file_browser.dirty = true;
         self.browse_files(path, ctx);
     }
+    /// Render the shared open/save/hex/attachment picker and dispatch its explicit accepted path.
     pub(super) fn file_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         if self.file_browser.needs_load {

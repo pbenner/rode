@@ -15,6 +15,8 @@ use crate::debugger::{
 use std::collections::BTreeMap;
 
 #[derive(Default)]
+/// Disposable debugger attachment, source snapshot identities, terminal streams and
+/// cleanup flags. Host protocol state can outlive this view when explicitly persistent.
 pub(super) struct State {
     target: Option<crate::slurm::Target>,
     persistent: bool,
@@ -53,6 +55,7 @@ impl State {
     }
 }
 impl EditorApp {
+    /// Leave the current controller according to persistence and clear project-specific UI/configuration state.
     pub(super) fn reset_debugger(&mut self) {
         self.leave_debugger();
         self.debugger.client = None;
@@ -68,6 +71,8 @@ impl EditorApp {
         self.debugger.source_digests.clear();
         self.debugger.verify_sources = false;
     }
+    /// Detach a persistent controller or request foreground termination, then release
+    /// its terminal views and pending source jump without changing unrelated shells.
     pub(super) fn leave_debugger(&mut self) {
         if self
             .debugger
@@ -88,6 +93,8 @@ impl EditorApp {
             self.stop_debugger();
         }
     }
+    /// Attach to the captured host runtime using its original policy and source digests;
+    /// release the previous controller only after creating the replacement attachment.
     pub(in crate::app) fn attach_debugger_runtime(
         &mut self,
         info: rode_runtime_core::service::Info,
@@ -126,6 +133,8 @@ impl EditorApp {
         self.workbench.tools_hidden = false;
         Ok(())
     }
+    /// Request explicit termination and retain cleanup flags while ending debugger-owned
+    /// terminal streams; return immediately without claiming cleanup is complete.
     pub(super) fn stop_debugger(&mut self) {
         if let Some(client) = &mut self.debugger.client {
             client.stop();
@@ -143,6 +152,7 @@ impl EditorApp {
         self.debugger.pending_jump = None;
         self.debugger.source_loading = None;
     }
+    /// Validate the parsed configuration draft before replacing saved project debugger settings.
     fn apply_debug_config(&mut self) -> anyhow::Result<()> {
         let config = self.debugger.config.validated()?.clone();
         let mut settings = self.workbench.debugger_settings().clone();
@@ -151,6 +161,8 @@ impl EditorApp {
         self.workbench.save_debugger_settings(settings);
         Ok(())
     }
+    /// Continue an existing live controller, otherwise validate saved sources, launch settings
+    /// and host readiness before starting a controller under the captured project policy.
     pub(super) fn start_debugger(&mut self, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Debugger) {
             self.notify("Enable Debugger in View → Extensions.", false);
@@ -234,6 +246,7 @@ impl EditorApp {
             Err(e) => self.notify(format!("Cannot start debugger: {e:#}"), true),
         }
     }
+    /// Submit a supported debugger control command and surface transport/state errors.
     pub(super) fn debug_control(&mut self, command: &str) {
         if let Some(client) = &mut self.debugger.client
             && let Err(e) = client.control(command)
@@ -241,6 +254,8 @@ impl EditorApp {
             self.notify(e.to_string(), true);
         }
     }
+    /// Toggle a one-based source line in saved settings and synchronize the complete
+    /// path breakpoint set, including an empty set to clear adapter state.
     pub(super) fn toggle_breakpoint(&mut self, path: String, line: usize) {
         if !self.feature(crate::extensions::Feature::Debugger) {
             return;
@@ -278,6 +293,7 @@ impl EditorApp {
             }
         }
     }
+    /// Toggle the active saved source cursor line; unsaved/preview documents cannot bind a breakpoint path.
     pub(super) fn toggle_cursor_breakpoint(&mut self) {
         if let Some(doc) = self.documents.get(self.active).filter(|d| !d.is_preview())
             && let Some(path) = doc.path.clone()
@@ -287,6 +303,7 @@ impl EditorApp {
             self.notify("Open a saved source file to set a breakpoint.", false);
         }
     }
+    /// Route debugger keys while respecting terminal focus and the presence of a live controller.
     pub(super) fn debugger_shortcuts(&mut self, ctx: &egui::Context, terminal_focus: bool) {
         if terminal_focus
             && !self
@@ -318,6 +335,7 @@ impl EditorApp {
             self.debug_control("stepIn");
         }
     }
+    /// Return the paused selected frame's host source path and one-based line, or None if unavailable.
     pub(super) fn debug_line(&self) -> Option<(&str, usize)> {
         let client = self
             .debugger
@@ -333,6 +351,7 @@ impl EditorApp {
             frame["line"].as_u64()? as usize,
         ))
     }
+    /// Suppress trusted execution markers when current source is dirty or differs from its launch version.
     pub(super) fn debug_source_stale(&self, doc: &Document) -> bool {
         self.debugger
             .client
@@ -345,6 +364,7 @@ impl EditorApp {
                     .get(&doc.id)
                     .is_some_and(|v| *v != doc.edit_version))
     }
+    /// Include retired cleanup flags and the current controller's pending stop in lifecycle guards.
     pub(super) fn debugger_stopping(&self) -> bool {
         self.debugger
             .cleanups
@@ -356,12 +376,15 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(Client::is_stopping)
     }
+    /// Report a controller whose protocol phase has not ended; this is separate from cleanup pending.
     pub(super) fn debugger_active(&self) -> bool {
         self.debugger
             .client
             .as_ref()
             .is_some_and(|c| c.phase != Phase::Ended)
     }
+    /// Drain controller events and cleanup flags, routing source/PTY updates only through
+    /// the captured workspace and stopped inspection epoch.
     pub(super) fn poll_debugger(&mut self, ctx: &egui::Context) {
         self.debugger.cleanups.retain(|f| f.load(Ordering::Acquire));
         if self.debugger_stopping() {
@@ -417,6 +440,7 @@ impl EditorApp {
         }
         self.debugger.client = Some(client);
     }
+    /// Render cached inspection/configuration state, then apply returned actions after UI borrows end.
     pub(super) fn debugger_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.debugger.draft_generation != Some(self.generation) {
             self.debugger

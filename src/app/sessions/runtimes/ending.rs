@@ -7,12 +7,15 @@ use std::{collections::BTreeSet, sync::mpsc};
 const LIMIT: usize = 32;
 
 #[derive(Clone)]
+/// Approved termination identity with its original host and sandbox plan captured before dispatch.
 pub(super) struct Request {
     pub info: Info,
     pub plan: sandbox::Plan,
     pub remote: Option<ssh::Remote>,
 }
 
+/// Bounded termination worker independent of read-only discovery. Dropping its browser
+/// does not abandon accepted requests; acknowledgements remain visible to the exit guard.
 pub(super) struct Queue {
     requests: mpsc::SyncSender<Request>,
     results: mpsc::Receiver<(String, Result<(), String>)>,
@@ -20,6 +23,7 @@ pub(super) struct Queue {
     pub error: String,
 }
 impl Queue {
+    /// Start a sequential host-termination worker and notify the supplied callback after each completion.
     pub fn new(wake: impl Fn() + Send + 'static) -> Self {
         Self::with_runner(
             |request| runtime::end(&request.plan, request.remote.as_ref(), &request.info),
@@ -49,12 +53,16 @@ impl Queue {
             error: String::new(),
         }
     }
+    /// Check whether a captured runtime ID already has an outstanding termination request.
     pub fn contains(&self, id: &str) -> bool {
         self.pending.contains(id)
     }
+    /// Report accepted requests still awaiting a completion acknowledgement.
     pub fn busy(&self) -> bool {
         !self.pending.is_empty()
     }
+    /// Accept a nonduplicate request within the 32-item bound without blocking the UI;
+    /// retain its ID only after the worker channel accepts ownership.
     pub fn push(&mut self, request: Request) -> Result<()> {
         let id = request.info.id.clone();
         ensure!(!self.contains(&id), "This runtime is already queued to end");

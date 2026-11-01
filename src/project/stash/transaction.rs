@@ -8,6 +8,8 @@ use std::{
     time::Instant,
 };
 
+/// Prepared Git-owned writer-lock lease. Closing stdin or dropping the owner aborts
+/// uncommitted work and releases locks even when an SSH controller disappears.
 pub(super) struct Transaction {
     child: Child,
     input: Option<ChildStdin>,
@@ -15,6 +17,8 @@ pub(super) struct Transaction {
     errors: File,
 }
 impl Transaction {
+    /// Acquire a no-dereference transaction against the expected stash tip; deletion
+    /// and verification use the same bounded acknowledgement and owned-child cleanup path.
     pub fn prepare(root: &Path, tip: &str, delete: bool) -> Result<Self> {
         let errors = tempfile::tempfile()?;
         let mut command = git_command(root);

@@ -3,6 +3,7 @@
 use super::*;
 
 impl EditorApp {
+    /// Open the allocation form using this project's saved scheduler defaults.
     pub(in crate::app) fn open_slurm(&mut self, ctx: &egui::Context) {
         self.sessions.allocation_draft = self.workbench.slurm_allocation().clone();
         self.sessions.allocation_error.clear();
@@ -124,6 +125,7 @@ impl EditorApp {
         }
     }
 
+    /// Validate requested resources and queue an explicit allocation on the selected project host.
     pub(in crate::app) fn slurm_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.heading("Interactive Slurm allocation");
