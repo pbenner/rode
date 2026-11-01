@@ -100,6 +100,21 @@ def header_click(x, offset):
     click(x, y + offset)
 
 
+def select_personality(preferences, value, capture=False):
+    """Click the centre of a tone-menu row and verify the persisted selection."""
+    # Offsets are relative to the chat header. The native menu's rows are
+    # 25 px apart; clicking their gap closes the menu without changing tone.
+    row_offsets = {"default": 51, "jackson_lamb": 76}
+    header_click(1346, 0)
+    if capture:
+        screenshot(window, "personality-menu.png")
+    header_click(1180, row_offsets[value])
+    wait_for(
+        lambda: agent_preferences(preferences).get("personality") == value,
+        f"Personality choice {value!r} was not saved",
+    )
+
+
 def send(root, message, first=False):
     show_tools()
     click(1280, 785)
@@ -221,20 +236,11 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 "Agent executable preference was not saved immediately",
             )
             header_click(1213, 0)
-            header_click(1346, 0)  # Tone menu: choices alone must not start an agent.
-            screenshot(window, "personality-menu.png")
-            header_click(1180, 65)
-            wait_for(
-                lambda: agent_preferences(preferences).get("personality") == "jackson_lamb",
-                "Personality choice was not saved",
-            )
+            # Tone choices alone must not start an agent.
+            select_personality(preferences, "jackson_lamb", capture=True)
             assert not (root / "agent-rpc.jsonl").exists()
-            header_click(1346, 0)
-            header_click(1180, 46)  # Default before the first turn leaves the task unmodified.
-            wait_for(
-                lambda: agent_preferences(preferences).get("personality") == "default",
-                "Default personality was not saved",
-            )
+            # Default before the first turn leaves the task unmodified.
+            select_personality(preferences, "default")
             long_composer(root, window, prompt)
             # Discover and select models/efforts before the first prompt. The
             # temporary catalog connection must never create a conversation.
@@ -270,8 +276,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
             if "[Sandbox]" in info:
                 assert not scope["private_visible"]
-            header_click(1346, 0)
-            header_click(1180, 65)
+            select_personality(preferences, "jackson_lamb")
             send(root, "second")
             styled = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert styled["params"]["input"][0]["text"] == "second"
@@ -458,19 +463,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             send(root, "acp-provider")
             assert any(m.get("method") == "session/new" for m in rpc(root))
             calls_before_tone = len(rpc(root))
-            header_click(1346, 0)
-            header_click(1180, 46)
-            wait_for(
-                lambda: agent_preferences(preferences).get("personality") == "default",
-                "ACP Default personality was not saved",
-            )
+            select_personality(preferences, "default")
             assert len(rpc(root)) == calls_before_tone, "Tone configured the idle ACP agent"
-            header_click(1346, 0)
-            header_click(1180, 65)
-            wait_for(
-                lambda: agent_preferences(preferences).get("personality") == "jackson_lamb",
-                "ACP personality was not saved",
-            )
+            select_personality(preferences, "jackson_lamb")
             assert len(rpc(root)) == calls_before_tone
             click(1090, 752)
             screenshot(window, "acp-model-controls.png")

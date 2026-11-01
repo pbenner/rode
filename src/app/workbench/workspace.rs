@@ -194,10 +194,10 @@ impl EditorApp {
             }
             ui.separator();
             if self.workbench.detached {
-                if ui.small_button("Dock back").clicked() {
+                if ui.button("Dock back").clicked() {
                     self.dock_tools(ctx);
                 }
-            } else if self.tool_surface() && ui.small_button("Detach").clicked() {
+            } else if self.tool_surface() && ui.button("Detach").clicked() {
                 self.workbench.detached = true;
                 self.navigation.zoom = None;
                 ctx.request_repaint();

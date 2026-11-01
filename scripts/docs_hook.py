@@ -1,4 +1,4 @@
-"""Publish canonical repository references and images without duplicate sources."""
+"""Publish repository references, images and example notebooks without duplicate sources."""
 
 from pathlib import Path
 
@@ -15,7 +15,7 @@ def on_page_markdown(markdown, **_kwargs):
         "../src/sandbox_policy.json": "https://github.com/pbenner/rode/blob/main/src/sandbox_policy.json",
     }.items():
         markdown = markdown.replace(f"]({source})", f"]({destination})")
-    return markdown.replace("](../assets/", "](images/")
+    return markdown.replace("](../assets/", "](images/").replace("](../examples/", "](examples/")
 
 
 def on_files(files, config):
@@ -26,4 +26,8 @@ def on_files(files, config):
         files.append(File.generated(config, definition.name, abs_src_path=str(definition)))
     for image in sorted((ROOT / "assets").glob("*.png")):
         files.append(File.generated(config, f"images/{image.name}", abs_src_path=str(image)))
+    for notebook in sorted((ROOT / "examples").glob("*.ipynb")):
+        files.append(
+            File.generated(config, f"examples/{notebook.name}", abs_src_path=str(notebook))
+        )
     return files

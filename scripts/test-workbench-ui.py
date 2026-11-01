@@ -159,9 +159,9 @@ def run(remote=False):
                     "Native Stage all failed",
                 )
                 screenshot(window, label + "-git-staged.png")
-                tool_click(700, 480)  # Commit message
+                tool_click(700, 455)  # Commit message below the single-line file row
                 text("Native project commit")
-                tool_click(510, 530)  # Commit staged
+                tool_click(510, 502)  # Commit staged
                 wait_for(
                     lambda: git("log", "-1", "--format=%s").strip() == "Native project commit",
                     "Native commit failed",

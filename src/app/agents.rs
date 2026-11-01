@@ -405,6 +405,9 @@ impl EditorApp {
         let unsaved = self.documents.iter().filter(|d| d.dirty()).count();
         let modal = self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal();
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        // Hover/focus frames extend beyond widget bounds. Keep that paint space
+        // inside the panel instead of clipping it at the header or composer.
+        let paint_margin = ui.visuals().clip_rect_margin;
         // Give history the full compact panel; retain Stop while a turn is running.
         self.agents
             .composer
@@ -415,10 +418,13 @@ impl EditorApp {
             .as_ref()
             .is_some_and(|w| w.plan.project_read_only);
         let isolated = self.workspace.as_ref().is_some_and(|w| w.plan.active);
-        let layout = self
-            .agents
-            .composer
-            .layout(ui, rect, unsaved > 0, hide_composer, !modal);
+        let layout = self.agents.composer.layout(
+            ui,
+            rect.shrink(paint_margin),
+            unsaved > 0,
+            hide_composer,
+            !modal,
+        );
         let composer = layout.input;
         let mut content = layout.content;
         let queue_height = if hide_composer {
@@ -460,7 +466,7 @@ impl EditorApp {
         };
         let before = agents.config.clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
-            ui.set_clip_rect(ui.clip_rect().intersect(content));
+            ui.set_clip_rect(ui.clip_rect().intersect(content.expand(paint_margin)));
             ui.horizontal(|ui| {
                 let old = agents.config.provider;
                 let width = (ui.available_width()-176.).max(80.);
@@ -597,7 +603,7 @@ impl EditorApp {
         });
         if queue_height > 0. {
             ui.scope_builder(egui::UiBuilder::new().max_rect(queue_rect), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(queue_rect));
+                ui.set_clip_rect(ui.clip_rect().intersect(queue_rect.expand(paint_margin)));
                 agents.queue.ui(
                     ui,
                     !offline && !modal && !agents.history_open && agents.chat.queue_capacity(),
@@ -609,7 +615,7 @@ impl EditorApp {
             if hide_composer {
                 return;
             }
-            ui.set_clip_rect(ui.clip_rect().intersect(composer));
+            ui.set_clip_rect(ui.clip_rect().intersect(composer.expand(paint_margin)));
             ui.separator();
             if unsaved > 0 {
                 ui.horizontal(|ui| {
@@ -650,12 +656,14 @@ impl EditorApp {
                     ctx.request_repaint();
                 }
             }
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let action_height = composer::action_height(ui);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), action_height),
+                Layout::right_to_left(Align::Center), |ui| {
                     background::persistence(ui, &mut agents.chat, palette, !offline && !modal);
                     let remaining = ui.available_width().max(1.);
                     ui.allocate_ui_with_layout(
-                        egui::vec2(remaining, ui.spacing().interact_size.y),
+                        egui::vec2(remaining, action_height),
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             let enabled = !offline
@@ -720,7 +728,6 @@ impl EditorApp {
                             }
                         },
                     );
-                });
             });
         });
         if agents.config != before {

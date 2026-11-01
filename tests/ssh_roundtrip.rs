@@ -935,7 +935,7 @@ fn roundtrip(jump: &str) {
     let plan = response.project.unwrap();
     let project_root = second.to_str().unwrap().to_owned();
     let image_path = second.join("image 'quoted' 🦀.png");
-    let image_bytes = include_bytes!("../assets/carbon.png");
+    let image_bytes = include_bytes!("../assets/rode-tour.png");
     std::fs::write(&image_path, image_bytes).unwrap();
     let response = remote
         .request_in(

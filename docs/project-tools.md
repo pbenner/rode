@@ -11,6 +11,8 @@ Use the **Source control** activity icon, **View → Source control**, or **Ctrl
 - Worktree listing, creation with new or existing branches, opening, removal, and metadata pruning.
 - Repository initialization and cloning into an empty selected project directory.
 
+Changed files use single rows with aligned actions beside the filename. The list fills the pane and keeps its width while scrolling. In narrow panes, **Diff** and **Stage / Mark resolved** remain beside each file; **More** contains **Staged diff**, **Unstage** and **Discard**. Unavailable actions are disabled, and hovering a shortened filename shows its full path.
+
 Open conflicted files, edit the conflict markers, save, and **Mark resolved**, then continue the merge/rebase. Changes shown by Git are on disk; save modified editor buffers before staging or changing branches. Discard, branch/tag deletion, stash removal, revert, rebase, and worktree removal expose a confirmation; normal Git protections remain in force. Hunk staging is available for ordinary tracked text patches; use whole-file staging for new/deleted/renamed/binary files.
 
 Git operations run in background workers, with bounded output/time and no automatic fetch. The Changes panel refreshes while visible. Network actions use existing host credentials and report failures; **Git terminal** provides interactive authentication and arbitrary Git commands. Within bwrap, enable network access and explicitly grant any identity/agent paths your Git authentication requires. Global Git configuration is shared read-only by default and can be hidden in the access editor.

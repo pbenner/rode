@@ -44,13 +44,13 @@ pub(super) fn persistence(
             palette.text
         }),
     )
-    .small();
+    .min_size(egui::vec2(84., 0.));
     if on {
         button = button
             .fill(palette.accent)
             .stroke(egui::Stroke::new(1.0_f32, palette.accent));
     }
-    if ui.add_enabled_ui(enabled && chat.persistence_ready(), |ui| ui.add_sized([84., 20.], button)).inner
+    if ui.add_enabled(enabled && chat.persistence_ready(), button)
         .on_hover_text("Keep this agent running after closing RODE, changing projects or losing SSH. Permissions still apply; questions wait until you reattach from Running. New chats default off.")
         .on_disabled_hover_text("Waiting for native agent startup or persistence acknowledgement.")
         .clicked()
@@ -151,8 +151,12 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         ui.heading("Running agents");
         let (root, host, _) = self.agent_location();
+        let launch = self.agent_launch();
+        let mode = launch.plan.label();
         ui.label(palette.tag(host));
-        ui.label("Persist keeps an agent working after its controlling view closes. Reattach in the original project and sandbox. Permission requests wait for you; they are never automatically approved.");
+        ui.add(egui::Label::new(format!("Current project: {root}")).wrap());
+        ui.label(format!("Current mode: {mode}"));
+        ui.label("Persist keeps work running after its controlling view closes. Attach requires the original project and sandbox settings. Only one window can control a chat. Permission requests wait for you; they are never automatically approved.");
         if ui
             .add_enabled(
                 self.agents.running.pending.is_none(),
@@ -190,32 +194,72 @@ impl EditorApp {
         if !self.agents.running.error.is_empty() {
             ui.colored_label(palette.error, &self.agents.running.error);
         }
-        let policy = crate::sessions::fingerprint(&self.agent_launch().plan);
+        let policy = crate::sessions::fingerprint(&launch.plan);
         let mut attach = None;
-        egui::ScrollArea::vertical().id_salt("running-agents").max_height((ctx.content_rect().height()-320.).clamp(140., 520.)).show(ui, |ui| {
-            if self.agents.running.items.is_empty() { ui.label("No running agents on this host. Saved conversations are available through History."); }
-            for info in self.agents.running.items.clone() {
-                ui.group(|ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.strong(&info.name); ui.small(info.provider.label());
-                        ui.small(if info.persistent { "PERSISTENT" } else { "UNTIL VIEW CLOSES" });
-                        let current = self.agents.chat.native_id() == Some(info.id.as_str())
-                            && (self.agents.chat.connected() || self.agents.chat.busy);
-                        let compatible = info.root == root && info.policy == policy;
-                        let can_leave = !self.agents.chat.busy || self.agents.chat.persistent();
-                        if ui.add_enabled(current || (compatible && !info.attached && can_leave), egui::Button::new(if current { "Show chat" } else { "Attach" }))
-                            .on_disabled_hover_text(if !compatible { "Open this agent's original project with the same sandbox policy." } else if info.attached { "Detach it from its controlling RODE window first." } else { "Enable Persist or stop the current turn before attaching another agent." }).clicked()
-                        {
-                            if current { self.dialog = Dialog::None; self.workbench.panel = Some(Panel::Agent); self.focus_pane(navigation::Pane::Tools, ctx); }
-                            else { attach = Some(info.clone()); }
+        egui::ScrollArea::vertical()
+            .id_salt("running-agents")
+            .max_height((ctx.content_rect().height() - 380.).clamp(140., 520.))
+            .show(ui, |ui| {
+                if self.agents.running.items.is_empty() {
+                    ui.label("No running agents on this host. Saved conversations are available through History.");
+                }
+                for info in self.agents.running.items.clone() {
+                    let current = self.agents.chat.native_id() == Some(info.id.as_str())
+                        && (self.agents.chat.connected() || self.agents.chat.busy);
+                    let compatible = info.root == root && info.policy == policy;
+                    let can_leave = !self.agents.chat.busy || self.agents.chat.persistent();
+                    let enabled = current || (compatible && !info.attached && can_leave);
+                    ui.group(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong(&info.name);
+                            ui.small(info.provider.label());
+                            ui.small(if info.persistent { "PERSISTENT" } else { "UNTIL VIEW CLOSES" });
+                            if ui
+                                .add_enabled(enabled, egui::Button::new(if current { "Show chat" } else { "Attach" }))
+                                .on_disabled_hover_text("See the explanation below this agent.")
+                                .clicked()
+                            {
+                                if current {
+                                    self.dialog = Dialog::None;
+                                    self.workbench.panel = Some(Panel::Agent);
+                                    self.focus_pane(navigation::Pane::Tools, ctx);
+                                } else {
+                                    attach = Some(info.clone());
+                                }
+                            }
+                            if ui.button("End").clicked() {
+                                self.agents.running.confirm = Some(info.clone());
+                            }
+                        });
+                        ui.label(palette.tag(format!("Agent mode: {}", info.mode)));
+                        ui.add(egui::Label::new(format!("Project: {}", info.root)).wrap());
+                        ui.label(&info.status);
+                        if !enabled {
+                            ui.strong("Cannot attach yet");
+                            if info.root != root {
+                                ui.add(egui::Label::new("Different project: open the agent's project shown above with its original sandbox settings.").wrap());
+                            } else if info.policy != policy {
+                                if info.mode != mode {
+                                    let action = if info.mode.starts_with("NORMAL MODE") {
+                                        "Reopen this project with sandboxing off."
+                                    } else {
+                                        "Reopen this project with sandboxing on and its original access settings."
+                                    };
+                                    ui.add(egui::Label::new(format!("Different sandbox mode: this agent uses {}, but this window uses {mode}. {action} A running agent cannot move into or out of a sandbox.", info.mode)).wrap());
+                                } else {
+                                    ui.add(egui::Label::new("Different sandbox settings: the mode matches, but the original access policy does not. Restore the original folder access, read-only and network settings in View → Project settings / sandbox access.").wrap());
+                                }
+                            }
+                            if info.attached {
+                                ui.add(egui::Label::new("Controlled by another RODE window: detach it there before attaching here. Hiding the chat panel does not detach it.").wrap());
+                            }
+                            if !can_leave {
+                                ui.add(egui::Label::new("Your current chat is working with Persist off. Enable Persist or stop its current turn before switching to this agent.").wrap());
+                            }
                         }
-                        if ui.button("End").clicked() { self.agents.running.confirm = Some(info.clone()); }
                     });
-                    ui.add(egui::Label::new(palette.tag(format!("{} · {}",info.mode, info.root))).truncate()).on_hover_text(&info.root);
-                    ui.label(&info.status);
-                });
-            }
-        });
+                }
+            });
         if let Some(info) = attach {
             let launch = self.agent_launch();
             let wake = ctx.clone();

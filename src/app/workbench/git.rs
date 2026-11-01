@@ -4,6 +4,7 @@
 //! buffers before worktree/index/history mutations, and destructive actions require explicit
 //! choices. Render from cached results rather than running Git during layout.
 use super::*;
+mod rows;
 
 #[derive(Clone)]
 pub(super) enum Mutation {
@@ -288,32 +289,41 @@ impl EditorApp {
             }
             ui.label(format!("{} changed", self.workbench.git.files.len()));
         });
-        let files = self.workbench.git.files.clone();
-        let row_height = if ui.available_width() < 360. {
-            76.
-        } else {
-            56.
-        };
-        egui::ScrollArea::vertical().id_salt("git-files").max_height(310.).show_rows(ui,row_height,files.len().min(10000),|ui,range| {
-            for index in range { let file = &files[index]; ui.push_id(index,|ui| {
-                ui.set_min_height(row_height);
-                let color = if file.conflict() { palette.error } else { palette.accent };
-                ui.horizontal(|ui| {
-                    ui.monospace(RichText::new(format!("{}{}",file.index,file.worktree)).color(color));
-                    if ui.add(egui::Button::new(&file.path).frame(false).truncate()).on_hover_text(format!("{}\nOpen file / resolve conflicts",file.path)).clicked() { self.open_file(format!("{}/{}",self.workbench.git.git_root,file.path),ctx); }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Diff").clicked() { self.git_file_diff(file,false,ctx); }
-                    if file.staged() && ui.small_button("Staged diff").clicked() { self.git_file_diff(file,true,ctx); }
-                    if ui.small_button(if file.conflict() { "Mark resolved" } else { "Stage" }).clicked() { self.git_mutate(vec!["add".into(),"--".into(),file.path.clone()],"Stage file",ctx); }
-                    if file.staged() && ui.small_button("Unstage").clicked() {
-                        self.git_mutate(self.unstage_args(Some(&file.path)),"Unstage file",ctx);
-                    }
-                    if file.index != '?' && ui.small_button("Discard").clicked() { self.workbench.git.confirm = Some((format!("Discard unstaged changes to {}? This replaces its on-disk content with the index version.",file.path),vec!["restore".into(),"--worktree".into(),"--".into(),file.path.clone()].into())); }
-                });
-            }); }
-        });
-        if files.is_empty() {
+        if let Some((index, action)) = rows::show(ui, &self.workbench.git.files, palette) {
+            let file = self.workbench.git.files[index].clone();
+            match action {
+                rows::Action::Open => self.open_file(
+                    format!("{}/{}", self.workbench.git.git_root, file.path),
+                    ctx,
+                ),
+                rows::Action::Diff => self.git_file_diff(&file, false, ctx),
+                rows::Action::StagedDiff => self.git_file_diff(&file, true, ctx),
+                rows::Action::Stage => self.git_mutate(
+                    vec!["add".into(), "--".into(), file.path],
+                    "Stage file",
+                    ctx,
+                ),
+                rows::Action::Unstage => {
+                    self.git_mutate(self.unstage_args(Some(&file.path)), "Unstage file", ctx)
+                }
+                rows::Action::Discard => {
+                    self.workbench.git.confirm = Some((
+                        format!(
+                            "Discard unstaged changes to {}? This replaces its on-disk content with the index version.",
+                            file.path
+                        ),
+                        vec![
+                            "restore".into(),
+                            "--worktree".into(),
+                            "--".into(),
+                            file.path,
+                        ]
+                        .into(),
+                    ))
+                }
+            }
+        }
+        if self.workbench.git.files.is_empty() {
             ui.label("Working tree clean.");
         }
         ui.add_space(8.);
@@ -340,7 +350,13 @@ impl EditorApp {
                 self.git_mutate(args, "Commit", ctx);
             }
         });
-        if files.iter().any(project::GitFile::conflict) {
+        if self
+            .workbench
+            .git
+            .files
+            .iter()
+            .any(project::GitFile::conflict)
+        {
             ui.separator();
             ui.colored_label(
                 palette.error,

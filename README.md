@@ -16,7 +16,9 @@ Also included:
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 
-![RODE](assets/carbon.png)
+[![RODE feature tour: native editing, SSH, sandbox controls, persistent terminals, notebooks, coding agents, Slurm and Git](assets/rode-tour.gif)](assets/rode-tour.mp4)
+
+30-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Native UI captures with demo data; agent and Slurm scenes show setup controls.
 
 ```sh
 cargo install --locked --path .

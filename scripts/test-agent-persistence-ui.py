@@ -154,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             time.sleep(0.8)
             screenshot(window, "running.png")
             # The only row is our project; its Attach button follows the badges.
-            click(515, 475)
+            click(515, 495)
             time.sleep(0.8)
             screenshot(window, "reattached.png")
             wait(lambda: infos() and infos()[0]["attached"], "Running did not reattach")

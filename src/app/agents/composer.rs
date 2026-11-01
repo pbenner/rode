@@ -246,6 +246,12 @@ impl State {
     }
 }
 
+/// Reserve the rendered button height, including the current theme's padding.
+pub(super) fn action_height(ui: &egui::Ui) -> f32 {
+    (ui.text_style_height(&egui::TextStyle::Button) + 2. * ui.spacing().button_padding.y)
+        .max(ui.spacing().interact_size.y)
+}
+
 /// Scroll only the draft. Text edits and cursor movement use TextEdit's native
 /// scroll requests; a size change also reveals the caret, while manual wheel
 /// scrolling remains undisturbed on unchanged frames.
@@ -258,8 +264,7 @@ pub(super) fn editor(
     let font = egui::FontSelection::Default.resolve(ui.style());
     let row_height = ui.fonts_mut(|fonts| fonts.row_height(&font));
     let available =
-        (ui.available_height() - ui.spacing().interact_size.y - ui.spacing().item_spacing.y - 2.)
-            .max(1.);
+        (ui.available_height() - action_height(ui) - ui.spacing().item_spacing.y - 2.).max(1.);
     let height = (3. * row_height + 4. + stretch).clamp(1., available);
     let visual = ui.visuals().widgets.inactive;
     let frame = egui::Frame::new()

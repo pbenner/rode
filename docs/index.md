@@ -4,7 +4,7 @@ A native Rust code editor for local files and remote computers over SSH.
 
 RODE combines a familiar editor layout with a real terminal, configurable dark themes, and project tools that run on the computer hosting your files.
 
-![RODE with Carbon theme](../assets/carbon.png)
+![RODE with Carbon theme](../assets/rode-tour.png)
 
 - Edit locally or through OpenSSH aliases, direct hosts, and jump hosts.
 - Open project folders, navigate tabs, [preview Markdown](markdown.md), search within files, and use [persistent terminals](terminals.md), with multiple shells and shared reattachment.

@@ -2,6 +2,8 @@
 
 Start with the [source architecture and maintenance guide](architecture.md) for module responsibilities, host boundaries and lifecycle contracts. Its [design decisions and tradeoffs](architecture.md#design-decisions-and-tradeoffs) explain why the boundaries exist and point to the owning modules' in-source rationale. Public Rust types, fields and methods have API documentation; both library crates warn on missing public documentation. When revisiting a design choice, update its rationale and consequences alongside the code.
 
+Build the public documentation with `scripts/uvx.sh --from mkdocs==1.6.1 mkdocs build --strict`. Repository-relative links to files outside `docs/` must also be exported or rewritten in `scripts/docs_hook.py`; file existence alone does not make them part of the published site.
+
 ```sh
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
@@ -87,7 +89,37 @@ RODE_TEST_RUFF=/path/to/ruff RODE_TEST_BINARY="$PWD/target/release/rode" RODE_WO
 
 Screenshots and logs go to `target/ui-smoke/`, `target/layout-ui/`, `target/project-ui/`, and `target/workbench-ui/`. Set `RODE_TEST_RUFF` for the Rust and SSH tests too, to exercise real Ruff formatting/checking. The smoke tests cover editing, saves, terminal commands, themes/preferences, local/remote folder browsing, sandbox/fallback, Git staging/commits, Python environments, and saved project policies. Namespace-isolation tests report when the host cannot run bubblewrap. These are basic regression checks, not a benchmark suite. `RODE_SMOKE_TEST=1 ./target/release/rode` provides a separate five-second launch/exit check.
 
+`cargo test --lib workbench::git::rows` renders and scrolls mixed Git file states at narrow and wide pane widths, checking stable list/action columns, single-row alignment with long Unicode paths, and compact-menu actions bound to the correct file. The native workbench check above exercises staging and committing through the surrounding panel.
+
 `scripts/test-file-browser-ui.py` also runs locally on its own; screenshots/logs go to `target/file-browser-ui/`. Library tests cover stale picker results, relative destinations, preserved Save As names and project-environment guards.
+
+## README feature tour
+
+The README embeds `assets/rode-tour.gif` and links to an H.264 MP4 and a still PNG. The 30-second tour holds captioned native screenshots rather than recording every idle frame. The GIF uses variable frame durations and a shared palette; the MP4 uses H.264, `yuv420p` and fast-start metadata. Keep the GIF below 1 MiB when refreshing it and inspect the encoded text at README size.
+
+`scripts/capture-readme-tour.py` captures a fresh demonstration project at 1380×900 with isolated preferences and session storage. It uses the native UI harness and the existing loopback SSH fixture. Install the UI/SSH prerequisites above and provide a Python environment containing `jupyter_client`, `ipykernel` and Matplotlib. Build the current editor and matching helper before capturing:
+
+```sh
+cargo build --locked --release --bins
+RODE_TEST_BINARY="$PWD/target/release/rode" \
+RODE_SESSION_HELPER="$PWD/target/release/rode-sessiond" \
+RODE_TEST_JUPYTER=/absolute/path/to/python \
+RODE_SSH_RUN_TRANSPORT=0 LIBGL_ALWAYS_SOFTWARE=1 \
+xvfb-run -a -s '-screen 0 1600x1100x24' \
+  bash scripts/test-ssh.sh python3 scripts/capture-readme-tour.py
+```
+
+The capture script checks real notebook output and the terminal persistence acknowledgements, records the source revision and binary/capture hashes in `target/readme-demo/captures/capture.json`, and publishes the new capture set only after all scenes complete. `--output` selects another capture directory. It removes its temporary project and closes its owned sessions. Review the captured screens after UI changes, since interaction coordinates may need updating.
+
+`scripts/build-readme-tour.py` lists the captions and timings. With FFmpeg (including libx264 and drawtext) and DejaVu Sans installed, encode the captures into the three assets:
+
+```sh
+python3 scripts/build-readme-tour.py target/readme-demo/captures
+```
+
+The captures use the native editor, a real Python notebook kernel, a real loopback SSH connection, active bubblewrap isolation and a real Git diff. The terminal frames show persistence being enabled. The agent frame shows provider selection without model inference. The Slurm form uses the existing deterministic scheduler fixture with an empty queue; it requests no real allocation. Keep those distinctions in the captions. Saved captures stay under ignored `target/`; do not capture personal chats, credentials or private projects. A clean checkout needs fresh captures before encoding.
+
+After regeneration, check all three files visually, use `ffprobe` to check duration/dimensions/codec, and review README links. Re-encoding existing captures needs no application rebuild. Repository-relative GIF embedding works without uploading a GitHub attachment; the MP4 is a linked file, not an assumed inline README video player.
 
 ## Concurrent processes
 
