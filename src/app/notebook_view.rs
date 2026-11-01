@@ -942,10 +942,10 @@ impl EditorApp {
                                 view.persistent = !on;
                             }
                         }
-                        if ui.small_button("Running kernels…").clicked() {
+                        if ui.button("Running kernels…").clicked() {
                             self.open_sessions(ctx);
                         }
-                        if view.kernel.is_none() && ui.small_button("Reattach kernel").clicked() {
+                        if view.kernel.is_none() && ui.button("Reattach kernel").clicked() {
                             if let Some(path) = &self.documents[index].path {
                                 self.find_notebook_runtime(path.clone(), ctx);
                             } else {
@@ -955,7 +955,7 @@ impl EditorApp {
                         if view.kernel.as_ref().is_some_and(Kernel::persistent)
                             && ui.add_enabled(
                                 view.kernel.as_ref().is_none_or(|k| !k.pending()),
-                                egui::Button::new("Detach kernel").small(),
+                                egui::Button::new("Detach kernel"),
                             ).clicked()
                         {
                             view.detach("Kernel detached · Reattach from Sessions");
@@ -1002,7 +1002,7 @@ impl EditorApp {
                         ).clicked() {
                             self.refresh_slurm(None, ctx);
                         }
-                        if ui.small_button("Allocate…").clicked() {
+                        if ui.button("Allocate…").clicked() {
                             self.open_slurm(ctx);
                         }
                         if let Some(kernel) = &view.kernel {

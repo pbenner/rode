@@ -17,7 +17,7 @@ pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool)
     let selected = config.personality;
     ui.add_enabled_ui(enabled, |ui| {
         egui::containers::menu::MenuButton::from_button(
-            egui::Button::new(selected.button()).small().selected(selected != Personality::Default),
+            egui::Button::new(selected.button()).selected(selected != Personality::Default),
         ).ui(ui, |ui| {
             ui.set_max_width(270.);
             ui.strong("Response personality");

@@ -464,17 +464,15 @@ impl EditorApp {
             ui.horizontal(|ui| {
                 let old = agents.config.provider;
                 let width = (ui.available_width()-176.).max(80.);
-                ui.allocate_ui_with_layout(egui::vec2(width,26.), Layout::left_to_right(Align::Center), |ui| {
-                    egui::ComboBox::from_id_salt("agent-provider").width(width)
-                        .truncate().selected_text(agents.config.provider.label()).show_ui(ui,|ui| {
-                            for provider in [Provider::Codex,Provider::Local,Provider::Acp] {
-                                ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label()));
-                            }
-                        }).response.on_hover_text(agents.config.provider.label());
-                });
+                egui::ComboBox::from_id_salt("agent-provider").width(width)
+                    .truncate().selected_text(agents.config.provider.label()).show_ui(ui,|ui| {
+                        for provider in [Provider::Codex,Provider::Local,Provider::Acp] {
+                            ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label()));
+                        }
+                    }).response.on_hover_text(agents.config.provider.label());
                 if old != agents.config.provider { agents.settings = true; }
                 if icons::small(ui,Icon::Settings,"Agent settings").clicked() { agents.settings = !agents.settings; }
-                if ui.small_button("New chat").on_hover_text("Stop this agent and start a fresh conversation").clicked() { new_chat = true; }
+                if ui.button("New chat").on_hover_text("Stop this agent and start a fresh conversation").clicked() { new_chat = true; }
                 controls::personality(ui, &mut agents.config, !agents.chat.busy && !offline);
             });
             ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
