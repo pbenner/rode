@@ -445,7 +445,9 @@ impl EditorApp {
                         .starts_with("Another RODE window still has this encrypted project open.");
             }
             if !locked && !shared_exit {
-                self.notify(self.vaults.message.clone(), true);
+                // Unlock failure and cleanup refusal can arrive in one poll.
+                // Preserve both: the cleanup reason explains why exit is blocked.
+                errors.push(self.vaults.message.clone());
             }
         }
         if !errors.is_empty() {
@@ -628,6 +630,17 @@ mod tests {
                     "False"
                 }
             );
+        let mut client = fixture_client(code);
+        client.info = Some(vault::Info {
+            cipherdir: "/cipher".into(),
+            mountpoint: "/plain".into(),
+        });
+        app.vaults.active = Some(client);
+        app.new_file();
+        app.documents[0].modified = false;
+        (app, ctx)
+    }
+    fn fixture_client(code: String) -> Client {
         let session = crate::process::Session::start(
             crate::process::Launch {
                 native_debug: false,
@@ -644,18 +657,47 @@ mod tests {
             Arc::new(|| {}),
         )
         .unwrap();
-        app.vaults.active = Some(Client {
+        Client {
             session,
-            info: Some(vault::Info {
-                cipherdir: "/cipher".into(),
-                mountpoint: "/plain".into(),
-            }),
+            info: None,
             remote: None,
             finished: false,
-        });
-        app.new_file();
-        app.documents[0].modified = false;
-        (app, ctx)
+        }
+    }
+    #[test]
+    fn failed_unlock_preserves_cleanup_refusal_and_keeps_exit_guarded() {
+        for locked in [true, false] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            let error =
+                serde_json::json!({"kind":"error", "message":"No verified encrypted mount"});
+            let closed = serde_json::json!({"kind":"closed", "info":{"cipherdir":"/cipher","mountpoint":"/plain"}, "locked":locked, "message":"Cannot verify other mount namespaces; project remains unlocked"});
+            let code = format!(
+                "print({}, flush=True)\nprint({}, flush=True)\n",
+                serde_json::to_string(&error.to_string()).unwrap(),
+                serde_json::to_string(&closed.to_string()).unwrap(),
+            );
+            let client = fixture_client(code);
+            let until = Instant::now() + Duration::from_secs(5);
+            // Put both replies in the same poll, as on a fast CI helper.
+            while !client.session.is_finished() {
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            app.vaults.pending = Some(client);
+            app.poll_vaults(&ctx);
+            assert!(app.vaults.message.contains("No verified encrypted mount"));
+            assert_eq!(
+                app.vaults
+                    .message
+                    .contains("Cannot verify other mount namespaces"),
+                !locked
+            );
+            assert_eq!(app.vaults.needs_lock, !locked);
+            crate::app::lifecycle::tests::native_close(&mut app, &ctx);
+            assert_eq!(app.quitting, locked);
+        }
     }
     #[test]
     fn native_window_close_waits_for_verified_lock_even_with_clean_buffers() {
