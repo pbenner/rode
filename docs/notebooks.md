@@ -8,6 +8,8 @@ Code cells use the independent syntax theme and the kernel's language. Markdown 
 
 Select a cell by clicking its header or editor. Use **+ Code cell**, **+ Markdown cell**, the cell type selector, **Up / Down** and **Delete** to arrange cells. Cell text keeps its editor undo/cursor state through tab switches and moves. Structural changes do not currently have a separate undo history. **Ctrl+F** searches cell sources and selects the next match.
 
+Editable cells grow and shrink to fit their source, including wrapped lines. Scroll the notebook to read long cells; cell editors have no separate scroll area.
+
 Saved and live outputs show stdout/stderr, tracebacks, text representations, PNGs and JPEGs. Common plots work through inline Matplotlib output. Unsupported MIME bundles, HTML, widget state, attachments, metadata and unfamiliar fields are preserved in the file even when they cannot be rendered. Live display updates and clear-output messages are supported; notebooks are never executed merely by opening them.
 
 **Ctrl+S / Save As** use the normal atomic, revision-checked local/SSH saves. Cell edits and execution outputs mark the notebook dirty; tab close/project changes retain the unsaved-edit guard. An external change prevents overwriting it. A save records its submitted snapshot and leaves changes arriving during that save dirty. The notebook never goes through whole-file text formatting or code-run commands.
@@ -51,6 +53,8 @@ Use **Detach kernel** to leave persistent work running. After reopening the same
 Persistence lasts for the host service/process lifetime; it does not survive host reboot, service termination, Slurm expiry or site logout cleanup. Retained results from an ended persistent kernel remain discoverable until **End runtime** removes them. No kernel memory or credentials are written to RODE preferences. Interactive `input()` prompts, attaching external Jupyter servers/kernels, widgets, JavaScript, HTML/SVG execution, notebook-cell stepping, completion and variable explorers are outside this implementation. The [debugger](debugger.md) supports persistent script/program debugging on the same compute targets.
 
 ## Slurm execution targets
+
+The [GPU smoke-test notebook](../examples/slurm_gpu_smoke.ipynb) checks execution placement, GPU access, a short matrix workload, training, inline plots and persistent kernel state. Open it with a GPU-enabled PyTorch environment and select your allocation as described below.
 
 For GPU execution, connect to the cluster's login host and use **Allocate… → Reserve for notebooks**. This creates a persistent, host-service-owned allocation; its terminal view shows scheduler progress and is not an interactive shell. Closing that view or shutting down a notebook kernel preserves the reservation. Use the confirmed **Release allocation** control when finished, or end its owning session. Reservations can continue consuming resources after RODE exits.
 

@@ -1177,11 +1177,9 @@ impl EditorApp {
                                 let edit_id=egui::Id::new(("notebook-source",id,uid));
                                 if let Some((owner,a,b))=selection && owner==uid {let mut state=egui::TextEdit::load_state(ctx,edit_id).unwrap_or_default();state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(a),egui::text::CCursor::new(b))));state.store(ctx,edit_id);view.selection=None;}
                                 if ctx.memory(|m|m.has_focus(edit_id)) && ui.input_mut(|i|i.consume_key(egui::Modifiers::SHIFT,Key::Enter)) {action=Some(if cell.kind()=="markdown" {Action::Preview(at)} else {Action::Run(false)});}
-                                egui::ScrollArea::vertical().id_salt("cell-source-scroll").max_height(320.).show(ui,|ui|{
-                                    let response=egui::TextEdit::multiline(&mut cell.source).id(edit_id).code_editor().font(FontId::monospace(font_size)).desired_width(f32::INFINITY).desired_rows(before.lines().count().clamp(3,18)).char_limit(notebook::MAX_SOURCE).layouter(&mut layouter).show(ui);
-                                    if focus_cell==Some(uid) {response.response.request_focus();view.focus=None;}
-                                    if response.response.has_focus(){view.active=uid;}
-                                });
+                                let response=egui::TextEdit::multiline(&mut cell.source).id(edit_id).code_editor().font(FontId::monospace(font_size)).desired_width(f32::INFINITY).desired_rows(3).char_limit(notebook::MAX_SOURCE).layouter(&mut layouter).show(ui);
+                                if focus_cell==Some(uid) {response.response.request_focus();view.focus=None;}
+                                if response.response.has_focus(){view.active=uid;}
                                 if cell.source!=before {
                                     if cell.source.len()>notebook::MAX_SOURCE {cell.source=before;view.error="Cell source exceeds 256 KiB.".into();} else {let source=cell.source.clone();cell.set_source(source);changed=true;}
                                 }
@@ -1389,6 +1387,108 @@ fn output_text(output: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_sources_expand_to_fit_and_wheel_scrolls_the_notebook() {
+        let multiline = (0..80)
+            .map(|line| format!("# Source line {line}\n"))
+            .collect::<String>();
+        let wrapped = "A long source line should wrap inside the cell. ".repeat(100);
+        for (kind, source) in [
+            ("code", &multiline),
+            ("markdown", &wrapped),
+            ("raw", &multiline),
+        ] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_notebook();
+            let view = app.documents[0].notebook.as_mut().unwrap();
+            let cell = &mut view.book.cells[0];
+            cell.change_kind(kind);
+            cell.set_source(source.clone());
+            let uid = cell.uid;
+            view.cells.entry(uid).or_default().previewing = false;
+            view.focus = None;
+            let mut next = Cell::new("code");
+            next.set_source("next_cell = True".into());
+            view.book.cells.push(next);
+
+            let frame = |app: &mut EditorApp, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800., 700.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            app.notebook_ui(ui, ctx);
+                        });
+                    },
+                )
+            };
+            frame(&mut app, vec![]);
+            let output = frame(&mut app, vec![]);
+            let source_text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == source => Some(text),
+                    _ => None,
+                })
+                .expect("cell source was rendered");
+            assert!(source_text.galley.size().y > 320.);
+            let height = app.documents[0].notebook.as_ref().unwrap().cells[&uid].height;
+            assert!(
+                height >= source_text.galley.size().y,
+                "{kind} cell clips its source: cell={height}, text={}",
+                source_text.galley.size().y
+            );
+            let has_header = |output: &egui::FullOutput| {
+                output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Cell 1"))
+            };
+            assert!(has_header(&output));
+            let point = source_text.pos + egui::vec2(20., 40.);
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0., -400.),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let mut output = frame(&mut app, vec![]);
+            for _ in 0..12 {
+                output = frame(&mut app, vec![]);
+            }
+            assert!(
+                !has_header(&output),
+                "Scrolling over {kind} source left the cell header fixed"
+            );
+            assert_eq!(
+                app.documents[0].notebook.as_ref().unwrap().book.cells[0].source,
+                *source
+            );
+
+            let view = app.documents[0].notebook.as_mut().unwrap();
+            view.book.cells[0].set_source("short source".into());
+            view.reveal = true;
+            frame(&mut app, vec![]);
+            frame(&mut app, vec![]);
+            assert!(
+                app.documents[0].notebook.as_ref().unwrap().cells[&uid].height < 320.,
+                "Shortened {kind} cell did not shrink"
+            );
+        }
+    }
+
     #[test]
     fn python_notebooks_default_to_the_environment_without_rewriting_saved_metadata() {
         for (language, saved, expected) in [
