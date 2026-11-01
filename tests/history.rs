@@ -235,6 +235,61 @@ fn deletion_revalidates_saved_scope_and_partial_failures_leave_unacknowledged_ro
 }
 
 #[test]
+fn active_writer_deletions_explain_idle_or_detached_owners_and_keep_raw_diagnostics() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        for (target, count) in [("saved-1", 0), ("saved-2", 1)] {
+            let (temp, launch) = fixture(provider, false);
+            options(
+                temp.path(),
+                serde_json::json!({
+                    "delete_error": target,
+                    "delete_error_message": format!("thread {target} already has an active writer"),
+                    "startup_stderr": "Codex could not find bubblewrap on PATH. Codex will use the bundled bubblewrap in the meantime."
+                }),
+            );
+            let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+            wait(&mut browser);
+            browser.load_more().unwrap();
+            wait(&mut browser);
+            browser.delete(None, vec![]).unwrap();
+            wait(&mut browser);
+            let progress = if count == 0 {
+                "No chats were deleted."
+            } else {
+                "Deleted 1 chat before stopping."
+            };
+            assert!(browser.status.starts_with(progress), "{}", browser.status);
+            assert!(browser.status.contains("idle or detached"));
+            assert!(
+                browser
+                    .status
+                    .contains("In Running, find the owning agent and choose End")
+            );
+            assert!(!browser.status.contains("bubblewrap"));
+            assert!(
+                browser
+                    .diagnostics()
+                    .contains("already has an active writer")
+            );
+            assert!(browser.diagnostics().contains("bundled bubblewrap"));
+            assert_eq!(deleted(temp.path()).len(), count);
+            assert!(browser.entries.iter().any(|entry| entry.id == target));
+            options(temp.path(), serde_json::json!({}));
+            let mut refreshed = Browser::open(launch, Arc::new(|| {})).unwrap();
+            wait(&mut refreshed);
+            assert!(refreshed.diagnostics().is_empty());
+            refreshed.delete(None, vec![]).unwrap();
+            wait(&mut refreshed);
+            assert_eq!(deleted(temp.path()).len(), 2);
+            assert!(log(temp.path()).iter().all(|call| !matches!(
+                call["method"].as_str(),
+                Some("turn/start" | "session/prompt" | "thread/resume" | "session/load")
+            )));
+        }
+    }
+}
+
+#[test]
 fn unsupported_deletion_keeps_history_resumable_and_invalid_pagination_never_deletes() {
     for provider in [Provider::Codex, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);

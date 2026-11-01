@@ -55,6 +55,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
     (root / "agent.py").chmod(0o755)
     history = dict(
         archived=True,
+        delete_error="saved-0",
+        delete_error_message="thread saved-0 already has an active writer",
+        startup_stderr="Codex could not find bubblewrap on PATH. Codex will use the bundled bubblewrap in the meantime.",
         count=4,
         active=["saved-3"],
         titles={
@@ -142,6 +145,31 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             click(420, header + 330)
             time.sleep(0.2)
             assert not deleted(), "Cancelling deletion removed a chat"
+            click(1275, header + 279)
+            time.sleep(0.2)
+            click(550, header + 330)
+            wait(
+                lambda: any(c.get("method") == "thread/delete" for c in calls()),
+                "Writer conflict was not requested",
+            )
+            time.sleep(0.6)
+            screenshot(window, "writer-conflict.png")
+            assert not deleted(), "Writer conflict removed an unacknowledged chat"
+            click(410, header + 273)  # Raw backend error and separate startup warning.
+            time.sleep(0.2)
+            screenshot(window, "writer-details.png")
+            click(410, header + 273)
+            # Ending another process is left to the user; clearing the fixture
+            # lock simulates that action before explicitly refreshing and retrying.
+            del history["delete_error"]
+            (root / "history-fixture.json").write_text(json.dumps(history))
+            listed_before = sum(c.get("method") == "thread/list" for c in calls())
+            click(1190, header + 113)
+            wait(
+                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
+                "History did not refresh after the writer conflict",
+            )
+            time.sleep(0.4)
             click(1275, header + 279)
             time.sleep(0.2)
             click(550, header + 330)

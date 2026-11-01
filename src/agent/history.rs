@@ -19,6 +19,7 @@ pub struct Browser {
     direct: Option<rode_agent_core::history::Browser>,
     native: Option<Client>,
     interpreter: String,
+    diagnostics: String,
 }
 impl std::ops::Deref for Browser {
     type Target = HistoryView;
@@ -36,6 +37,7 @@ impl Browser {
             direct: Some(inner),
             native: None,
             interpreter,
+            diagnostics: String::new(),
         })
     }
     /// Open a disposable browser on the native host service, without inference.
@@ -51,16 +53,20 @@ impl Browser {
             direct: None,
             native: Some(native),
             interpreter,
+            diagnostics: String::new(),
         })
     }
     /// Drain bounded browser updates and preserve the current chat on failure.
     pub fn poll(&mut self) {
+        let mut updated = false;
         if let Some(direct) = &mut self.direct {
             direct.poll();
             self.view = direct.view();
+            updated = true;
         }
         if let Some(native) = &mut self.native {
             if let Some(state) = native.poll() {
+                updated = true;
                 if let Some(view) = state.history {
                     self.view = view;
                     if !state.error.is_empty() {
@@ -76,10 +82,24 @@ impl Browser {
                 }
             }
             if let Some(error) = native.error.take() {
+                updated = true;
                 self.view.status = error;
                 self.view.busy = false;
                 self.view.can_resume = false;
             }
+        }
+        if updated {
+            self.describe_status();
+        }
+    }
+    /// Raw backend error and startup warnings behind an explained history failure.
+    pub fn diagnostics(&self) -> &str {
+        &self.diagnostics
+    }
+    fn describe_status(&mut self) {
+        self.diagnostics.clear();
+        if let Some(explanation) = writer_conflict(&self.view.status) {
+            self.diagnostics = std::mem::replace(&mut self.view.status, explanation);
         }
     }
     /// Transfer a successfully restored connection into the current chat.
@@ -153,10 +173,72 @@ impl Browser {
             self.view.deleting = true;
             self.view.status = "Deleting saved chats…".into();
         }
+        self.diagnostics.clear();
         Ok(())
     }
     /// Invalidate browsing when the interpreter context changes.
     pub fn uses_interpreter(&self, interpreter: &str) -> bool {
         self.interpreter == interpreter
+    }
+}
+
+/// Interpret the deletion failure at the desktop boundary, including replies
+/// from older services which may still own detached agents after an upgrade.
+fn writer_conflict(status: &str) -> Option<String> {
+    let primary = status.lines().next()?;
+    let (count, error) = primary
+        .strip_prefix("Deleted ")?
+        .split_once(" chats before this operation stopped. ")?;
+    let count: usize = count.parse().ok()?;
+    if !error
+        .strip_prefix("Agent history: ")?
+        .contains("already has an active writer")
+    {
+        return None;
+    }
+    let progress = match count {
+        0 => "No chats were deleted.".into(),
+        1 => "Deleted 1 chat before stopping. Remaining chats were kept.".into(),
+        count => format!("Deleted {count} chats before stopping. Remaining chats were kept."),
+    };
+    Some(format!(
+        "{progress} An agent process still has this chat or a child chat open, even if idle or detached. In Running, find the owning agent and choose End; for a session in another client, end it there. Then refresh history and retry. Detaching or closing a persistent window leaves the session running."
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writer_conflicts_explain_detached_sessions_and_preserve_deletion_counts() {
+        for (count, progress) in [
+            (0, "No chats were deleted."),
+            (1, "Deleted 1 chat before stopping."),
+            (4, "Deleted 4 chats before stopping."),
+        ] {
+            let raw = format!(
+                "Deleted {count} chats before this operation stopped. Agent history: thread example-thread already has an active writer\nERROR: bubblewrap was not found; using the bundled copy"
+            );
+            let explanation = writer_conflict(&raw).unwrap();
+            assert!(explanation.starts_with(progress));
+            assert!(explanation.contains("idle or detached"));
+            assert!(explanation.contains("In Running, find the owning agent and choose End"));
+            assert!(explanation.contains("closing a persistent window leaves the session running"));
+            assert!(explanation.contains("refresh history and retry"));
+            assert!(!explanation.contains("bubblewrap"));
+            assert!(!explanation.contains("example-thread"));
+        }
+    }
+
+    #[test]
+    fn unrelated_errors_and_warnings_do_not_claim_a_writer_conflict() {
+        for status in [
+            "Deleted 0 chats before this operation stopped. Agent history: Delete failed",
+            "Deleted 0 chats before this operation stopped. Agent history: Permission denied\nthread example-thread already has an active writer",
+            "Deleted 1 saved chats. Refresh failed. Agent history: thread example-thread already has an active writer",
+        ] {
+            assert!(writer_conflict(status).is_none());
+        }
     }
 }

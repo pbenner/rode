@@ -161,6 +161,8 @@ try:
         method = request.get("method")
         params = request.get("params", {})
         if method == "initialize":
+            if warning := history_options().get("startup_stderr"):
+                print(warning, file=sys.stderr, flush=True)
             acp = "protocolVersion" in params
             response(
                 request,
@@ -283,7 +285,15 @@ try:
                     }
                 )
             elif options.get("delete_error") == identity:
-                emit({"id": request["id"], "error": {"code": -32000, "message": "Delete failed"}})
+                emit(
+                    {
+                        "id": request["id"],
+                        "error": {
+                            "code": -32000,
+                            "message": options.get("delete_error_message", "Delete failed"),
+                        },
+                    }
+                )
             else:
                 removed = {identity}
                 if options.get("cascade") and not acp:

@@ -71,7 +71,7 @@ pub(super) fn ui(
                         ui.label(RichText::new("Loading saved conversations…").color(palette.muted));
                         return;
                     };
-                    if !browser.busy && !browser.can_resume {
+                    if !browser.busy && (!browser.can_resume || !browser.diagnostics().is_empty()) {
                         // Keep backend diagnostics readable without allowing a
                         // long traceback to displace the conversation list.
                         egui::Frame::new().fill(palette.raised).inner_margin(8).corner_radius(4).show(ui, |ui| {
@@ -86,10 +86,17 @@ pub(super) fn ui(
                                 .on_hover_text(&browser.status);
                         });
                     }
+                    if !browser.diagnostics().is_empty() {
+                        egui::CollapsingHeader::new("Backend details").id_salt("history-backend-details").show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt("history-backend-diagnostics").max_height(120.).show(ui, |ui| {
+                                ui.add(egui::Label::new(browser.diagnostics()).wrap().selectable(true));
+                            });
+                        });
+                    }
                     if !can_resume {
                         ui.add(egui::Label::new(RichText::new("Stop the current turn before resuming or deleting conversations.").small().color(palette.muted)).wrap());
                     }
-                    if !browser.can_delete && !browser.busy {
+                    if !browser.can_delete && !browser.busy && browser.diagnostics().is_empty() {
                         ui.add(egui::Label::new(RichText::new("History deletion is unavailable with this backend.").small().color(palette.muted)).wrap())
                             .on_hover_text("ACP agents must advertise session deletion; older Codex versions may need updating.");
                     }
