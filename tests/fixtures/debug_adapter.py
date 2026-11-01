@@ -70,7 +70,12 @@ while True:
         launch = message
         # A detached grandchild must still be cleaned up with this session.
         child = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(600)"],
+            [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(600)",
+                str(Path("adapter-child").resolve()),
+            ],
             start_new_session=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -1,6 +1,9 @@
 //! DAP framing/state, interactive debug PTYs and owned-target cleanup on native/Python
 //! coordinators; real installed adapters are opt-in.
 
+#[path = "support/process.rs"]
+mod fixture_process;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rode::{
     debugger::{
@@ -113,6 +116,9 @@ fn stopped(client: &Client) -> bool {
     client.phase == Phase::Paused && !client.scopes.is_empty() && !client.variables.is_empty()
 }
 fn finish(client: &mut Client, root: &Path, attach: bool) {
+    // Bubblewrap gives the adapter a different PID namespace. Observe the
+    // actual child in the test runner's /proc, rather than an unrelated PID.
+    let pid = fixture_process::host_pid(&root.join("adapter-child"));
     client.stop();
     let deadline = Instant::now() + Duration::from_secs(5);
     while client.cleanup().load(Ordering::Acquire) {
@@ -122,13 +128,10 @@ fn finish(client: &mut Client, root: &Path, attach: bool) {
     let args: Value =
         serde_json::from_slice(&fs::read(root.join("disconnected.json")).unwrap()).unwrap();
     assert_eq!(args["terminateDebuggee"], !attach);
-    let pid = fs::read_to_string(root.join("adapter-child")).unwrap();
-    let path = format!("/proc/{}/stat", pid.trim());
-    let alive = fs::read_to_string(path).is_ok_and(|s| {
-        s.rsplit_once(") ")
-            .is_some_and(|(_, f)| !f.starts_with('Z'))
-    });
-    assert!(!alive, "Detached adapter child survived");
+    assert!(
+        !fixture_process::running(pid),
+        "Detached adapter child survived"
+    );
 }
 #[test]
 fn protocol_terminal_breakpoints_steps_and_scoped_cleanup() {

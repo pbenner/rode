@@ -262,11 +262,15 @@ def run():
                 process, window = launch()
                 command("Terminal: Sessions and Slurm allocations")
                 screenshot(window, "reattach-list.png")
-                # First session row's Attach button (two fixed-height rows).
-                for _ in range(5):
-                    key("Tab")
-                key("Return")
-                time.sleep(0.4)
+                # The runtime section changes keyboard focus order. Select the
+                # first terminal's actual Attach control and await its host view.
+                click(657, 277)
+                wait_for(
+                    lambda: any(
+                        info["id"] == first["id"] and info["clients"] == 1 for info in infos()
+                    ),
+                    "The first terminal was not attached",
+                )
                 screenshot(window, "reattached.png")
                 text("echo reattached > reattached.ok\n")
                 wait_for(
@@ -275,10 +279,7 @@ def run():
                 )
                 other, other_window = launch()
                 command("Terminal: Sessions and Slurm allocations")
-                for _ in range(5):
-                    key("Tab")
-                key("Return")
-                time.sleep(0.4)
+                click(657, 277)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and info["clients"] == 2 for info in infos()

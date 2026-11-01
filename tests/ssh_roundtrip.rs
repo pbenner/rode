@@ -1,4 +1,7 @@
 //! Run through scripts/test-ssh.sh, which creates an isolated localhost SSH server.
+#[path = "support/process.rs"]
+mod fixture_process;
+
 use rode::{
     files::Request,
     ssh::{Profile, Remote},
@@ -2174,16 +2177,12 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
                 .and_then(|s| s.parse::<u32>().ok())
                 .is_some()
         });
-        let pid: u32 = std::fs::read_to_string(root.join("agent-child.pid"))
-            .unwrap()
-            .parse()
-            .unwrap();
+        // The fixture's recorded PID belongs to the project sandbox. Resolve
+        // its unique argv marker in our namespace before checking cleanup.
+        let pid = fixture_process::host_pid(&root.join("agent-child.pid"));
         drop(chat);
         let until = Instant::now() + Duration::from_secs(5);
-        while std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
-            !s.rsplit_once(')')
-                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
-        }) {
+        while fixture_process::running(pid) {
             assert!(
                 Instant::now() < until,
                 "Closing SSH agent left its tool process alive"

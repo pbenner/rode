@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regressions for CI selection, transferred binaries and bounded fixture execution."""
 
+import io
 import json
 import os
 import subprocess
@@ -110,6 +111,22 @@ class RunnerTests(unittest.TestCase):
             "Could not start", (self.root / "target/ci-results/commands/missing.log").read_text()
         )
 
+    def test_verbose_failure_keeps_the_assertion_and_tail_in_console_output(self):
+        command = [
+            sys.executable,
+            "-c",
+            "print('original assertion');print('daemon chatter\\n'*6000);print('final diagnostic');exit(1)",
+        ]
+        console = io.StringIO()
+        with patch("sys.stdout", console), self.assertRaises(SystemExit):
+            ci.measure("verbose", command)
+        self.assertIn("original assertion", console.getvalue())
+        self.assertIn("final diagnostic", console.getvalue())
+        self.assertIn("middle omitted", console.getvalue())
+        self.assertLess(len(console.getvalue()), 25000)
+        log = (self.root / "target/ci-results/commands/verbose.log").read_text()
+        self.assertEqual(log.count("daemon chatter"), 6000)
+
     def test_timeout_terminates_descendants_as_well_as_the_test_driver(self):
         child_pid = self.root / "child.pid"
         source = (
@@ -179,6 +196,28 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "RODE_TEST_RUFF"):
                 ci.run_suite("remote-documents")
             run.assert_not_called()
+
+    def test_transferred_tests_use_the_selected_helper_for_service_discovery(self):
+        for name in ["rode", "rode-sessiond-static", "tests/ssh_roundtrip"]:
+            path = self.root / "target/ci" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("fixture")
+            path.chmod(0o755)
+        override = self.root / "custom-helper"
+        override.write_text("fixture")
+        override.chmod(0o755)
+        for settings in [
+            {},
+            {"RODE_TEST_SESSION_HELPER": str(override)},
+            {"RODE_SESSION_HELPER": str(override)},
+        ]:
+            with patch.dict(os.environ, settings, clear=True), patch.object(ci, "measure") as run:
+                ci.run_suite("ssh")
+                env = run.call_args.args[2]
+                self.assertEqual(
+                    env["RODE_SESSION_HELPER"],
+                    settings.get("RODE_SESSION_HELPER", env["RODE_TEST_SESSION_HELPER"]),
+                )
 
 
 class SshFixtureTests(unittest.TestCase):

@@ -12,6 +12,7 @@ from pathlib import Path
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    assert_running,
     background,
     click,
     close_window,
@@ -21,6 +22,7 @@ from ui_harness import (
     screenshot,
     text,
     theme,
+    wait_for_window,
 )
 
 with tempfile.TemporaryDirectory(prefix="rode-ui-") as directory:
@@ -70,17 +72,7 @@ fn run_step(step: usize) {
     )
     process = subprocess.Popen([str(BINARY), directory], env=environment, stdout=log, stderr=log)
     try:
-        window = None
-        for _ in range(100):
-            tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-            match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-            if match:
-                window = int(match[1], 16)
-                break
-            assert process.poll() is None, (ARTIFACTS / "app.log").read_text()
-            time.sleep(0.05)
-        assert window, "RODE window did not appear"
-        time.sleep(0.5)  # winit creates the window before mapping its first frame
+        window = wait_for_window(process, ARTIFACTS / "app.log")
         focus_window(window)
         time.sleep(0.4)
         screenshot(window, "welcome.png")
@@ -93,10 +85,15 @@ fn run_step(step: usize) {
         key("End", ("Control_L",))
         text("\n// native-smoke-saved")
         key("s", ("Control_L",))
-        time.sleep(0.6)
-        assert "native-smoke-saved" in path.read_text(), (
-            "Editing + Ctrl+S failed; inspect opened.png"
-        )
+        # Formatting and the protected write run asynchronously. A cold
+        # formatter on a CI runner need not finish within one frame delay.
+        deadline = time.monotonic() + 15
+        while "native-smoke-saved" not in path.read_text():
+            assert_running(process, ARTIFACTS / "app.log")
+            if time.monotonic() >= deadline:
+                screenshot(window, "save-failure.png")
+                raise AssertionError("Editing + Ctrl+S failed; inspect save-failure.png")
+            time.sleep(0.05)
         screenshot(window, "editor.png")
         key("f", ("Control_L",))
         text("run_step")
