@@ -88,6 +88,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
         assert result["kind"] != "error", result
         return result.get("data")
 
+    owner = None
     process, window = None, None
     with (ARTIFACTS / "native.log").open("w") as log:
         try:
@@ -125,11 +126,13 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
             key("Return")
             time.sleep(0.6)
             screenshot(window, "notebook.png")
-            click(612, 213)  # Refresh the target list.
+            click(390, 208)  # Expand kernel settings.
+            time.sleep(0.3)
+            click(630, 277)  # Refresh the target list.
             time.sleep(0.7)
-            click(477, 213)
+            click(499, 277)
             screenshot(window, "targets.png")
-            click(487, 281)
+            click(509, 345)
             command("Notebook: Run all cells")
             marker = root / "executed.json"
             wait_for(marker.exists, "Notebook did not execute on selected target")
@@ -137,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
             assert result == dict(job="4242", gpu="0,1", counter=1), result
             screenshot(window, "compute-kernel.png")
             # Toggle persistence on the existing kernel, then destroy the entire desktop.
-            click(385, 183)
+            click(400, 242)
             wait_for(
                 lambda: any(i["persistent"] for i in rpc("runtimes")),
                 "Kernel persistence was not acknowledged",
@@ -172,7 +175,8 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
             key("Return")
             time.sleep(0.6)
             screenshot(window, "before-reattach.png")
-            click(644, 183)
+            # The expanded settings state survives the desktop restart.
+            click(650, 242)
             wait_for(
                 lambda: any(i["id"] == kernel["id"] and i["attached"] for i in rpc("runtimes")),
                 "Kernel did not reattach",
@@ -186,8 +190,8 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
             screenshot(window, "reattached-kernel.png")
             # Changing to the host stops the old kernel and resets its live variables.
             marker.unlink()
-            click(477, 213)
-            click(477, 242)
+            click(499, 277)
+            click(499, 306)
             command("Notebook: Run all cells")
             wait_for(marker.exists, "Host kernel did not start after changing target")
             result = json.loads(marker.read_text())
@@ -211,6 +215,14 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
                 rpc("end_runtime", id=info["id"], policy=info["policy"])
             for info in rpc("list") or []:
                 rpc("end", id=info["id"], policy=info["policy"])
+            wait_for(
+                lambda: not rpc("runtimes") and not rpc("list"),
+                "Notebook fixture services did not stop",
+            )
+            if owner is not None:
+                wait_for(
+                    (state / "ended").exists, "Allocation fixture did not finish shutting down"
+                )
 print(
     "Notebook reservation, compute execution, desktop restart, kernel reattachment and target restart passed"
 )

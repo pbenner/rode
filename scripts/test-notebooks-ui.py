@@ -142,12 +142,9 @@ def run(remote=False):
                 key("space", ("Control_L",))
                 key("e")
                 screenshot(window, label + "-opened.png")
-                click(640, 251)
-                screenshot(window, label + "-environment-picker.png")
-                key("Escape")
-                click(510, 302)
-                screenshot(window, label + "-kernel-picker.png")
-                key("Escape")
+                click(390, 208)
+                screenshot(window, label + "-settings.png")
+                click(390, 208)
                 assert json.loads(source.read_text()) == original, (
                     "Opening a notebook changed its source"
                 )
@@ -232,6 +229,40 @@ def run(remote=False):
                 text("new.ipynb")
                 key("Return")
                 wait_for(lambda: (project / "new.ipynb").exists(), "New notebook save failed")
+                click(610, 149)
+                text("inserted_code = 7")
+                click(710, 149)
+                text("Inserted markdown")
+                key("s", ("Control_L",))
+
+                def inserted():
+                    cells = json.loads((project / "new.ipynb").read_text())["cells"]
+                    return (
+                        len(cells) == 3
+                        and [c["cell_type"] for c in cells] == ["code", "code", "markdown"]
+                        and "inserted_code = 7" in "".join(cells[1]["source"])
+                        and "Inserted markdown" in "".join(cells[2]["source"])
+                    )
+
+                wait_for(inserted, "Toolbar cell insertion or editor focus failed")
+                screenshot(window, label + "-inserted-cells.png")
+                # Insert between existing cells, rather than appending to the notebook.
+                click(465, 359)
+                text("Between cells")
+                key("s", ("Control_L",))
+
+                def between():
+                    cells = json.loads((project / "new.ipynb").read_text())["cells"]
+                    return (
+                        len(cells) == 4
+                        and [c["cell_type"] for c in cells]
+                        == ["code", "markdown", "code", "markdown"]
+                        and "Between cells" in "".join(cells[1]["source"])
+                        and "inserted_code = 7" in "".join(cells[2]["source"])
+                    )
+
+                wait_for(between, "Inline cell insertion changed the wrong position")
+                screenshot(window, label + "-between-cells.png")
                 open_file("notes.txt")
                 key("s", ("Control_L",))
                 time.sleep(0.3)

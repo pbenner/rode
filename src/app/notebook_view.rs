@@ -861,22 +861,11 @@ impl EditorApp {
             .inner_margin(egui::Margin::symmetric(12, 5))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(palette.tag("JUPYTER"));
-                    if ui.selectable_label(!view.source_mode, "Cells").clicked() && view.source_mode
-                    {
-                        action = Some(Action::Source);
-                    }
-                    if ui
-                        .selectable_label(view.source_mode, "JSON source")
-                        .on_hover_text(
-                            "Stops this notebook's kernel before editing its JSON source",
-                        )
-                        .clicked()
-                        && !view.source_mode
-                    {
-                        action = Some(Action::Source);
-                    }
                     if view.source_mode {
+                        ui.label(palette.tag("JSON SOURCE"));
+                        if ui.button("Back to cells").clicked() {
+                            action = Some(Action::Source);
+                        }
                         return;
                     }
                     let busy = view.kernel.as_ref().is_some_and(Kernel::busy);
@@ -898,23 +887,44 @@ impl EditorApp {
                     {
                         action = Some(Action::Interrupt);
                     }
-                    if ui
-                        .add_enabled(view.kernel.is_some(), egui::Button::new("Shut down"))
-                        .clicked()
-                    {
-                        action = Some(Action::Shutdown);
+                    ui.separator();
+                    let insert_at = view.active_index().map_or(view.book.cells.len(), |at| at + 1);
+                    if ui.button("+ Code cell").on_hover_text("Insert a code cell below the selected cell").clicked() {
+                        action = Some(Action::Add("code", insert_at));
                     }
-                    if ui.button("+ Code").clicked() {
-                        action = Some(Action::Add("code", view.book.cells.len()));
+                    if ui.button("+ Markdown cell").on_hover_text("Insert a text cell below the selected cell").clicked() {
+                        action = Some(Action::Add("markdown", insert_at));
                     }
-                    if ui.button("+ Markdown").clicked() {
-                        action = Some(Action::Add("markdown", view.book.cells.len()));
-                    }
-                    if ui.button("Clear outputs").clicked() {
-                        action = Some(Action::Clear(None));
-                    }
+                    ui.menu_button("Notebook…", |ui| {
+                        if ui.button("Clear all outputs").clicked() {
+                            action = Some(Action::Clear(None));
+                            ui.close();
+                        }
+                        if ui.add_enabled(view.kernel.is_some(), egui::Button::new("Shut down kernel")).clicked() {
+                            action = Some(Action::Shutdown);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Edit JSON source").clicked() {
+                            action = Some(Action::Source);
+                            ui.close();
+                        }
+                    });
                 });
                 if !view.source_mode {
+                    ui.horizontal_wrapped(|ui| {
+                        let status = view.kernel.as_ref().map(|k| k.status.as_str()).unwrap_or("Not started");
+                        if view.kernel.as_ref().is_some_and(Kernel::busy) { ui.spinner(); }
+                        ui.label(palette.tag(status)).on_hover_text(&view.status);
+                        ui.label(if view.kernel_name == "python3" { "Python · selected environment" } else { &view.kernel_name });
+                        let execution = view.kernel.as_ref().map(|k| k.execution.clone()).unwrap_or_else(||
+                            view.execution_target.as_ref().map(|t| format!("Slurm job {}", t.id)).unwrap_or_else(|| "Project host".into()));
+                        ui.label(egui::RichText::new(execution).small().color(palette.muted));
+                    });
+                    egui::CollapsingHeader::new("Kernel settings")
+                        .id_salt(("notebook-settings", id))
+                        .show(ui, |ui| {
+
                     ui.horizontal_wrapped(|ui| {
                         let on = view.kernel.as_ref().map_or(view.persistent, Kernel::persistent);
                         if ui.add_enabled(
@@ -1019,9 +1029,9 @@ impl EditorApp {
                     if !self.python_environment_error().is_empty() {
                         ui.colored_label(palette.error, self.python_environment_error());
                     }
-                    if let Some(env) = self.python_environments() {
-                        ui.small(&env.executable);
-                        if !env.kernel_error.is_empty() { ui.colored_label(palette.muted, &env.kernel_error); }
+                    if let Some(env) = self.python_environments()
+                        && !env.kernel_error.is_empty() {
+                        ui.colored_label(palette.muted, &env.kernel_error);
                     }
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Kernel");
@@ -1047,17 +1057,7 @@ impl EditorApp {
                                 }
                             });
                         if previous != view.kernel_name { action = Some(Action::Kernel); }
-                        ui.label(
-                            palette.tag(
-                                view.kernel
-                                    .as_ref()
-                                    .map(|k| k.status.as_str())
-                                    .unwrap_or(&view.status),
-                            ),
-                        );
-                        if let Some(kernel) = &view.kernel {
-                            ui.small(&kernel.python);
-                        }
+                    });
                     });
                     if self.show_find {
                         ui.horizontal(|ui| {
@@ -1106,9 +1106,6 @@ impl EditorApp {
                     }
                     if !view.error.is_empty() {
                         ui.colored_label(palette.error, &view.error);
-                    }
-                    if !view.status.is_empty() && view.kernel.is_some() {
-                        ui.small(&view.status);
                     }
                 }
             });
@@ -1200,6 +1197,15 @@ impl EditorApp {
                                 if cell.outputs().len()>notebook::MAX_OUTPUTS {ui.small("Only the first 256 saved outputs are displayed; the rest are preserved.");}
                             }
                         });
+                    });
+                    ui.push_id(("insert-cell", id, uid), |ui| {
+                        ui.add_space(4.);
+                        ui.horizontal(|ui| {
+                            ui.add_space(18.);
+                            if ui.small_button("+ Code cell").on_hover_text("Insert a code cell here").clicked() { action=Some(Action::Add("code",at+1)); }
+                            if ui.small_button("+ Markdown cell").on_hover_text("Insert a text cell here").clicked() { action=Some(Action::Add("markdown",at+1)); }
+                        });
+                        ui.add_space(8.);
                     });
                     state.height=(ui.cursor().top()-top).max(60.);y+=state.height;
                 }
