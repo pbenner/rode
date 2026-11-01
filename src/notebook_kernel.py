@@ -10,6 +10,7 @@ source-version checks.
 import json
 import os
 import queue
+import shlex
 import signal
 import socket
 import sys
@@ -171,7 +172,9 @@ def run():
         from jupyter_client import KernelManager
     except ImportError as error:
         raise ValueError(
-            "Install jupyter_client and a kernel (for Python: ipykernel) in the selected project-host interpreter. RODE does not install them automatically."
+            f"Notebook dependencies are missing from {sys.executable}: {error}. "
+            "Install them on the project host with: "
+            f"uv pip install --python {shlex.quote(sys.executable)} jupyter_client ipykernel"
         ) from error
     manager, client = None, None
     # IPC sockets stay on the project host and work without shared networking.

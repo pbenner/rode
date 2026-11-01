@@ -64,7 +64,7 @@ The `syntax` object accepts `comment`, `keyword`, `type`, `function`, `string`, 
 
 Bold basic foreground colors (SGR 1 plus 30–37) use bright entries 8–15, matching [xterm's default boldColors setting](https://www.invisible-island.net/xterm/manpage/xterm.html). This does not brighten backgrounds, RGB colors or already-bright/extended indices. SGR 22/0 restores normal intensity.
 
-Built-in palettes use pure white (`#ffffff`) for `terminal_foreground` and ANSI entries 7/15 (White/Bright white), without tinting these with the UI accent. Custom definitions and saved swatch overrides may explicitly choose other values.
+Built-in palettes set `terminal_foreground` and ANSI entry 7 (White) to the UI text colour, with a lighter matching entry 15 (Bright white). Prompt/path slots follow the theme: warm gold in Carbon/Amber, green in Phosphor/Matrix, cool blue in Ice/Code Dark and violet in Neon. ANSI colour names identify slots; a themed Blue slot need not be literal blue. Bright foreground entries meet at least 4.5:1 contrast against the default terminal background. Red and green remain distinct for error/success indicators. Custom definitions and saved swatch overrides may explicitly choose other values.
 
 The optional `ansi` array overrides the terminal's first 16 indexed colors in standard order: black, red, green, yellow, blue, magenta, cyan, white, followed by their bright variants. All 16 entries are required if the array is supplied. Extended 256-color indices and explicit RGB colors use their standard values before contrast correction.
 

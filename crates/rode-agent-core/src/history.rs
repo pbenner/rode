@@ -520,16 +520,7 @@ impl Browser {
         } else if controls.is_empty() {
             controls = std::mem::take(&mut self.replay_controls);
         }
-        self.replay.retain_mut(|message| {
-            if message.role == Role::User {
-                let task = super::personality::visible_text(&message.text);
-                if task.len() != message.text.len() {
-                    message.text = task.to_owned();
-                }
-                return !message.text.is_empty();
-            }
-            true
-        });
+        super::personality::clean_history(&mut self.replay);
         self.limited |= trim(&mut self.replay);
         self.restored = Some(Restored {
             session: self.session.take().context("History connection closed")?,
@@ -647,7 +638,8 @@ fn codex_messages(turn: &Value) -> Vec<Message> {
                         .flatten()
                         .take(32)
                         .filter_map(|c| c["text"].as_str())
-                        .filter(|text| !super::personality::visible_text(text).is_empty())
+                        .map(super::personality::visible_text)
+                        .filter(|text| !text.is_empty())
                         .map(|s| clip(s, 65536))
                         .collect::<Vec<_>>()
                         .join("\n");
@@ -744,6 +736,34 @@ fn trim(messages: &mut VecDeque<Message>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_replayed_prompts_hide_styles_before_or_after_transport_clipping() {
+        for length in [65000, 65500] {
+            let task = "x".repeat(length);
+            let hint = include_str!("personality/lamb.txt");
+            let source = format!("{task}\n\n{hint}");
+            let codex = codex_messages(&json!({"id":"turn","items":[{
+                "id":"user", "type":"userMessage", "content":[{"text":source}]
+            }]}));
+            assert_eq!(codex[0].text.len(), task.len());
+            assert!(codex[0].text == task);
+
+            let mut acp = VecDeque::new();
+            let mut serial = 0;
+            acp_message(
+                &mut acp,
+                &json!({
+                    "sessionUpdate":"user_message_chunk", "messageId":"user",
+                    "content":{"text":source}
+                }),
+                &mut serial,
+            );
+            super::super::personality::clean_history(&mut acp);
+            assert_eq!(acp[0].text.len(), task.len());
+            assert!(acp[0].text == task);
+        }
+    }
 
     #[test]
     fn replay_omits_hidden_reasoning_and_bounds_multibyte_messages() {

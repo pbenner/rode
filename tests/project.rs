@@ -40,6 +40,45 @@ fn remote(request: &Request) -> anyhow::Result<Response> {
 }
 
 #[test]
+fn python_command_runner_tolerates_a_child_exiting_before_stdin_is_flushed() {
+    let script = format!(
+        "{}\n{}",
+        include_str!("../src/remote_project.py"),
+        r#"
+import sys
+
+start_process = subprocess.Popen
+
+def already_exited(*args, **kwargs):
+    process = start_process(*args, **kwargs)
+    # Force the valid scheduling order where the child exits before its writer runs.
+    process.wait(timeout=5)
+    return process
+
+subprocess.Popen = already_exited
+errors = []
+threading.excepthook = lambda args: errors.append(str(args.exc_value))
+for text in ("buffered input", "x" * (1024 * 1024)):
+    output = project_run([sys.executable, "-c", "raise SystemExit(0)"], text=text)
+    for thread in threading.enumerate():
+        if thread is not threading.current_thread():
+            thread.join(timeout=2)
+    assert output == dict(code=0, stdout="", stderr=""), output
+    assert not errors, errors
+"#
+    );
+    let output = Command::new("python3")
+        .args(["-c", &script])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn runtime_overrides_and_literal_variables_match_on_native_and_python_hosts() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();

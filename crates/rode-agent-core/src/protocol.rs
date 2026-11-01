@@ -152,6 +152,7 @@ impl Chat {
     /// Update a remote view without creating a process. Preserve unsubmitted
     /// question drafts when another streamed update arrives for the same card.
     pub fn apply_view(&mut self, mut view: crate::service::ChatView) {
+        super::personality::clean_history(&mut view.messages);
         for prompt in &mut view.prompts {
             if let Some(old) = self.prompts.iter().find(|old| old.id == prompt.id) {
                 for question in &mut prompt.questions {
@@ -1165,7 +1166,7 @@ pub fn clip(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.into();
     }
-    let suffix = "\n[… truncated]";
+    let suffix = TRUNCATED_SUFFIX;
     let mut end = if limit < suffix.len() {
         limit
     } else {
@@ -1180,6 +1181,7 @@ pub fn clip(text: &str, limit: usize) -> String {
         format!("{}{suffix}", &text[..end])
     }
 }
+pub(crate) const TRUNCATED_SUFFIX: &str = "\n[… truncated]";
 fn append_bounded(target: &mut String, text: &str, limit: usize) {
     if target.len() >= limit {
         return;

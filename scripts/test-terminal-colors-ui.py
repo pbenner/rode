@@ -140,7 +140,9 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
         SHELL=str(shell),
     )
     saved = root / "data/rode/app.ron"
-    for run in ("initial", "restart"):
+    for run in (
+        () if os.environ.get("RODE_TERMINAL_COLORS_UI_PROMPT_ONLY") else ("initial", "restart")
+    ):
         with (ARTIFACTS / f"{run}.log").open("w") as log:
             process = subprocess.Popen(
                 [str(BINARY), str(root)], env=environment, stdout=log, stderr=log
@@ -181,7 +183,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.foreground")
-                            == "#f0ffff"
+                            == "#f0dad8"
                         ),
                         "Foreground edit was not saved",
                     )
@@ -288,12 +290,27 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
             window = window_for(process)
             key("t", ("Control_L", "Shift_L"))
             time.sleep(1)
-            prompt_colors(window, "bash-prompt.png", palette, "1050x170+315+690")
-            click(600, 745)
-            text("false\n")
-            prompt_colors(
-                window, "bash-prompt-failed.png", palette, "1050x170+315+690", failed=True
+            text("echo $$ > palette-before.pid\n")
+            wait_for(
+                lambda: (root / "palette-before.pid").exists(), "No shell before theme switches"
             )
+            for name in ["carbon", "amber", "matrix", "ice", "neon", "code-dark"]:
+                theme(name.replace("-", " "))
+                current = json.loads((ROOT / f"themes/{name}.json").read_text())
+                text("true\n")
+                prompt_colors(window, name + "-prompt.png", current, "1050x240+315+140")
+                text("false\n")
+                prompt_colors(
+                    window, name + "-prompt-failed.png", current, "1050x240+315+140", failed=True
+                )
+            text("echo $$ > palette-after.pid\n")
+            wait_for(
+                lambda: (root / "palette-after.pid").exists(), "Theme switches lost shell input"
+            )
+            assert (root / "palette-before.pid").read_text() == (
+                root / "palette-after.pid"
+            ).read_text()
+            theme("carbon")
             # Compare with xterm when installed; it is a test reference, never
             # an editor dependency. Pin its palette to compare ANSI semantics.
             if shutil.which("xterm"):
@@ -304,7 +321,9 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
                     "-geometry",
                     "100x12",
                     "-fa",
-                    "monospace",
+                    # Match egui's grayscale antialiasing for RGB pixel checks,
+                    # independent of the desktop's LCD/subpixel font settings.
+                    "monospace:rgba=none",
                     "-fs",
                     "11",
                     "-tn",

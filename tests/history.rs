@@ -499,6 +499,50 @@ fn local_history_does_not_require_a_model_and_read_only_wins_over_saved_access()
 }
 
 #[test]
+fn both_protocols_hide_saved_personality_instructions_in_previews_and_recalled_prompts() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        for hint in [
+            include_str!("../crates/rode-agent-core/src/personality/lamb.txt"),
+            "<rode_response_style version=\"2\" name=\"jackson_lamb\">\nOlder personality instructions.\n</rode_response_style>",
+        ] {
+            let (temp, launch) = fixture(provider, false);
+            fs::write(temp.path().join("saved-response-style.txt"), hint).unwrap();
+            // The backend cuts the preview inside the style's opening tag.
+            let preview = format!("Earlier work on this project\n\n{hint}");
+            options(
+                temp.path(),
+                serde_json::json!({"previews": {"saved-1": &preview[..55]}}),
+            );
+            let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+            wait(&mut browser);
+            assert_eq!(browser.entries[0].title, "Saved conversation saved-1");
+            assert_eq!(browser.entries[0].preview, "Earlier work on this project");
+            browser.resume("saved-1").unwrap();
+            wait(&mut browser);
+            let mut chat = Chat::default();
+            chat.restore(browser.take_restored().unwrap());
+            assert_eq!(
+                chat.messages
+                    .iter()
+                    .filter(|m| m.role == Role::User)
+                    .map(|m| m.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["Earlier question 1", "Earlier question 2"]
+            );
+            // Restoring display text must not rewrite the agent-owned transcript.
+            assert_eq!(
+                fs::read_to_string(temp.path().join("saved-response-style.txt")).unwrap(),
+                hint
+            );
+            assert!(!log(temp.path()).iter().any(|call| matches!(
+                call["method"].as_str(),
+                Some("turn/start" | "session/prompt")
+            )));
+        }
+    }
+}
+
+#[test]
 fn acp_replay_hides_fragmented_style_hints_and_default_resets_a_restored_chat() {
     let (temp, mut launch) = fixture(Provider::Acp, false);
     launch.config.personality = rode::agent::Personality::JacksonLamb;

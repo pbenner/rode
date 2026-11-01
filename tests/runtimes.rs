@@ -180,6 +180,52 @@ fn until(mut check: impl FnMut() -> bool) {
 }
 
 #[test]
+fn missing_notebook_dependencies_report_the_interpreter_and_install_command() {
+    let mut fixture = Fixture::new();
+    let python = "/usr/bin/python3";
+    let info = fixture.create(
+        Start::Notebook {
+            name: "python3".into(),
+        },
+        vec![
+            python.into(),
+            "-S".into(), // Exclude installed site packages, even on hosts with Jupyter.
+            "-u".into(),
+            "-c".into(),
+            include_str!("../src/notebook_kernel.py").into(),
+        ],
+        python,
+        false,
+    );
+    let session = fixture.attach(&info);
+    let Update::State(state) = wait(
+        &session,
+        |update| matches!(update, Update::State(state) if !state.info.alive && !state.error.is_empty()),
+    ) else {
+        panic!()
+    };
+    assert!(
+        state.error.contains("Notebook dependencies are missing"),
+        "{}",
+        state.error
+    );
+    assert!(state.error.contains(python), "{}", state.error);
+    assert!(
+        state.error.contains("uv pip install --python"),
+        "{}",
+        state.error
+    );
+    assert!(
+        state.error.contains("jupyter_client ipykernel"),
+        "{}",
+        state.error
+    );
+    assert!(!state.error.contains("connection ended"), "{}", state.error);
+    assert_eq!(state.execution, "Project host");
+    assert!(!state.info.busy);
+}
+
+#[test]
 fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattachment() {
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
         eprintln!("Set RODE_TEST_JUPYTER for real persistent notebook coverage");

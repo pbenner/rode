@@ -27,7 +27,8 @@ pub enum Personality {
 // Pre-release prompts have one current definition per personality.
 const NORMAL: &str = include_str!("personality/default.txt");
 const LAMB: &str = include_str!("personality/lamb.txt");
-const REPLAY_HINTS: [&str; 2] = [NORMAL, LAMB];
+const STYLE_OPEN: &str = "<rode_response_style";
+const STYLE_CLOSE: &str = "</rode_response_style>";
 
 impl Personality {
     /// Available reply styles, with the ordinary agent default first.
@@ -69,27 +70,76 @@ impl Personality {
     }
 }
 
-/// Hide only our exact control block/suffix in user-message replay. Do not
-/// interpret arbitrary XML or alter assistant output, source files or tool logs.
+/// Hide generated style suffixes by their envelope, independently of the wording
+/// saved by an older build. Leave ordinary XML and quoted blocks within a task alone.
 pub(crate) fn visible_text(text: &str) -> &str {
-    for hint in REPLAY_HINTS {
-        if let Some(task) = text.trim_end().strip_suffix(hint) {
-            return task.trim_end_matches(['\r', '\n']);
-        }
-    }
-    text
+    strip_styles(text, false)
 }
 
 /// Backend previews may concatenate text blocks and truncate inside our hint.
 /// Clean that known suffix before applying RODE's own metadata length limits.
 pub(crate) fn preview_text(text: &str) -> &str {
-    if let Some(start) = text.rfind("<rode_response_style") {
-        let suffix = text[start..].trim_end();
-        if REPLAY_HINTS.iter().any(|hint| hint.starts_with(suffix)) {
-            return text[..start].trim_end_matches(['\r', '\n']);
+    strip_styles(text, true)
+}
+
+fn strip_styles(mut text: &str, partial: bool) -> &str {
+    loop {
+        let mut candidate = text.trim_end();
+        if partial {
+            candidate = candidate
+                .strip_suffix(crate::protocol::TRUNCATED_SUFFIX)
+                .unwrap_or(candidate);
         }
+        let Some(start) = style_start(candidate, partial) else {
+            break;
+        };
+        text = text[..start].trim_end_matches(['\r', '\n']);
     }
     text
+}
+
+fn style_start(text: &str, partial: bool) -> Option<usize> {
+    let start = text.rfind(STYLE_OPEN).or_else(|| {
+        // Even the reserved tag name can be cut off by backend metadata limits.
+        let start = text.rfind("<rode_response_")?;
+        (partial && STYLE_OPEN.starts_with(&text[start..])).then_some(start)
+    })?;
+    if text.len() < start + STYLE_OPEN.len() {
+        return Some(start);
+    }
+    let suffix = &text[start + STYLE_OPEN.len()..];
+    if !suffix.is_empty() && !suffix.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let Some((attributes, body)) = suffix.split_once('>') else {
+        // A backend may cut off metadata before the opening tag is complete.
+        return partial.then_some(start);
+    };
+    if !attributes
+        .split_whitespace()
+        .any(|attribute| matches!(attribute, "name=\"default\"" | "name=\"jackson_lamb\""))
+    {
+        return None;
+    }
+    match body.split_once(STYLE_CLOSE) {
+        Some((_, after)) => after.trim().is_empty().then_some(start),
+        None => partial.then_some(start),
+    }
+}
+
+/// Clean display-only history at both backend replay and live-service reattachment.
+/// Assistant output and tool logs may legitimately discuss the style instructions.
+pub(crate) fn clean_history(messages: &mut std::collections::VecDeque<crate::protocol::Message>) {
+    messages.retain_mut(|message| {
+        if message.role != crate::protocol::Role::User {
+            return true;
+        }
+        let task = preview_text(&message.text);
+        if task.len() != message.text.len() {
+            message.text = task.to_owned();
+        }
+        !message.text.is_empty()
+    });
 }
 
 #[cfg(test)]
@@ -107,9 +157,9 @@ mod tests {
     }
 
     #[test]
-    fn replay_hides_only_exact_generated_style_suffixes() {
+    fn replay_hides_generated_style_suffixes_and_preserves_literal_user_text() {
         assert_eq!(visible_text("task"), "task");
-        for hint in REPLAY_HINTS {
+        for hint in [NORMAL, LAMB] {
             assert_eq!(visible_text(hint), "");
             assert_eq!(visible_text(&format!("task\n\n{hint}\n")), "task");
             let preview = format!("task{hint}");
@@ -128,20 +178,74 @@ mod tests {
 
     #[test]
     fn current_hints_keep_truncated_history_previews_clean() {
-        for hint in REPLAY_HINTS {
-            for (end, _) in hint.char_indices().skip("<rode_response_style".len()) {
+        for hint in [NORMAL, LAMB] {
+            for (end, _) in hint.char_indices().skip("<rode_response_".len()) {
                 assert_eq!(
                     preview_text(&format!("user task\n\n{}", &hint[..end])),
                     "user task"
                 );
             }
         }
-        for hint in REPLAY_HINTS {
+        for hint in [NORMAL, LAMB] {
             assert!(!hint.contains("version="));
         }
         let hint = Personality::JacksonLamb.hint(false).unwrap();
         assert!(hint.len() < 2400, "Keep the per-turn reminder compact");
         assert!(Personality::Default.hint(false).is_none());
         assert_eq!(Personality::Default.hint(true), Some(NORMAL));
+    }
+
+    #[test]
+    fn saved_style_wording_and_attributes_do_not_depend_on_the_current_hint() {
+        for attributes in [
+            "name=\"jackson_lamb\"",
+            "version=\"2\" name=\"jackson_lamb\"",
+            "name=\"default\" version=\"1\"",
+        ] {
+            let hint = format!("{STYLE_OPEN} {attributes}>\nOld instructions.\n{STYLE_CLOSE}");
+            assert_eq!(visible_text(&hint), "");
+            let task = format!("Actual task\r\n\r\n{hint}\n");
+            assert_eq!(visible_text(&task), "Actual task");
+            assert_eq!(visible_text(&format!("{task}{LAMB}")), "Actual task");
+            for (end, _) in hint.char_indices().skip("<rode_response_".len()) {
+                assert_eq!(preview_text(&format!("Task\n{}", &hint[..end])), "Task");
+            }
+            let quoted = format!("Explain this block:\n{hint}\nKeep this explanation.");
+            assert_eq!(visible_text(&quoted), quoted);
+            assert_eq!(preview_text(&quoted), quoted);
+        }
+        for literal in [
+            "Keep my whitespace.  \n",
+            "<rode_response_styles name=\"jackson_lamb\">literal</rode_response_style>",
+            "<rode_response_style name=\"example\">literal</rode_response_style>",
+        ] {
+            assert_eq!(visible_text(literal), literal);
+            assert_eq!(preview_text(literal), literal);
+        }
+    }
+
+    #[test]
+    fn reattached_views_hide_user_style_blocks_without_altering_assistant_or_tool_text() {
+        use crate::protocol::{Chat, Message, Role};
+        let mut chat = Chat::default();
+        let mut view = chat.view();
+        for (id, role, text) in [
+            ("prompt", Role::User, format!("Do the work.\n{LAMB}")),
+            ("hint", Role::User, NORMAL.to_owned()),
+            ("assistant", Role::Assistant, LAMB.to_owned()),
+            ("tool", Role::Tool, LAMB.to_owned()),
+        ] {
+            view.messages.push_back(Message {
+                id: id.into(),
+                role,
+                title: id.into(),
+                text,
+            });
+        }
+        chat.apply_view(view);
+        assert_eq!(chat.messages.len(), 3);
+        assert_eq!(chat.messages[0].text, "Do the work.");
+        assert_eq!(chat.messages[1].text, LAMB);
+        assert_eq!(chat.messages[2].text, LAMB);
     }
 }

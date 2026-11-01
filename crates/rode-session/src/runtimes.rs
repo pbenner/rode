@@ -388,7 +388,11 @@ fn launch(spec: &Spec) -> Result<Controller> {
                 session,
                 spec.python.clone(),
                 name.clone(),
-                "Starting kernel…".into(),
+                spec.target
+                    .as_ref()
+                    .and_then(|target| target["id"].as_str())
+                    .map(|id| format!("Slurm job {id}"))
+                    .unwrap_or_else(|| "Project host".into()),
                 Duration::from_secs(60),
             )?,
         ))),

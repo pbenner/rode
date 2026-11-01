@@ -263,6 +263,45 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
             "{} terminal",
             builtin.id
         );
+        assert_eq!(
+            p.terminal_foreground, p.text,
+            "{} default terminal text",
+            builtin.id
+        );
+        assert_eq!(p.ansi[7], p.text, "{} ANSI white", builtin.id);
+        for index in 8..16 {
+            assert!(
+                contrast(p.ansi[index], p.terminal_background) >= 4.5,
+                "{} bright ANSI {index} must remain readable in PS1",
+                builtin.id
+            );
+        }
+        assert!(
+            p.ansi[9].r() > p.ansi[9].g(),
+            "{} error stays red",
+            builtin.id
+        );
+        assert!(
+            p.ansi[10].g() > p.ansi[10].r(),
+            "{} success stays green",
+            builtin.id
+        );
+        let path = p.ansi[12];
+        match builtin.id.as_str() {
+            "carbon" | "amber" => assert!(
+                path.r() > path.g() && path.g() > path.b(),
+                "{} warm path",
+                builtin.id
+            ),
+            "phosphor" | "matrix" => assert!(
+                path.g() > path.r() && path.g() > path.b(),
+                "{} green path",
+                builtin.id
+            ),
+            "ice" | "code-dark" => assert!(path.b() > path.r(), "{} cool path", builtin.id),
+            "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
+            _ => unreachable!(),
+        }
         let file = format!(r#"{{"name":"Derived","base":"{}"}}"#, builtin.id);
         fs::write(directory.path().join("derived.json"), &file).unwrap();
         assert_eq!(

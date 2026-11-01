@@ -93,15 +93,18 @@ def project_run(args, root=None, text="", timeout=20, env=None, cancel=None):
         except (BrokenPipeError, OSError):
             pass
         finally:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
 
-    readers = [
+    workers = [
         threading.Thread(target=drain, args=(pipe, captured[i]), daemon=True)
         for i, pipe in enumerate([process.stdout, process.stderr])
     ]
-    for thread in readers:
+    workers.append(threading.Thread(target=write, daemon=True))
+    for thread in workers:
         thread.start()
-    threading.Thread(target=write, daemon=True).start()
     start = time.monotonic()
     while process.poll() is None:
         if overflow.is_set() or time.monotonic() - start > timeout or (cancel and cancel.is_set()):
@@ -109,14 +112,14 @@ def project_run(args, root=None, text="", timeout=20, env=None, cancel=None):
             process.wait()
             raise ValueError("Command exceeded its time or 8 MiB output limit.")
         time.sleep(0.015)
-    for thread in readers:
+    for thread in workers:
         thread.join(2)
         if thread.is_alive():
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            raise ValueError("Command output pipes did not close.")
+            raise ValueError("Command pipes did not close.")
     if overflow.is_set():
         raise ValueError("Command output exceeded 8 MiB.")
     return dict(

@@ -71,6 +71,7 @@ SUITES = {
         ui("layout"),
         ui("languages"),
         ui("syntax-themes"),
+        ui("terminal-colors", RODE_TERMINAL_COLORS_UI_PROMPT_ONLY="1"),
         ui("project", RODE_PROJECT_UI_CASE="sandbox"),
         ui("project", RODE_PROJECT_UI_CASE="fallback"),
     ],

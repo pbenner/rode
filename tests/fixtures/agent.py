@@ -30,10 +30,17 @@ def deleted_history():
     return set(json.loads(path.read_text())) if path.exists() else set()
 
 
+def response_style():
+    path = root / "saved-response-style.txt"
+    return path.read_text() if path.exists() else ""
+
+
 def saved(identity):
     """Agent-owned history, with a deliberately foreign row to check client isolation."""
     options = history_options()
-    title = options.get("titles", {}).get(identity, "Saved conversation " + identity)
+    hint = response_style()
+    suffix = "\n\n" + hint if hint else ""
+    title = options.get("titles", {}).get(identity, "Saved conversation " + identity + suffix)
     return {
         "id": identity,
         "sessionId": identity,
@@ -43,7 +50,9 @@ def saved(identity):
         else "openai",
         "name": title,
         "title": title,
-        "preview": options.get("previews", {}).get(identity, "Earlier work on this project"),
+        "preview": options.get("previews", {}).get(
+            identity, "Earlier work on this project" + suffix
+        ),
         "updatedAt": options.get("updated", {}).get(identity, 1700000000),
         "status": {"type": "idle"},
     }
@@ -315,6 +324,13 @@ try:
         elif method == "thread/turns/list":
             assert params["threadId"] == thread_id
             n = 1 if params.get("cursor") else 2
+            hint = response_style()
+            content = [{"type": "text", "text": f"Earlier question {n}"}]
+            if hint:
+                if n == 1:
+                    content[0]["text"] += "\n\n" + hint
+                else:
+                    content.append({"type": "text", "text": hint})
             response(
                 request,
                 {
@@ -325,7 +341,7 @@ try:
                                 {
                                     "id": f"user-{n}",
                                     "type": "userMessage",
-                                    "content": [{"type": "text", "text": f"Earlier question {n}"}],
+                                    "content": content,
                                 },
                                 {
                                     "id": f"tool-{n}",
@@ -354,9 +370,8 @@ try:
                     ("agent_message_chunk", f"Earlier answer {n}"),
                 ):
                     chunks = [content]
-                    style = root / "saved-response-style.txt"
-                    if kind == "user_message_chunk" and style.exists():
-                        hint = style.read_text()
+                    hint = response_style()
+                    if kind == "user_message_chunk" and hint:
                         # Replayed text blocks can be coalesced and fragmented by ACP peers.
                         chunks += ["\n" + hint[: len(hint) // 2], hint[len(hint) // 2 :]]
                     for chunk in chunks:

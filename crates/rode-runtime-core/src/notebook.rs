@@ -21,6 +21,7 @@ pub struct Run {
     /// Code snapshot submitted to the owned kernel.
     pub code: String,
 }
+
 /// Normalized Jupyter events tagged with their originating execution snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
@@ -54,6 +55,8 @@ pub struct Kernel {
     pending: Option<(u64, Run)>,
     next: u64,
     ready: bool,
+    failed: bool,
+    stderr: String,
     started: Instant,
     startup_timeout: Duration,
     /// Current human-readable bridge/kernel status.
@@ -101,6 +104,8 @@ impl Kernel {
             pending: None,
             next: 1,
             ready: false,
+            failed: false,
+            stderr: String::new(),
             started: Instant::now(),
             startup_timeout,
             status: "Starting kernel…".into(),
@@ -120,10 +125,14 @@ impl Kernel {
     }
     /// Return whether startup or an execution is in progress.
     pub fn busy(&self) -> bool {
-        self.pending.is_some() || !self.queue.is_empty() || !self.ready
+        !self.failed && (self.pending.is_some() || !self.queue.is_empty() || !self.ready)
     }
     /// Validate and enqueue bounded cell snapshots, preserving sequential execution.
     pub fn run(&mut self, runs: Vec<Run>) -> Result<()> {
+        ensure!(
+            !self.failed,
+            "Restart the failed notebook kernel before running cells."
+        );
         ensure!(
             self.pending.is_none() && self.queue.is_empty(),
             "A notebook run is already in progress."
@@ -175,6 +184,17 @@ impl Kernel {
     pub fn is_finished(&self) -> bool {
         self.session.is_finished()
     }
+    fn fail(&mut self, error: String, events: &mut Vec<Event>) {
+        if self.failed {
+            return;
+        }
+        self.failed = true;
+        self.queue.clear();
+        self.pending = None;
+        self.status = "Kernel failed".into();
+        self.session.stop();
+        events.push(Event::Error(error));
+    }
     /// Drain available bridge events without blocking, advancing the sequential run queue.
     pub fn poll(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
@@ -182,6 +202,9 @@ impl Kernel {
             let Some(event) = self.session.poll() else {
                 break;
             };
+            if self.failed {
+                continue;
+            }
             match event {
                 process::Event::Message(message) => {
                     let run = message["id"].as_u64().and_then(|id| {
@@ -201,7 +224,7 @@ impl Kernel {
                             };
                             events.push(Event::Ready(message["language_info"].clone()));
                             if let Err(e) = self.next_run() {
-                                events.push(Event::Error(e.to_string()));
+                                self.fail(e.to_string(), &mut events);
                             }
                         }
                         "output" => {
@@ -239,45 +262,196 @@ impl Kernel {
                                 }
                                 events.push(Event::Done(run, status));
                                 if let Err(e) = self.next_run() {
-                                    events.push(Event::Error(e.to_string()));
+                                    self.fail(e.to_string(), &mut events);
                                 }
                             }
                         }
-                        "error" => events.push(Event::Error(
+                        "error" => self.fail(
                             message["message"]
                                 .as_str()
                                 .unwrap_or("Notebook kernel error")
                                 .into(),
-                        )),
-                        _ => events.push(Event::Error("Invalid notebook kernel message.".into())),
+                            &mut events,
+                        ),
+                        _ => self.fail("Invalid notebook kernel message.".into(), &mut events),
                     }
                 }
-                process::Event::Error(error) => events.push(Event::Error(error)),
-                process::Event::Exited(code) => events.push(Event::Error(format!(
-                    "Notebook kernel connection ended ({code:?}) on {}. {}",
-                    self.execution,
-                    if self.ready {
-                        "The process or allocation ended."
-                    } else {
-                        &self.status
-                    }
-                ))),
+                process::Event::Error(error) => self.fail(error, &mut events),
+                process::Event::Exited(code) => {
+                    let reason = code
+                        .map(|code| format!("exit status {code}"))
+                        .unwrap_or_else(|| "terminated by a signal".into());
+                    self.fail(
+                        format!(
+                            "Notebook kernel connection ended ({reason}) on {} using {}. {}",
+                            self.execution,
+                            self.python,
+                            if self.stderr.is_empty() {
+                                "The process or allocation ended."
+                            } else {
+                                self.stderr.trim()
+                            }
+                        ),
+                        &mut events,
+                    );
+                }
                 process::Event::Stderr(text) => {
                     if self.ready {
                         continue;
                     }
                     self.status = text.chars().take(512).collect();
+                    self.stderr.push_str(&text);
+                    self.stderr.push('\n');
+                    self.stderr = self
+                        .stderr
+                        .chars()
+                        .rev()
+                        .take(4096)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect();
                 }
                 process::Event::Started => {}
             }
         }
-        if !self.ready && self.started.elapsed() > self.startup_timeout {
-            events.push(Event::Error(format!(
-                "Kernel startup exceeded {} seconds on {}.",
-                self.startup_timeout.as_secs(),
-                self.execution
-            )));
+        if !self.ready && !self.failed && self.started.elapsed() > self.startup_timeout {
+            self.fail(
+                format!(
+                    "Kernel startup exceeded {} seconds on {} using {}.",
+                    self.startup_timeout.as_secs(),
+                    self.execution,
+                    self.python
+                ),
+                &mut events,
+            );
         }
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+
+    struct Input;
+    impl process::Sink for Input {
+        fn try_send_buffer(&self, bytes: &mut Vec<u8>) -> Result<bool> {
+            bytes.clear();
+            Ok(true)
+        }
+    }
+    struct Transport {
+        events: mpsc::Receiver<process::Event>,
+        stopped: Arc<AtomicBool>,
+    }
+    impl process::Transport for Transport {
+        fn writer(&self) -> process::Writer {
+            process::Writer::new(Input)
+        }
+        fn poll(&self) -> Option<process::Event> {
+            self.events.try_recv().ok()
+        }
+        fn stop(&self) {
+            self.stopped.store(true, Ordering::Release);
+        }
+        fn is_finished(&self) -> bool {
+            self.stopped.load(Ordering::Acquire)
+        }
+    }
+    fn kernel(timeout: Duration) -> (Kernel, mpsc::Sender<process::Event>, Arc<AtomicBool>) {
+        let (send, events) = mpsc::channel();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let session = process::Session::new(Transport {
+            events,
+            stopped: stopped.clone(),
+        });
+        (
+            Kernel::from_session(
+                session,
+                "/project/.venv/bin/python".into(),
+                "python3".into(),
+                "Project host".into(),
+                timeout,
+            )
+            .unwrap(),
+            send,
+            stopped,
+        )
+    }
+
+    #[test]
+    fn startup_error_survives_exit_in_the_same_or_a_later_poll() {
+        for split in [false, true] {
+            let (mut kernel, send, stopped) = kernel(Duration::from_secs(30));
+            kernel
+                .run(vec![Run {
+                    uid: 1,
+                    cell: "cell".into(),
+                    version: 0,
+                    code: "print(42)".into(),
+                }])
+                .unwrap();
+            send.send(process::Event::Message(json!({
+                "kind": "error", "message": "Install jupyter_client and ipykernel"
+            })))
+            .unwrap();
+            let mut events = if split { kernel.poll() } else { vec![] };
+            send.send(process::Event::Stderr(
+                "Additional shutdown diagnostic".into(),
+            ))
+            .unwrap();
+            send.send(process::Event::Exited(Some(1))).unwrap();
+            events.extend(kernel.poll());
+            assert!(
+                matches!(events.as_slice(), [Event::Error(error)] if error == "Install jupyter_client and ipykernel")
+            );
+            assert!(!kernel.busy());
+            assert!(kernel.runs().is_empty());
+            assert_eq!(kernel.status, "Kernel failed");
+            assert!(kernel.run(vec![]).is_err());
+            assert!(stopped.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn exit_without_a_protocol_error_includes_startup_stderr_and_interpreter() {
+        let (mut kernel, send, _) = kernel(Duration::from_secs(30));
+        send.send(process::Event::Stderr("Traceback:".into()))
+            .unwrap();
+        send.send(process::Event::Stderr(
+            "ImportError: broken dependency".into(),
+        ))
+        .unwrap();
+        send.send(process::Event::Exited(Some(1))).unwrap();
+        let events = kernel.poll();
+        let [Event::Error(error)] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        assert!(error.contains("exit status 1"));
+        assert!(error.contains("Project host using /project/.venv/bin/python"));
+        assert!(error.contains("Traceback:\nImportError: broken dependency"));
+        assert!(!error.contains("Starting kernel"));
+    }
+
+    #[test]
+    fn startup_timeout_stops_the_transport_and_cannot_be_revived_by_a_late_ready() {
+        let (mut kernel, send, stopped) = kernel(Duration::from_secs(30));
+        kernel.started = Instant::now() - Duration::from_secs(31);
+        assert!(
+            matches!(kernel.poll().as_slice(), [Event::Error(error)] if error.contains("startup exceeded"))
+        );
+        assert!(stopped.load(Ordering::Acquire));
+        send.send(process::Event::Message(json!({"kind": "ready"})))
+            .unwrap();
+        send.send(process::Event::Exited(Some(0))).unwrap();
+        assert!(kernel.poll().is_empty());
+        assert!(!kernel.ready());
+        assert!(!kernel.busy());
     }
 }
