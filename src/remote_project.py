@@ -529,6 +529,38 @@ def project_monitor(root):
     return result
 
 
+def project_git_command(args):
+    """Build validated Git arguments and the shared noninteractive environment."""
+    if not args or len(args) > 128 or sum(len(value.encode("utf-8")) for value in args) > 64 * 1024:
+        raise ValueError("Invalid Git command size.")
+    env = dict(
+        os.environ,
+        GIT_TERMINAL_PROMPT="0",
+        GIT_EDITOR="true",
+        GIT_SEQUENCE_EDITOR="true",
+        LC_ALL="C.UTF-8",
+    )
+    return (
+        [
+            "git",
+            "--no-pager",
+            "--literal-pathspecs",
+            "-c",
+            "color.ui=false",
+            "-c",
+            "core.quotePath=false",
+        ]
+        + args,
+        env,
+    )
+
+
+def project_git(root, args, text=""):
+    """Execute literal Git arguments with the same bounded environment on every route."""
+    command, env = project_git_command(args)
+    return project_run(command, root, text, timeout=120, env=env)
+
+
 def project_handle(request):
     """Dispatch the project.rs service protocol; caller supplies the execution boundary."""
     if request["task"] == "extension":
@@ -577,37 +609,11 @@ def project_handle(request):
     if task == "slurm":
         return globals()["slurm_service"](request, root)
     if task == "git":
-        args = request["args"]
-        if (
-            not args
-            or len(args) > 128
-            or sum(len(value.encode("utf-8")) for value in args) > 64 * 1024
-        ):
-            raise ValueError("Invalid Git command size.")
-        env = dict(
-            os.environ,
-            GIT_TERMINAL_PROMPT="0",
-            GIT_EDITOR="true",
-            GIT_SEQUENCE_EDITOR="true",
-            LC_ALL="C.UTF-8",
+        return dict(
+            kind="command", data=project_git(root, request["args"], request.get("input") or "")
         )
-        data = project_run(
-            [
-                "git",
-                "--no-pager",
-                "--literal-pathspecs",
-                "-c",
-                "color.ui=false",
-                "-c",
-                "core.quotePath=false",
-            ]
-            + args,
-            root,
-            request.get("input") or "",
-            timeout=120,
-            env=env,
-        )
-        return dict(kind="command", data=data)
+    if task == "git_stash":
+        return dict(kind="command", data=git_stash(request, root))  # noqa: F821 - concatenated peer
     if task == "monitor":
         return dict(kind="monitor", data=project_monitor(root))
     if task == "environments":

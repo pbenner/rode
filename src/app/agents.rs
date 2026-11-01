@@ -191,7 +191,7 @@ impl EditorApp {
             self.agents.history_delete = None;
             self.agents.save_config();
             self.agents.replace_chat();
-            self.agents.running = Default::default();
+            self.agents.running.reset_context();
             self.agents.completed = 0;
             self.agents.draft.clear();
             self.agents.composing = false;
@@ -281,10 +281,13 @@ impl EditorApp {
         {
             self.agents.queue.sync(view, self.agents.chat.busy);
         }
+        while let Some(prompt) = self.agents.queue.take_dispatched() {
+            self.agents.composer.remember_prompt(prompt);
+        }
         if self.agents.completed != self.agents.chat.completed {
             self.agents.completed = self.agents.chat.completed;
             self.agents.queue.finished();
-            if !self.agents.chat.last_turn_succeeded {
+            if !self.agents.chat.automatic_queue() && !self.agents.chat.last_turn_succeeded {
                 self.agents.queue.pause();
             }
             self.reload_clean_documents(ctx);
@@ -294,7 +297,9 @@ impl EditorApp {
             && !self.agents.chat.connected()
         {
             self.agents.queue.finished();
-            self.agents.queue.pause();
+            if !self.agents.chat.automatic_queue() {
+                self.agents.queue.pause();
+            }
         }
         self.agents.flush_queue();
         self.dispatch_agent_queue(ctx);
@@ -502,7 +507,7 @@ impl EditorApp {
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
             if agents.history_open {
-                let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal,agents.chat.conversation_id(),&mut agents.history_delete);
+                let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal,agents.chat.conversation_id(),&mut agents.history_delete,palette);
                 history_action.refresh |= panel.refresh;
                 history_action.more=panel.more;
                 history_action.resume=panel.resume;
@@ -715,7 +720,7 @@ impl EditorApp {
             // revalidate unrelated ACP controls before there is another task.
             let mut execution_before = before;
             execution_before.personality = agents.config.personality;
-            if execution_before != agents.config
+            if (agents.chat.automatic_queue() || execution_before != agents.config)
                 && let Err(error) = agents.chat.configure_idle(&agents.config)
             {
                 agents.queue.pause();
@@ -884,6 +889,9 @@ impl EditorApp {
     }
 
     fn dispatch_agent_queue(&mut self, ctx: &egui::Context) {
+        if self.agents.chat.automatic_queue() {
+            return;
+        }
         if self.agents.chat.busy
             || self.agents.chat.queue_pending()
             || self.agents.queue.command().is_some()

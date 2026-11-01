@@ -84,8 +84,9 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 deadline = time.monotonic() + 15
                 while time.monotonic() < deadline:
                     assert_running(process, log_path)
-                    if check():
-                        return
+                    result = check()
+                    if result:
+                        return result
                     time.sleep(0.05)
                 raise AssertionError(message)
 
@@ -167,6 +168,50 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             send("after docking", window, (700, 790))
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
             assert sum(call.get("method") == "turn/start" for call in calls()) == 4
+            click(1073, 69)
+            child = wait(tools_window, "Could not detach the queued chat")
+            send("queue-gated", child, (450, 680))
+            wait(lambda: (project / "queue-started").exists(), "Held turn did not start")
+            # The first queued turn evicts user messages from the transcript;
+            # recall must still include the second accepted queued prompt.
+            for message in ["history-burst", "detached queue second"]:
+                click(450, 680)
+                text(message)
+                key("Return")
+                time.sleep(0.3)
+            focus(window)
+            (project / "queue-continue").touch()
+            wait(
+                lambda: sum(call.get("method") == "turn/start" for call in calls()) == 7,
+                "The detached chat did not process every queued prompt",
+            )
+            prompts = [
+                call["params"]["input"][0]["text"]
+                for call in calls()
+                if call.get("method") == "turn/start"
+            ]
+            assert prompts[-3:] == [
+                "queue-gated",
+                "history-burst",
+                "detached queue second",
+            ], prompts
+            screenshot(child, "detached-queue-drained.png")
+            focus(child)
+            click(450, 680)
+            key("Up")
+            key("Return")
+            wait(
+                lambda: sum(call.get("method") == "turn/start" for call in calls()) == 8,
+                "The detached queue was missing from prompt recall",
+            )
+            assert [
+                call["params"]["input"][0]["text"]
+                for call in calls()
+                if call.get("method") == "turn/start"
+            ][-1] == "detached queue second"
+            request_close(child)
+            wait(lambda: tools_window() is None, "Queued chat did not dock back")
+            focus(window)
             click(339, 69)  # Code replaces tools again, preserving the unsaved buffer.
             key("s", ("Control_L",))
             wait(lambda: "unsaved workspace edit" in source.read_text(), "Code edits were lost")

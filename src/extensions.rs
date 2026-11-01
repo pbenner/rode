@@ -633,7 +633,16 @@ pub(crate) fn execute(
     request: &crate::project::Request,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<Reply> {
-    let mut input = serde_json::to_vec(request)?;
+    execute_with_prelude(command, request, cancel, vec![])
+}
+
+pub(crate) fn execute_with_prelude(
+    command: std::process::Command,
+    request: &crate::project::Request,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut input: Vec<u8>,
+) -> Result<Reply> {
+    input.extend(serde_json::to_vec(request)?);
     input.push(b'\n');
     let output = crate::project::run_controlled(
         command,

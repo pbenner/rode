@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 root = Path.cwd()
@@ -31,6 +32,8 @@ def deleted_history():
 
 def saved(identity):
     """Agent-owned history, with a deliberately foreign row to check client isolation."""
+    options = history_options()
+    title = options.get("titles", {}).get(identity, "Saved conversation " + identity)
     return {
         "id": identity,
         "sessionId": identity,
@@ -38,10 +41,10 @@ def saved(identity):
         "modelProvider": "rode_local"
         if any("model_providers.rode_local" in a for a in sys.argv)
         else "openai",
-        "name": "Saved conversation " + identity,
-        "title": "Saved conversation " + identity,
-        "preview": "Earlier work on this project",
-        "updatedAt": 1700000000,
+        "name": title,
+        "title": title,
+        "preview": options.get("previews", {}).get(identity, "Earlier work on this project"),
+        "updatedAt": options.get("updated", {}).get(identity, 1700000000),
         "status": {"type": "idle"},
     }
 
@@ -444,6 +447,11 @@ try:
                 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
                 (root / "agent-child.pid").write_text(str(child.pid))
                 reply("Working on a long task…")
+            elif message == "queue-gated":
+                (root / "queue-started").touch()
+                while not (root / "queue-continue").exists():
+                    time.sleep(0.05)
+                finish("Queued gate released.")
             elif message == "approve":
                 pending = "approval"
                 emit(

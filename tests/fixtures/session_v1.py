@@ -98,6 +98,10 @@ def handle(stream):
                 "RODE_TEST_HISTORY_CAPABLE"
             ):
                 reply(stream, "ok")
+            elif action == "supports_runtimes" and os.environ.get("RODE_TEST_RUNTIME_CAPABLE"):
+                reply(stream, "ok")
+            elif action == "runtimes" and os.environ.get("RODE_TEST_RUNTIME_CAPABLE"):
+                reply(stream, "runtimes", [])
             elif action not in ("attach", "rename", "end", "shutdown", "create"):
                 reply(
                     stream,

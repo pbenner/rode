@@ -12,6 +12,8 @@ Saved and live outputs show stdout/stderr, tracebacks, text representations, PNG
 
 **Ctrl+S / Save As** use the normal atomic, revision-checked local/SSH saves. Cell edits and execution outputs mark the notebook dirty; tab close/project changes retain the unsaved-edit guard. An external change prevents overwriting it. A save records its submitted snapshot and leaves changes arriving during that save dirty. The notebook never goes through whole-file text formatting or code-run commands.
 
+Background refreshes after Git operations or agent replies preserve the notebook view and live kernel when the saved contents are unchanged.
+
 Use **JSON source** for direct metadata or unsupported-cell editing. Switching to JSON stops this notebook's kernel; switching back reparses the current unsaved buffer. Invalid/unsupported notebooks remain available as ordinary JSON text, with an explanation. Their contents are never replaced by an empty notebook. The cell renderer supports **nbformat 4** and preserves untouched string/list source representations and unknown JSON fields.
 
 ## Running cells

@@ -32,6 +32,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+pub(crate) mod python;
+
 static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 /// User-managed OpenSSH settings, without passwords, private-key contents or cached
@@ -318,13 +320,10 @@ impl Remote {
                     + " "
             })
             .unwrap_or_default();
-        command.arg(format!(
-            "{prefix}python3 -c {}",
-            quote(files::REMOTE_HELPER)
-        ));
+        command.arg(format!("{prefix}{}", python::HOST.command()));
         let output = run_bounded(
             command,
-            serde_json::to_vec(request)?,
+            python::HOST.input(serde_json::to_vec(request)?)?,
             Duration::from_secs(if matches!(request, Request::Tool { .. }) {
                 150
             } else {
@@ -358,10 +357,15 @@ impl Remote {
             })
             .unwrap_or_default();
         command.arg(format!(
-            "{prefix}python3 -c {} --extension-helper",
-            quote(files::REMOTE_HELPER)
+            "{prefix}{} --extension-helper",
+            python::HOST.command()
         ));
-        crate::extensions::execute(command, request, cancel)
+        crate::extensions::execute_with_prelude(
+            command,
+            request,
+            cancel,
+            python::HOST.input(vec![])?,
+        )
     }
     /// Close only this connection's master and remove its private socket directory.
     pub fn cleanup(&self) {
@@ -393,11 +397,8 @@ impl Remote {
         } else {
             String::new()
         };
-        command.arg(format!(
-            "{prefix}python3 -c {} --latex-helper",
-            quote(files::REMOTE_HELPER)
-        ));
-        crate::latex::execute(command, invocation, cancel)
+        command.arg(format!("{prefix}{} --latex-helper", python::HOST.command()));
+        crate::latex::execute_with_prelude(command, invocation, cancel, python::HOST.input(vec![])?)
     }
     /// Run a cancellable Marp coordinator over the existing master and actual project policy.
     pub fn marp_request(
@@ -423,11 +424,8 @@ impl Remote {
                     + " "
             })
             .unwrap_or_default();
-        command.arg(format!(
-            "{prefix}python3 -c {} --marp-helper",
-            quote(files::REMOTE_HELPER)
-        ));
-        crate::marp::execute(command, invocation, cancel)
+        command.arg(format!("{prefix}{} --marp-helper", python::HOST.command()));
+        crate::marp::execute_with_prelude(command, invocation, cancel, python::HOST.input(vec![])?)
     }
 }
 

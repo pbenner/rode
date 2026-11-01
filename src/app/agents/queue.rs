@@ -28,6 +28,8 @@ pub(super) struct Queue {
     hosted: bool,
     observed_ack: Option<String>,
     commands: VecDeque<rode_agent_core::queue::Action>,
+    last_dispatched: Option<u64>,
+    recall: VecDeque<String>,
 }
 
 enum Action {
@@ -51,6 +53,8 @@ impl Queue {
         self.edit = None;
         self.paused = false;
         self.waiting_for_reply = false;
+        self.last_dispatched = None;
+        self.recall.clear();
     }
 
     pub fn pause(&mut self) {
@@ -86,11 +90,30 @@ impl Queue {
             && self.observed_ack.as_deref() == Some(view.acknowledged.as_str())
             && self.serial == view.serial
             && self.paused == view.paused
+            && self
+                .prompts
+                .iter()
+                .map(|p| p.id)
+                .eq(view.items.iter().map(|p| p.id))
+            && self.edit.as_ref().map(|edit| edit.id) == view.editing
+            && self.last_dispatched == view.dispatched.last().map(|item| item.id)
         {
             return;
         }
         self.observed_ack = Some(view.acknowledged.clone());
         let restoring = !self.hosted;
+        if !restoring {
+            let first_new = self
+                .last_dispatched
+                .and_then(|id| view.dispatched.iter().position(|item| item.id == id))
+                .map_or(0, |index| index + 1);
+            self.recall.extend(
+                view.dispatched[first_new..]
+                    .iter()
+                    .map(|item| item.text.clone()),
+            );
+        }
+        self.last_dispatched = view.dispatched.last().map(|item| item.id);
         self.hosted = true;
         self.serial = view.serial;
         self.paused = view.paused;
@@ -119,6 +142,11 @@ impl Queue {
 
     pub fn can_push(&self) -> bool {
         self.prompts.len() < LIMIT
+    }
+
+    /// Consume accepted queued submissions exactly once for local prompt recall.
+    pub fn take_dispatched(&mut self) -> Option<String> {
+        self.recall.pop_front()
     }
 
     #[cfg(test)]
@@ -198,7 +226,7 @@ impl Queue {
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Queued ({})", self.prompts.len())).strong())
-                    .on_hover_text("Pending prompts belong to this agent. Persist on retains the queue and its attachments when Rode closes. Dispatch resumes when you reattach.");
+                    .on_hover_text("Pending prompts belong to this agent. With Persist on, the host continues the queue and retains its attachments after detaching or closing Rode. Pause, Stop, failures and permission requests still hold work.");
                 if ui.small_button(if self.paused { "Resume queue" } else { "Pause queue" })
                     .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.")
                     .clicked() {
@@ -332,6 +360,64 @@ fn valid(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepted_prompts_enter_recall_once_in_dispatch_order_without_transcript_rows() {
+        use rode_agent_core::queue::{Item, View};
+        let mut queue = Queue::default();
+        queue.set_hosted();
+        let mut view = View::default();
+        for (id, text) in [
+            (2, "second, moved earlier"),
+            (1, "first, edited before sending"),
+        ] {
+            view.dispatched.push(Item {
+                id,
+                text: text.into(),
+                files: vec!["snapshot.txt".into()],
+            });
+            queue.sync(&view, false);
+            assert_eq!(queue.take_dispatched().as_deref(), Some(text));
+            queue.sync(&view, false);
+            assert!(queue.take_dispatched().is_none());
+        }
+        queue.clear();
+        queue.sync(&view, false);
+        assert!(
+            queue.take_dispatched().is_none(),
+            "Reattachment must not duplicate restored history"
+        );
+    }
+
+    #[test]
+    fn host_dispatch_updates_rows_even_without_a_new_edit_acknowledgement() {
+        use rode_agent_core::queue::{Item, View};
+        let mut queue = Queue::default();
+        let mut view = View {
+            serial: 2,
+            acknowledged: "same-edit".into(),
+            items: vec![
+                Item {
+                    id: 1,
+                    text: "first".into(),
+                    files: vec![],
+                },
+                Item {
+                    id: 2,
+                    text: "second".into(),
+                    files: vec![],
+                },
+            ],
+            ..Default::default()
+        };
+        queue.sync(&view, true);
+        view.items.remove(0);
+        queue.sync(&view, true);
+        assert_eq!(queue.head_id(), Some(2));
+        view.items.clear();
+        queue.sync(&view, false);
+        assert!(queue.is_empty());
+    }
 
     #[test]
     fn editing_suspends_the_queue_and_preserves_order_until_save_or_cancel() {

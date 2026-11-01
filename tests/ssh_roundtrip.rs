@@ -537,7 +537,10 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
-    use rode_agent_core::service::{Spec, State, Update};
+    use rode_agent_core::{
+        queue::Action as Queue,
+        service::{Command, Spec, State, Update},
+    };
     use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, sync::Arc};
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
     let connect = |profile: Profile| {
@@ -560,6 +563,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
             let root = base.path().join("project");
             std::fs::create_dir(&root).unwrap();
             std::fs::write(base.path().join("private.txt"), "outside project").unwrap();
+            std::fs::write(root.join("record-inputs"), "").unwrap();
             let executable = root.join("agent.py");
             std::fs::write(&executable, include_str!("fixtures/persistent_agent.py")).unwrap();
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -683,15 +687,51 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                     .unwrap();
             assert_eq!(scope["cwd"], plan.root);
             assert_eq!(scope["private_visible"], !plan.active);
+            assert!(info.automatic_queue);
+            for id in 1..=2 {
+                first
+                    .send(
+                        &serde_json::to_value(Command::Queue {
+                            request: format!("ssh-queue-{id}"),
+                            operation: Queue::Push {
+                                id,
+                                text: format!("queued over SSH {id}"),
+                                attachments: vec![],
+                            },
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            let until = Instant::now() + Duration::from_secs(8);
+            while state
+                .as_ref()
+                .is_none_or(|s| s.queue.acknowledged != "ssh-queue-2" || s.queue.items.len() != 2)
+            {
+                if let Some(rode::process::Event::Message(value)) = first.poll() {
+                    state = Some(
+                        serde_json::from_value::<Update>(value)
+                            .unwrap()
+                            .apply(state.as_ref())
+                            .unwrap(),
+                    );
+                }
+                assert!(Instant::now() < until, "SSH queue was not acknowledged");
+                std::thread::sleep(Duration::from_millis(25));
+            }
             drop(first);
             drop(login);
             remote.cleanup();
             std::fs::write(root.join("continue"), "continue").unwrap();
             let until = Instant::now() + Duration::from_secs(8);
-            while !root.join("work-done").exists() {
+            while std::fs::read_to_string(root.join("work-done"))
+                .ok()
+                .as_deref()
+                != Some("3")
+            {
                 assert!(
                     Instant::now() < until,
-                    "Agent stopped when SSH disconnected"
+                    "Agent queue stopped when SSH disconnected"
                 );
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -699,12 +739,10 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
             let second = attach(&next);
             let until = Instant::now() + Duration::from_secs(12);
             state = None;
-            while state.as_ref().is_none_or(|s| {
-                !s.chat
-                    .messages
-                    .iter()
-                    .any(|m| m.text.contains("background complete 1"))
-            }) {
+            while state
+                .as_ref()
+                .is_none_or(|s| s.chat.completed != 3 || s.chat.busy || !s.queue.items.is_empty())
+            {
                 if let Some(rode::process::Event::Message(value)) = second.poll() {
                     state = Some(
                         serde_json::from_value::<Update>(value)
@@ -717,6 +755,15 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 std::thread::sleep(Duration::from_millis(25));
             }
             assert_eq!(std::fs::read(root.join("agent.pid")).unwrap(), pid);
+            let recorded: Vec<serde_json::Value> =
+                std::fs::read_to_string(root.join("recorded-inputs.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+            assert_eq!(recorded.len(), 3);
+            assert_eq!(recorded[1][0]["text"], "queued over SSH 1");
+            assert_eq!(recorded[2][0]["text"], "queued over SSH 2");
             rpc(
                 &next,
                 rode_session::Request::EndAgent {
@@ -927,6 +974,80 @@ fn roundtrip(jump: &str) {
         .tool
         .unwrap();
     assert!(matches!(git,rode::project::Response::Command(output) if output.success()));
+    let run_git = |args: &[&str]| {
+        let response = remote
+            .request_in(
+                &Request::Tool {
+                    request: rode::project::Request::Git {
+                        root: project_root.clone(),
+                        args: args.iter().map(|s| (*s).into()).collect(),
+                        input: None,
+                    },
+                },
+                Some(&plan),
+            )
+            .unwrap()
+            .tool
+            .unwrap();
+        let rode::project::Response::Command(output) = response else {
+            panic!("Missing Git reply")
+        };
+        output.checked().unwrap()
+    };
+    let stash_file = second.join("stash-test.txt");
+    std::fs::write(&stash_file, "baseline\n").unwrap();
+    run_git(&["add", "--", "stash-test.txt"]);
+    run_git(&[
+        "-c",
+        "user.name=RODE Test",
+        "-c",
+        "user.email=rode@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "Stash baseline",
+    ]);
+    let stash = |value: &str| {
+        std::fs::write(&stash_file, value).unwrap();
+        run_git(&[
+            "-c",
+            "user.name=RODE Test",
+            "-c",
+            "user.email=rode@example.invalid",
+            "stash",
+            "push",
+            "-m",
+            value.trim(),
+            "--",
+            "stash-test.txt",
+        ]);
+        run_git(&["rev-parse", "refs/stash"]).trim().to_owned()
+    };
+    let selected = stash("selected A\n");
+    let newer = stash("newer B\n");
+    let drop_stash = |reference: &str| {
+        remote.request_in(
+            &Request::Tool {
+                request: rode::project::Request::GitStash {
+                    root: project_root.clone(),
+                    action: rode::project::StashAction::Drop,
+                    reference: reference.into(),
+                    oid: selected.clone(),
+                },
+            },
+            Some(&plan),
+        )
+    };
+    assert!(
+        drop_stash("stash@{0}")
+            .unwrap_err()
+            .to_string()
+            .contains("Stash list changed")
+    );
+    let reply = drop_stash("stash@{1}").unwrap().tool.unwrap();
+    assert!(matches!(reply, rode::project::Response::Command(output) if output.success()));
+    assert_eq!(run_git(&["stash", "list", "--format=%H"]).trim(), newer);
     let environment = remote
         .request_in(
             &Request::Tool {

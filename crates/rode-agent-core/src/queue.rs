@@ -33,11 +33,20 @@ pub struct View {
     pub editing: Option<u64>,
     /// Last processed queue request, including rejected requests.
     pub acknowledged: String,
+    /// Recent accepted queued prompts, in dispatch order, independent of transcript eviction.
+    /// At most LIMIT entries cover every prompt that can run without a desktop view.
+    #[serde(default)]
+    pub dispatched: Vec<Item>,
 }
 /// A queue mutation, ordered and acknowledged by its host controller.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Action {
+    /// Capture the explicit settings to use for future queued turns.
+    Configure {
+        /// Validated by the host without changing its executable or sandbox.
+        config: Box<Config>,
+    },
     /// Capture a complete immutable prompt on the host.
     Push {
         /// New item identity allocated by the controlling view.
@@ -100,6 +109,18 @@ pub struct Queue {
     view: View,
 }
 impl Queue {
+    /// Eligible head identity; the controller checks task/permission state separately.
+    pub fn next_id(&self) -> Option<u64> {
+        if self.view.paused || self.view.editing.is_some() {
+            return None;
+        }
+        self.items.front().map(|item| item.row.id)
+    }
+    /// Whether an allocated identity has already left this queue. Old desktop
+    /// dispatch retries must not submit it twice or pause later automatic work.
+    pub fn removed(&self, id: u64) -> bool {
+        id > 0 && id <= self.view.serial && !self.items.iter().any(|item| item.row.id == id)
+    }
     /// Snapshot only bounded display data; payloads stay on the host.
     pub fn view(&self) -> View {
         View {
@@ -116,6 +137,10 @@ impl Queue {
         if !self.items.is_empty() {
             self.view.paused = true;
         }
+    }
+    /// Explicit configuration/control holds also apply to prompts queued later.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.view.paused = paused;
     }
     /// Inspect an eligible head; its identity must still match at dispatch time.
     pub fn head(&self, id: u64) -> Result<(String, Vec<Attachment>)> {
@@ -135,7 +160,11 @@ impl Queue {
     /// Remove the head only after the agent accepted the same prompt.
     pub fn sent(&mut self, id: u64) {
         if self.items.front().is_some_and(|p| p.row.id == id) {
-            self.items.pop_front();
+            let prompt = self.items.pop_front().unwrap();
+            self.view.dispatched.push(prompt.row);
+            if self.view.dispatched.len() > LIMIT {
+                self.view.dispatched.remove(0);
+            }
         }
         if self.items.is_empty() {
             self.view.paused = false;
@@ -168,7 +197,7 @@ impl Queue {
                     attachments,
                 });
             }
-            Action::Pause { paused } => self.view.paused = paused,
+            Action::Pause { paused } => self.set_paused(paused),
             Action::Edit { id } => {
                 ensure!(
                     self.items.iter().any(|p| p.row.id == id),
@@ -221,8 +250,46 @@ impl Queue {
                 };
                 self.items.swap(index, other);
             }
-            Action::Dispatch { .. } => anyhow::bail!("Dispatch requires the agent controller."),
+            Action::Dispatch { .. } | Action::Configure { .. } => {
+                anyhow::bail!("This queue operation requires the agent controller.")
+            }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recent_dispatch_records_are_bounded_and_keep_payloads_out_of_views() {
+        let mut queue = Queue::default();
+        for id in 1..=(LIMIT as u64 + 2) {
+            queue
+                .apply(Action::Push {
+                    id,
+                    text: format!("prompt {id}"),
+                    attachments: vec![Attachment::Document {
+                        name: "snapshot.txt".into(),
+                        text: "private attachment payload".into(),
+                    }],
+                })
+                .unwrap();
+            queue.sent(id);
+        }
+        let view = queue.view();
+        assert_eq!(view.dispatched.len(), LIMIT);
+        assert_eq!(view.dispatched[0].id, 3);
+        assert_eq!(
+            view.dispatched.last().unwrap().text,
+            format!("prompt {}", LIMIT + 2)
+        );
+        assert_eq!(view.dispatched[0].files, ["snapshot.txt"]);
+        assert!(
+            !serde_json::to_string(&view)
+                .unwrap()
+                .contains("private attachment payload")
+        );
     }
 }

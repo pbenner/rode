@@ -135,6 +135,7 @@ impl Store {
         let info = Info {
             supports_attachments: true,
             supports_queue: true,
+            automatic_queue: true,
             id: spec.id.clone(),
             name: spec.name.clone(),
             root: spec.plan.root.clone(),
@@ -313,6 +314,7 @@ fn run(
         chat.notice(&error);
     }
     let mut queue = rode_agent_core::queue::Queue::default();
+    let mut queued_config = spec.config.clone();
     let mut completed = chat.completed;
     let mut changed = true;
     let mut stopping = false;
@@ -321,6 +323,7 @@ fn run(
         chat.poll();
         if completed != chat.completed {
             completed = chat.completed;
+            changed = true;
             if !chat.last_turn_succeeded {
                 queue.pause();
             }
@@ -332,6 +335,12 @@ fn run(
                 browser = None;
                 changed = true;
             }
+        }
+        // Drain already received controls before scheduling another turn. Stop,
+        // edit holds and acknowledged settings take precedence over dispatch.
+        let incoming = input.try_recv();
+        if matches!(incoming, Err(mpsc::TryRecvError::Disconnected)) {
+            stopping = true;
         }
         let mut shared = job.shared.lock().unwrap();
         let view = shared.attached;
@@ -355,6 +364,23 @@ fn run(
             chat.disconnect();
             browser = None;
         }
+        if !stopping
+            && matches!(incoming, Err(mpsc::TryRecvError::Empty))
+            && browser.is_none()
+            && !chat.busy
+            && chat.connected()
+            && !chat.stopping()
+            && chat.prompts.is_empty()
+            && let Some(id) = queue.next_id()
+        {
+            if let Err(failure) =
+                dispatch(&mut chat, &mut queue, &launch, &queued_config, id, &wake)
+            {
+                queue.pause();
+                error = format!("Queued prompt was not sent: {failure:#}");
+            }
+            changed = true;
+        }
         let finished = stopping && active.load(Ordering::Acquire) == 0;
         shared.state.info.busy = chat.busy || browser.as_ref().is_some_and(|b: &Browser| b.busy);
         shared.state.info.status = browser
@@ -362,8 +388,9 @@ fn run(
             .map(|b| b.status.clone())
             .unwrap_or_else(|| chat.status.clone());
         shared.state.info.alive = !finished;
-        if (changed && view && last_view.elapsed() >= Duration::from_millis(200)) || finished {
+        if (changed && last_view.elapsed() >= Duration::from_millis(200)) || finished {
             shared.state.chat = chat.view();
+            shared.state.chat.config = queued_config.clone();
             shared.state.queue = queue.view();
             shared.state.history = browser.as_ref().map(Browser::view);
             shared.state.error = std::mem::take(&mut error);
@@ -380,14 +407,19 @@ fn run(
         }
         let timeout = if stopping {
             Duration::from_millis(50)
-        } else if changed && view {
+        } else if changed {
             Duration::from_millis(200).saturating_sub(last_view.elapsed())
         } else if chat.has_deadline() || browser.as_ref().is_some_and(|b| b.busy) {
             Duration::from_millis(250)
         } else {
             Duration::from_secs(30)
         };
-        match input.recv_timeout(timeout) {
+        let incoming = match incoming {
+            Ok(work) => Ok(work),
+            Err(mpsc::TryRecvError::Empty) => input.recv_timeout(timeout),
+            Err(mpsc::TryRecvError::Disconnected) => Err(mpsc::RecvTimeoutError::Disconnected),
+        };
+        match incoming {
             Ok(Work::Action(action)) => {
                 changed = true;
                 error.clear();
@@ -397,36 +429,36 @@ fn run(
                             Err(anyhow::anyhow!("Invalid queue request identity"))
                         } else {
                             queue.acknowledge(request);
-                            if let rode_agent_core::queue::Action::Dispatch { id, config } =
-                                operation
-                            {
-                                let result = (|| -> Result<()> {
-                                    ensure!(
-                                        !chat.busy && browser.is_none(),
-                                        "The agent is not ready for a queued prompt."
-                                    );
-                                    ensure!(
-                                        launch.config.same_process(&config),
-                                        "Queued prompts cannot change the agent executable/provider."
-                                    );
-                                    let (text, attachments) = queue.head(id)?;
-                                    let mut next = launch.clone();
-                                    next.config = *config;
-                                    chat.submit_with_attachments(
-                                        next,
-                                        text,
-                                        attachments,
-                                        wake.clone(),
-                                    )?;
-                                    queue.sent(id);
-                                    Ok(())
-                                })();
-                                if result.is_err() {
-                                    queue.pause();
+                            match operation {
+                                rode_agent_core::queue::Action::Configure { config } => {
+                                    let result =
+                                        configure(&mut chat, &mut queued_config, &launch, *config);
+                                    if result.is_err() {
+                                        queue.set_paused(true);
+                                    }
+                                    result
                                 }
-                                result
-                            } else {
-                                queue.apply(operation)
+                                rode_agent_core::queue::Action::Dispatch { id, config } => {
+                                    // An older UI can retry a head that the host has already
+                                    // submitted. A removed identity must never send twice.
+                                    if queue.removed(id) {
+                                        Ok(())
+                                    } else {
+                                        let result = (|| -> Result<()> {
+                                            ensure!(browser.is_none(), "History browser is open");
+                                            dispatch(
+                                                &mut chat, &mut queue, &launch, &config, id, &wake,
+                                            )?;
+                                            queued_config = *config;
+                                            Ok(())
+                                        })();
+                                        if result.is_err() {
+                                            queue.pause();
+                                        }
+                                        result
+                                    }
+                                }
+                                operation => queue.apply(operation),
                             }
                         }
                     }
@@ -442,10 +474,18 @@ fn run(
                         } else {
                             let mut launch = launch.clone();
                             launch.config = config;
+                            let config = launch.config.clone();
                             chat.submit_with_attachments(launch, text, attachments, wake.clone())
+                                .map(|()| queued_config = config)
                         }
                     }
-                    Action::Configure { config } => chat.configure_idle(&config),
+                    Action::Configure { config } => {
+                        let result = configure(&mut chat, &mut queued_config, &launch, config);
+                        if result.is_err() {
+                            queue.set_paused(true);
+                        }
+                        result
+                    }
                     Action::Answer { id, result } => {
                         if chat.prompts.front().is_some_and(|p| p.id == id) {
                             chat.answer(result)
@@ -510,6 +550,50 @@ fn run(
             Err(mpsc::RecvTimeoutError::Disconnected) => stopping = true,
         }
     }
+}
+
+fn dispatch(
+    chat: &mut Chat,
+    queue: &mut rode_agent_core::queue::Queue,
+    launch: &rode_agent_core::Launch,
+    config: &rode_agent_core::Config,
+    id: u64,
+    wake: &Arc<dyn Fn() + Send + Sync>,
+) -> Result<()> {
+    ensure!(
+        !chat.busy && chat.prompts.is_empty() && !chat.stopping(),
+        "The agent is not ready for a queued prompt"
+    );
+    ensure!(
+        launch.config.same_process(config),
+        "Queued prompts cannot change the agent executable/provider"
+    );
+    let (text, attachments) = queue.head(id)?;
+    let mut next = launch.clone();
+    next.config = config.clone();
+    chat.submit_with_attachments(next, text, attachments, wake.clone())?;
+    queue.sent(id);
+    Ok(())
+}
+
+fn configure(
+    chat: &mut Chat,
+    queued: &mut rode_agent_core::Config,
+    launch: &rode_agent_core::Launch,
+    config: rode_agent_core::Config,
+) -> Result<()> {
+    config.argv()?;
+    ensure!(
+        launch.config.same_process(&config),
+        "Queued prompts cannot change the agent executable/provider"
+    );
+    let mut execution_before = queued.clone();
+    execution_before.personality = config.personality;
+    if execution_before != config {
+        chat.configure_idle(&config)?;
+    }
+    *queued = config;
+    Ok(())
 }
 
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {

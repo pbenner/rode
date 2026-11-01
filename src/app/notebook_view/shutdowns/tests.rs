@@ -20,7 +20,13 @@ fn notebook_shutdown_ownership_survives_view_replacement_and_reports_failures() 
         helper.is_file(),
         "Build rode-sessiond with cargo test --all-targets"
     );
-    for case in ["reparse", "close_tab", "shutdown_failure"] {
+    for case in [
+        "reparse",
+        "close_tab",
+        "shutdown_failure",
+        "reload_persistent",
+        "reload_foreground",
+    ] {
         let root = tempfile::tempdir().unwrap();
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
@@ -235,7 +241,7 @@ fn notebook_shutdown_probe() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_notebook();
     let (ready, prepared) = mpsc::channel();
-    let kernel = Kernel::attach(
+    let mut kernel = Kernel::attach(
         host.plan.clone(),
         None,
         info,
@@ -245,6 +251,78 @@ fn notebook_shutdown_probe() {
     )
     .unwrap();
     prepared.recv_timeout(Duration::from_secs(5)).unwrap();
+    if case.starts_with("reload_") {
+        let until = Instant::now() + Duration::from_secs(10);
+        while kernel.pending() {
+            kernel.poll();
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let persistent = case == "reload_persistent";
+        if !persistent {
+            kernel.set_persistent(false).unwrap();
+            while kernel.pending() {
+                kernel.poll();
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        app.workspace = Some(crate::app::Workspace {
+            root: host.plan.root.clone(),
+            remote: None,
+            connected: true,
+            ready: true,
+            plan: host.plan.clone(),
+            sandbox_options: Default::default(),
+        });
+        let doc = &mut app.documents[0];
+        let path = root
+            .path()
+            .join("demo.ipynb")
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&path, &doc.text).unwrap();
+        doc.acknowledge_save(
+            path,
+            doc.text.clone(),
+            crate::files::digest(doc.text.as_bytes()),
+        );
+        let version = doc.edit_version;
+        let uid = doc.notebook.as_ref().unwrap().book.cells[0].uid;
+        doc.notebook.as_mut().unwrap().kernel = Some(kernel);
+        app.reload_clean_documents(&ctx);
+        let mut events = Vec::new();
+        loop {
+            let event = app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let reloaded = matches!(
+                &event,
+                Event::Done {
+                    job: Job::Reload { .. },
+                    ..
+                }
+            );
+            events.push(event);
+            if reloaded {
+                break;
+            }
+        }
+        for event in events {
+            app.tx.send(event).unwrap();
+        }
+        app.poll(&ctx);
+        let doc = &app.documents[0];
+        let view = doc.notebook.as_ref().unwrap();
+        assert_eq!(view.native_id(), Some(host.id.as_str()));
+        assert_eq!(view.book.cells[0].uid, uid);
+        assert_eq!(doc.edit_version, version);
+        assert_eq!(view.kernel.as_ref().unwrap().persistent(), persistent);
+        assert!(
+            host.infos()
+                .iter()
+                .any(|info| info.id == host.id && info.attached && info.alive)
+        );
+        return;
+    }
     app.documents[0].notebook.as_mut().unwrap().kernel = Some(kernel);
     let failure = case == "shutdown_failure";
     let mut blocked = BlockedDiscovery::new(&primary, failure);

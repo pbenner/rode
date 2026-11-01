@@ -15,6 +15,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+mod stash;
+pub use stash::Action as StashAction;
 
 const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -83,6 +85,18 @@ pub enum Request {
         args: Vec<String>,
         /// Optional UTF-8 stdin, such as a patch or commit message.
         input: Option<String>,
+    },
+    /// Act on the exact stash object displayed by the UI, checking its reflog
+    /// identity under Git's locks before removing an entry.
+    GitStash {
+        /// Repository working directory on the project host.
+        root: String,
+        /// Explicit stash operation.
+        action: StashAction,
+        /// Captured reflog selector, such as `stash@{0}`.
+        reference: String,
+        /// Full SHA-1 or SHA-256 object ID captured with the selector.
+        oid: String,
     },
     /// Sample host counters on demand, outside the project's sandbox by explicit policy.
     Monitor {
@@ -433,28 +447,25 @@ pub fn local(request: &Request) -> Result<Response> {
             {
                 bail!("Git input exceeds 8 MiB.");
             }
-            let mut command = Command::new("git");
-            command
-                .current_dir(crate::files::expand_home(root))
-                .args([
-                    "--no-pager",
-                    "--literal-pathspecs",
-                    "-c",
-                    "color.ui=false",
-                    "-c",
-                    "core.quotePath=false",
-                ])
-                .args(args)
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .env("GIT_EDITOR", "true")
-                .env("GIT_SEQUENCE_EDITOR", "true")
-                .env("LC_ALL", "C.UTF-8");
+            let mut command = git_command(&crate::files::expand_home(root));
+            command.args(args);
             Ok(Response::Command(run(
                 command,
                 input.clone().unwrap_or_default().into_bytes(),
                 Duration::from_secs(120),
             )?))
         }
+        Request::GitStash {
+            root,
+            action,
+            reference,
+            oid,
+        } => Ok(Response::Command(stash::execute(
+            &crate::files::expand_home(root),
+            *action,
+            reference,
+            oid,
+        )?)),
         Request::Monitor { root } => Ok(Response::Monitor(monitor(root)?)),
         Request::Environments { root, selected } => {
             Ok(Response::Environments(environments(root, selected)?))
@@ -518,6 +529,25 @@ pub fn local(request: &Request) -> Result<Response> {
             )?))
         }
     }
+}
+
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .args([
+            "--no-pager",
+            "--literal-pathspecs",
+            "-c",
+            "color.ui=false",
+            "-c",
+            "core.quotePath=false",
+        ])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("LC_ALL", "C.UTF-8");
+    command
 }
 
 fn resolve(root: &Path, value: &str) -> PathBuf {

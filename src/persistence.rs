@@ -253,6 +253,14 @@ pub fn changes(before: &Value, after: &Value) -> Vec<Edit> {
         }
         if let Some(next) = after.as_object() {
             let old = before.as_object();
+            if next.is_empty() && old.is_none() {
+                edits.push(Edit {
+                    path,
+                    value: Some(after.clone()),
+                    previous: None,
+                });
+                return;
+            }
             for (key, value) in next {
                 let mut child = path.clone();
                 child.push(key.clone());
@@ -339,6 +347,32 @@ fn structured(key: &str) -> bool {
     matches!(
         key,
         "project_preferences" | "agent_preferences" | "sandbox_defaults" | "extension_preferences"
+    )
+}
+
+/// Dynamic map keys belong to the user; omitted typed fields may belong to a
+/// newer RODE version. Keep that distinction explicit when merging deletions.
+fn removable_preference(key: &str, path: &[String]) -> bool {
+    let parts: Vec<_> = path.iter().map(String::as_str).collect();
+    matches!(
+        (key, parts.as_slice()),
+        ("sandbox_defaults", ["overrides", _])
+            | (
+                "agent_preferences" | "extension_preferences" | "project_preferences",
+                [_]
+            )
+            | ("agent_preferences", [_, "acp_options", _, ..])
+            | ("extension_preferences", [_, "settings", _, ..])
+            | ("project_preferences", [_, "sandbox", "overrides", _])
+            | (
+                "project_preferences",
+                [_, "environment", "variables" | "runtimes", _]
+            )
+            | ("project_preferences", [_, "debugger", "breakpoints", _])
+            | (
+                "project_preferences",
+                [_, "debugger", "config", "extra", _, ..]
+            )
     )
 }
 
@@ -590,28 +624,10 @@ impl Storage for Preferences {
             };
             let mut edits = vec![];
             for mut edit in changes(&before, &next) {
-                // Struct fields unknown to this version must survive. Only map
-                // entry eviction and explicit sandbox-override removal delete keys.
+                // Struct fields unknown to this version must survive. Known maps
+                // and user-editable JSON objects support explicit key deletion.
                 if edit.value.is_none() {
-                    let removable = match key {
-                        "agent_preferences" => {
-                            edit.path.len() == 1
-                                || (edit.path.len() == 3 && edit.path[1] == "acp_options")
-                        }
-                        "extension_preferences" => {
-                            edit.path.len() == 1
-                                || (edit.path.len() == 3 && edit.path[1] == "settings")
-                        }
-                        "project_preferences" => {
-                            edit.path.len() == 1
-                                || (edit.path.len() == 4
-                                    && edit.path[1] == "sandbox"
-                                    && edit.path[2] == "overrides")
-                        }
-                        "sandbox_defaults" => edit.path.len() == 2 && edit.path[0] == "overrides",
-                        _ => false,
-                    };
-                    if !removable {
+                    if !removable_preference(key, &edit.path) {
                         continue;
                     }
                     // Evict only the record this window actually saw. Another

@@ -317,10 +317,7 @@ fn run_session(
         );
         let mut command = Command::new("ssh");
         command.args(remote.channel_args(false));
-        command.arg(format!(
-            "python3 -u -c {}",
-            ssh::quote(include_str!("remote_agent.py"))
-        ));
+        command.arg(ssh::python::PROCESS.command());
         let mut data = serde_json::to_vec(&RemoteLaunch {
             root: launch.plan.root.clone(),
             prefix: if launch.plan.active {
@@ -337,7 +334,7 @@ fn run_session(
             "Process launch request exceeds 256 KiB."
         );
         data.push(b'\n');
-        (command, Some(data))
+        (command, Some(ssh::python::PROCESS.input(data)?))
     } else if launch.native_debug {
         let (command, helper) = launch.plan.coordinator_command("--debug-helper")?;
         helper_binary = helper;

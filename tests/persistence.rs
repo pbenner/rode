@@ -566,3 +566,134 @@ fn concurrent_extension_toggles_and_namespaced_settings_merge() {
     assert_eq!(result["test.adapter"]["settings"]["two"], "second");
     assert_eq!(result["test.adapter"]["future"], 42);
 }
+
+fn roundtrip(key: &str, initial: Value, next: Value) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.ron");
+    let data = BTreeMap::from([(key, initial.to_string())]);
+    fs::write(&path, ron::ser::to_string(&data).unwrap()).unwrap();
+    let mut prefs = Preferences::open(path.clone(), Arc::new(|| {}));
+    prefs.set_string(key, next.to_string());
+    drop(prefs);
+    let saved: BTreeMap<String, String> = ron::de::from_bytes(&fs::read(path).unwrap()).unwrap();
+    serde_json::from_str(&saved[key]).unwrap()
+}
+
+#[test]
+fn environment_removal_survives_restart() {
+    let before = json!({"local": {"environment": {"variables": {"REVIEW": "stale"}, "runtimes": {"node": "/old/bin/node"}}}});
+    let after = json!({"local": {"environment": {"variables": {}, "runtimes": {}}}});
+    let saved = roundtrip("project_preferences", before, after);
+    assert_eq!(
+        saved["local"]["environment"],
+        json!({"variables": {}, "runtimes": {}})
+    );
+}
+
+#[test]
+fn last_breakpoint_removal_survives_restart() {
+    let before =
+        json!({"local": {"debugger": {"breakpoints": {"/project/test.py": [{"line": 3}]}}}});
+    let after = json!({"local": {"debugger": {"breakpoints": {}}}});
+    let saved = roundtrip("project_preferences", before, after);
+    assert_eq!(saved["local"]["debugger"]["breakpoints"], json!({}));
+}
+
+#[test]
+fn nested_extension_key_removal_survives_restart() {
+    let before =
+        json!({"review.example": {"settings": {"options": {"removed": 1, "retained": 2}}}});
+    let after = json!({"review.example": {"settings": {"options": {"retained": 2}}}});
+    let saved = roundtrip("extension_preferences", before, after);
+    assert_eq!(
+        saved["review.example"]["settings"]["options"],
+        json!({"retained": 2})
+    );
+}
+
+#[test]
+fn empty_object_setting_survives_restart() {
+    let before = json!({"review.example": {"settings": {"options": "old"}}});
+    let after = json!({"review.example": {"settings": {"options": {}}}});
+    let saved = roundtrip("extension_preferences", before, after);
+    assert_eq!(saved["review.example"]["settings"]["options"], json!({}));
+}
+
+#[test]
+fn map_deletions_preserve_other_windows_additions_and_unknown_typed_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let initial = json!({"same": {
+        "future_project_field": {"retained": true},
+        "environment": {"future_environment_field": true, "variables": {"OLD":"old"}, "runtimes": {"node":"/old/node"}},
+        "debugger": {"breakpoints": {"/old.py":[{"line":1}]}, "config":{"extra":{"old":true}}}
+    }});
+    fs::write(
+        &path,
+        ron::ser::to_string(&BTreeMap::from([(
+            "project_preferences",
+            initial.to_string(),
+        )]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut deleting = open(&path);
+    let mut adding = open(&path);
+    let mut addition = initial;
+    addition["same"]["environment"]["variables"]["NEW"] = json!("new");
+    addition["same"]["environment"]["runtimes"]["go"] = json!("/new/go");
+    addition["same"]["debugger"]["breakpoints"]["/new.py"] = json!([{"line":2}]);
+    addition["same"]["debugger"]["config"]["extra"]["new"] = json!(true);
+    adding.set_string("project_preferences", addition.to_string());
+    drop(adding);
+    deleting.set_string(
+        "project_preferences",
+        json!({"same": {
+            "environment": {"variables": {}, "runtimes": {}},
+            "debugger": {"breakpoints": {}, "config":{"extra":{}}}
+        }})
+        .to_string(),
+    );
+    drop(deleting);
+    let saved: Value = serde_json::from_str(&values(&path)["project_preferences"]).unwrap();
+    assert_eq!(
+        saved["same"]["environment"]["variables"],
+        json!({"NEW":"new"})
+    );
+    assert_eq!(
+        saved["same"]["environment"]["runtimes"],
+        json!({"go":"/new/go"})
+    );
+    assert_eq!(
+        saved["same"]["debugger"]["breakpoints"],
+        json!({"/new.py":[{"line":2}]})
+    );
+    assert_eq!(
+        saved["same"]["debugger"]["config"]["extra"],
+        json!({"new":true})
+    );
+    assert_eq!(saved["same"]["future_project_field"]["retained"], true);
+    assert_eq!(
+        saved["same"]["environment"]["future_environment_field"],
+        true
+    );
+}
+
+#[test]
+fn newly_added_empty_objects_and_nested_json_deletions_are_real_edits() {
+    let initial =
+        json!({"review.example":{"settings":{"options":{"old":true,"kept":2},"scalar":"old"}}});
+    let next = json!({"review.example":{"settings":{"options":{"kept":2},"scalar":{},"added":{}}}});
+    let saved = roundtrip("extension_preferences", initial, next.clone());
+    assert_eq!(saved, next);
+    for before in [
+        Value::Null,
+        json!("old"),
+        json!([]),
+        json!({"removed":true}),
+    ] {
+        let mut actual = before.clone();
+        persistence::apply(&mut actual, &persistence::changes(&before, &json!({})));
+        assert_eq!(actual, json!({}));
+    }
+}

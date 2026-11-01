@@ -130,12 +130,13 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             wait(lambda: infos() and not infos()[0]["attached"], "View did not detach")
             attachment.write_text("Changed after Rode closed")
             (root / "continue").touch()
-            wait(lambda: (root / "work-done").exists(), "Work stopped when RODE closed")
+            wait(
+                lambda: (root / "work-done").exists() and (root / "work-done").read_text() == "2",
+                "Queued work did not continue after RODE closed",
+            )
             assert (root / "agent.pid").read_text() == pid
             time.sleep(0.4)
-            assert (root / "work-done").read_text() == "1", (
-                "A queued prompt ran without an attached view"
-            )
+            assert (root / "work-done").read_text() == "2"
             # Another window may have changed this project's saved executable.
             # Attaching must restore the live backend's settings before follow-up.
             preferences = base / "data/rode/app.ron"
@@ -163,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             )
             wait(
                 lambda: (root / "work-done").read_text() == "2",
-                "Queued prompt was lost on restart/reattach",
+                "Completed queued work was lost on restart/reattach",
             )
             recorded = [
                 json.loads(line)

@@ -1298,6 +1298,15 @@ impl EditorApp {
                                     .iter_mut()
                                     .find(|d| d.id == id && d.edit_version == version && !d.dirty())
                                 {
+                                    // Read-only refreshes must not dispose a live kernel merely
+                                    // because Git or an agent finished touching other files.
+                                    if response.notebook.is_some()
+                                        && doc.notebook.is_some()
+                                        && doc.text == response.text
+                                        && doc.revision.as_deref() == Some(&response.revision)
+                                    {
+                                        continue;
+                                    }
                                     if let Some(result) = response.notebook {
                                         doc.notebook = result.ok().map(|book| {
                                             notebook_view::View::new(

@@ -15,6 +15,10 @@ Open conflicted files, edit the conflict markers, save, and **Mark resolved**, t
 
 Git operations run in background workers, with bounded output/time and no automatic fetch. The Changes panel refreshes while visible. Network actions use existing host credentials and report failures; **Git terminal** provides interactive authentication and arbitrary Git commands. Within bwrap, enable network access and explicitly grant any identity/agent paths your Git authentication requires. Global Git configuration is shared read-only by default and can be hidden in the access editor.
 
+Stash actions capture the full object ID shown in the loaded list. Apply uses that immutable object; removal checks the selector and object together while holding Git's writer locks. If another terminal changes the list, refresh before removing the entry. A successful apply followed by a changed list leaves the saved stash in place and reports that pop could not remove it. Guarded removal supports Git's files reference backend, loose/packed stash refs, SHA-1/SHA-256 and linked worktrees. Reftable and namespaced repositories require the Git terminal for removal. Final-reference deletion uses Git's `hook run` command and honors reference-transaction hook rejection.
+
+Git owns the removal transaction's locks. If the desktop or SSH helper exits, its control pipe closes and Git aborts the transaction, releasing those locks.
+
 Linked worktrees share repository metadata. **Open + share main .git** explicitly grants that metadata directory when opening a separate worktree sandbox; **Open project** keeps the current/saved policy. Standard repository layouts are supported by the shortcut; nonstandard Git directories can be granted through the path editor. Worktree creation needs a destination accessible to the current sandbox.
 
 ## Formatting, issues, and Python environments

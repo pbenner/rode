@@ -394,11 +394,12 @@ impl Client {
     pub fn queue_pending(&self) -> bool {
         !self.queue_requests.is_empty()
     }
-    /// Current acknowledged queue, only while this view controls the agent.
+    /// Last acknowledged queue, including the final pause after a backend exits.
+    /// Mutations still require a live controlling connection.
     pub fn queue_view(&self) -> Option<&rode_agent_core::queue::View> {
         self.state
             .as_ref()
-            .filter(|s| !self.closed && s.info.supports_queue)
+            .filter(|s| s.info.supports_queue)
             .map(|s| &s.queue)
     }
     /// Whether this exact process/host/interpreter can accept a follow-up.

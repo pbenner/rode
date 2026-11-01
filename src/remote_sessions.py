@@ -85,7 +85,7 @@ def native_sessions(request):
         if hashlib.sha256(source.read(24 * 1024 * 1024 + 1)).hexdigest() != digest:
             raise ValueError("Installed terminal helper failed its integrity check.")
     protocol = globals()["project_run"]([executable, "protocol"], timeout=5)
-    if protocol["code"] != 0 or protocol["stdout"].strip() != "8":
+    if protocol["code"] != 0 or protocol["stdout"].strip() != "9":
         raise ValueError(
             "The packaged terminal helper uses an older protocol. Rebuild it with "
             "scripts/build-sessiond.sh or select an updated RODE_SESSION_HELPER. "

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Delete saved chats through native controls using only isolated backend fixtures."""
 
+import ctypes
 import json
 import os
 import re
@@ -20,11 +21,21 @@ from ui_harness import (
     assert_running,
     click,
     close_window,
+    display,
     focus_window,
     key,
     screenshot,
     text,
+    x11,
 )
+
+x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
+
+
+def resize(window, width, height):
+    x11.XResizeWindow(display, window, width, height)
+    x11.XFlush(display)
+    time.sleep(0.5)
 
 
 def wait(check, message):
@@ -42,7 +53,30 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
     root.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/agent.py", root / "agent.py")
     (root / "agent.py").chmod(0o755)
-    (root / "history-fixture.json").write_text(json.dumps(dict(archived=True)))
+    history = dict(
+        archived=True,
+        count=4,
+        active=["saved-3"],
+        titles={
+            "saved-0": "Can we discuss the implemented Slurm support in rode?",
+            "saved-1": "I get this message on another machine, although I have clicked on install codex button\n\nI couldn’t access the repository: the command runner fails because this file is missing.",
+            "saved-2": "Notebook kernels and debugger reattachment",
+            "saved-3": "Training run on the GPU cluster",
+        },
+        previews={
+            "saved-0": "Persistent notebook kernels, compute targets and debugger reattachment.",
+            "saved-1": "I get this message on another machine, although I have clicked on install codex button\n\nI couldn’t access the repository: the command runner fails because this file is missing:\n`/home/test/.local/share/rode/codex/0.166.0/x86_64/codex-code-node-host`\nNo files were changed.",
+            "saved-2": "Variables and breakpoints survive closing the desktop and reconnecting over SSH.",
+            "saved-3": "Checking the running allocation and reviewing the latest logs.",
+        },
+        updated={
+            "saved-0": int(time.time()) - 420,
+            "saved-1": int(time.time()) - 39600,
+            "saved-2": int(time.time()) - 86400,
+            "saved-3": int(time.time()) - 120,
+        },
+    )
+    (root / "history-fixture.json").write_text(json.dumps(history))
     env = dict(
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
@@ -62,7 +96,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
     window = None
     with log_path.open("w") as log:
         process = subprocess.Popen(
-            [str(BINARY), "--sandbox", str(root)], env=env, stdout=log, stderr=log
+            [str(BINARY), "--theme", "carbon", "--sandbox", str(root)],
+            env=env,
+            stdout=log,
+            stderr=log,
         )
         try:
 
@@ -93,28 +130,39 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             )
             time.sleep(0.4)
             screenshot(window, "list.png")
-            click(1340, header + 180)
+            # Long multiline backend titles must stay compact, including in a
+            # narrow tool panel where the toolbar moves onto its own line.
+            resize(window, 760, 900)
+            screenshot(window, "compact.png")
+            resize(window, 1380, 900)
+            click(1275, header + 279)
             time.sleep(0.2)
             screenshot(window, "confirm-one.png")
             assert not deleted(), "Opening deletion confirmation removed a chat"
-            click(370, header + 219)
+            click(420, header + 330)
             time.sleep(0.2)
             assert not deleted(), "Cancelling deletion removed a chat"
-            click(1340, header + 180)
+            click(1275, header + 279)
             time.sleep(0.2)
-            click(505, header + 223)
-            wait(lambda: deleted() == ["saved-1"], "Individual chat deletion was not acknowledged")
+            click(550, header + 330)
+            wait(lambda: deleted() == ["saved-0"], "Individual chat deletion was not acknowledged")
+            time.sleep(0.3)
             screenshot(window, "deleted-one.png")
-            # A filter does not turn Delete all into Delete visible rows.
-            click(1200, header + 125)
+            # A filter does not turn Delete all into Delete visible rows. Grow
+            # the backend snapshot past one page after the initial four-row view.
+            history["count"] = 40
+            (root / "history-fixture.json").write_text(json.dumps(history))
+            click(700, header + 179)
             text("no matching chats")
-            click(580, header + 105)
+            screenshot(window, "filtered-empty.png")
+            click(1280, header + 113)
             time.sleep(0.2)
             screenshot(window, "confirm-all.png")
-            click(505, header + 240)
+            click(550, header + 330)
+            expected = sorted(["archived-1"] + [f"saved-{n}" for n in range(40) if n != 3])
             wait(
-                lambda: deleted() == ["archived-1", "saved-1", "saved-2"],
-                "Delete all missed unloaded or archived chats",
+                lambda: deleted() == expected,
+                "Delete all missed unloaded, archived or protected chats",
             )
             time.sleep(0.3)
             screenshot(window, "deleted-all.png")
@@ -122,6 +170,43 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 c.get("method") not in ("thread/start", "thread/resume", "turn/start")
                 for c in calls()
             ), "History deletion started inference or resumed a chat"
+            # Refresh the protected chat as idle and resume it with the primary
+            # card target; the adjacent Delete button must never resume a chat.
+            history["active"] = []
+            (root / "history-fixture.json").write_text(json.dumps(history))
+            click(700, header + 179)
+            key("a", ("Control_L",))
+            key("BackSpace")
+            listed_before = sum(c.get("method") == "thread/list" for c in calls())
+            click(1190, header + 113)
+            wait(
+                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
+                "History did not refresh",
+            )
+            time.sleep(0.5)
+            click(600, header + 264)
+            wait(
+                lambda: any(
+                    c.get("method") == "thread/resume" and c["params"]["threadId"] == "saved-3"
+                    for c in calls()
+                ),
+                "Conversation card did not resume the selected chat",
+            )
+            time.sleep(0.5)
+            screenshot(window, "resumed.png")
+            assert all(c.get("method") not in ("thread/start", "turn/start") for c in calls()), (
+                "Restoring history started inference"
+            )
+            history["refresh_error"] = True
+            (root / "history-fixture.json").write_text(json.dumps(history))
+            listed_before = sum(c.get("method") == "thread/list" for c in calls())
+            click(1340, header + 74)
+            wait(
+                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
+                "History did not show the failed backend refresh",
+            )
+            time.sleep(0.4)
+            screenshot(window, "backend-error.png")
             close_window(window, process)
         except Exception:
             if window and process.poll() is None:
@@ -132,5 +217,5 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 process.terminate()
                 process.wait(timeout=5)
 print(
-    "History deletion: individual confirmation/cancel, unloaded and archived bulk removal, and no inference passed"
+    "History layout: long titles, compact panels, filter, protected bulk deletion and card resume passed"
 )

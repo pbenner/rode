@@ -47,6 +47,9 @@ pub struct Info {
     /// Whether queued prompts are held by this live controller.
     #[serde(default)]
     pub supports_queue: bool,
+    /// Whether this controller dispatches queued prompts independently of desktop views.
+    #[serde(default)]
+    pub automatic_queue: bool,
     /// Native agent identity.
     pub id: String,
     /// Display title.

@@ -14,6 +14,22 @@ pub(super) struct Running {
     error: String,
     confirm: Option<Info>,
 }
+impl Running {
+    /// Discovery belongs to the selected project. An approved mutation keeps its
+    /// captured worker and acknowledgement even after that project is closed.
+    pub(super) fn reset_context(&mut self) {
+        let pending = if self.mutating {
+            self.pending.take()
+        } else {
+            None
+        };
+        *self = Self {
+            mutating: pending.is_some(),
+            pending,
+            ..Self::default()
+        };
+    }
+}
 pub(super) fn persistence(
     ui: &mut egui::Ui,
     chat: &mut Chat,
@@ -56,6 +72,9 @@ impl EditorApp {
         let launch = self.agent_launch();
         let upload = !self.agents.running.ready;
         self.agents.running.mutating = end.is_some();
+        if end.is_some() {
+            self.agents.running.error.clear();
+        }
         let request = end
             .map(|info| rode_session::Request::EndAgent {
                 id: info.id,
@@ -75,17 +94,24 @@ impl EditorApp {
         });
     }
     pub(super) fn poll_background_agents(&mut self, ctx: &egui::Context) {
-        if let Some(result) = self
+        let result = self
             .agents
             .running
             .pending
             .as_ref()
-            .and_then(|r| r.try_recv().ok())
-        {
+            .and_then(|r| match r.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "Background-agent worker disconnected; inspect Running agents before exiting"
+                        .into(),
+                )),
+            });
+        if let Some(result) = result {
             self.agents.running.pending = None;
             let mutating = std::mem::take(&mut self.agents.running.mutating);
             match result {
-                Ok(rode_session::Response::Agents(items)) => {
+                Ok(rode_session::Response::Agents(items)) if !mutating => {
                     self.agents.running.items = items;
                     self.agents.running.error.clear();
                     self.agents.running.ready = true;
@@ -101,6 +127,9 @@ impl EditorApp {
             if mutating && !self.agents.running.error.is_empty() {
                 self.abort_session_quit(self.agents.running.error.clone(), ctx);
             }
+        }
+        if self.agents.running.mutating {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
         if self.dialog == Dialog::AgentSessions {
             if self
@@ -203,5 +232,70 @@ impl EditorApp {
         if ui.button("Close").clicked() {
             self.dialog = Dialog::None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_switch_keeps_pending_agent_end() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.poll_agents(&ctx);
+        let (reply, receiver) = mpsc::channel();
+        app.agents.running.pending = Some(receiver);
+        app.agents.running.mutating = true;
+        assert!(app.agent_installation_pending());
+        let replacement = tempfile::tempdir().unwrap();
+        app.guarded(
+            Action::Project {
+                path: replacement.path().to_string_lossy().into(),
+                remote: false,
+                options: sandbox::Options::default(),
+            },
+            &ctx,
+        );
+        let until = Instant::now() + Duration::from_secs(5);
+        while app.preparing {
+            app.poll(&ctx);
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.poll_agents(&ctx);
+        app.quit_terminals(&ctx);
+        assert!(app.session_exit_pending());
+        assert!(!app.quitting);
+        assert!(
+            reply
+                .send(Err("End agent failed on the original host".into()))
+                .is_ok(),
+            "Project switching discarded the mutation receiver"
+        );
+        app.poll_agents(&ctx);
+        assert!(app.agents.running.error.contains("End agent failed"));
+        assert!(!app.session_exit_pending());
+        assert!(!app.quitting);
+    }
+
+    #[test]
+    fn disconnected_shutdown_worker_aborts_exit_instead_of_waiting_forever() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.poll_agents(&ctx);
+        let (reply, receiver) = mpsc::channel();
+        app.agents.running.pending = Some(receiver);
+        app.agents.running.mutating = true;
+        app.quit_terminals(&ctx);
+        assert!(app.session_exit_pending());
+        drop(reply);
+        app.poll_agents(&ctx);
+        assert!(!app.agent_installation_pending());
+        assert!(!app.session_exit_pending());
+        assert!(!app.quitting);
+        assert!(app.agents.running.error.contains("worker disconnected"));
     }
 }

@@ -61,8 +61,8 @@ mod runtimes;
 pub const VERSION: u32 = 1;
 /// Feature level that supports explicit persistence toggles.
 pub const PERSISTENCE_PROTOCOL: u32 = 2;
-/// Current feature level, including host-owned agent queues, attachments and scheduler metadata.
-pub const PROTOCOL: u32 = 8;
+/// Current feature level, including automatic host-owned prompt queue dispatch.
+pub const PROTOCOL: u32 = 9;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -130,6 +130,8 @@ pub enum Request {
     SupportsHistoryDeletion,
     /// Probe host-owned notebook/debugger controllers without starting work.
     SupportsRuntimes,
+    /// Probe prompt dispatch that continues without a controlling desktop view.
+    SupportsAutomaticQueue,
     /// Discover retained notebook and debugger runtimes.
     Runtimes,
     /// Create a captured host-owned runtime.
@@ -395,7 +397,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 6] {
+fn service_directories() -> [PathBuf; 7] {
     let primary = directory();
     [
         primary.clone(),
@@ -403,6 +405,7 @@ fn service_directories() -> [PathBuf; 6] {
         primary.join("protocol-3"),
         primary.join("protocol-6"),
         primary.join("protocol-7"),
+        primary.join("protocol-8"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -439,18 +442,23 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
         return Ok(compatible);
     }
     if primary.join("socket").exists() {
-        match request_once(&Request::SupportsRuntimes, launcher, &primary) {
-            Ok(Response::Ok) => {}
-            Err(error) if service_offline(&error) => {}
-            Err(error)
-                if error
-                    .to_string()
-                    .contains("unknown variant `supports_runtimes`") =>
-            {
-                return Ok(compatible);
+        for probe in [Request::SupportsRuntimes, Request::SupportsAutomaticQueue] {
+            match request_once(&probe, launcher, &primary) {
+                Ok(Response::Ok) => {}
+                Err(error) if service_offline(&error) => break,
+                Err(error)
+                    if error
+                        .to_string()
+                        .contains("unknown variant `supports_runtimes`")
+                        || error
+                            .to_string()
+                            .contains("unknown variant `supports_automatic_queue`") =>
+                {
+                    return Ok(compatible);
+                }
+                Err(error) => return Err(error),
+                _ => bail!("Unexpected native service capability response"),
             }
-            Err(error) => return Err(error),
-            _ => bail!("Unexpected native service capability response"),
         }
     }
     Ok(primary)
@@ -603,7 +611,8 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         | Request::SupportsAllocations
         | Request::SupportsAgents
         | Request::SupportsHistoryDeletion
-        | Request::SupportsRuntimes => request_once(request, launcher, &directory()),
+        | Request::SupportsRuntimes
+        | Request::SupportsAutomaticQueue => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -1290,7 +1299,8 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
             | Request::SupportsAllocations
             | Request::SupportsAgents
             | Request::SupportsHistoryDeletion
-            | Request::SupportsRuntimes => Response::Ok,
+            | Request::SupportsRuntimes
+            | Request::SupportsAutomaticQueue => Response::Ok,
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();

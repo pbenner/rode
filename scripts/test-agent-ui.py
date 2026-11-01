@@ -276,6 +276,15 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             # recall must still traverse every sent prompt, in both directions.
             send(root, "history-burst")
             send(root, "newest after burst")
+            key("Up")
+            key("End", ("Control_L",))
+            text(" recalled after eviction")
+            key("Return")
+            wait_for(
+                lambda: sent(root, "newest after burst recalled after eviction"),
+                "Transcript eviction lost the most recently submitted prompt",
+            )
+            time.sleep(0.3)
             click(1280, 785)
             text("draft after burst")
             key("Home", ("Control_L",))
@@ -293,7 +302,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 "Browsing the full prompt history did not restore the unsent draft",
             )
             time.sleep(0.3)
-            for _ in range(7):
+            for _ in range(8):
                 key("Up")
             key("End", ("Control_L",))
             text(" from retained history")
@@ -549,16 +558,16 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.3)
-            header_click(1200, 242)  # Load older metadata without prompting the model.
+            header_click(700, 349)  # Load older metadata without prompting the model.
             wait_for(
                 lambda: sum(m.get("method") == "thread/list" for m in rpc(root)) == 2,
                 "History did not load another page",
             )
-            header_click(1200, 125)
+            header_click(700, 175)
             text("saved-2")
             time.sleep(0.2)
             screenshot(window, "history-filtered.png")
-            header_click(1200, 180)  # The filter exposes the older conversation first.
+            header_click(600, 264)  # The filter exposes the older conversation first.
             wait_for(
                 lambda: any(m.get("method") == "thread/resume" for m in rpc(root)),
                 "History did not restore the selected conversation",

@@ -122,6 +122,13 @@ impl Chat {
             .as_ref()
             .is_none_or(|c| c.state.as_ref().is_none_or(|s| s.info.supports_queue))
     }
+    /// Whether automatic queue advancement belongs to the host service.
+    pub fn automatic_queue(&self) -> bool {
+        self.native
+            .as_ref()
+            .and_then(|client| client.state.as_ref())
+            .is_some_and(|state| state.info.automatic_queue)
+    }
     /// Transfer one queue mutation to the controlling host.
     pub fn queue_action(&mut self, operation: rode_agent_core::queue::Action) -> Result<()> {
         self.native
@@ -289,6 +296,11 @@ impl Chat {
     }
     /// Apply idle ACP selectors using the same acknowledged backend policy.
     pub fn configure_idle(&mut self, config: &Config) -> Result<()> {
+        if self.automatic_queue() {
+            return self.queue_action(rode_agent_core::queue::Action::Configure {
+                config: Box::new(config.clone()),
+            });
+        }
         if let Some(client) = &self.native {
             client.send(Command::Configure {
                 config: config.clone(),

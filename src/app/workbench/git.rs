@@ -5,6 +5,21 @@
 //! choices. Render from cached results rather than running Git during layout.
 use super::*;
 
+#[derive(Clone)]
+pub(super) enum Mutation {
+    Command(Vec<String>),
+    Stash {
+        action: project::StashAction,
+        reference: String,
+        oid: String,
+    },
+}
+impl From<Vec<String>> for Mutation {
+    fn from(args: Vec<String>) -> Self {
+        Self::Command(args)
+    }
+}
+
 pub(super) struct State {
     pub(super) git_root: String,
     pub(super) git_busy: bool,
@@ -29,7 +44,7 @@ pub(super) struct State {
     pub(super) worktree_branch: String,
     pub(super) worktree_new_branch: bool,
     pub(super) clone_url: String,
-    pub(super) confirm: Option<(String, Vec<String>)>,
+    pub(super) confirm: Option<(String, Mutation)>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -172,7 +187,7 @@ impl EditorApp {
                     ui.horizontal_wrapped(|ui| {
                         if ui.button("Add remote").clicked() { self.git_mutate(vec!["remote".into(),"add".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Add remote",ctx); }
                         if ui.button("Set URL").clicked() { self.git_mutate(vec!["remote".into(),"set-url".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Set remote URL",ctx); }
-                        if ui.button("Remove").clicked() { self.workbench.git.confirm = Some(("Remove remote configuration?".into(),vec!["remote".into(),"remove".into(),self.workbench.git.remote_name.clone()])); }
+                        if ui.button("Remove").clicked() { self.workbench.git.confirm = Some(("Remove remote configuration?".into(),vec!["remote".into(),"remove".into(),self.workbench.git.remote_name.clone()].into())); }
                         if ui.button("Push + set upstream").clicked() { self.git_mutate(vec!["push".into(),"--set-upstream".into(),self.workbench.git.remote_name.clone(),"HEAD".into()],"Set upstream",ctx); }
                     });
                 }
@@ -180,7 +195,7 @@ impl EditorApp {
                     for tag in self.workbench.git.git_tab_data.clone().lines() { ui.horizontal_wrapped(|ui| {
                         ui.monospace(tag);
                         if ui.small_button("Checkout").clicked() { self.git_mutate(vec!["switch".into(),"--detach".into(),tag.into()],"Checkout tag",ctx); }
-                        if ui.small_button("Delete").clicked() { self.workbench.git.confirm = Some((format!("Delete local tag {tag}?"),vec!["tag".into(),"-d".into(),tag.into()])); }
+                        if ui.small_button("Delete").clicked() { self.workbench.git.confirm = Some((format!("Delete local tag {tag}?"),vec!["tag".into(),"-d".into(),tag.into()].into())); }
                     }); }
                     ui.text_edit_singleline(&mut self.workbench.git.tag_input);
                     ui.horizontal_wrapped(|ui| {
@@ -225,7 +240,7 @@ impl EditorApp {
                             if !self.workbench.git.worktree_new_branch && !self.workbench.git.worktree_branch.is_empty() { args.push(self.workbench.git.worktree_branch.clone()); }
                             self.git_mutate(args,"Add worktree",ctx);
                         }
-                        if ui.button("Remove worktree").clicked() { self.workbench.git.confirm = Some(("Remove this worktree directory? Git will refuse if it has changes.".into(),vec!["worktree".into(),"remove".into(),"--".into(),self.workbench.git.worktree_path.clone()])); }
+                        if ui.button("Remove worktree").clicked() { self.workbench.git.confirm = Some(("Remove this worktree directory? Git will refuse if it has changes.".into(),vec!["worktree".into(),"remove".into(),"--".into(),self.workbench.git.worktree_path.clone()].into())); }
                         if ui.button("Prune metadata").clicked() { self.git_mutate(strings(&["worktree","prune"]),"Prune worktrees",ctx); }
                     });
                 }
@@ -294,7 +309,7 @@ impl EditorApp {
                     if file.staged() && ui.small_button("Unstage").clicked() {
                         self.git_mutate(self.unstage_args(Some(&file.path)),"Unstage file",ctx);
                     }
-                    if file.index != '?' && ui.small_button("Discard").clicked() { self.workbench.git.confirm = Some((format!("Discard unstaged changes to {}? This replaces its on-disk content with the index version.",file.path),vec!["restore".into(),"--worktree".into(),"--".into(),file.path.clone()])); }
+                    if file.index != '?' && ui.small_button("Discard").clicked() { self.workbench.git.confirm = Some((format!("Discard unstaged changes to {}? This replaces its on-disk content with the index version.",file.path),vec!["restore".into(),"--worktree".into(),"--".into(),file.path.clone()].into())); }
                 });
             }); }
         });
@@ -341,13 +356,13 @@ impl EditorApp {
                 if ui.button("Abort merge").clicked() {
                     self.workbench.git.confirm = Some((
                         "Abort the in-progress merge?".into(),
-                        strings(&["merge", "--abort"]),
+                        strings(&["merge", "--abort"]).into(),
                     ));
                 }
                 if ui.button("Abort rebase").clicked() {
                     self.workbench.git.confirm = Some((
                         "Abort the in-progress rebase?".into(),
-                        strings(&["rebase", "--abort"]),
+                        strings(&["rebase", "--abort"]).into(),
                     ));
                 }
             });
@@ -427,7 +442,7 @@ impl EditorApp {
                     if ui.small_button("Revert").clicked() {
                         self.workbench.git.confirm = Some((
                             format!("Create a new commit reverting {}?", fields[1]),
-                            vec!["revert".into(), "--no-edit".into(), fields[0].into()],
+                            vec!["revert".into(), "--no-edit".into(), fields[0].into()].into(),
                         ));
                     }
                 });
@@ -476,7 +491,7 @@ impl EditorApp {
                 if ui.small_button("Rebase onto").clicked() {
                     self.workbench.git.confirm = Some((
                         format!("Rebase the current branch onto {}?", fields[0]),
-                        vec!["rebase".into(), fields[0].into()],
+                        vec!["rebase".into(), fields[0].into()].into(),
                     ));
                 }
                 if !remote && ui.small_button("Delete").clicked() {
@@ -485,7 +500,7 @@ impl EditorApp {
                             "Delete branch {}? Git will refuse if it is not merged.",
                             fields[0]
                         ),
-                        vec!["branch".into(), "-d".into(), fields[0].into()],
+                        vec!["branch".into(), "-d".into(), fields[0].into()].into(),
                     ));
                 }
             });
@@ -523,29 +538,33 @@ impl EditorApp {
             );
         }
         for line in self.workbench.git.git_tab_data.clone().lines() {
-            let Some((reference, message)) = line.split_once('\0') else {
+            let mut fields = line.splitn(3, '\0');
+            let (Some(reference), Some(oid), Some(message)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
                 continue;
             };
             ui.label(message);
             ui.horizontal(|ui| {
                 if ui.small_button("Apply").clicked() {
-                    self.git_mutate(
-                        vec!["stash".into(), "apply".into(), reference.into()],
-                        "Apply stash",
+                    self.git_stash(
+                        project::StashAction::Apply,
+                        reference.into(),
+                        oid.into(),
                         ctx,
                     );
                 }
                 if ui.small_button("Pop").clicked() {
-                    self.git_mutate(
-                        vec!["stash".into(), "pop".into(), reference.into()],
-                        "Pop stash",
-                        ctx,
-                    );
+                    self.git_stash(project::StashAction::Pop, reference.into(), oid.into(), ctx);
                 }
                 if ui.small_button("Drop").clicked() {
                     self.workbench.git.confirm = Some((
-                        format!("Permanently drop {reference}?"),
-                        vec!["stash".into(), "drop".into(), reference.into()],
+                        format!("Permanently drop {reference}: {message}?"),
+                        Mutation::Stash {
+                            action: project::StashAction::Drop,
+                            reference: reference.into(),
+                            oid: oid.into(),
+                        },
                     ));
                 }
             });
@@ -653,7 +672,7 @@ impl EditorApp {
                     diff_view(ui, &self.workbench.git.git_output, palette);
                 });
         }
-        if let Some((message, args)) = self.workbench.git.confirm.clone() {
+        if let Some((message, mutation)) = self.workbench.git.confirm.clone() {
             egui::Modal::new(egui::Id::new("git-confirm")).show(ctx, |ui| {
                 ui.set_max_width(480.);
                 ui.heading("Confirm Git operation");
@@ -661,7 +680,16 @@ impl EditorApp {
                 ui.horizontal(|ui| {
                     if ui.button("Continue").clicked() {
                         self.workbench.git.confirm = None;
-                        self.git_mutate(args, "Requested operation", ctx);
+                        match mutation {
+                            Mutation::Command(args) => {
+                                self.git_mutate(args, "Requested operation", ctx)
+                            }
+                            Mutation::Stash {
+                                action,
+                                reference,
+                                oid,
+                            } => self.git_stash(action, reference, oid, ctx),
+                        }
                     }
                     if ui.button("Cancel").clicked() {
                         self.workbench.git.confirm = None;
@@ -736,13 +764,50 @@ impl EditorApp {
                 "refs/heads",
                 "refs/remotes",
             ]),
-            GitTab::Stash => strings(&["stash", "list", "--format=%gd%x00%gs"]),
+            GitTab::Stash => strings(&["stash", "list", "--format=%gd%x00%H%x00%gs"]),
             GitTab::Remotes => strings(&["remote", "-v"]),
             GitTab::Tags => strings(&["tag", "--list", "--sort=-creatordate"]),
             GitTab::Worktrees => strings(&["worktree", "list", "--porcelain"]),
             GitTab::Submodules => strings(&["submodule", "status", "--recursive"]),
         };
         self.git_command(args, GitJob::Tab, None, ctx);
+    }
+    fn git_stash(
+        &mut self,
+        action: project::StashAction,
+        reference: String,
+        oid: String,
+        ctx: &egui::Context,
+    ) {
+        if self.workbench.git.git_busy || !self.project_ready() {
+            return;
+        }
+        if self.documents.iter().any(Document::dirty) {
+            self.notify(
+                "Save or close modified editor buffers before this Git operation.",
+                true,
+            );
+            return;
+        }
+        self.workbench.git.git_busy = true;
+        self.dispatch_tool(
+            project::Request::GitStash {
+                root: self.workbench.git.git_root.clone(),
+                action,
+                reference,
+                oid,
+            },
+            ToolJob::Git(GitJob::Mutate {
+                label: match action {
+                    project::StashAction::Apply => "Apply stash",
+                    project::StashAction::Pop => "Pop stash",
+                    project::StashAction::Drop => "Drop stash",
+                }
+                .into(),
+                clear_message: false,
+            }),
+            ctx,
+        );
     }
     pub(in crate::app) fn git_mutate(
         &mut self,

@@ -435,6 +435,7 @@ pub const REMOTE_HELPER: &str = concat!(
     include_str!("environment_probe.py"),
     "\n",
     include_str!("remote_project.py"),
+    include_str!("remote_git_stash.py"),
     "\n",
     include_str!("remote_sessions.py"),
     "\n",

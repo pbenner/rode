@@ -373,9 +373,17 @@ fn offline_approvals_wait_and_wrong_policy_or_stale_answers_are_rejected() {
     for provider in [Provider::Codex, Provider::Acp] {
         let fixture = Fixture::new();
         let info = fixture.create(provider, true, "approval");
-        let view = fixture.attach(&info);
+        let mut view = fixture.attach(&info);
         let state = view.until(|s| s.chat.prompts.len() == 1);
         let question = state.chat.prompts[0].clone();
+        view.queue(
+            "after-approval",
+            rode_agent_core::queue::Action::Push {
+                id: 1,
+                text: "next queued task".into(),
+                attachments: vec![],
+            },
+        );
         drop(view);
         fs::write(fixture.root.join("continue"), "").unwrap();
         std::thread::sleep(Duration::from_millis(250));
@@ -399,10 +407,212 @@ fn offline_approvals_wait_and_wrong_policy_or_stale_answers_are_rejected() {
             id: question.id,
             result: question.choices[0].result.clone(),
         });
-        view.until(|s| s.chat.completed == 1);
+        view.until(|s| s.chat.completed == 2 && !s.chat.busy);
         assert!(fixture.root.join("work-done").exists());
         view.send(Action::End);
         view.until(|s| !s.info.alive);
+    }
+}
+
+#[test]
+fn automatic_queue_preserves_pause_edit_and_failure_holds_while_detached() {
+    use rode_agent_core::queue::Action as Queue;
+    for provider in [Provider::Codex, Provider::Acp] {
+        for hold in ["pause", "edit", "failure"] {
+            let fixture = Fixture::new();
+            if hold == "failure" {
+                fs::write(fixture.root.join("fail-first"), "").unwrap();
+            }
+            let info = fixture.create(provider, true, "work");
+            let mut view = fixture.attach(&info);
+            view.until(|s| s.chat.connected && s.chat.busy);
+            view.queue(
+                "push",
+                Queue::Push {
+                    id: 1,
+                    text: "held follow-up".into(),
+                    attachments: vec![],
+                },
+            );
+            match hold {
+                "pause" => {
+                    view.queue("hold", Queue::Pause { paused: true });
+                }
+                "edit" => {
+                    view.queue("hold", Queue::Edit { id: 1 });
+                }
+                _ => {}
+            }
+            drop(view);
+            wait(|| {
+                fixture
+                    .infos()
+                    .iter()
+                    .any(|i| i.id == info.id && !i.attached)
+            });
+            fs::write(fixture.root.join("continue"), "").unwrap();
+            wait(|| fixture.root.join("work-done").exists());
+            let mut view = fixture.attach(&info);
+            let state = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+            assert_eq!(state.queue.items.len(), 1, "{provider:?} {hold}");
+            assert_eq!(
+                fs::read_to_string(fixture.root.join("work-done")).unwrap(),
+                "1"
+            );
+            if hold == "edit" {
+                assert_eq!(state.queue.editing, Some(1));
+                view.queue("release", Queue::CancelEdit { id: 1 });
+            } else {
+                assert!(state.queue.paused);
+                view.queue("release", Queue::Pause { paused: false });
+            }
+            view.until(|s| s.chat.completed == 2 && !s.chat.busy && s.queue.items.is_empty());
+            view.send(Action::End);
+            view.until(|s| !s.info.alive);
+        }
+    }
+}
+
+#[test]
+fn stop_holds_automatic_follow_ups_until_explicit_resume() {
+    use rode_agent_core::queue::Action as Queue;
+    let fixture = Fixture::new();
+    let info = fixture.create(Provider::Codex, true, "work");
+    let mut view = fixture.attach(&info);
+    view.until(|s| s.chat.connected && s.chat.busy);
+    view.queue(
+        "push",
+        Queue::Push {
+            id: 1,
+            text: "after stop".into(),
+            attachments: vec![],
+        },
+    );
+    view.send(Action::Cancel);
+    view.until(|s| s.chat.completed == 1 && !s.chat.busy && s.queue.paused);
+    drop(view);
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|i| i.id == info.id && !i.attached)
+    });
+    fs::write(fixture.root.join("continue"), "").unwrap();
+    let mut view = fixture.attach(&info);
+    let state = view.until(|s| s.chat.completed == 1 && !s.chat.busy && s.queue.paused);
+    assert_eq!(state.queue.items.len(), 1);
+    assert!(!fixture.root.join("work-done").exists());
+    view.queue("resume", Queue::Pause { paused: false });
+    view.until(|s| s.chat.completed == 2 && !s.chat.busy && s.queue.items.is_empty());
+    view.send(Action::End);
+    view.until(|s| !s.info.alive);
+}
+
+#[test]
+fn automatic_queue_configuration_cannot_change_the_captured_backend() {
+    use rode_agent_core::queue::Action as Queue;
+    let fixture = Fixture::new();
+    let info = fixture.create(Provider::Codex, true, "work");
+    let mut view = fixture.attach(&info);
+    let state = view.until(|s| s.chat.connected && s.chat.busy);
+    let original = state.chat.config;
+    let mut invalid = original.clone();
+    invalid.codex = "/different-agent".into();
+    let rejected = view.queue(
+        "invalid",
+        Queue::Configure {
+            config: Box::new(invalid),
+        },
+    );
+    assert!(!rejected.error.is_empty());
+    assert!(rejected.queue.paused);
+    assert_eq!(rejected.chat.config, original);
+    view.queue(
+        "push",
+        Queue::Push {
+            id: 1,
+            text: "next task".into(),
+            attachments: vec![],
+        },
+    );
+    drop(view);
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|i| i.id == info.id && !i.attached)
+    });
+    fs::write(fixture.root.join("continue"), "").unwrap();
+    let mut view = fixture.attach(&info);
+    view.until(|s| s.chat.completed == 1 && !s.chat.busy && s.queue.paused);
+    view.queue(
+        "restore",
+        Queue::Configure {
+            config: Box::new(original),
+        },
+    );
+    view.queue("resume", Queue::Pause { paused: false });
+    view.until(|s| s.chat.completed == 2 && !s.chat.busy && s.queue.items.is_empty());
+    view.send(Action::End);
+    view.until(|s| !s.info.alive);
+}
+
+#[test]
+fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
+    for compatible in [false, true] {
+        let fixture = Fixture::new();
+        let directory = if compatible {
+            fixture.runtime.join("protocol-8")
+        } else {
+            fixture.runtime.clone()
+        };
+        fs::create_dir_all(directory.parent().unwrap()).unwrap();
+        fs::set_permissions(
+            directory.parent().unwrap(),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let id = rode_session::new_id().unwrap();
+        let mut legacy = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/session_v1.py"
+            ))
+            .arg(&directory)
+            .arg(&fixture.root)
+            .arg(&id)
+            .arg("legacy-policy")
+            .env("RODE_TEST_RUNTIME_CAPABLE", "1")
+            .spawn()
+            .unwrap();
+        struct Stop<'a>(&'a mut Child);
+        impl Drop for Stop<'_> {
+            fn drop(&mut self) {
+                // The fixture handles TERM by closing its owned shell and PTY.
+                unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
+                let _ = self.0.wait();
+            }
+        }
+        let _stop = Stop(&mut legacy);
+        wait(|| directory.join("socket").exists());
+        let info = fixture.create(Provider::Codex, true, "work");
+        assert!(info.automatic_queue);
+        let Response::Sessions(sessions) = fixture.rpc(&Request::List).unwrap() else {
+            panic!()
+        };
+        assert!(sessions.iter().any(|s| s.id == id && s.alive));
+        let actions = fs::read_to_string(directory.join("requests")).unwrap();
+        assert!(!actions.lines().any(|s| s == "create_agent"));
+        if !compatible {
+            assert!(actions.lines().any(|s| s == "supports_runtimes"));
+            assert!(actions.lines().any(|s| s == "supports_automatic_queue"));
+            assert!(
+                fixture
+                    .runtime
+                    .join(format!("protocol-{}/socket", rode_session::PROTOCOL))
+                    .exists()
+            );
+        }
     }
 }
 
@@ -528,34 +738,18 @@ fn queued_prompts_and_files_survive_view_replacement_without_reordering_or_dupli
             "Attachment contents must stay on the host"
         );
         view.queue("resume", Queue::Pause { paused: false });
-        view.queue(
-            "dispatch-second",
-            Queue::Dispatch {
-                id: 2,
-                config: Box::new(state.chat.config.clone()),
-            },
-        );
-        let state = view.until(|s| s.chat.completed == 2 && !s.chat.busy);
-        let rejected = view.queue(
+        let state = view.until(|s| s.chat.completed == 3 && !s.chat.busy);
+        let duplicate = view.queue(
             "duplicate",
             Queue::Dispatch {
                 id: 2,
                 config: Box::new(state.chat.config.clone()),
             },
         );
-        assert!(!rejected.error.is_empty());
-        assert_eq!(rejected.queue.items.len(), 1);
-        assert!(rejected.queue.paused);
-        view.queue("resume-first", Queue::Pause { paused: false });
-        // Dispatch consumes the same host-owned file snapshot; reattachment sees it removed.
-        view.send(Action::Queue {
-            request: "dispatch-first".into(),
-            operation: Queue::Dispatch {
-                id: 1,
-                config: Box::new(state.chat.config),
-            },
-        });
-        view.until(|s| s.chat.completed == 3);
+        assert!(duplicate.error.is_empty());
+        assert!(duplicate.queue.items.is_empty());
+        assert_eq!(duplicate.queue.dispatched.len(), 2);
+        assert!(!duplicate.queue.paused);
         drop(view);
         wait(|| {
             fixture
@@ -580,6 +774,94 @@ fn queued_prompts_and_files_survive_view_replacement_without_reordering_or_dupli
                 .as_str()
                 .is_some_and(|s| s.contains("Retained snapshot λ"))
         }));
+        view.send(Action::End);
+        view.until(|s| !s.info.alive);
+    }
+}
+
+#[test]
+fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_settings() {
+    use rode_agent_core::{
+        attachment::Attachment, personality::Personality, queue::Action as Queue,
+    };
+    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("record-inputs"), "").unwrap();
+        let info = fixture.create(provider, true, "work");
+        assert!(info.automatic_queue);
+        let mut view = fixture.attach(&info);
+        let state = view.until(|s| s.chat.connected && s.chat.busy);
+        let mut config = state.chat.config;
+        config.personality = Personality::JacksonLamb;
+        view.queue(
+            "settings",
+            Queue::Configure {
+                config: Box::new(config.clone()),
+            },
+        );
+        view.queue(
+            "push-first",
+            Queue::Push {
+                id: 1,
+                text: "detached first".into(),
+                attachments: vec![Attachment::Document {
+                    name: "snapshot.txt".into(),
+                    text: "Immutable detached snapshot λ".into(),
+                }],
+            },
+        );
+        view.queue(
+            "push-second",
+            Queue::Push {
+                id: 2,
+                text: "detached second".into(),
+                attachments: vec![],
+            },
+        );
+        drop(view);
+        wait(|| {
+            fixture
+                .infos()
+                .iter()
+                .any(|i| i.id == info.id && !i.attached)
+        });
+        fs::write(fixture.root.join("continue"), "").unwrap();
+        wait(|| fs::read_to_string(fixture.root.join("work-done")).is_ok_and(|v| v == "3"));
+        assert!(
+            fixture
+                .infos()
+                .iter()
+                .any(|i| i.id == info.id && !i.attached && i.alive)
+        );
+        let mut view = fixture.attach(&info);
+        let state =
+            view.until(|s| s.chat.completed == 3 && !s.chat.busy && s.queue.items.is_empty());
+        assert_eq!(state.chat.config, config);
+        assert_eq!(
+            state
+                .queue
+                .dispatched
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            ["detached first", "detached second"]
+        );
+        assert!(!state.queue.paused);
+        let calls: Vec<serde_json::Value> =
+            fs::read_to_string(fixture.root.join("recorded-inputs.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[1][0]["text"], "detached first");
+        assert_eq!(calls[2][0]["text"], "detached second");
+        assert!(
+            calls[1]
+                .to_string()
+                .contains("Immutable detached snapshot λ")
+        );
+        assert!(calls[1].to_string().contains("jackson_lamb"));
         view.send(Action::End);
         view.until(|s| !s.info.alive);
     }

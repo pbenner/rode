@@ -64,7 +64,8 @@ def work(message, number, prompt):
     if cancelled.is_set():
         return
     (root / "work-done").write_text(str(number))
-    text = f"background complete {number}"
+    failed = number == 1 and (root / "fail-first").exists()
+    text = f"background {'failed' if failed else 'complete'} {number}"
     if acp:
         notify(
             "session/update",
@@ -75,7 +76,7 @@ def work(message, number, prompt):
                 ),
             ),
         )
-        reply(message, dict(stopReason="end_turn"))
+        reply(message, dict(stopReason="cancelled" if failed else "end_turn"))
     else:
         notify(
             "item/agentMessage/delta",
@@ -85,7 +86,10 @@ def work(message, number, prompt):
         )
         notify(
             "turn/completed",
-            dict(threadId="native-thread", turn=dict(id=str(number), status="completed")),
+            dict(
+                threadId="native-thread",
+                turn=dict(id=str(number), status="failed" if failed else "completed"),
+            ),
         )
 
 
