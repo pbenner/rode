@@ -16,11 +16,14 @@ from ui_harness import (
     BINARY,
     click,
     close_window,
+    display,
     focus_window,
     key,
     screenshot,
     text,
     wait_for_window,
+    x11,
+    xtest,
 )
 
 
@@ -31,6 +34,75 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
+
+
+def mouse_button(x, y, button, pressed):
+    xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
+    xtest.XTestFakeButtonEvent(display, button, pressed, 0)
+    x11.XFlush(display)
+    time.sleep(0.08)
+
+
+def clipboard():
+    result = subprocess.run(
+        ["xclip", "-selection", "clipboard", "-o"],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+def check_selection(window, root):
+    """Exercise actual mouse selection and the native system clipboard."""
+    text("python3 selection-input.py\n")
+    wait_for(lambda: (root / "selection-ready").exists(), "Selection fixture not ready")
+    # The isolated window uses the harness's fixed 1380x900 size and scale 1.
+    # Row zero starts at x=320, with 13-point monospace cells about 7.8 px wide.
+    mouse_button(320, 150, 1, True)
+    xtest.XTestFakeMotionEvent(display, -1, 390, 150, 0)
+    x11.XFlush(display)
+    time.sleep(0.08)
+    mouse_button(390, 150, 1, False)
+    screenshot(window, "selected-text.png")
+
+    def assert_copy(action):
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input="clipboard sentinel",
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=2,
+        )
+        action()
+        wait_for(lambda: clipboard() == "SELECT_ME", "Copied text did not match selection")
+        assert not (root / "selection-result").exists(), "Copy leaked input into the PTY"
+
+    assert_copy(lambda: key("c", ("Control_L",)))
+    assert_copy(lambda: key("c", ("Control_L", "Shift_L")))
+    assert_copy(lambda: click(1096, 108))  # Header Copy.
+
+    def palette_copy():
+        key("p", ("Control_L", "Shift_L"))
+        text("Terminal: Copy output")
+        key("Return")
+
+    assert_copy(palette_copy)
+
+    def context_copy():
+        mouse_button(420, 150, 3, True)
+        mouse_button(420, 150, 3, False)
+        time.sleep(0.2)
+        key("x")  # Menu typing must not leak into the raw terminal fixture.
+        click(470, 162)
+
+    assert_copy(context_copy)
+    click(600, 300)  # Clear selection and return focus after using the header/palette.
+    key("c", ("Control_L",))
+    wait_for(lambda: (root / "selection-result").exists(), "Interrupt did not reach the PTY")
+    assert (root / "selection-result").read_text() == "03"
 
 
 def run():
@@ -52,6 +124,16 @@ def run():
             " Path('control-result').write_text(data.hex())\n"
             "finally: termios.tcsetattr(0,termios.TCSANOW,settings)\n"
         )
+        (root / "selection-input.py").write_text(
+            "import os,termios,tty\nfrom pathlib import Path\n"
+            "settings=termios.tcgetattr(0)\n"
+            "try:\n"
+            " tty.setraw(0)\n"
+            " os.write(1,b'\\x1b[2J\\x1b[HSELECT_ME suffix\\r\\nsecond line\\r\\n')\n"
+            " Path('selection-ready').touch()\n"
+            " Path('selection-result').write_text(os.read(0,1).hex())\n"
+            "finally: termios.tcsetattr(0,termios.TCSANOW,settings)\n"
+        )
         shell = base / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         shell.chmod(0o755)
@@ -60,6 +142,7 @@ def run():
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             SHELL=str(shell),
+            WINIT_X11_SCALE_FACTOR="1",
         )
         with (ARTIFACTS / "native.log").open("w") as log:
             process = subprocess.Popen(
@@ -124,6 +207,7 @@ def run():
                 key("c", ("Control_L",))
                 wait_for(lambda: (root / "control-result").exists(), "Control keys were swallowed")
                 assert (root / "control-result").read_text() == "1803"
+                check_selection(window, root)
                 # The editor escape route must still work with terminal focus.
                 key("p", ("Control_L", "Shift_L"))
                 text("Terminal: Sessions and Slurm allocations")
@@ -140,7 +224,7 @@ def run():
                 assert source.read_text() == "editor source must stay unchanged\n"
                 close_window(window, process)
                 print(
-                    "Native readline completion, focus, history, Control+X/Control+C, palette escape route, and editor preservation passed."
+                    "Native readline completion, focus, history, Control+X/Control+C, drag selection, keyboard/header/palette/context clipboard actions, and editor preservation passed."
                 )
             except Exception:
                 if window and process.poll() is None:

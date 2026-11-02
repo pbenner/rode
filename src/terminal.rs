@@ -13,6 +13,9 @@ use std::{
     time::Duration,
 };
 mod colors;
+mod selection;
+#[cfg(test)]
+mod selection_tests;
 
 const SHELL_KEYS: egui::EventFilter = egui::EventFilter {
     tab: true,
@@ -42,6 +45,7 @@ pub struct Terminal {
     pub python: Option<String>,
     visible: Arc<AtomicBool>,
     contrast: colors::Contrast,
+    selection: Option<selection::Selection>,
 }
 
 /// Control messages sent from a debugger terminal view to its owning coordinator.
@@ -125,6 +129,7 @@ impl Terminal {
                 python: None,
                 visible,
                 contrast: Default::default(),
+                selection: None,
             },
             Stream { output, alive },
         )
@@ -376,6 +381,7 @@ impl Terminal {
             python: None,
             visible,
             contrast: Default::default(),
+            selection: None,
         })
     }
 
@@ -404,6 +410,7 @@ impl Terminal {
             python: None,
             visible: self.visible.clone(),
             contrast: Default::default(),
+            selection: None,
         }
     }
 
@@ -450,6 +457,19 @@ impl Terminal {
             .unwrap_or_default()
     }
 
+    /// Copy selected text, falling back to the visible screen when no range is selected.
+    pub fn copy_contents(&self) -> String {
+        self.parser
+            .lock()
+            .map(|parser| {
+                self.selection
+                    .as_ref()
+                    .and_then(|selection| selection.text(parser.screen()))
+                    .unwrap_or_else(|| parser.screen().contents())
+            })
+            .unwrap_or_default()
+    }
+
     /// Queue raw PTY input without blocking; a full/disconnected input queue returns an error.
     pub fn send(&self, bytes: Vec<u8>) -> Result<()> {
         anyhow::ensure!(
@@ -462,15 +482,19 @@ impl Terminal {
         })
     }
 
-    /// Render visible terminal cells and process focused shell input. Returns copied output
-    /// when requested; ordinary control keys remain shell input outside editor escape routes.
+    /// Render selectable terminal cells and process focused shell input. Returns input
+    /// errors; ordinary control keys remain shell input outside editor escape routes.
     pub fn ui(&mut self, ui: &mut egui::Ui, font_size: f32, palette: Palette) -> Option<String> {
         let font = FontId::monospace(font_size);
         let char_size =
             ui.fonts_mut(|fonts| Vec2::new(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
         let available = ui.available_size();
         let (rect, _) = ui.allocate_exact_size(available.max(Vec2::splat(1.0)), Sense::hover());
-        let response = ui.interact(rect, egui::Id::new("terminal-input"), Sense::click());
+        let response = ui.interact(
+            rect,
+            egui::Id::new("terminal-input"),
+            Sense::click_and_drag(),
+        );
         if ui.memory(|memory| memory.allows_interaction(ui.layer_id()))
             && ui
                 .ctx()
@@ -479,7 +503,7 @@ impl Terminal {
         {
             response.request_focus();
         }
-        if response.clicked() {
+        if response.clicked() || response.drag_started() {
             response.request_focus();
         }
         if response.has_focus() {
@@ -494,6 +518,7 @@ impl Terminal {
             .clamp(10.0, 400.0) as u16;
         if self.size != (rows, cols) {
             self.size = (rows, cols);
+            self.selection = None;
             if let Some(control) = &self.control {
                 control(StreamControl::Resize(rows, cols));
             }
@@ -512,6 +537,7 @@ impl Terminal {
             }
         }
         let mut bytes_to_send = Vec::new();
+        let origin = rect.min + egui::vec2(6.0, 4.0);
         if let Ok(mut parser) = self.parser.lock() {
             if response.hovered() {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -522,7 +548,52 @@ impl Terminal {
                     );
                 }
             }
-            if response.has_focus() && self.is_alive() && ui.is_enabled() {
+            if self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| !selection.valid_for(parser.screen()))
+            {
+                self.selection = None;
+            }
+            // Capture the anchor on press. A move and release can arrive together,
+            // before egui ever reports a drag or retains its press origin.
+            if response.contains_pointer()
+                && ui.is_enabled()
+                && let Some(position) = ui.input(|input| {
+                    input.events.iter().find_map(|event| match event {
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            ..
+                        } => Some(*pos),
+                        _ => None,
+                    })
+                })
+                && rect.contains(position)
+            {
+                response.request_focus();
+                self.selection = Some(selection::Selection::new(
+                    parser.screen(),
+                    selection::point(parser.screen(), origin, char_size, position, (rows, cols)),
+                ));
+            }
+            if let Some(position) = ui.input(|input| input.pointer.interact_pos())
+                && let Some(selection) = &mut self.selection
+                && selection.dragging
+            {
+                selection.head =
+                    selection::point(parser.screen(), origin, char_size, position, (rows, cols));
+                selection.dragging = ui.input(|input| input.pointer.primary_down());
+            }
+            if response.clicked_by(egui::PointerButton::Primary) {
+                self.selection = None;
+            }
+            if response.has_focus()
+                && ui.is_enabled()
+                && !response.context_menu_opened()
+                && ui.memory(|memory| memory.allows_interaction(ui.layer_id()))
+            {
                 let events = ui.input(|input| input.events.clone());
                 // Native clipboard shortcuts replace their key press. A release can
                 // retain modifiers after they have already been released this frame.
@@ -538,6 +609,18 @@ impl Terminal {
                     })
                     .unwrap_or_else(|| ui.input(|input| input.modifiers));
                 for event in events {
+                    if !self.is_alive()
+                        && !matches!(
+                            event,
+                            egui::Event::Copy
+                                | egui::Event::Key {
+                                    key: Key::C | Key::Escape,
+                                    ..
+                                }
+                        )
+                    {
+                        continue;
+                    }
                     match event {
                         egui::Event::Text(text) => {
                             if ui.input(|i| i.modifiers.alt && !i.modifiers.ctrl) {
@@ -561,12 +644,18 @@ impl Terminal {
                             }
                         }
                         egui::Event::Copy => {
-                            if copy_modifiers.shift
+                            if let Some(text) = self
+                                .selection
+                                .as_ref()
+                                .and_then(|selection| selection.text(parser.screen()))
+                            {
+                                ui.ctx().copy_text(text);
+                            } else if copy_modifiers.shift
                                 || copy_modifiers.mac_cmd
                                 || cfg!(target_os = "macos")
                             {
                                 ui.ctx().copy_text(parser.screen().contents());
-                            } else {
+                            } else if self.is_alive() {
                                 bytes_to_send.push(0x03);
                             }
                         }
@@ -579,22 +668,50 @@ impl Terminal {
                             modifiers,
                             ..
                         } => {
-                            if let Some(bytes) =
-                                key_bytes(key, modifiers, parser.screen().application_cursor())
+                            if key == Key::C
+                                && (modifiers.command || modifiers.mac_cmd || modifiers.ctrl)
+                            {
+                                if let Some(text) = self
+                                    .selection
+                                    .as_ref()
+                                    .and_then(|selection| selection.text(parser.screen()))
+                                {
+                                    ui.ctx().copy_text(text);
+                                } else if modifiers.shift || modifiers.mac_cmd {
+                                    ui.ctx().copy_text(parser.screen().contents());
+                                } else if self.is_alive()
+                                    && let Some(bytes) = key_bytes(
+                                        key,
+                                        modifiers,
+                                        parser.screen().application_cursor(),
+                                    )
+                                {
+                                    bytes_to_send.extend(bytes);
+                                }
+                            } else if key == Key::Escape && self.selection.is_some() {
+                                self.selection = None;
+                            } else if self.is_alive()
+                                && let Some(bytes) =
+                                    key_bytes(key, modifiers, parser.screen().application_cursor())
                             {
                                 bytes_to_send.extend(bytes);
                             }
                         }
                         _ => {}
                     }
+                    // Later events in this same frame must see the selection cleared
+                    // by typing, paste or a shell key (in particular, Control+C).
+                    if !bytes_to_send.is_empty() {
+                        self.selection = None;
+                    }
                 }
                 if !bytes_to_send.is_empty() {
                     parser.screen_mut().set_scrollback(0);
+                    self.selection = None;
                 }
             }
             let painter = ui.painter().with_clip_rect(rect);
             painter.rect_filled(rect, 0, palette.terminal_background);
-            let origin = rect.min + egui::vec2(6.0, 4.0);
             let screen = parser.screen();
             let focused = response.has_focus();
             let cursor = if self.is_alive() && !screen.hide_cursor() && screen.scrollback() == 0 {
@@ -635,7 +752,11 @@ impl Terminal {
                     if cell.inverse() {
                         std::mem::swap(&mut fg, &mut bg);
                     }
-                    if focused && cursor == Some((row, col)) {
+                    let selected = self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.contains(row, col));
+                    if selected || (focused && cursor == Some((row, col))) {
                         bg = palette.accent;
                         fg = palette.terminal_background;
                     }
@@ -689,6 +810,23 @@ impl Terminal {
                     egui::StrokeKind::Inside,
                 );
             }
+            response.context_menu(|ui| {
+                let selected = self
+                    .selection
+                    .as_ref()
+                    .and_then(|selection| selection.text(screen));
+                if ui
+                    .add_enabled(selected.is_some(), egui::Button::new("Copy selection"))
+                    .clicked()
+                {
+                    ui.ctx().copy_text(selected.unwrap_or_default());
+                    ui.close();
+                }
+                if ui.button("Copy visible output").clicked() {
+                    ui.ctx().copy_text(screen.contents());
+                    ui.close();
+                }
+            });
         }
         if !bytes_to_send.is_empty() {
             return self.send(bytes_to_send).err().map(|e| e.to_string());

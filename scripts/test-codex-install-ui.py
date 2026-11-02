@@ -108,6 +108,13 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
         no_proxy="",
     )
     environment.pop("RODE_CODEX_BUNDLE", None)
+    # Test first-time setup even when the developer has a separately installed
+    # CLI. The child uses the private XDG and Codex directories above; neither
+    # PATH nor the ~/.local/bin fallback should discover the developer's CLI.
+    environment["PATH"] = os.pathsep.join(
+        path for path in os.get_exec_path(environment) if not (Path(path) / "codex").is_file()
+    )
+    environment.pop("HOME", None)
     base = root / "data/rode/codex"
     base.parent.mkdir(parents=True)
     base.parent.chmod(0o775)  # An older preferences directory with a shared umask.

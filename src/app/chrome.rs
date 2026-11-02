@@ -148,10 +148,10 @@ impl EditorApp {
             });
     }
 
-    /// Copy the selected project terminal or SSH authentication terminal's visible contents.
+    /// Copy a text selection or the visible project/SSH authentication terminal contents.
     pub(super) fn copy_terminal_output(&self, ctx: &egui::Context) {
         if let Some(terminal) = self.terminal.as_ref().or(self.ssh_master.as_ref()) {
-            ctx.copy_text(terminal.contents());
+            ctx.copy_text(terminal.copy_contents());
         }
     }
 
@@ -192,7 +192,7 @@ impl EditorApp {
                 }
                 if wide && ui
                     .small_button("Copy")
-                    .on_hover_text("Copy visible terminal contents")
+                    .on_hover_text("Copy selected text, or visible terminal contents when nothing is selected")
                     .clicked()
                 {
                     self.copy_terminal_output(ctx);

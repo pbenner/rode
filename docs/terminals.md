@@ -4,7 +4,7 @@ RODE owns terminal sessions through a small native Rust service on the computer 
 
 ## Everyday use
 
-- **Copy** in the terminal header, or **Terminal: Copy output** in the command palette, copies terminal contents, including retained diagnostics after a failed SSH login.
+- Drag across terminal text to select it, including output visible in scrollback or after a process exits. **Ctrl+C** copies the selection; with nothing selected it interrupts the shell/program. **Ctrl+Shift+C** (or **Cmd+C** on macOS), **Copy** in the terminal header, and **Terminal: Copy output** in the command palette copy the selection, or the visible output when nothing is selected. Right-click for **Copy selection** and **Copy visible output**. Clicking the terminal or pressing Escape clears the selection. Selections also clear when the displayed text changes or the viewport scrolls/resizes, so copying cannot pick up unrelated output.
 - **New** in the terminal header creates another native terminal with **Persist: off** in the current project, using its prepared sandbox and selected environment. Switch between views using the terminal tabs.
 - **Sessions**, or **View → Terminals & Slurm**, lists your running terminals on the current host, including attachment count, project path, and sandbox mode. Use **Attach**, **Rename**, or **End** there. Exited terminals are cleared automatically; the visible list refreshes every two seconds.
 - The same manager lists [notebook kernels](notebooks.md) and [debuggers](debugger.md) under **Notebook kernels & debuggers**. Their persistence controls retain execution and inspection state on the host; reattach from the original project and sandbox, or use **End runtime** to stop them explicitly.
