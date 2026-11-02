@@ -328,6 +328,38 @@ fn codex_turn(program: &str, isolated: bool) {
         tool_request.contains("RODE_TOOL_OK"),
         "Tool output was not returned to the model"
     );
+    // A second process cannot resume an idle chat that still has an owner.
+    // Keep that chat usable, and distinguish the lock from startup diagnostics.
+    {
+        let mut locked =
+            rode::agent::history::Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        let end = Instant::now() + Duration::from_secs(30);
+        while locked.busy {
+            locked.poll();
+            assert!(Instant::now() < end, "{}", locked.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let id = locked.entries[0].id.clone();
+        locked.resume(&id).unwrap();
+        while locked.busy {
+            locked.poll();
+            assert!(Instant::now() < end, "{}", locked.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(locked.take_restored().is_none());
+        assert!(
+            locked.status.contains("In Running, choose Attach"),
+            "{}",
+            locked.status
+        );
+        assert!(
+            locked
+                .diagnostics()
+                .contains("already has an active writer")
+        );
+        assert!(chat.connected());
+        assert_eq!(chat.status, "Ready");
+    }
     // History discovery and replay use the real on-disk app-server rollouts,
     // including threads created with source appServer, without another model call.
     drop(chat);

@@ -93,9 +93,19 @@ def controls():
 
 
 def metadata(name, text, append=False):
+    """Publish complete snapshots; JSONL logs retain their separate append protocol."""
+    path = root / name
     try:
-        with (root / name).open("a" if append else "w") as stream:
-            stream.write(text)
+        if append:
+            with path.open("a") as stream:
+                stream.write(text)
+        else:
+            pending = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            try:
+                pending.write_text(text)
+                pending.replace(path)
+            finally:
+                pending.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -160,6 +170,23 @@ try:
         metadata("agent-rpc.jsonl", json.dumps(request) + "\n", append=True)
         method = request.get("method")
         params = request.get("params", {})
+        if method in ("thread/resume", "session/load"):
+            identity = params["threadId" if method == "thread/resume" else "sessionId"]
+            options = history_options()
+            if options.get("resume_error") == identity:
+                emit(
+                    {
+                        "id": request["id"],
+                        "error": {
+                            "code": -32000,
+                            "message": options.get(
+                                "resume_error_message",
+                                f"thread {identity} already has an active writer",
+                            ),
+                        },
+                    }
+                )
+                continue
         if method == "initialize":
             if warning := history_options().get("startup_stderr"):
                 print(warning, file=sys.stderr, flush=True)
@@ -257,6 +284,8 @@ try:
                     "nextCursor": next_cursor,
                 },
             )
+            if options.get("exit_after_list"):
+                break
         elif method == "thread/read":
             row = saved(params["threadId"])
             options = history_options()

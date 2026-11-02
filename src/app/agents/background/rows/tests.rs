@@ -6,6 +6,7 @@ use egui::{Event, FullOutput, PointerButton, Pos2, Rect};
 fn fixture() -> Vec<Info> {
     (0..4)
         .map(|index| Info {
+            history_browser: false,
             supports_attachments: true,
             supports_queue: true,
             automatic_queue: true,

@@ -16,13 +16,10 @@ from ui_harness import (
     BINARY,
     click,
     close_window,
-    display,
     focus_window,
     key,
     screenshot,
     text,
-    x11,
-    xtest,
 )
 
 
@@ -49,14 +46,12 @@ def open_file(name):
     time.sleep(0.5)
 
 
-def wheel(x, y, down=True, ticks=8):
-    xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
-    for _ in range(ticks):
-        xtest.XTestFakeButtonEvent(display, 5 if down else 4, 1, 0)
-        xtest.XTestFakeButtonEvent(display, 5 if down else 4, 0, 0)
-        x11.XFlush(display)
-        time.sleep(0.07)
-    time.sleep(0.3)
+def toggle_extension(identity):
+    """Filter by stable ID, then activate the checkbox using native keyboard focus."""
+    key("x", ("Control_L", "Shift_L"))
+    text(identity)
+    key("Tab")
+    key("space")
 
 
 def preferences(path):
@@ -146,9 +141,12 @@ def run(remote=False):
                 wait_for(mapped, "No binary editor window")
                 time.sleep(0.8)
                 focus_window(window)
-                # These coordinates are relative to the ordinary local project layout.
-                # Remote sandbox banners add 40 px above document content.
-                dy = 40 if remote else 0
+                # Remote workspaces add a status strip and, on sandbox fallback,
+                # an extra warning row above the document controls.
+                dy = 0
+                if remote:
+                    title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                    dy = 44 if "[Sandbox]" in title else 74
                 open_file("sample.bin")
                 screenshot(window, label + "-hex.png")
                 click(315, 215 + dy)  # Edit bytes
@@ -200,21 +198,16 @@ def run(remote=False):
                 time.sleep(0.6)
                 screenshot(window, label + "-disassembly.png")
                 # The direct shortcut opens the manager; toggles save immediately.
-                key("x", ("Control_L", "Shift_L"))
+                toggle_extension("rode.monitor")
                 screenshot(window, label + "-extension-manager.png")
-                click(427, 442)  # System monitor, after Debugger and Git in the centered modal.
                 prefs = base / "data/rode/app.ron"
                 wait_for(
                     lambda: preferences(prefs).get("rode.monitor", {}).get("enabled") is False,
                     "Extension preference was not persisted",
                 )
                 key("Escape")
-                key("x", ("Control_L", "Shift_L"))  # Reopen the manager after its layout changes.
-                wheel(900, 500, ticks=20)
+                toggle_extension("test.adapter")
                 screenshot(window, label + "-installed-adapter.png")
-                # Last entry is the installed adapter; locating its checkbox by
-                # screenshot is stable once scrolled to the bottom.
-                click(427, 535)
                 wait_for(
                     lambda: preferences(prefs).get("test.adapter", {}).get("enabled") is True,
                     "Installed adapter checkbox was not enabled",

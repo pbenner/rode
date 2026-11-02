@@ -120,7 +120,10 @@ impl EditorApp {
             let mutating = std::mem::take(&mut self.agents.running.mutating);
             match result {
                 Ok(rode_session::Response::Agents(items)) if !mutating => {
-                    self.agents.running.items = items;
+                    self.agents.running.items = items
+                        .into_iter()
+                        .filter(|info| !info.history_browser)
+                        .collect();
                     self.agents.running.error.clear();
                     self.agents.running.ready = true;
                 }
@@ -251,6 +254,9 @@ impl EditorApp {
         if let Some((id, action)) = selected {
             match action {
                 rows::Action::Show => {
+                    self.agents.browser = None;
+                    self.agents.history_open = false;
+                    self.agents.history_delete = None;
                     self.dialog = Dialog::None;
                     self.reveal_panel(Panel::Agent, ctx);
                 }
@@ -277,6 +283,9 @@ impl EditorApp {
         if let Some(info) = attach {
             let launch = self.agent_launch();
             let wake = ctx.clone();
+            self.agents.browser = None;
+            self.agents.history_open = false;
+            self.agents.history_delete = None;
             self.agents.replace_chat();
             self.agents
                 .chat
@@ -295,6 +304,34 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_hides_browser_roles_and_keeps_legacy_or_restored_chat_metadata() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        // Older services have no role flag. A restored chat can retain this
+        // title too, so filter the explicit role rather than its display name.
+        let chat: Info = serde_json::from_value(serde_json::json!({
+            "id": "chat", "name": "Saved conversations", "root": "/project",
+            "policy": "policy", "mode": "NORMAL MODE", "provider": "codex",
+            "alive": true, "busy": false, "status": "Ready", "attached": true,
+            "persistent": false, "created": 0
+        }))
+        .unwrap();
+        assert!(!chat.history_browser);
+        let mut browser = chat.clone();
+        browser.id = "browser".into();
+        browser.history_browser = true;
+        let (reply, receiver) = mpsc::channel();
+        app.agents.running.pending = Some(receiver);
+        reply
+            .send(Ok(rode_session::Response::Agents(vec![browser, chat])))
+            .unwrap();
+        app.poll_background_agents(&ctx);
+        assert_eq!(app.agents.running.items.len(), 1);
+        assert_eq!(app.agents.running.items[0].id, "chat");
+    }
 
     #[test]
     fn project_switch_keeps_pending_agent_end() {

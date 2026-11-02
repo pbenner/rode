@@ -2,6 +2,7 @@
 //! model, account or inference endpoint, and own isolated runtime directories.
 use rode_agent_core::{
     Config, Plan, Provider,
+    history::Owner,
     service::{Command as Action, Info, Spec, State},
 };
 use rode_session::{Request, Response};
@@ -217,6 +218,109 @@ impl Drop for View {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn history_marks_attached_and_detached_owners_without_trying_to_resume_them() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.root.join("agent.py"),
+            include_str!("fixtures/agent.py"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("history-fixture.json"),
+            r#"{"include_open":true}"#,
+        )
+        .unwrap();
+        let owner = fixture.create(provider, true, "current");
+        let current = fixture.attach(&owner);
+        let state = current.until(|s| s.chat.connected && s.chat.completed == 1);
+        let conversation = state.chat.conversation;
+
+        let info = fixture.create_agent(provider, false, None, vec![]);
+        assert!(
+            fixture
+                .infos()
+                .iter()
+                .any(|item| item.id == info.id && item.history_browser),
+            "A starting history browser must remain routable with its browser role"
+        );
+        let mut browser = fixture.attach(&info);
+        let state = browser.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_resume));
+        let history = state.history.unwrap();
+        assert_eq!(history.owners.get(&conversation), Some(&Owner::Attached));
+        assert!(!history.owners.contains_key("saved-1"));
+        assert!(
+            fixture
+                .infos()
+                .iter()
+                .any(|item| item.id == info.id && item.history_browser),
+            "An idle history browser lost its role"
+        );
+        browser.send(Action::HistoryResume {
+            id: conversation.clone(),
+        });
+        let state = browser.until(|s| !s.error.is_empty());
+        assert!(state.error.contains("already has an active writer"));
+        assert!(state.history.unwrap().can_resume);
+        let calls = fs::read_to_string(fixture.root.join("agent-rpc.jsonl")).unwrap();
+        assert!(!calls.lines().any(|line| {
+            let call: serde_json::Value = serde_json::from_str(line).unwrap();
+            matches!(
+                call["method"].as_str(),
+                Some("thread/resume" | "session/load")
+            )
+        }));
+
+        drop(current);
+        wait(|| {
+            fixture
+                .infos()
+                .iter()
+                .any(|i| i.id == owner.id && !i.attached)
+        });
+        browser.send(Action::HistoryMore);
+        browser.until(|s| {
+            s.history
+                .as_ref()
+                .is_some_and(|h| !h.busy && h.owners.get(&conversation) == Some(&Owner::Detached))
+        });
+        fixture
+            .rpc(&Request::EndAgent {
+                id: owner.id.clone(),
+                policy: owner.policy.clone(),
+            })
+            .unwrap();
+        // Finished records can already have been reaped by discovery.
+        wait(|| fixture.infos().iter().all(|i| i.id != owner.id || !i.alive));
+
+        let refreshed = fixture.create_agent(provider, false, None, vec![]);
+        let restored_id = refreshed.id.clone();
+        let mut refreshed = fixture.attach(&refreshed);
+        let state =
+            refreshed.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_resume));
+        assert!(!state.history.unwrap().owners.contains_key(&conversation));
+        refreshed.send(Action::HistoryResume { id: conversation });
+        refreshed.until(|s| s.history.is_none() && s.chat.connected);
+        assert!(
+            fixture
+                .infos()
+                .iter()
+                .any(|item| item.id == restored_id && item.alive && !item.history_browser),
+            "The restored chat did not appear in Running"
+        );
+        browser.send(Action::End);
+        browser.until(|s| !s.info.alive);
+        assert!(
+            fixture
+                .infos()
+                .iter()
+                .all(|item| item.id != info.id || item.history_browser),
+            "A closed history browser appeared in Running"
+        );
     }
 }
 

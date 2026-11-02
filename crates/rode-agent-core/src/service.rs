@@ -2,7 +2,7 @@
 //! creation; a later attachment cannot change the host or enclosing sandbox.
 use crate::{
     Config, Plan, Provider, controls,
-    history::Entry,
+    history::{Entry, Owner},
     protocol::{Message, Prompt},
 };
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,9 @@ pub struct Spec {
 /// Discoverable live agent metadata, separate from backend-owned saved chats.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
+    /// A disposable history connection, retained for routing but hidden from Running.
+    #[serde(default)]
+    pub history_browser: bool,
     /// Whether this host controller accepts portable prompt attachments.
     #[serde(default)]
     pub supports_attachments: bool,
@@ -110,6 +113,13 @@ pub struct ChatView {
 pub struct HistoryView {
     /// Bounded saved-chat rows.
     pub entries: Vec<Entry>,
+    /// Known owners on this host; other chats are checked when restored.
+    #[serde(default)]
+    pub owners: BTreeMap<String, Owner>,
+    /// Additional process output, kept separate from the operation failure.
+    /// None means separate output was not reported, as with older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_output: Option<String>,
     /// Current support/load/error status.
     pub status: String,
     /// Whether listing/restoring is in progress.

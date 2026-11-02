@@ -558,6 +558,7 @@ impl EditorApp {
                 history_action.refresh |= panel.refresh;
                 history_action.more=panel.more;
                 history_action.resume=panel.resume;
+                history_action.running=panel.running;
                 history_action.close=panel.close;
                 history_action.delete=panel.delete;
                 return;
@@ -873,7 +874,7 @@ impl EditorApp {
         if refresh {
             self.reload_clean_documents(ctx);
         }
-        if running {
+        if running || history_action.running {
             self.open_background_agents(ctx);
         }
         self.agents.flush_queue();

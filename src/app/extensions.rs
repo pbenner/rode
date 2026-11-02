@@ -166,10 +166,36 @@ impl EditorApp {
             palette,
         );
         ui.small(format!("Manifests: {}", api::directory().display()));
-        let entries = self.extensions.registry.entries.clone();
+        let filter = ui.add(
+            egui::TextEdit::singleline(&mut self.dialog_input)
+                .id_salt("extension-filter")
+                .hint_text("Filter extensions by name or ID")
+                .desired_width(f32::INFINITY)
+                .char_limit(256),
+        );
+        if self.dialog_focus {
+            filter.request_focus();
+            self.dialog_focus = false;
+        }
+        let query = self.dialog_input.trim().to_lowercase();
+        let entries: Vec<_> = self
+            .extensions
+            .registry
+            .entries
+            .iter()
+            .filter(|entry| {
+                query.is_empty()
+                    || entry.id.to_lowercase().contains(&query)
+                    || entry.name.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            ui.label("No matching extensions.");
+        }
         let mut toggle = None;
         let mut settings = None;
-        egui::ScrollArea::vertical()
+        let scroll = egui::ScrollArea::vertical()
             .id_salt("extension-list")
             .max_height(
                 (ctx.content_rect().height()
@@ -179,40 +205,44 @@ impl EditorApp {
                         400.
                     })
                 .clamp(100., 360.),
-            )
-            .show(ui, |ui| {
-                for entry in entries {
-                    ui.push_id(&entry.id, |ui| {
-                        layout::card(ui, palette, |ui| {
-                            let mut enabled = self.extensions.registry.enabled(&entry.id);
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.checkbox(&mut enabled, &entry.name).changed() {
-                                    toggle = Some((entry.id.clone(), enabled));
-                                }
-                                ui.small(if entry.feature.is_some() {
-                                    "BUNDLED"
-                                } else {
-                                    "INSTALLED TOOL"
-                                });
-                                if entry.manifest.is_some() && ui.small_button("Settings").clicked()
-                                {
-                                    settings = Some(entry.id.clone());
-                                }
+            );
+        let scroll = if filter.changed() {
+            scroll.vertical_scroll_offset(0.)
+        } else {
+            scroll
+        };
+        scroll.show(ui, |ui| {
+            for entry in entries {
+                ui.push_id(&entry.id, |ui| {
+                    layout::card(ui, palette, |ui| {
+                        let mut enabled = self.extensions.registry.enabled(&entry.id);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.checkbox(&mut enabled, &entry.name).changed() {
+                                toggle = Some((entry.id.clone(), enabled));
+                            }
+                            ui.small(if entry.feature.is_some() {
+                                "BUNDLED"
+                            } else {
+                                "INSTALLED TOOL"
                             });
-                            ui.label(&entry.description);
-                            ui.small(format!("{} · {}", entry.id, entry.activation));
-                            if let Some(manifest) = entry.manifest {
-                                ui.monospace(format!(
-                                    "{} {}",
-                                    manifest.tool.program,
-                                    manifest.tool.args.join(" ")
-                                ));
+                            if entry.manifest.is_some() && ui.small_button("Settings").clicked() {
+                                settings = Some(entry.id.clone());
                             }
                         });
-                        ui.add_space(8.);
+                        ui.label(&entry.description);
+                        ui.small(format!("{} · {}", entry.id, entry.activation));
+                        if let Some(manifest) = entry.manifest {
+                            ui.monospace(format!(
+                                "{} {}",
+                                manifest.tool.program,
+                                manifest.tool.args.join(" ")
+                            ));
+                        }
                     });
-                }
-            });
+                    ui.add_space(8.);
+                });
+            }
+        });
         if let Some((id, enabled)) = toggle {
             self.set_extension(&id, enabled);
         }

@@ -3,7 +3,7 @@
 //! that view disconnects. No transcript or credentials are written to disk.
 use super::*;
 use rode_agent_core::{
-    history::Browser,
+    history::{Browser, Owner},
     protocol::Chat,
     service::{Command as Action, Info, Spec, State},
 };
@@ -49,7 +49,8 @@ impl Store {
             .values()
             .any(|job| !job.shared.lock().unwrap().finished)
     }
-    /// Return metadata sorted by creation time, reaping finished records after their short grace period.
+    /// Return all controller metadata for routing, including disposable browsers;
+    /// Running filters their role flag. Reap finished records after their grace period.
     pub fn list(&self) -> Vec<Info> {
         let mut jobs = self.jobs.lock().unwrap();
         jobs.retain(|_, job| {
@@ -147,6 +148,7 @@ impl Store {
         );
         let (input, commands) = mpsc::sync_channel(32);
         let info = Info {
+            history_browser: spec.text.is_none(),
             supports_attachments: true,
             supports_queue: true,
             automatic_queue: true,
@@ -350,6 +352,7 @@ fn run(
             if let Some(restored) = history.take_restored() {
                 chat.restore(restored);
                 browser = None;
+                job.shared.lock().unwrap().state.info.history_browser = false;
                 changed = true;
             }
         }
@@ -359,6 +362,13 @@ fn run(
         if matches!(incoming, Err(mpsc::TryRecvError::Disconnected)) {
             stopping = true;
         }
+        // Snapshot other controllers before locking our state: another history
+        // worker can be doing the same discovery at the same time.
+        let owners = if browser.is_some() {
+            history_owners(&registry, &spec)
+        } else {
+            BTreeMap::new()
+        };
         let mut shared = job.shared.lock().unwrap();
         let view = shared.attached;
         if !shared.state.info.persistent
@@ -409,7 +419,11 @@ fn run(
             shared.state.chat = chat.view();
             shared.state.chat.config = queued_config.clone();
             shared.state.queue = queue.view();
-            shared.state.history = browser.as_ref().map(Browser::view);
+            shared.state.history = browser.as_ref().map(|browser| {
+                let mut view = browser.view();
+                view.owners.extend(owners);
+                view
+            });
             shared.state.error = std::mem::take(&mut error);
             shared.revision = shared.revision.wrapping_add(1);
             shared.changed = Instant::now();
@@ -529,10 +543,18 @@ fn run(
                         .as_mut()
                         .context("History browser is closed")
                         .and_then(Browser::load_more),
-                    Action::HistoryResume { id } => browser
-                        .as_mut()
-                        .context("History browser is closed")
-                        .and_then(|b| b.resume(&id)),
+                    Action::HistoryResume { id } => {
+                        if history_owners(&registry, &spec).contains_key(&id) {
+                            Err(anyhow::anyhow!(
+                                "Agent history: thread {id} already has an active writer"
+                            ))
+                        } else {
+                            browser
+                                .as_mut()
+                                .context("History browser is closed")
+                                .and_then(|b| b.resume(&id))
+                        }
+                    }
                     Action::HistoryDelete { id, mut protected } => {
                         if let Some(jobs) = registry.upgrade() {
                             for other in jobs.lock().unwrap().values() {
@@ -567,6 +589,35 @@ fn run(
             Err(mpsc::RecvTimeoutError::Disconnected) => stopping = true,
         }
     }
+}
+
+/// Read only host-owned conversation identities, including idle persistent chats.
+/// Backend ownership outside this service is learned from rejected restores.
+fn history_owners(
+    registry: &std::sync::Weak<Mutex<HashMap<String, Arc<Job>>>>,
+    spec: &Spec,
+) -> BTreeMap<String, Owner> {
+    let mut owners = BTreeMap::new();
+    if let Some(jobs) = registry.upgrade() {
+        for job in jobs.lock().unwrap().values() {
+            let shared = job.shared.lock().unwrap();
+            if !shared.finished
+                && shared.state.info.root == spec.plan.root
+                && shared.state.info.provider == spec.config.provider
+                && !shared.state.chat.conversation.is_empty()
+            {
+                owners.insert(
+                    shared.state.chat.conversation.clone(),
+                    if shared.attached {
+                        Owner::Attached
+                    } else {
+                        Owner::Detached
+                    },
+                );
+            }
+        }
+    }
+    owners
 }
 
 fn dispatch(

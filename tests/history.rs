@@ -67,7 +67,54 @@ fn log(root: &Path) -> Vec<Value> {
 }
 
 fn options(root: &Path, value: Value) {
-    fs::write(root.join("history-fixture.json"), value.to_string()).unwrap();
+    let pending = root.join("history-fixture.tmp");
+    fs::write(&pending, value.to_string()).unwrap();
+    fs::rename(pending, root.join("history-fixture.json")).unwrap();
+}
+
+#[test]
+fn fixture_snapshots_remain_complete_while_a_replacement_is_being_written() {
+    // Exercise the exact read-after-truncate interleaving without timing sleeps.
+    // Extract only the fixture helper, so this check never starts an agent/model.
+    let source = r#"
+import ast, contextlib, json, os, sys, tempfile
+from pathlib import Path
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    fixture = ast.parse(Path(sys.argv[1]).read_text())
+    node = next(node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == 'metadata')
+    namespace = dict(root=root, os=os)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), '<fixture-metadata>', 'exec'), namespace)
+    path = root / 'history-deleted.json'
+    path.write_text('["saved-0"]')
+    original_open = Path.open
+    @contextlib.contextmanager
+    def observed_open(target, mode='r', *args, **kwargs):
+        with original_open(target, mode, *args, **kwargs) as stream:
+            if 'w' in mode:
+                assert json.loads(path.read_text()) == ['saved-0'], 'snapshot was truncated before publication'
+            yield stream
+    Path.open = observed_open
+    namespace['metadata'](path.name, '["saved-0", "saved-1"]')
+    assert json.loads(path.read_text()) == ['saved-0', 'saved-1']
+    assert not list(root.glob('*.tmp'))
+    namespace['metadata']('agent-rpc.jsonl', '{"method":"thread/list"}\n', append=True)
+    namespace['metadata']('agent-rpc.jsonl', '{"method":"thread/read"}\n', append=True)
+    assert len((root / 'agent-rpc.jsonl').read_text().splitlines()) == 2
+"#;
+    let output = std::process::Command::new("python3")
+        .args(["-c", source])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/agent.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn deleted(root: &Path) -> Vec<String> {
@@ -235,6 +282,133 @@ fn deletion_revalidates_saved_scope_and_partial_failures_leave_unacknowledged_ro
 }
 
 #[test]
+fn an_idle_history_process_exit_disables_restoration_deletion_and_pagination() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        options(temp.path(), serde_json::json!({"exit_after_list": true}));
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        let end = Instant::now() + Duration::from_secs(10);
+        while browser.can_resume {
+            browser.poll();
+            assert!(
+                Instant::now() < end,
+                "History still appears connected: {}",
+                browser.status
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            browser.status.contains("History agent exited"),
+            "{}",
+            browser.status
+        );
+        assert!(!browser.busy && !browser.more && !browser.can_delete);
+        assert_eq!(browser.entries[0].id, "saved-1");
+        assert!(browser.resume("saved-1").is_err());
+        assert!(browser.delete(Some("saved-1"), vec![]).is_err());
+        assert!(browser.load_more().is_err());
+    }
+}
+
+#[test]
+fn active_writer_restore_keeps_current_chat_and_explains_how_to_reattach() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        let mut current = Chat::default();
+        current
+            .submit(
+                launch.clone(),
+                "Current conversation".into(),
+                Arc::new(|| {}),
+            )
+            .unwrap();
+        wait_chat(&mut current);
+        let current_id = current.conversation_id().unwrap().to_owned();
+        let count = current.messages.len();
+        options(
+            temp.path(),
+            serde_json::json!({
+                "resume_error": "saved-1",
+                "resume_error_message": format!("thread saved-1 already has an active writer{}", "x".repeat(65536)),
+                "startup_stderr": "Codex could not find bubblewrap on PATH. Codex will use the bundled bubblewrap in the meantime."
+            }),
+        );
+        let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.resume("saved-1").unwrap();
+        wait(&mut browser);
+        assert!(browser.take_restored().is_none());
+        assert!(
+            browser.status.contains("In Running, choose Attach"),
+            "{}",
+            browser.status
+        );
+        assert!(browser.status.contains("idle or detached"));
+        assert!(browser.status.contains("window/client that owns it"));
+        assert!(!browser.status.contains("bubblewrap"));
+        assert!(!browser.status.contains("deleted"));
+        assert!(
+            browser
+                .diagnostics()
+                .contains("thread saved-1 already has an active writer")
+        );
+        assert!(!browser.diagnostics().contains("bubblewrap"));
+        assert!(
+            browser.diagnostics().len() <= 16384,
+            "The error exceeded the history display budget"
+        );
+        assert!(browser.backend_output().contains("bundled bubblewrap"));
+        assert_eq!(
+            browser.owners.get("saved-1"),
+            Some(&rode::agent::history::Owner::OtherProcess)
+        );
+        assert!(
+            browser.can_resume,
+            "An owned chat must not disable other chats"
+        );
+        assert!(browser.resume("saved-1").is_err());
+        assert_eq!(current.conversation_id(), Some(current_id.as_str()));
+        assert_eq!(current.messages.len(), count);
+        assert!(current.connected());
+        current
+            .submit(launch.clone(), "Still here".into(), Arc::new(|| {}))
+            .unwrap();
+        wait_chat(&mut current);
+        assert_eq!(current.completed, 2);
+
+        // Keep using this connection after a rejected resume. No refresh or
+        // backend restart is needed to restore another saved conversation.
+        let before_other = log(temp.path()).len();
+        browser.load_more().unwrap();
+        wait(&mut browser);
+        browser.resume("saved-2").unwrap();
+        wait(&mut browser);
+        assert!(browser.take_restored().is_some(), "{}", browser.status);
+        assert!(
+            !log(temp.path())[before_other..]
+                .iter()
+                .any(|call| call["method"] == "initialize")
+        );
+
+        options(temp.path(), serde_json::json!({}));
+        let before = log(temp.path()).len();
+        let mut retry = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut retry);
+        retry.resume("saved-1").unwrap();
+        wait(&mut retry);
+        assert!(retry.take_restored().is_some(), "{}", retry.status);
+        assert!(retry.diagnostics().is_empty());
+        assert!(log(temp.path())[before..].iter().all(|call| !matches!(
+            call["method"].as_str(),
+            Some(
+                "thread/start" | "session/new" | "turn/start" | "session/prompt" | "thread/delete"
+            )
+        )));
+    }
+}
+
+#[test]
 fn active_writer_deletions_explain_idle_or_detached_owners_and_keep_raw_diagnostics() {
     for provider in [Provider::Codex, Provider::Acp] {
         for (target, count) in [("saved-1", 0), ("saved-2", 1)] {
@@ -271,7 +445,8 @@ fn active_writer_deletions_explain_idle_or_detached_owners_and_keep_raw_diagnost
                     .diagnostics()
                     .contains("already has an active writer")
             );
-            assert!(browser.diagnostics().contains("bundled bubblewrap"));
+            assert!(!browser.diagnostics().contains("bubblewrap"));
+            assert!(browser.backend_output().contains("bundled bubblewrap"));
             assert_eq!(deleted(temp.path()).len(), count);
             assert!(browser.entries.iter().any(|entry| entry.id == target));
             options(temp.path(), serde_json::json!({}));

@@ -20,12 +20,24 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::Path,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 mod deletion;
+
+/// Observed ownership of a saved conversation; absence means ownership is unverified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Owner {
+    /// A RODE controller has an attached window.
+    Attached,
+    /// A RODE controller continues without a window.
+    Detached,
+    /// The backend rejected restoration because another process owns the chat.
+    OtherProcess,
+}
 
 /// A host/project-scoped saved conversation returned by the agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,6 +107,7 @@ pub struct Browser {
     limited: bool,
     deadline: Instant,
     stderr: String,
+    owners: BTreeMap<String, Owner>,
     restored: Option<Restored>,
     deletion: Option<deletion::Deletion>,
     deletion_result: Option<String>,
@@ -105,6 +118,8 @@ impl Browser {
     pub fn view(&self) -> crate::service::HistoryView {
         crate::service::HistoryView {
             entries: self.entries.clone(),
+            owners: self.owners.clone(),
+            backend_output: Some(self.stderr.trim().into()),
             status: self.status.clone(),
             busy: self.busy,
             can_resume: self.can_resume,
@@ -137,6 +152,7 @@ impl Browser {
             limited: false,
             deadline: Instant::now() + Duration::from_secs(420),
             stderr: String::new(),
+            owners: BTreeMap::new(),
             restored: None,
             deletion: None,
             deletion_result: None,
@@ -163,6 +179,10 @@ impl Browser {
         ensure!(
             self.entries.iter().any(|e| e.id == id && !e.active),
             "Select an idle conversation from this project"
+        );
+        ensure!(
+            !self.owners.contains_key(id),
+            "This chat is open in another process; use Running or refresh after ending its session"
         );
         self.selected = id.into();
         self.pages.clear();
@@ -206,7 +226,7 @@ impl Browser {
                 Event::Message(value) => self.receive(value),
                 Event::Stderr(text) => { self.stderr=clip(&format!("{}\n{text}",self.stderr),8192); Ok(()) },
                 Event::Error(error) => Err(anyhow::anyhow!(error)),
-                Event::Exited(code) => { if self.busy {Err(anyhow::anyhow!("History agent exited ({code:?})"))} else {self.session=None; Ok(())} },
+                Event::Exited(code) => Err(anyhow::anyhow!("History agent exited ({code:?}); refresh history to reconnect")),
             };
             if let Err(error) = result {
                 self.fail(&format!("{error:#}"));
@@ -327,10 +347,22 @@ impl Browser {
             if self.delete_error(call, error)? {
                 return Ok(());
             }
-            bail!(
-                "Agent history: {}",
-                error["message"].as_str().unwrap_or("request failed")
-            );
+            let message = error["message"].as_str().unwrap_or("request failed");
+            if matches!(call, Call::Read | Call::Resume | Call::Load)
+                && message.contains("already has an active writer")
+            {
+                // A rejected resume has acquired no writer. Keep the metadata
+                // connection usable for other chats, and mark only this row.
+                self.owners
+                    .insert(self.selected.clone(), Owner::OtherProcess);
+                self.status = clip(&format!("Agent history: {message}"), 16384);
+                self.busy = false;
+                self.selected.clear();
+                self.pages.clear();
+                self.replay.clear();
+                return Ok(());
+            }
+            bail!("Agent history: {}", message);
         }
         let result = &value["result"];
         match call {
@@ -551,17 +583,7 @@ impl Browser {
                     .map(|summary| format!("{summary}. Refresh failed. "))
             })
             .unwrap_or_default();
-        self.status = clip(
-            &format!(
-                "{progress}{error}{}",
-                if self.stderr.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n{}", self.stderr)
-                }
-            ),
-            16384,
-        );
+        self.status = clip(&format!("{progress}{error}"), 16384);
         self.busy = false;
         self.more = false;
         self.can_resume = false;

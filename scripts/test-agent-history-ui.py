@@ -79,7 +79,14 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             "saved-3": int(time.time()) - 120,
         },
     )
-    (root / "history-fixture.json").write_text(json.dumps(history))
+
+    def save_history():
+        """Replace control data atomically while the backend may be reading it."""
+        pending = root / "history-fixture.tmp"
+        pending.write_text(json.dumps(history))
+        pending.replace(root / "history-fixture.json")
+
+    save_history()
     env = dict(
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
@@ -94,6 +101,16 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
     def deleted():
         path = root / "history-deleted.json"
         return json.loads(path.read_text()) if path.exists() else []
+
+    def running_agents():
+        output = subprocess.check_output(
+            [str(BINARY), "--session-service", "request"],
+            input=b'{"action":"agents"}',
+            env=env,
+        )
+        response = json.loads(output)
+        assert response["kind"] == "agents", response
+        return [agent for agent in response["data"] if not agent.get("history_browser", False)]
 
     log_path = ARTIFACTS / "history.log"
     window = None
@@ -132,6 +149,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 "History did not open",
             )
             time.sleep(0.4)
+            assert not running_agents(), "History browsing appeared as a running chat"
             screenshot(window, "list.png")
             # Long multiline backend titles must stay compact, including in a
             # narrow tool panel where the toolbar moves onto its own line.
@@ -155,14 +173,18 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             time.sleep(0.6)
             screenshot(window, "writer-conflict.png")
             assert not deleted(), "Writer conflict removed an unacknowledged chat"
-            click(410, header + 273)  # Raw backend error and separate startup warning.
+            click(410, header + 289)  # The operation error, without startup warnings.
             time.sleep(0.2)
             screenshot(window, "writer-details.png")
-            click(410, header + 273)
+            click(410, header + 289)
+            click(450, header + 323)  # Startup warnings have their own collapsed section.
+            time.sleep(0.2)
+            screenshot(window, "writer-startup-warnings.png")
+            click(450, header + 323)
             # Ending another process is left to the user; clearing the fixture
             # lock simulates that action before explicitly refreshing and retrying.
             del history["delete_error"]
-            (root / "history-fixture.json").write_text(json.dumps(history))
+            save_history()
             listed_before = sum(c.get("method") == "thread/list" for c in calls())
             click(1190, header + 113)
             wait(
@@ -179,7 +201,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             # A filter does not turn Delete all into Delete visible rows. Grow
             # the backend snapshot past one page after the initial four-row view.
             history["count"] = 40
-            (root / "history-fixture.json").write_text(json.dumps(history))
+            save_history()
             click(700, header + 179)
             text("no matching chats")
             screenshot(window, "filtered-empty.png")
@@ -201,7 +223,8 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             # Refresh the protected chat as idle and resume it with the primary
             # card target; the adjacent Delete button must never resume a chat.
             history["active"] = []
-            (root / "history-fixture.json").write_text(json.dumps(history))
+            history["resume_error"] = "saved-3"
+            save_history()
             click(700, header + 179)
             key("a", ("Control_L",))
             key("BackSpace")
@@ -212,6 +235,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 "History did not refresh",
             )
             time.sleep(0.5)
+            screenshot(window, "saved-chat-row.png")
             click(600, header + 264)
             wait(
                 lambda: any(
@@ -221,12 +245,53 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 "Conversation card did not resume the selected chat",
             )
             time.sleep(0.5)
+            screenshot(window, "restore-writer-conflict.png")
+            click(950, header + 113)  # Running agents shortcut on a restore conflict.
+            time.sleep(0.4)
+            screenshot(window, "restore-running-agents.png")
+            assert not running_agents(), "A failed history browser appeared as a running chat"
+            key("Escape")
+            del history["resume_error"]
+            save_history()
+            listed_before = sum(c.get("method") == "thread/list" for c in calls())
+            click(1190, header + 113)
+            wait(
+                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
+                "History did not refresh after the restore writer conflict",
+            )
+            time.sleep(0.5)
+            click(600, header + 264)
+            wait(
+                lambda: any(c.get("method") == "thread/turns/list" for c in calls()),
+                "Conversation did not restore after the writer lock was released",
+            )
+            time.sleep(0.5)
             screenshot(window, "resumed.png")
+            assert any(agent["alive"] for agent in running_agents()), (
+                "The restored chat was missing from Running"
+            )
             assert all(c.get("method") not in ("thread/start", "turn/start") for c in calls()), (
                 "Restoring history started inference"
             )
+            # Selecting the current chat returns to the existing connection;
+            # a second resume would contend with its own active writer.
+            resumes_before = sum(c.get("method") == "thread/resume" for c in calls())
+            listed_before = sum(c.get("method") == "thread/list" for c in calls())
+            click(1340, header + 74)
+            wait(
+                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
+                "History did not reopen for the current chat",
+            )
+            time.sleep(0.5)
+            screenshot(window, "current-chat-row.png")
+            click(600, header + 264)
+            time.sleep(0.5)
+            assert sum(c.get("method") == "thread/resume" for c in calls()) == resumes_before, (
+                "Selecting the open chat tried to acquire a second writer"
+            )
+            screenshot(window, "returned-to-open-chat.png")
             history["refresh_error"] = True
-            (root / "history-fixture.json").write_text(json.dumps(history))
+            save_history()
             listed_before = sum(c.get("method") == "thread/list" for c in calls())
             click(1340, header + 74)
             wait(

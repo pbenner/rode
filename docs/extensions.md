@@ -6,6 +6,8 @@ Click the **Extensions** icon (four blocks) in the left activity bar, press **Ct
 
 Use the checkboxes to enable/disable native features and installed adapters. The manager also installs local tool manifests, reloads installed manifests and edits extension-specific JSON settings. Changes save immediately and merge safely with other RODE windows' edits. A running window keeps its own choices until changed or restarted.
 
+Filter the list by extension name or ID. The filter receives keyboard focus when the manager opens; after filtering, press **Tab** to focus a checkbox and **Space** to toggle it.
+
 ## Bundled features
 
 Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.

@@ -5,7 +5,7 @@ use super::super::{
     layout,
 };
 use crate::{
-    agent::history::{Browser, Entry},
+    agent::history::{Browser, Entry, Owner},
     theme::Palette,
 };
 use eframe::egui::{self, Align, Layout, RichText, Sense, Stroke};
@@ -16,6 +16,7 @@ pub(super) struct Action {
     pub refresh: bool,
     pub more: bool,
     pub resume: Option<String>,
+    pub running: bool,
     pub close: bool,
     pub delete: Option<Delete>,
 }
@@ -25,6 +26,56 @@ pub(super) struct Action {
 pub(super) enum Delete {
     One { id: String, title: String },
     All,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Availability {
+    Current,
+    Saved,
+    Active,
+    Owned(Owner),
+}
+impl Availability {
+    fn of(entry: &Entry, current: Option<&str>, owner: Option<Owner>) -> Self {
+        if current == Some(entry.id.as_str()) {
+            Self::Current
+        } else if let Some(owner) = owner {
+            Self::Owned(owner)
+        } else if entry.active {
+            Self::Active
+        } else {
+            Self::Saved
+        }
+    }
+    fn label(self, can_resume: bool) -> &'static str {
+        match self {
+            Self::Current => "Open here · Return to chat",
+            Self::Saved if can_resume => "Saved · Restore chat",
+            Self::Saved => "Saved · Restore unavailable",
+            Self::Active => "Active turn · Use Running",
+            Self::Owned(Owner::Attached) => "Open in another window · Use Running",
+            Self::Owned(Owner::Detached) => "Running in background · Use Running",
+            Self::Owned(Owner::OtherProcess) => "Open in another process · Cannot restore here",
+        }
+    }
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Current => "Return to the chat already open in this window.",
+            Self::Saved => {
+                "Restore this saved chat. The backend checks ownership when restoring; another client may still have it open."
+            }
+            Self::Active => "This chat has an active turn. Use Running to find its session.",
+            Self::Owned(Owner::Attached) => {
+                "Continue in the RODE window that owns this chat, or detach it there before attaching through Running."
+            }
+            Self::Owned(Owner::Detached) => {
+                "This chat is still open in a background RODE session. Use Running → Attach to continue it."
+            }
+            Self::Owned(Owner::OtherProcess) => {
+                "Another process owns this chat. Find its RODE session in Running, or return to the other client. End that session and refresh History to restore it here."
+            }
+        }
+    }
 }
 
 /// Render bounded cached metadata and return explicit refresh/resume/deletion actions.
@@ -43,7 +94,7 @@ pub(super) fn ui(
         layout::header(
             ui,
             "Chat history",
-            "Saved conversations in this project",
+            "Restore saved chats here. Open chats use Running. Ownership is checked on restore.",
             palette,
             |ui| {
                 toolbar(ui, browser, can_resume, confirmation, &mut action, palette);
@@ -93,7 +144,7 @@ pub(super) fn ui(
             });
         }
         if !browser.diagnostics().is_empty() {
-            egui::CollapsingHeader::new("Backend details")
+            egui::CollapsingHeader::new("Error details")
                 .id_salt("history-backend-details")
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -102,6 +153,25 @@ pub(super) fn ui(
                         .show(ui, |ui| {
                             ui.add(
                                 egui::Label::new(browser.diagnostics())
+                                    .wrap()
+                                    .selectable(true),
+                            );
+                        });
+                });
+        }
+        if !browser.busy
+            && !browser.backend_output().is_empty()
+            && (!browser.diagnostics().is_empty() || !browser.can_resume)
+        {
+            egui::CollapsingHeader::new("Startup warnings and backend output")
+                .id_salt("history-backend-output")
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("history-backend-output-scroll")
+                        .max_height(120.)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(browser.backend_output())
                                     .wrap()
                                     .selectable(true),
                             );
@@ -153,18 +223,31 @@ pub(super) fn ui(
                         continue;
                     }
                     visible += 1;
-                    let resumable =
-                        can_resume && browser.can_resume && !browser.busy && !entry.active;
+                    let availability =
+                        Availability::of(entry, current, browser.owners.get(&entry.id).copied());
+                    let resumable = can_resume
+                        && !browser.busy
+                        && (availability != Availability::Saved || browser.can_resume);
                     let deletable = can_resume
                         && browser.can_delete
                         && !browser.busy
-                        && !entry.active
-                        && current != Some(entry.id.as_str());
+                        && availability == Availability::Saved;
                     ui.push_id(&entry.id, |ui| {
-                        let (resume, delete) =
-                            conversation(ui, entry, resumable, deletable, current, palette);
+                        let (resume, delete) = conversation(
+                            ui,
+                            entry,
+                            resumable,
+                            deletable,
+                            availability,
+                            browser.can_resume,
+                            palette,
+                        );
                         if resume {
-                            action.resume = Some(entry.id.clone());
+                            match availability {
+                                Availability::Current => action.close = true,
+                                Availability::Saved => action.resume = Some(entry.id.clone()),
+                                _ => action.running = true,
+                            }
                         }
                         if delete {
                             *confirmation = Some(Delete::One {
@@ -253,6 +336,11 @@ fn toolbar(
     {
         action.close = true;
     }
+    if browser.is_some_and(|browser| !browser.diagnostics().is_empty())
+        && ui.button("Running agents…").clicked()
+    {
+        action.running = true;
+    }
 }
 
 fn confirm(
@@ -296,10 +384,11 @@ fn conversation(
     entry: &Entry,
     resumable: bool,
     deletable: bool,
-    current: Option<&str>,
+    availability: Availability,
+    can_resume: bool,
     palette: Palette,
 ) -> (bool, bool) {
-    let open = current == Some(entry.id.as_str());
+    let open = availability == Availability::Current;
     let mut frame = layout::card_frame(palette)
         .fill(if open { palette.active } else { palette.panel })
         .stroke(Stroke::new(
@@ -353,11 +442,15 @@ fn conversation(
                     );
                 }
                 ui.horizontal(|ui| {
-                    if entry.active {
-                        ui.label(RichText::new("Active turn").size(11.).color(palette.accent));
-                    } else if open {
-                        ui.label(RichText::new("Open chat").size(11.).color(palette.accent));
-                    }
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(availability.label(can_resume))
+                                .size(11.)
+                                .color(palette.accent),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(availability.hint());
                     if !entry.updated.is_empty() {
                         ui.add(
                             egui::Label::new(
@@ -382,13 +475,22 @@ fn conversation(
         }
         let body = interaction
             .interact(content.response.rect, interaction.id(), Sense::click())
-            .on_hover_text(&entry.title)
+            .on_hover_text(format!("{}\n{}", entry.title, availability.hint()))
+            .on_disabled_hover_text(availability.hint())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         body.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
                 interaction.is_enabled(),
-                format!("Resume {}", single_line(&entry.title)),
+                format!(
+                    "{} {}",
+                    match availability {
+                        Availability::Current => "Show",
+                        Availability::Saved => "Restore",
+                        _ => "Find in Running",
+                    },
+                    single_line(&entry.title)
+                ),
             )
         });
         resume = body.clicked();

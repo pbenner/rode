@@ -3,9 +3,9 @@
 //! connection only after the backend has acknowledged it.
 use super::{Launch, background::Client};
 use anyhow::{Context, Result};
-pub use rode_agent_core::history::Entry;
+pub use rode_agent_core::history::{Entry, Owner};
 use rode_agent_core::service::{Command, HistoryView};
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 /// Acknowledged restored conversation; consumed exactly once by Chat.
 pub enum Restored {
     /// Direct library client restoration.
@@ -20,6 +20,8 @@ pub struct Browser {
     native: Option<Client>,
     interpreter: String,
     diagnostics: String,
+    selected: Option<String>,
+    locked: BTreeSet<String>,
 }
 impl std::ops::Deref for Browser {
     type Target = HistoryView;
@@ -38,6 +40,8 @@ impl Browser {
             native: None,
             interpreter,
             diagnostics: String::new(),
+            selected: None,
+            locked: BTreeSet::new(),
         })
     }
     /// Open a disposable browser on the native host service, without inference.
@@ -54,11 +58,14 @@ impl Browser {
             native: Some(native),
             interpreter,
             diagnostics: String::new(),
+            selected: None,
+            locked: BTreeSet::new(),
         })
     }
     /// Drain bounded browser updates and preserve the current chat on failure.
     pub fn poll(&mut self) {
         let mut updated = false;
+        let mut closed = None;
         if let Some(direct) = &mut self.direct {
             direct.poll();
             self.view = direct.view();
@@ -75,31 +82,73 @@ impl Browser {
                         self.view.deleting = false;
                     }
                 } else if !state.chat.connected {
-                    self.view.status = state.error;
-                    self.view.busy = false;
+                    closed = Some(if state.error.is_empty() {
+                        "History connection closed; refresh history to reconnect".into()
+                    } else {
+                        state.error
+                    });
                 } else {
                     self.view.busy = false;
                 }
             }
             if let Some(error) = native.error.take() {
                 updated = true;
-                self.view.status = error;
-                self.view.busy = false;
-                self.view.can_resume = false;
+                closed = Some(error);
             }
+        }
+        if let Some(error) = closed {
+            self.connection_closed(error);
         }
         if updated {
             self.describe_status();
         }
     }
-    /// Raw backend error and startup warnings behind an explained history failure.
+    /// Raw operation failure, separate from additional backend output/startup warnings.
     pub fn diagnostics(&self) -> &str {
         &self.diagnostics
     }
+    /// Additional process output, including startup warnings, without the operation error.
+    pub fn backend_output(&self) -> &str {
+        self.view.backend_output.as_deref().unwrap_or_default()
+    }
+    fn connection_closed(&mut self, error: String) {
+        self.view.status = error;
+        self.view.busy = false;
+        self.view.can_resume = false;
+        self.view.can_delete = false;
+        self.view.deleting = false;
+        self.view.more = false;
+        self.selected = None;
+    }
     fn describe_status(&mut self) {
         self.diagnostics.clear();
-        if let Some(explanation) = writer_conflict(&self.view.status) {
+        // Older host services appended stderr to the operation error. Keep
+        // those diagnostics separate even before the host service is upgraded.
+        if self.view.backend_output.is_none() {
+            // Legacy failures separated the error from accumulated stderr
+            // with a blank line. Preserve multiline error messages intact.
+            if let Some((primary, output)) = self.view.status.split_once("\n\n") {
+                self.view.backend_output = Some(output.trim().into());
+                self.view.status = primary.into();
+            }
+        }
+        if let Some(mut explanation) = writer_conflict(&self.view.status) {
+            if self.view.status.starts_with("Agent history: ")
+                && let Some(selected) = self.selected.take()
+            {
+                self.locked.insert(selected);
+            }
+            if !self.backend_output().is_empty() {
+                explanation
+                    .push_str(" Startup warnings below are separate from this ownership conflict.");
+            }
             self.diagnostics = std::mem::replace(&mut self.view.status, explanation);
+        }
+        for id in &self.locked {
+            self.view
+                .owners
+                .entry(id.clone())
+                .or_insert(Owner::OtherProcess);
         }
     }
     /// Transfer a successfully restored connection into the current chat.
@@ -124,33 +173,54 @@ impl Browser {
     }
     /// Request another bounded saved-conversation page.
     pub fn load_more(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            !self.view.busy && self.view.more,
+            "No further history page is available"
+        );
         if let Some(direct) = &mut self.direct {
             direct.load_more()?;
             self.view = direct.view();
-            Ok(())
         } else {
             self.native
                 .as_ref()
                 .context("History browser is closed")?
                 .send(Command::HistoryMore)?;
             self.view.busy = true;
-            Ok(())
         }
+        self.selected = None;
+        self.diagnostics.clear();
+        Ok(())
     }
     /// Restore exactly the backend row selected by the user.
     pub fn resume(&mut self, id: &str) -> Result<()> {
+        anyhow::ensure!(
+            !self.view.busy && self.view.can_resume,
+            "This agent cannot resume history right now"
+        );
+        anyhow::ensure!(
+            self.view
+                .entries
+                .iter()
+                .any(|entry| entry.id == id && !entry.active),
+            "Select an idle conversation from this project"
+        );
+        anyhow::ensure!(
+            !self.view.owners.contains_key(id),
+            "This chat is open in another process; continue it from Running"
+        );
         if let Some(direct) = &mut self.direct {
             direct.resume(id)?;
             self.view = direct.view();
-            Ok(())
         } else {
             self.native
                 .as_ref()
                 .context("History browser is closed")?
                 .send(Command::HistoryResume { id: id.into() })?;
             self.view.busy = true;
-            Ok(())
         }
+        self.selected = Some(id.into());
+        self.diagnostics.clear();
+        Ok(())
     }
     /// Delete one saved chat or all pages for this project/backend, keeping open chats.
     pub fn delete(&mut self, id: Option<&str>, protected: Vec<String>) -> Result<()> {
@@ -173,6 +243,7 @@ impl Browser {
             self.view.deleting = true;
             self.view.status = "Deleting saved chats…".into();
         }
+        self.selected = None;
         self.diagnostics.clear();
         Ok(())
     }
@@ -182,10 +253,16 @@ impl Browser {
     }
 }
 
-/// Interpret the deletion failure at the desktop boundary, including replies
+/// Interpret ownership failures at the desktop boundary, including replies
 /// from older services which may still own detached agents after an upgrade.
 fn writer_conflict(status: &str) -> Option<String> {
     let primary = status.lines().next()?;
+    if primary
+        .strip_prefix("Agent history: ")
+        .is_some_and(|error| error.contains("already has an active writer"))
+    {
+        return Some("Cannot restore this chat: it is open in another process, even if idle or detached. In Running, choose Attach for a detached RODE session, or return to the window/client that owns it. To restore it here, end the owning session, then refresh history and retry.".into());
+    }
     let (count, error) = primary
         .strip_prefix("Deleted ")?
         .split_once(" chats before this operation stopped. ")?;
@@ -209,6 +286,74 @@ fn writer_conflict(status: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn presentation(view: HistoryView) -> Browser {
+        Browser {
+            view,
+            direct: None,
+            native: None,
+            interpreter: "off".into(),
+            diagnostics: String::new(),
+            selected: None,
+            locked: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn structured_output_preserves_multiline_errors_even_without_process_output() {
+        let error = "Agent history: Cannot read saved chat\nPermission denied\n\nCheck directory permissions";
+        let view: HistoryView = serde_json::from_value(serde_json::json!({
+            "entries": [], "status": error, "busy": false, "can_resume": false,
+            "more": false, "backend_output": ""
+        }))
+        .unwrap();
+        let mut browser = presentation(view);
+        browser.describe_status();
+        assert_eq!(browser.status, error);
+        assert!(browser.backend_output().is_empty());
+        assert!(browser.owners.is_empty());
+    }
+
+    #[test]
+    fn deletion_conflicts_cannot_mark_an_earlier_restore_selection_as_owned() {
+        let mut browser = presentation(HistoryView {
+            status: "Deleted 0 chats before this operation stopped. Agent history: thread different-chat already has an active writer".into(),
+            backend_output: Some(String::new()),
+            ..Default::default()
+        });
+        browser.selected = Some("earlier-selection".into());
+        browser.describe_status();
+        assert!(browser.status.starts_with("No chats were deleted."));
+        assert!(browser.owners.is_empty());
+        assert!(browser.locked.is_empty());
+    }
+
+    #[test]
+    fn legacy_service_output_does_not_obscure_the_failure_or_claim_unrelated_ownership() {
+        for primary in [
+            "Agent history: thread saved-1 already has an active writer",
+            "Agent history: Permission denied",
+        ] {
+            let mut browser = presentation(HistoryView {
+                status: format!(
+                    "{primary}\n\nERROR: Codex could not find bubblewrap on PATH; using the bundled copy"
+                ),
+                ..Default::default()
+            });
+            browser.selected = Some("saved-1".into());
+            browser.describe_status();
+            assert!(!browser.status.contains("bubblewrap"));
+            assert!(!browser.diagnostics().contains("bubblewrap"));
+            assert!(browser.backend_output().contains("using the bundled copy"));
+            if primary.contains("active writer") {
+                assert!(browser.status.starts_with("Cannot restore this chat:"));
+                assert_eq!(browser.owners.get("saved-1"), Some(&Owner::OtherProcess));
+            } else {
+                assert_eq!(browser.status, primary);
+                assert!(browser.owners.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn writer_conflicts_explain_detached_sessions_and_preserve_deletion_counts() {
@@ -234,6 +379,8 @@ mod tests {
     #[test]
     fn unrelated_errors_and_warnings_do_not_claim_a_writer_conflict() {
         for status in [
+            "Agent history: Permission denied\nthread example-thread already has an active writer",
+            "Agent history: Thread not found\nERROR: bubblewrap was not found",
             "Deleted 0 chats before this operation stopped. Agent history: Delete failed",
             "Deleted 0 chats before this operation stopped. Agent history: Permission denied\nthread example-thread already has an active writer",
             "Deleted 1 saved chats. Refresh failed. Agent history: thread example-thread already has an active writer",
