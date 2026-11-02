@@ -16,6 +16,39 @@ from unittest.mock import patch
 import ci
 
 
+def process_exited(status):
+    """Treat a zombie or vanished proc entry as exited, including races during read."""
+    try:
+        state = status.read_text().rsplit(") ", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    return state == "Z"
+
+
+class ProcessStateTests(unittest.TestCase):
+    def test_exit_during_proc_read_is_treated_as_terminated(self):
+        for error in (
+            FileNotFoundError(2, "No such file"),
+            ProcessLookupError(3, "No such process"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(Path, "read_text", side_effect=error):
+                    self.assertTrue(process_exited(Path("/proc/123/stat")))
+
+    def test_only_zombies_count_as_exited_when_proc_state_is_available(self):
+        for state in ("R", "S", "D", "T", "Z"):
+            with self.subTest(state=state):
+                # The parenthesized command name may itself contain spaces and parentheses.
+                status = f"123 (python worker (fixture)) {state} 1 123 123"
+                with patch.object(Path, "read_text", return_value=status):
+                    self.assertEqual(process_exited(Path("/proc/123/stat")), state == "Z")
+
+    def test_unexpected_proc_read_errors_are_not_treated_as_successful_cleanup(self):
+        with patch.object(Path, "read_text", side_effect=PermissionError(13, "Permission denied")):
+            with self.assertRaises(PermissionError):
+                process_exited(Path("/proc/123/stat"))
+
+
 class SelectionTests(unittest.TestCase):
     def test_docs_keep_the_fast_lane_without_expensive_viewers(self):
         self.assertEqual(ci.extended_suites(["README.md", "docs/editing.md"]), [])
@@ -142,7 +175,7 @@ class RunnerTests(unittest.TestCase):
         pid = child_pid.read_text()
         status = Path(f"/proc/{pid}/stat")
         deadline = time.monotonic() + 1
-        while status.exists() and status.read_text().split()[2] != "Z":
+        while not process_exited(status):
             self.assertLess(time.monotonic(), deadline, "Timed-out descendant survived")
             time.sleep(0.01)
 
