@@ -1375,6 +1375,10 @@ impl EditorApp {
 
     /// Select or hide the terminal surface, lazily creating a shell only when none is owned or starting.
     fn toggle_terminal(&mut self, ctx: &egui::Context) {
+        if self.tab_detached(workbench::ToolTab::Terminal) {
+            self.focus_tool_tab(workbench::ToolTab::Terminal, ctx);
+            return;
+        }
         self.show_terminal = !self.terminal_visible() || self.workbench.detached;
         if self.show_terminal {
             self.terminal_intent();
@@ -1397,11 +1401,16 @@ impl EditorApp {
         {
             return;
         }
-        if self.terminal_visible() && self.dialog == Dialog::None && !egui::Popup::is_any_open(ctx)
+        if self.terminal_any_visible()
+            && self.tool_viewport(workbench::ToolTab::Terminal) == ctx.viewport_id()
+            && self.dialog == Dialog::None
+            && !egui::Popup::is_any_open(ctx)
         {
             Terminal::prepare_input(ctx);
         }
-        let terminal_focus = Terminal::focused(ctx) && self.terminal_visible();
+        let terminal_focus = Terminal::focused(ctx)
+            && self.terminal_any_visible()
+            && self.tool_viewport(workbench::ToolTab::Terminal) == ctx.viewport_id();
         let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
         if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::P) {
             self.set_dialog(Dialog::Commands);
@@ -1765,18 +1774,16 @@ impl EditorApp {
                     let selected = match action {
                         0 => self.show_explorer,
                         2 => self.dialog == Dialog::Connect,
-                        3 => self.terminal_visible(),
-                        4 => self.tools_visible() && self.workbench.panel == Some(Panel::Git),
-                        5 => self.tools_visible() && self.workbench.panel == Some(Panel::Monitor),
-                        6 => self.tools_visible() && self.workbench.panel == Some(Panel::Problems),
-                        7 => {
-                            self.tools_visible() && self.workbench.panel == Some(Panel::Environment)
-                        }
-                        8 => self.tools_visible() && self.workbench.panel == Some(Panel::Settings),
-                        9 => self.tools_visible() && self.workbench.panel == Some(Panel::Agent),
+                        3 => self.terminal_any_visible(),
+                        4 => self.panel_visible(Panel::Git),
+                        5 => self.panel_visible(Panel::Monitor),
+                        6 => self.panel_visible(Panel::Problems),
+                        7 => self.panel_visible(Panel::Environment),
+                        8 => self.panel_visible(Panel::Settings),
+                        9 => self.panel_visible(Panel::Agent),
                         10 => self.dialog == Dialog::Extensions,
-                        12 => self.tools_visible() && self.workbench.panel == Some(Panel::Tasks),
-                        11 => self.tools_visible() && self.workbench.panel == Some(Panel::Debug),
+                        12 => self.panel_visible(Panel::Tasks),
+                        11 => self.panel_visible(Panel::Debug),
                         _ => false,
                     };
                     let response = ui.add_sized(
@@ -2691,15 +2698,14 @@ impl eframe::App for EditorApp {
         self.explorer(ctx);
         self.workspace_content(ctx);
         self.dialogs(ctx);
-        if !self.workbench.detached {
-            self.workbench_windows(ctx);
-        }
+        self.workbench_windows(ctx);
         self.extension_windows(ctx);
         self.latex_window(ctx);
         self.terminal_colors.show(ctx, self.themes.active());
         self.notice_ui(ctx);
         self.navigation_finish(ctx);
         self.detached_tools(ctx);
+        self.detached_tabs(ctx);
         if self.profiles_loading.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }

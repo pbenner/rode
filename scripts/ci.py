@@ -56,6 +56,7 @@ SUITES = {
         ui("project", RODE_PROJECT_UI_CASE="failure"),
         ([sys.executable, "scripts/test-ui.py"], {}, 180),
         ui("workspace"),
+        ui("navigation"),
         ui("terminal-keys"),
         ui("multiprocess"),
     ],

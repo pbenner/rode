@@ -69,6 +69,7 @@ class SelectionTests(unittest.TestCase):
     def test_all_previous_workflow_cases_remain_reachable(self):
         required = {
             "workspace",
+            "navigation",
             "environment",
             "debugger",
             "terminal-keys",

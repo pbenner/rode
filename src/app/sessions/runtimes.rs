@@ -278,7 +278,7 @@ impl EditorApp {
             }
         } else if current {
             self.dialog = Dialog::None;
-            self.workbench.panel = Some(Panel::Debug);
+            self.reveal_panel(Panel::Debug, ctx);
         } else {
             match self.attach_debugger_runtime(info, ctx) {
                 Ok(()) => self.dialog = Dialog::None,

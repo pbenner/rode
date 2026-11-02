@@ -543,10 +543,10 @@ impl EditorApp {
             return;
         }
         for terminal in self.terminal.iter().chain(self.ssh_master.iter()) {
-            terminal.set_visible(self.terminal_visible());
+            terminal.set_visible(self.terminal_any_visible());
         }
         let manager = self.dialog == Dialog::Sessions;
-        let allocation_visible = self.terminal_visible()
+        let allocation_visible = self.terminal_any_visible()
             && self
                 .sessions
                 .active

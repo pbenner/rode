@@ -646,6 +646,9 @@ impl EditorApp {
     }
     /// Render cached Git diff/output and confirmation windows belonging to the current tool viewport.
     pub(in crate::app) fn workbench_windows(&mut self, ctx: &egui::Context) {
+        if ctx.viewport_id() != self.tool_viewport(workspace::ToolTab::Panel(Panel::Git)) {
+            return;
+        }
         let palette = self.themes.active().palette;
         if let Some(mut diff) = self.workbench.git.diff.take() {
             if diff.open {

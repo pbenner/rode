@@ -128,9 +128,7 @@ impl EditorApp {
             .iter()
             .map(|doc| (doc.id, self.debugger.source_version(doc)))
             .collect();
-        self.workbench.panel = Some(Panel::Debug);
-        self.workbench.surface = workbench::Surface::Tools;
-        self.workbench.tools_hidden = false;
+        self.reveal_panel(Panel::Debug, ctx);
         Ok(())
     }
     /// Request explicit termination and retain cleanup flags while ending debugger-owned
@@ -168,10 +166,7 @@ impl EditorApp {
             self.notify("Enable Debugger in View → Extensions.", false);
             return;
         }
-        self.workbench.panel = Some(Panel::Debug);
-        self.workbench.surface = workbench::Surface::Tools;
-        self.workbench.tools_hidden = false;
-        self.remember_tool_tab();
+        self.reveal_panel(Panel::Debug, ctx);
         if self
             .debugger
             .client

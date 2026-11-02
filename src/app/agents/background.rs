@@ -250,8 +250,7 @@ impl EditorApp {
             match action {
                 rows::Action::Show => {
                     self.dialog = Dialog::None;
-                    self.workbench.panel = Some(Panel::Agent);
-                    self.focus_pane(navigation::Pane::Tools, ctx);
+                    self.reveal_panel(Panel::Agent, ctx);
                 }
                 rows::Action::Attach => {
                     attach = self
@@ -283,8 +282,7 @@ impl EditorApp {
             self.agents.attaching = true;
             self.agents.focus = true;
             self.dialog = Dialog::None;
-            self.workbench.panel = Some(Panel::Agent);
-            self.focus_pane(navigation::Pane::Tools, ctx);
+            self.reveal_panel(Panel::Agent, ctx);
         }
         if ui.button("Close").clicked() {
             self.dialog = Dialog::None;

@@ -16,9 +16,9 @@ use super::*;
 use crate::project::{self, Diagnostic};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-pub(super) use workspace::Surface;
+pub(super) use workspace::{Surface, ToolTab};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// Tool-view identity used by tabs, commands and feature gates; it carries no running job.
 pub(super) enum Panel {
     Git,
@@ -165,6 +165,8 @@ pub(super) struct Workbench {
     pub surface: Surface,
     pub detached: bool,
     pub tools_hidden: bool,
+    /// Tabs hosted in their own native windows, independent of the whole sidebar.
+    floating_tabs: Vec<workspace::ToolTab>,
     last_tool: Option<workspace::ToolTab>,
     preferences: BTreeMap<String, Preferences>,
     pub preferences_pending: bool,
@@ -269,6 +271,7 @@ impl Workbench {
         let detached = self.detached;
         let tools_hidden = self.tools_hidden;
         let last_tool = self.last_tool;
+        let floating_tabs = std::mem::take(&mut self.floating_tabs);
         *self = Self {
             preferences,
             preferences_pending: pending,
@@ -277,6 +280,7 @@ impl Workbench {
             detached,
             tools_hidden,
             last_tool,
+            floating_tabs,
             ..Default::default()
         };
     }
@@ -308,8 +312,13 @@ impl EditorApp {
         let Some(panel) = self.workbench.panel else {
             return;
         };
+        self.panel_content(panel, ui, ctx);
+    }
+
+    /// Render a specific tool using its existing controller, independent of the dock selection.
+    fn panel_content(&mut self, panel: Panel, ui: &mut egui::Ui, ctx: &egui::Context) {
         if !self.panel_enabled(panel) {
-            self.workbench.panel = None;
+            ui.label("This extension is disabled. Enable it in View → Extensions.");
             return;
         }
         let palette = self.themes.active().palette;
@@ -352,6 +361,17 @@ impl EditorApp {
             });
     }
 
+    /// Reveal a tool without toggling it off, including an independently detached tab.
+    pub(in crate::app) fn reveal_panel(&mut self, panel: Panel, ctx: &egui::Context) {
+        if self.tab_detached(ToolTab::Panel(panel)) {
+            self.focus_tool_tab(ToolTab::Panel(panel), ctx);
+        } else if self.workbench.panel == Some(panel) && self.workbench.surface == Surface::Tools {
+            self.focus_pane(navigation::Pane::Tools, ctx);
+        } else {
+            self.toggle_panel(panel, ctx);
+        }
+    }
+
     /// Select or hide a tool panel, refreshing its cached data when appropriate.
     /// An already selected detached panel is revealed and focused instead of hidden.
     pub(super) fn toggle_panel(&mut self, panel: Panel, ctx: &egui::Context) {
@@ -363,6 +383,10 @@ impl EditorApp {
             return;
         }
         self.workbench.last_tool = Some(workspace::ToolTab::Panel(panel));
+        if self.tab_detached(workspace::ToolTab::Panel(panel)) {
+            self.focus_tool_tab(workspace::ToolTab::Panel(panel), ctx);
+            return;
+        }
         if self.workbench.detached
             && self.workbench.panel == Some(panel)
             && self.workbench.surface == Surface::Tools
@@ -524,8 +548,7 @@ impl EditorApp {
     /// Use cached timestamps and in-flight flags to avoid launching work every frame.
     pub(super) fn workbench_tick(&mut self, ctx: &egui::Context) {
         if self.feature(crate::extensions::Feature::Monitor)
-            && self.tools_visible()
-            && self.workbench.panel == Some(Panel::Monitor)
+            && self.panel_visible(Panel::Monitor)
             && self.monitor_ready()
         {
             let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
@@ -555,8 +578,7 @@ impl EditorApp {
             return;
         }
         if self.feature(crate::extensions::Feature::Git)
-            && self.tools_visible()
-            && self.workbench.panel == Some(Panel::Git)
+            && self.panel_visible(Panel::Git)
             && self.workbench.git.git_tab == GitTab::Changes
         {
             if !self.workbench.git.git_busy

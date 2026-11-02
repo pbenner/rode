@@ -37,12 +37,14 @@ pub(super) struct State {
     pub active: Pane,
     pub used: bool,
     pending: Option<Pane>,
+    /// Focus requests target a native host so another tool window cannot consume them.
+    pending_viewport: egui::ViewportId,
     leader: Option<Instant>,
     pub zoom: Option<Pane>,
     pub widths: [Option<f32>; 2],
     rects: [Option<egui::Rect>; 5],
     viewports: [Option<egui::ViewportId>; 5],
-    remembered: [Option<egui::Id>; 5],
+    remembered: std::collections::HashMap<egui::ViewportId, [Option<egui::Id>; 5]>,
     pub tree: tree::Selection,
     pub list: List,
     modal: bool,
@@ -55,12 +57,13 @@ impl State {
             active: Pane::Editor,
             used: false,
             pending: None,
+            pending_viewport: egui::ViewportId::ROOT,
             leader: None,
             zoom: None,
             widths: [None; 2],
             rects: [None; 5],
             viewports: [None; 5],
-            remembered: [None; 5],
+            remembered: Default::default(),
             tree: Default::default(),
             list: Default::default(),
             modal: false,
@@ -79,12 +82,18 @@ impl State {
     pub fn editor_intent(&mut self) {
         self.active = Pane::Editor;
         self.pending = Some(Pane::Editor);
+        self.pending_viewport = egui::ViewportId::ROOT;
         self.zoom = self.zoom.filter(|p| *p == Pane::Editor);
     }
     pub fn terminal_intent(&mut self) {
         self.active = Pane::Terminal;
         self.pending = Some(Pane::Terminal);
         self.zoom = self.zoom.filter(|p| *p == Pane::Terminal);
+    }
+    pub fn request_focus(&mut self, pane: Pane, viewport: egui::ViewportId) {
+        self.active = pane;
+        self.pending = Some(pane);
+        self.pending_viewport = viewport;
     }
     pub fn accepts_editor_focus(&self) -> bool {
         !self.used || self.active == Pane::Editor
@@ -265,11 +274,22 @@ impl EditorApp {
             Editor => self.focus_pane(Pane::Editor, ctx),
             Explorer => self.focus_pane(Pane::Explorer, ctx),
             Terminal => self.focus_pane(Pane::Terminal, ctx),
-            Tools => self.focus_pane(Pane::Tools, ctx),
+            Tools => {
+                if let Some(tab) = self
+                    .floating_tab(ctx.viewport_id())
+                    .filter(|tab| tab.pane() == Pane::Tools)
+                {
+                    self.focus_tool_tab(tab, ctx);
+                } else {
+                    self.focus_pane(Pane::Tools, ctx);
+                }
+            }
             Menus => self.focus_pane(Pane::Menus, ctx),
             Narrower | Wider | Shorter | Taller => {
                 self.navigation.zoom = None;
-                if self.workbench.detached
+                let viewport = self.navigation.viewports[self.navigation.active.index()]
+                    .unwrap_or(ctx.viewport_id());
+                if viewport != egui::ViewportId::ROOT
                     && matches!(self.navigation.active, Pane::Tools | Pane::Terminal)
                 {
                     let mut size = ctx
@@ -277,7 +297,7 @@ impl EditorApp {
                             input
                                 .raw
                                 .viewports
-                                .get(&Self::tools_viewport())
+                                .get(&viewport)
                                 .and_then(|viewport| viewport.inner_rect)
                                 .map(|rect| rect.size())
                         })
@@ -290,10 +310,7 @@ impl EditorApp {
                             -32.
                         })
                     .max(if axis == 0 { 640. } else { 420. });
-                    ctx.send_viewport_cmd_to(
-                        Self::tools_viewport(),
-                        egui::ViewportCommand::InnerSize(size),
-                    );
+                    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::InnerSize(size));
                 } else if matches!(action, Narrower | Wider)
                     && self.navigation.active == Pane::Explorer
                 {
@@ -306,7 +323,9 @@ impl EditorApp {
                 }
             }
             Zoom => {
-                if self.workbench.detached
+                let viewport = self.navigation.viewports[self.navigation.active.index()]
+                    .unwrap_or(ctx.viewport_id());
+                if viewport != egui::ViewportId::ROOT
                     && matches!(self.navigation.active, Pane::Tools | Pane::Terminal)
                 {
                     let maximized = ctx
@@ -314,12 +333,12 @@ impl EditorApp {
                             input
                                 .raw
                                 .viewports
-                                .get(&Self::tools_viewport())
+                                .get(&viewport)
                                 .and_then(|viewport| viewport.maximized)
                         })
                         .unwrap_or(false);
                     ctx.send_viewport_cmd_to(
-                        Self::tools_viewport(),
+                        viewport,
                         egui::ViewportCommand::Maximized(!maximized),
                     );
                     return;
@@ -334,6 +353,10 @@ impl EditorApp {
                 }
             }
             Hide => {
+                if let Some(tab) = self.floating_tab(ctx.viewport_id()) {
+                    self.reattach_tool_tab(tab, ctx);
+                    return;
+                }
                 self.remember_tool_tab();
                 match self.navigation.active {
                     Pane::Explorer => self.show_explorer = false,
@@ -391,20 +414,26 @@ impl EditorApp {
     }
     /// Record focus intent and reveal the requested surface before focusing its native widget.
     pub(super) fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
-        if self.workbench.detached {
-            let target = if matches!(pane, Pane::Tools | Pane::Terminal) {
-                Self::tools_viewport()
-            } else {
-                egui::ViewportId::ROOT
-            };
-            if target == Self::tools_viewport() {
-                self.workbench.tools_hidden = false;
-                ctx.send_viewport_cmd_to(target, egui::ViewportCommand::Visible(true));
-            }
-            ctx.send_viewport_cmd_to(target, egui::ViewportCommand::Focus);
+        let tab = match pane {
+            Pane::Terminal => Some(workbench::ToolTab::Terminal),
+            Pane::Tools => Some(workbench::ToolTab::Panel(
+                self.workbench.panel.unwrap_or(Panel::Monitor),
+            )),
+            _ => None,
+        };
+        if let Some(tab) = tab.filter(|tab| self.tab_detached(*tab)) {
+            self.focus_tool_tab(tab, ctx);
+            return;
         }
-        self.navigation.active = pane;
-        self.navigation.pending = Some(pane);
+        let viewport = tab.map_or(egui::ViewportId::ROOT, |tab| self.tool_viewport(tab));
+        if viewport == Self::tools_viewport() {
+            self.workbench.tools_hidden = false;
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
+        }
+        if viewport != ctx.viewport_id() {
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+        }
+        self.navigation.request_focus(pane, viewport);
         if self.navigation.zoom.is_some_and(|p| p != pane) {
             self.navigation.zoom = None;
         }
@@ -439,29 +468,45 @@ impl EditorApp {
     pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane) {
         let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
-        if self.navigation.zoom.is_none() {
+        if self.navigation.zoom.is_none()
+            && (self.navigation.viewports[pane.index()].is_none()
+                || ctx.input(|input| input.focused)
+                || (self.navigation.pending == Some(pane)
+                    && self.navigation.pending_viewport == ctx.viewport_id()))
+        {
             self.navigation.rects[pane.index()] = Some(rect);
             self.navigation.viewports[pane.index()] = Some(ctx.viewport_id());
         }
-        let host = ui.interact(rect, pane.id(), Sense::focusable_noninteractive());
+        let host_id = if ctx.viewport_id() == egui::ViewportId::ROOT {
+            pane.id()
+        } else {
+            pane.id().with(ctx.viewport_id())
+        };
+        let host = ui.interact(rect, host_id, Sense::focusable_noninteractive());
         let blocked = self.dialog != Dialog::None
             || self.pending.is_some()
             || self.workbench_modal()
             || egui::Popup::is_any_open(&ctx);
         if !blocked
             && self.navigation.pending == Some(pane)
+            && self.navigation.pending_viewport == ctx.viewport_id()
             && ctx.memory(|m| m.allows_interaction(ui.layer_id()))
         {
-            if self.workbench.detached && ctx.viewport_id() == Self::tools_viewport() {
+            if ctx.viewport_id() != egui::ViewportId::ROOT {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             match pane {
                 Pane::Terminal => Terminal::focus(&ctx),
                 Pane::Editor if !self.documents.is_empty() => self.focus_editor(&ctx),
                 Pane::Explorer if self.workspace.is_some() => host.request_focus(),
-                _ => ctx.memory_mut(|m| {
-                    m.request_focus(self.navigation.remembered[pane.index()].unwrap_or(host.id))
-                }),
+                _ => {
+                    let remembered = self
+                        .navigation
+                        .remembered
+                        .get(&ctx.viewport_id())
+                        .and_then(|panes| panes[pane.index()]);
+                    ctx.memory_mut(|m| m.request_focus(remembered.unwrap_or(host.id)));
+                }
             }
             self.navigation.pending = None;
         }
@@ -479,7 +524,10 @@ impl EditorApp {
             {
                 self.navigation.active = pane;
                 if inside {
-                    self.navigation.remembered[pane.index()] = focused;
+                    self.navigation
+                        .remembered
+                        .entry(ctx.viewport_id())
+                        .or_insert([None; 5])[pane.index()] = focused;
                 }
             }
         }
@@ -497,8 +545,13 @@ impl EditorApp {
     }
     /// Render the same focus/zoom commands exposed by keyboard navigation.
     pub(super) fn navigation_menu(&mut self, response: &egui::Response) {
-        self.navigation.remembered[Pane::Menus.index()] = Some(response.id);
-        if self.navigation.pending == Some(Pane::Menus) {
+        self.navigation
+            .remembered
+            .entry(response.ctx.viewport_id())
+            .or_insert([None; 5])[Pane::Menus.index()] = Some(response.id);
+        if self.navigation.pending == Some(Pane::Menus)
+            && self.navigation.pending_viewport == response.ctx.viewport_id()
+        {
             response.request_focus();
             self.navigation.pending = None;
         }
@@ -511,6 +564,7 @@ impl EditorApp {
             || self.session_exit_pending();
         if self.navigation.modal && !modal {
             self.navigation.pending = Some(self.navigation.active);
+            self.navigation.pending_viewport = ctx.viewport_id();
             ctx.request_repaint();
         }
         self.navigation.modal = modal;

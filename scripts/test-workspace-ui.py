@@ -40,13 +40,17 @@ def focus(window):
     time.sleep(0.15)
 
 
-def tools_window():
+def tool_window(title):
     tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-    match = re.search(r'(0x[0-9a-f]+) "RODE · Project tools"', tree)
+    match = re.search(r'(0x[0-9a-f]+) "RODE · ' + re.escape(title) + '"', tree)
     if not match:
         return None
     attributes = subprocess.run(["xwininfo", "-id", match[1]], capture_output=True, text=True)
     return int(match[1], 16) if "Map State: IsViewable" in attributes.stdout else None
+
+
+def tools_window():
+    return tool_window("Project tools")
 
 
 with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
@@ -246,12 +250,96 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             text("echo $$ > after.pid\n")
             wait(lambda: (project / "after.pid").exists(), "Docking lost terminal input focus")
             assert (project / "before.pid").read_text() == (project / "after.pid").read_text()
+
+            # Independent tab windows share the existing shell and agent controller.
+            click(1155, 69)  # Detach tab, beside the full-sidebar Detach action.
+            terminal_window = wait(
+                lambda: tool_window("Terminal"), "No independent Terminal window"
+            )
+            focus(terminal_window)
+            text("echo $$ > tab.pid\n")
+            wait(lambda: (project / "tab.pid").exists(), "Detached terminal tab lost shell input")
+            assert (project / "before.pid").read_text() == (project / "tab.pid").read_text()
+            key("p", ("Control_L", "Shift_L"))
+            text("Terminal: Sessions and Slurm allocations")
+            key("Return")
+            time.sleep(0.3)
+            screenshot(terminal_window, "individual-terminal-dialog.png")
+            key("Escape")
+            time.sleep(0.3)
+            text("echo $$ > tab-modal.pid\n")
+            wait(
+                lambda: (project / "tab-modal.pid").exists(),
+                "Terminal tab did not restore input after its dialog",
+            )
+            assert (project / "before.pid").read_text() == (project / "tab-modal.pid").read_text()
+            focus(window)
+            click(400, 69)  # Disabled Terminal tab must not take over the docked surface.
+            screenshot(window, "disabled-terminal-tab.png")
+            key("a", ("Control_L", "Shift_L"))
+            time.sleep(0.3)
+            click(1155, 69)
+            chat_window = wait(lambda: tool_window("Chat"), "No independent Chat window")
+            send("independent chat tab", chat_window, (450, 680))
+            assert tool_window("Terminal") == terminal_window
+            assert sum(call.get("method") == "initialize" for call in calls()) == 1
+            screenshot(chat_window, "independent-chat-tab.png")
+            focus(window)
+            click(460, 69)  # Chat stays visible but disabled; Code remains selected.
+            click(700, 180)  # Code must still be available after the disabled tab click.
+            key("End", ("Control_L",))
+            text("\nedit with two detached tabs")
+            key("s", ("Control_L",))
+            screenshot(window, "two-tabs-detached.png")
+            wait(
+                lambda: "edit with two detached tabs" in source.read_text(),
+                "Disabled tool tab replaced Code or swallowed editor input",
+            )
+            focus(chat_window)
+            key("p", ("Control_L", "Shift_L"))
+            text("Terminal: Sessions and Slurm allocations")
+            key("Return")
+            time.sleep(0.3)
+            screenshot(chat_window, "individual-tab-dialog.png")
+            key("Escape")
+            click(845, 14)  # Reattach in the individual window's header.
+            wait(lambda: tool_window("Chat") is None, "Reattach did not close the Chat tab window")
+            send("after individual reattach", window, (700, 790))
+            assert tool_window("Terminal") == terminal_window
+            focus(terminal_window)
+            request_close(terminal_window)
+            wait(
+                lambda: tool_window("Terminal") is None,
+                "Closing an independent tab did not reattach it",
+            )
+            focus(window)
+            text("echo $$ > tab-docked.pid\n")
+            wait(lambda: (project / "tab-docked.pid").exists(), "Tab reattach lost terminal input")
+            assert (project / "before.pid").read_text() == (project / "tab-docked.pid").read_text()
             click(1073, 69)
-            wait(tools_window, "Could not reopen tools before closing the main window")
+            child = wait(tools_window, "Could not reopen tools before closing the main window")
+            focus(child)
+            click(170, 22)  # Chat in the detached whole-sidebar window.
+            click(55, 55)  # Detach tab wraps below the tab row at this window width.
+            chat_window = wait(
+                lambda: tool_window("Chat"), "Could not detach a tab from the sidebar window"
+            )
+            send("tab from detached sidebar", chat_window, (450, 680))
+            assert tools_window() == child
+            focus(chat_window)
+            click(845, 14)
+            wait(
+                lambda: tool_window("Chat") is None, "Tab did not reattach to its detached sidebar"
+            )
+            send("reattached to sidebar window", child, (450, 680))
+            assert sum(call.get("method") == "initialize" for call in calls()) == 1
+            click(55, 55)
+            wait(lambda: tool_window("Chat"), "Could not reopen the independent Chat tab")
             close_window(window, process)
             assert tools_window() is None, "Closing the main window left an orphan tools window"
+            assert tool_window("Chat") is None, "Closing the main window left an orphan tab window"
             print(
-                "Workspace switching, remembered sidebar tabs, detached hide/show, retained chat/code and the same live shell passed."
+                "Workspace switching, sidebar and individual tab windows, disabled placeholders, retained chat/code and the same live shell passed."
             )
         finally:
             if process.poll() is None:

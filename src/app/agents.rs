@@ -225,8 +225,7 @@ impl EditorApp {
             self.agents.key = key;
             self.agents.catalog = None;
         }
-        if !self.tools_visible()
-            || self.workbench.panel != Some(Panel::Agent)
+        if !self.panel_visible(Panel::Agent)
             || self
                 .agents
                 .browser

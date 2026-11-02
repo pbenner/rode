@@ -19,12 +19,8 @@ impl EditorApp {
     /// Reveal the interpreter section in Environment, refreshing discovery when it is already open.
     pub(in crate::app) fn open_python_environment(&mut self, ctx: &egui::Context) {
         self.workbench.environment.open_python = true;
-        if self.workbench.panel == Some(Panel::Environment) {
-            self.focus_pane(navigation::Pane::Tools, ctx);
-            self.refresh_environment(false, ctx);
-        } else {
-            self.toggle_panel(Panel::Environment, ctx);
-        }
+        self.reveal_panel(Panel::Environment, ctx);
+        self.refresh_environment(false, ctx);
     }
 
     /// Queue at most one runtime-version probe using captured applied environment settings.

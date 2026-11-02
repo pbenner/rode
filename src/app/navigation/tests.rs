@@ -1,6 +1,33 @@
 //! Pane focus, leader routing and modal/terminal input-boundary regressions.
 
 use super::*;
+
+#[test]
+fn tool_focus_is_consumed_only_by_its_requested_native_window() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    let target = egui::ViewportId::from_hash_of("individual-tool-window");
+    app.navigation.request_focus(Pane::Tools, target);
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.pane_ui(ui, Pane::Tools));
+    });
+    assert_eq!(app.navigation.pending, Some(Pane::Tools));
+    let mut input = egui::RawInput {
+        viewport_id: target,
+        ..Default::default()
+    };
+    input.viewports.insert(target, Default::default());
+    let _ = ctx.run(input, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.pane_ui(ui, Pane::Tools));
+    });
+    assert_eq!(app.navigation.pending, None);
+    assert_eq!(app.navigation.viewports[Pane::Tools.index()], Some(target));
+    assert_eq!(
+        ctx.memory(|memory| memory.focused()),
+        Some(Pane::Tools.id().with(target))
+    );
+}
 #[test]
 fn defaults_avoid_alt_and_require_the_prefix_for_typing_keys() {
     let bindings = bindings::Bindings::load(None);

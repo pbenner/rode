@@ -269,17 +269,17 @@ impl EditorApp {
         self.workbench.prefs = prefs.clone();
         self.workbench.draft = prefs;
         self.workbench.save_preferences();
-        if self.workbench.panel == Some(Panel::Environment) {
+        if self.panel_visible(Panel::Environment) {
             self.refresh_runtimes(ctx);
         }
-        if self.workbench.panel == Some(Panel::Environment)
+        if self.panel_visible(Panel::Environment)
             || self.documents.iter().any(|d| {
                 crate::languages::detect(d.path.as_deref()).is_some_and(|l| l.id == "python")
             })
         {
             self.refresh_environment(false, ctx);
         }
-        if self.workbench.panel == Some(Panel::Git) {
+        if self.panel_visible(Panel::Git) {
             self.refresh_git(ctx);
         }
     }

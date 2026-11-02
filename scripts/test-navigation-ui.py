@@ -231,16 +231,26 @@ def run():
                 )
                 nav("e")
                 append(second, "back-to-editor\n")
-                # Actually execute the second matching palette item: below.
+                # Select Explorer, the second explicit focus result. Spatial
+                # "below" has no target when Code replaces the terminal surface.
                 key("p", ("Control_L", "Shift_L"))
-                text("Navigation: Focus pane")
+                text("Navigation: Focus e")
                 key("Down")
                 key("Return")
                 time.sleep(0.2)
+                key("b")
+                key("Return")
+                time.sleep(0.3)
+                append(first, "palette-selection\n")
+                nav("f")
+                key("c")
+                key("Return")
+                time.sleep(0.3)
+                nav("t")
                 text("echo selected > selected.out\n")
                 wait_for(
                     lambda: (root / "selected.out").exists(),
-                    "Palette did not execute its second result",
+                    "Terminal focus failed after palette selection",
                 )
                 nav("p")
                 nav("h", ("Shift_L",))
@@ -279,7 +289,9 @@ def run():
                 nav("e", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
                 append(second, "remapped-editor\n")
                 assert nested.read_text() == "nested\nnested-edit\n"
-                assert first.read_text() == "first\nfirst-edit\nsuggestion-edit\n"
+                assert (
+                    first.read_text() == "first\nfirst-edit\nsuggestion-edit\npalette-selection\n"
+                )
                 assert (
                     second.read_text()
                     == "second\nsecond-edit\nback-to-editor\ntools-return\nremapped-editor\n"
