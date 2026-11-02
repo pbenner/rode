@@ -9,7 +9,11 @@ from pathlib import Path
 request = json.load(sys.stdin)
 settings = request.get("settings", {})
 if settings.get("marker"):
-    Path(settings["marker"]).write_text(str(os.getpid()))
+    # File existence signals readiness to another process: publish only a complete PID.
+    marker = Path(settings["marker"])
+    pending = marker.with_name(marker.name + ".tmp")
+    pending.write_text(str(os.getpid()))
+    pending.replace(marker)
 if settings.get("sleep"):
     time.sleep(settings["sleep"])
 reply = {"api": 1}

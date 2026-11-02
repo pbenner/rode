@@ -39,17 +39,21 @@ Inspect or run the same suites locally:
 
 ```sh
 python3 scripts/ci.py list
-mkdir -p target
-cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json
-cargo build --locked --profile ci --bins
-bash scripts/build-sessiond.sh
 mkdir -p target/test-tools/bin
 scripts/uvx.sh --from ruff==0.17.3 python -c 'import shutil; shutil.copy2(shutil.which("ruff"), "target/test-tools/bin/ruff")'
+cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json
+RODE_TEST_RUFF="$PWD/target/test-tools/bin/ruff" cargo test --locked --profile ci --workspace --all-targets
+cargo build --locked --profile ci --bins
+bash scripts/build-sessiond.sh
 python3 scripts/ci.py bundle
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1100x24' python3 scripts/ci.py run workspace
 ```
 
 The bundle includes the pinned Ruff executable in `target/ci/tools/ruff`; document and runtime suites validate it before starting. Document jobs also install uv for the default `uvx ruff` path. The private SSH fixture exposes the invoking process's `PATH` so both sides use the same installed test tools.
+
+For the ordinary Rust build job, run `RODE_TEST_RUFF="$PWD/target/test-tools/bin/ruff" cargo test --locked --profile ci --workspace --all-targets`. Building with `--no-run` does not execute tests, and filters such as `--lib app::` omit integration tests under `tests/`. Targeted checks help during development but do not establish that the full build job passes. Optional installed-tool tests still need the overrides and dependencies of their owning extended suite.
+
+Process fixtures must publish readiness markers only after their contents are complete, for example by writing a sibling temporary file and renaming it into place. File creation can precede its first write; waiting for existence and then parsing immediately can fail under another scheduler. Exercise that interleaving directly in a regression rather than relying on longer sleeps or automatic retries.
 
 Install each suite's prerequisites first (listed in `scripts/ci-deps.sh`); that script uses sudo and is intended for disposable CI runners. The failed-login clipboard regression also requires `xclip`. `RODE_TEST_BINARY`, `RODE_TEST_SESSION_HELPER` and `RODE_SESSION_HELPER` can override the binaries for local runs. The CI runner defaults `RODE_SESSION_HELPER` to the selected test helper as well: transferred test executables live in a separate directory, so service-backed history/agents cannot rely on sibling discovery. Explicit overrides remain respected. `RODE_SSH_TEST_BINARY` selects a prebuilt transport-test executable; standalone `scripts/test-ssh.sh` still builds/runs its Rust tests by default. To batch UI-only commands under one SSH fixture, use `RODE_SSH_RUN_TRANSPORT=0 bash scripts/test-ssh.sh <command> [arguments...]`; omitting the command in this mode is an error. `python3 scripts/test-ci.py` checks suite selection, helper discovery, artifact permissions, bounded failure output, timeout cleanup and both SSH-wrapper execution modes without contacting an SSH host.
 

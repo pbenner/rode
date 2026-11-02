@@ -105,6 +105,61 @@ fn adapters_format_unsaved_snapshots_and_match_the_python_peer_without_saving_fi
     assert!(reply.validate("check").is_err());
 }
 #[test]
+fn adapter_readiness_marker_is_not_visible_until_its_pid_is_written() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("pid");
+    let mut invocation =
+        Registry::default().invocation(&manifest(), "format".into(), None, "ready".into());
+    invocation
+        .settings
+        .insert("marker".into(), serde_json::json!(marker));
+    // Force the exact interleaving behind the CI failure: inspect the public marker
+    // after opening the writer's file, while it is still empty. No sleeps or retries.
+    let source = r#"
+import runpy, sys
+from pathlib import Path
+marker = Path(sys.argv[1])
+def observed_write(path, value):
+    with path.open('w') as output:
+        assert not marker.exists(), 'PID marker became visible before its contents were written'
+        return output.write(value)
+Path.write_text = observed_write
+runpy.run_path(sys.argv[2], run_name='__main__')
+"#;
+    let mut child = Command::new("python3")
+        .args(["-c", source])
+        .arg(&marker)
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/extension.py"
+        ))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&serde_json::to_vec(&invocation).unwrap())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(marker).unwrap().parse::<u32>().unwrap(),
+        pid
+    );
+    let reply: extensions::Reply = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(reply.text.as_deref(), Some("READY"));
+}
+
+#[test]
 fn closing_a_coordinator_lifeline_stops_the_adapter_process() {
     let root = tempfile::tempdir().unwrap();
     let pid = root.path().join("pid");
