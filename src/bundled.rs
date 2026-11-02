@@ -467,13 +467,14 @@ fn mounted_program(directory: &Path, plan: &sandbox::Plan) -> Result<(String, Ve
         prefix.pop().as_deref() == Some("--"),
         "Invalid sandbox plan"
     );
+    let destination = plan.helper_destination(directory, "/rode-codex");
     prefix.extend([
         "--ro-bind".into(),
         directory.to_string_lossy().into(),
-        "/rode-codex".into(),
+        destination.clone(),
         "--".into(),
     ]);
-    Ok(("/rode-codex/codex".into(), prefix))
+    Ok((format!("{destination}/codex"), prefix))
 }
 
 // The complete verified runtime is streamed under pipe backpressure; no archive
@@ -799,6 +800,15 @@ mod tests {
 
     #[test]
     fn bundled_asset_grant_is_read_only_and_does_not_expose_sibling_data() {
+        bundled_asset_grant(sandbox::Backend::Bwrap);
+    }
+
+    #[test]
+    fn landlock_bundled_asset_grant_uses_the_real_path_and_protects_contents() {
+        bundled_asset_grant(sandbox::Backend::Landlock);
+    }
+
+    fn bundled_asset_grant(backend: sandbox::Backend) {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
         let assets = root.path().join("assets");
@@ -806,12 +816,18 @@ mod tests {
         fs::create_dir(&assets).unwrap();
         fs::write(root.path().join("private"), "private").unwrap();
         let binary = assets.join("codex");
-        fs::write(&binary, format!("#!/bin/sh\nset -eu\n! test -e {}\n! touch /rode-codex/forbidden\necho ok > project-output\n", ssh::quote(root.path().join("private").to_str().unwrap()))).unwrap();
+        let target = if backend == sandbox::Backend::Landlock {
+            assets.to_string_lossy().into_owned()
+        } else {
+            "/rode-codex".into()
+        };
+        fs::write(&binary, format!("#!/bin/sh\nset -eu\n! cat {} >/dev/null 2>&1\n! touch {}\necho ok > project-output\n", ssh::quote(root.path().join("private").to_str().unwrap()), ssh::quote(&format!("{target}/forbidden")))).unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
         let plan = sandbox::prepare(
             project.to_str().unwrap(),
             &sandbox::Options {
                 enabled: true,
+                backend,
                 ..Default::default()
             },
         )

@@ -35,6 +35,8 @@ Fast UI checks run in four isolated jobs: `workspace`, `agents`, `terminals` and
 
 The sandbox job adjusts the unprivileged-user-namespace AppArmor setting only on its disposable GitHub runner. `RODE_TEST_REQUIRE_SANDBOX=1` requires both Rust and Python project preparation to activate the real sandbox; unavailable sandboxing fails that job. Ordinary jobs retain explicit fallback coverage and print unavailable-host diagnostics.
 
+The same suite includes `landlock`. On a host with Landlock ABI 6, run `RODE_TEST_REQUIRE_LANDLOCK=1 cargo test --test landlock --test agents --test sessions` to require actual enforcement. Ordinary CI still supports older kernels and reports Landlock availability skips. `RODE_TEST_REQUIRE_LANDLOCK=1 RODE_SSH_TEST_FILTER=landlock_file bash scripts/test-ssh.sh` checks the real direct/ProxyJump path. Direct Python-peer tests compress their code argument through `tests/support/python.rs` to avoid Linux's per-argument size limit; production streams helper source through stdin.
+
 Every test command has a deadline and writes its log and elapsed time under `target/ci-results/<suite>/`. Timings also appear in the Actions job summary. Long console output retains both the beginning and end, so SSH daemon chatter cannot hide an earlier test assertion; the artifact retains the complete log. Job limits bound setup/build hangs; failure logs and screenshots are uploaded even after test failures, with separate artifact names per job. Tests are not automatically retried. Use the recorded timings to rebalance jobs before tightening budgets; a sub-ten-minute fast tier is a target, not an assumed runner speed.
 
 Inspect or run the same suites locally:
@@ -61,7 +63,7 @@ Install each suite's prerequisites first (listed in `scripts/ci-deps.sh`); that 
 
 The root package declares both `rode` and `rode-sessiond`, so plain `cargo install --locked --path .` installs both. `tests/sessions.rs` exercises the headless binary through `CARGO_BIN_EXE_rode-sessiond`, including protocol negotiation without a display and reattachment through the ordinary editor after the helper's clients exit. The library package's opt-in `standalone` feature exposes a separate `rode-sessiond-standalone` target for the static builder; distinct names avoid workspace output collisions even with all features enabled. `scripts/build-sessiond.sh` and Debian packaging build that target without desktop dependencies; the published helper names remain unchanged.
 
-An additional test starts a temporary localhost-only SSH daemon using fresh keys, a private known-hosts file, and an isolated config. It never edits `~/.ssh`:
+An additional test starts a temporary localhost-only SSH daemon using fresh keys, a private known-hosts file, an isolated config and a temporary remote `HOME` for helper deployment. It never edits `~/.ssh`:
 
 ```sh
 scripts/build-sessiond.sh

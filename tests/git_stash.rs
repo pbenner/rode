@@ -1,4 +1,7 @@
 //! Native/Python stash identity, Git writer locking and reflog parity.
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     files,
     project::{self, Request, Response, StashAction},
@@ -41,7 +44,7 @@ fn invoke(
     };
     let response = if peer {
         let mut child = Command::new("python3")
-            .args(["-c", files::REMOTE_HELPER])
+            .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

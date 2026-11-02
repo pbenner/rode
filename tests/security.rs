@@ -1,5 +1,8 @@
 //! Regression checks for special files, canonical grants and inherited terminal access.
 //! Every subprocess has a deadline so failures cannot hang the test runner.
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{files, persistence, sandbox};
 use serde_json::json;
 use std::{
@@ -61,7 +64,7 @@ fn native_and_python_reads_and_saves_reject_fifos_without_a_writer() {
             ] {
                 let mut command = if python {
                     let mut command = Command::new("python3");
-                    command.args(["-c", files::REMOTE_HELPER]);
+                    command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
                     command
                 } else {
                     let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
@@ -138,7 +141,7 @@ fn symlinked_home_cannot_be_exposed_by_project_or_additional_grants() {
     symlink(&home, &alias).unwrap();
     let peer = format!(
         "__name__='security_peer'\n{}\nr=json.load(sys.stdin);print(json.dumps(sandbox_arguments('/usr/bin/bwrap',r['root'],r['home'],r['options'])))",
-        files::REMOTE_HELPER
+        python_peer::source(files::REMOTE_HELPER)
     );
     let mut cases = vec![];
     for exposed in [&home, &private] {

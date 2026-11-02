@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 test_dir=$(mktemp -d /tmp/rode-ssh-test.XXXXXX)
-mkdir -m 700 "$test_dir/codex-home"
+mkdir -m 700 "$test_dir/codex-home" "$test_dir/home"
 sshd_pid=
 cleanup() {
     if [[ -n "$sshd_pid" ]]; then kill "$sshd_pid" 2>/dev/null || true; wait "$sshd_pid" 2>/dev/null || true; fi
@@ -22,6 +22,16 @@ ssh-keygen -q -t ed25519 -N '' -f "$test_dir/host"
 ssh-keygen -q -t ed25519 -N '' -f "$test_dir/client"
 test_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 test_user=$(id -un)
+cat > "$test_dir/host-shell" <<EOF
+#!/bin/sh
+# Apply the fixture home after the account's initial shell startup files.
+export HOME='$test_dir/home'
+if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then
+    exec /bin/sh -c "\$SSH_ORIGINAL_COMMAND"
+fi
+exec /bin/sh
+EOF
+chmod 700 "$test_dir/host-shell"
 cat > "$test_dir/sshd_config" <<EOF
 Port $test_port
 ListenAddress 127.0.0.1
@@ -37,6 +47,8 @@ LogLevel VERBOSE
 AcceptEnv CODEX_HOME RODE_CODEX_CACHE
 # The fixture runs on this host; expose the same CI-installed tools to its child shells.
 SetEnv "PATH=$PATH"
+# Keep helper deployment and tool preferences out of the real user's home.
+ForceCommand $test_dir/host-shell
 EOF
 read -r key_type key_data _ < "$test_dir/host.pub"
 printf '[127.0.0.1]:%s %s %s\n' "$test_port" "$key_type" "$key_data" > "$test_dir/known_hosts"

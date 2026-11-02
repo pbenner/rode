@@ -1,4 +1,7 @@
 //! Local Rust helpers and the Python SSH peer coordinate on the same file inodes.
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     files::{self, Request},
     persistence,
@@ -13,7 +16,7 @@ use std::{
 fn writer(request: &Request, python: bool) -> Child {
     let mut command = if python {
         let mut command = Command::new("python3");
-        command.args(["-c", files::REMOTE_HELPER]);
+        command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
         command
     } else {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));

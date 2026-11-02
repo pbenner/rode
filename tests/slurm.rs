@@ -1,6 +1,9 @@
 //! Deterministic scheduler parsing, exact-ID ownership checks and cancellation argument
 //! isolation; no real allocation is cancelled.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     files,
     project::{Request, Response},
@@ -15,7 +18,7 @@ use std::{
 fn execute(request: &Request, peer: bool) -> anyhow::Result<Response> {
     let mut command = if peer {
         let mut command = Command::new("python3");
-        command.args(["-c", files::REMOTE_HELPER]);
+        command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
         command
     } else {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));

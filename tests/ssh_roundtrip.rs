@@ -14,6 +14,109 @@ use std::{
 
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn landlock_file_and_command_policy_on_direct_and_proxyjump_hosts() {
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("project ' 🦀");
+        std::fs::create_dir(&root).unwrap();
+        let secret = base.path().join("secret");
+        std::fs::write(&secret, "private").unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let plan = remote
+            .request(&Request::Prepare {
+                path: root.to_string_lossy().into(),
+                sandbox: rode::sandbox::Options {
+                    enabled: true,
+                    backend: rode::sandbox::Backend::Landlock,
+                    share_network: false,
+                    ..Default::default()
+                },
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        if !plan.active {
+            assert_ne!(
+                std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                Ok("1"),
+                "{}",
+                plan.reason
+            );
+            eprintln!("SSH Landlock unavailable: {}", plan.reason);
+            return;
+        }
+        assert_eq!(plan.label(), "SANDBOX · Landlock");
+        let path = root.join("saved").to_string_lossy().into_owned();
+        remote
+            .request_in(
+                &Request::Write {
+                    path: path.clone(),
+                    text: "ssh-landlock".into(),
+                    expected: None,
+                },
+                Some(&plan),
+            )
+            .unwrap();
+        assert_eq!(
+            remote
+                .request_in(&Request::Read { path }, Some(&plan))
+                .unwrap()
+                .text,
+            "ssh-landlock"
+        );
+        assert!(
+            remote
+                .request_in(
+                    &Request::Read {
+                        path: secret.to_string_lossy().into()
+                    },
+                    Some(&plan)
+                )
+                .is_err()
+        );
+        // Run an actual remote child under the captured prefix, including UDP denial.
+        let mut args = plan.prefix.clone();
+        args.extend(["python3".into(), "-c".into(), "import os,socket; assert os.getcwd()==os.environ['EXPECTED_ROOT'];\ntry: socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\nexcept PermissionError: print('LANDLOCK_SSH_OK')\nelse: raise AssertionError('UDP allowed')".into()]);
+        let mut command = Command::new("ssh");
+        command.args(remote.channel_args(false)).arg(format!(
+            "EXPECTED_ROOT={} {}",
+            rode::ssh::quote(root.to_str().unwrap()),
+            args.iter()
+                .map(|arg| rode::ssh::quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("LANDLOCK_SSH_OK"));
+        assert_eq!(std::fs::read_to_string(secret).unwrap(), "private");
+        drop(login);
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn mise_tools_and_tasks_resolve_on_the_project_host_over_ssh_and_proxyjump() {
     use std::os::unix::fs::PermissionsExt;
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");

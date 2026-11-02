@@ -101,6 +101,15 @@ def run(remote=False, fallback=False):
             XDG_DATA_HOME=str(base / "data-home"),
             RODE_SESSION_DIR=str(base / "sessions"),
         )
+        landlock = os.environ.get("RODE_TEST_SANDBOX_BACKEND") == "landlock" and not fallback
+        if landlock:
+            preferences = base / "data-home/rode"
+            preferences.mkdir(parents=True)
+            (preferences / "app.ron").write_text(
+                json.dumps(
+                    {"sandbox_defaults": json.dumps({"enabled": True, "backend": "landlock"})}
+                )
+            )
         if fallback:
             tools = base / "no-bwrap"
             tools.mkdir()
@@ -172,6 +181,11 @@ def run(remote=False, fallback=False):
                         "A rebuilt editor could not start a new native terminal",
                     )
                     assert (first / "after-update.cwd").read_text().strip() == str(first)
+                    if landlock:
+                        infos = session_rpc(environment, "list")
+                        assert infos and all(
+                            info["mode"] == "SANDBOX · Landlock" for info in infos
+                        ), infos
                 key("o", ("Control_L", "Shift_L"))
                 time.sleep(0.3)
                 key("a", ("Control_L",))

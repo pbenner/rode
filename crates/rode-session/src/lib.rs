@@ -1,6 +1,6 @@
 //! A headless, per-user PTY and coding-agent service. GUI clients may disconnect
-//! without ending explicitly persistent jobs. The only listener is an owner-only
-//! Unix domain socket.
+//! without ending explicitly persistent jobs. Control uses same-user Unix sockets;
+//! Linux abstract sockets also enforce Landlock's IPC-domain boundary.
 //!
 //! Control requests use tagged JSON. Attachments use a separate framed stream
 //! for terminal bytes, resize and lifetime updates. A session owns the PTY and
@@ -61,8 +61,8 @@ mod runtimes;
 pub const VERSION: u32 = 1;
 /// Feature level that supports explicit persistence toggles.
 pub const PERSISTENCE_PROTOCOL: u32 = 2;
-/// Current feature level, including automatic host-owned prompt queue dispatch.
-pub const PROTOCOL: u32 = 9;
+/// Current feature level, including Landlock-scoped control transport on Linux.
+pub const PROTOCOL: u32 = 10;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -132,6 +132,8 @@ pub enum Request {
     SupportsRuntimes,
     /// Probe prompt dispatch that continues without a controlling desktop view.
     SupportsAutomaticQueue,
+    /// Probe control transport that cannot be reached from a Landlock domain.
+    SupportsScopedControl,
     /// Discover retained notebook and debugger runtimes.
     Runtimes,
     /// Create a captured host-owned runtime.
@@ -345,12 +347,38 @@ fn recv_json<R: Read, T: serde::de::DeserializeOwned>(input: &mut R) -> Result<T
     ensure!(kind == b'J', "Expected a session control message");
     Ok(serde_json::from_slice(&bytes)?)
 }
-fn connect_at(dir: &Path) -> Result<UnixStream> {
+#[cfg(target_os = "linux")]
+fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::SocketAddr> {
+    use std::os::linux::net::SocketAddrExt;
+    std::os::unix::net::SocketAddr::from_abstract_name(format!(
+        "rode-session-{}-{}-{}",
+        meta.uid(),
+        meta.dev(),
+        meta.ino()
+    ))
+}
+
+/// Connect to the protected control transport in a private runtime directory.
+/// Legacy filesystem sockets remain supported, but permission denials never fall back.
+pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     let meta = fs::symlink_metadata(dir)?;
     ensure!(
         meta.is_dir() && meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o077 == 0,
         "Unsafe session directory"
     );
+    #[cfg(target_os = "linux")]
+    let stream = {
+        match UnixStream::connect_addr(&control_address(&meta)?) {
+            Ok(stream) => stream,
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                // Older services have no abstract listener. New services reject
+                // all requests on this discovery socket, including raw clients.
+                UnixStream::connect(dir.join("socket"))?
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
     let stream = UnixStream::connect(dir.join("socket"))?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -397,7 +425,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 7] {
+fn service_directories() -> [PathBuf; 8] {
     let primary = directory();
     [
         primary.clone(),
@@ -406,6 +434,7 @@ fn service_directories() -> [PathBuf; 7] {
         primary.join("protocol-6"),
         primary.join("protocol-7"),
         primary.join("protocol-8"),
+        primary.join("protocol-9"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -442,7 +471,11 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
         return Ok(compatible);
     }
     if primary.join("socket").exists() {
-        for probe in [Request::SupportsRuntimes, Request::SupportsAutomaticQueue] {
+        for probe in [
+            Request::SupportsRuntimes,
+            Request::SupportsAutomaticQueue,
+            Request::SupportsScopedControl,
+        ] {
             match request_once(&probe, launcher, &primary) {
                 Ok(Response::Ok) => {}
                 Err(error) if service_offline(&error) => break,
@@ -452,7 +485,10 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
                         .contains("unknown variant `supports_runtimes`")
                         || error
                             .to_string()
-                            .contains("unknown variant `supports_automatic_queue`") =>
+                            .contains("unknown variant `supports_automatic_queue`")
+                        || error
+                            .to_string()
+                            .contains("unknown variant `supports_scoped_control`") =>
                 {
                     return Ok(compatible);
                 }
@@ -612,7 +648,8 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         | Request::SupportsAgents
         | Request::SupportsHistoryDeletion
         | Request::SupportsRuntimes
-        | Request::SupportsAutomaticQueue => request_once(request, launcher, &directory()),
+        | Request::SupportsAutomaticQueue
+        | Request::SupportsScopedControl => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -633,7 +670,7 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
     }
 }
 fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Response> {
-    let mut stream = match connect_at(dir) {
+    let mut stream = match connect_control(dir) {
         Ok(stream) => stream,
         Err(error) => {
             if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
@@ -694,7 +731,7 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
             });
             let until = Instant::now() + Duration::from_secs(5);
             loop {
-                if let Ok(stream) = connect_at(dir) {
+                if let Ok(stream) = connect_control(dir) {
                     break stream;
                 }
                 ensure!(
@@ -1300,7 +1337,8 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
             | Request::SupportsAgents
             | Request::SupportsHistoryDeletion
             | Request::SupportsRuntimes
-            | Request::SupportsAutomaticQueue => Response::Ok,
+            | Request::SupportsAutomaticQueue
+            | Request::SupportsScopedControl => Response::Ok,
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();
@@ -1439,8 +1477,15 @@ pub fn serve() -> Result<()> {
         );
         fs::remove_file(socket())?;
     }
-    let listener = UnixListener::bind(socket())?;
+    // Publish discovery only after the protected endpoint is listening. A
+    // filesystem socket alone would be reachable through Landlock's pathname
+    // Unix-socket limitation, even without a grant for the runtime directory.
+    #[cfg(target_os = "linux")]
+    let listener = UnixListener::bind_addr(&control_address(&fs::metadata(&dir)?)?)?;
+    let discovery = UnixListener::bind(socket())?;
     fs::set_permissions(socket(), fs::Permissions::from_mode(0o600))?;
+    #[cfg(not(target_os = "linux"))]
+    let listener = discovery.try_clone()?;
     let server = Arc::new(Server {
         agents: agents::Store::default(),
         runtimes: runtimes::Store::default(),
@@ -1459,12 +1504,31 @@ pub fn serve() -> Result<()> {
         if server.stop.load(Ordering::Acquire) {
             break;
         }
-        let mut fd = libc::pollfd {
-            fd: listener.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        if unsafe { libc::poll(&mut fd, 1, 1000) } <= 0 {
+        let mut fds = [
+            libc::pollfd {
+                fd: listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: if cfg!(target_os = "linux") {
+                    discovery.as_raw_fd()
+                } else {
+                    -1
+                },
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 1000) } <= 0 {
+            continue;
+        }
+        if fds[1].revents & libc::POLLIN != 0 {
+            let (mut stream, _) = discovery.accept()?;
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+            let _ = send_json(&mut stream, &Response::Error("Terminal control must originate outside the project sandbox using an updated RODE helper".into()));
+        }
+        if fds[0].revents & libc::POLLIN == 0 {
             continue;
         }
         let (stream, _) = listener.accept()?;
@@ -1494,7 +1558,7 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
     };
     let (dir, _) = locate(id, &launcher)?
         .context("Terminal session is no longer available; refresh the session list")?;
-    let mut stream = connect_at(&dir)?;
+    let mut stream = connect_control(&dir)?;
     send_json(
         &mut stream,
         &Request::Attach {

@@ -969,10 +969,7 @@ fn bytes(value: u64) -> String {
 /// Edit requested sandbox grants. The host preparation probe separately determines
 /// whether those requested options can become an active execution plan.
 pub(super) fn sandbox_options_ui(ui: &mut egui::Ui, options: &mut sandbox::Options) {
-    ui.checkbox(
-        &mut options.enabled,
-        "Sandbox project when bwrap is available",
-    );
+    sandbox_backend_ui(ui, options);
     ui.add_enabled_ui(options.enabled,|ui| {
         ui.checkbox(&mut options.share_network,"Allow network access");
         ui.checkbox(&mut options.project_read_only,"Project is read only");
@@ -1002,7 +999,23 @@ pub(super) fn sandbox_options_ui(ui: &mut egui::Ui, options: &mut sandbox::Optio
         if ui.button("+ Add folder or file").clicked() { rows.push((String::new(),sandbox::Access::ReadOnly)); }
         options.read_only = rows.iter().filter(|(_,a)|*a == sandbox::Access::ReadOnly).map(|(p,_)|p.clone()).collect();
         options.read_write = rows.into_iter().filter(|(_,a)|*a == sandbox::Access::ReadWrite).map(|(p,_)|p).collect();
-        ui.label(RichText::new("Private /tmp and hidden home remain enforced. Unavailable bwrap is visibly normal mode. Shared writable caches retain their contents and access.").small());
+        ui.label(RichText::new(match options.backend {
+            sandbox::Backend::Bwrap => "Private /tmp and hidden home. Unavailable bwrap is visibly normal mode. Shared writable caches retain their contents and access.",
+            sandbox::Backend::Landlock => "Requires Python 3 and Linux Landlock ABI 6. Restricts file access, not host process visibility or file metadata. Uses private project scratch via TMPDIR; cannot hide names or subtract child grants. Unavailable enforcement is visibly normal mode.",
+        }).small());
+    });
+}
+
+/// Compact shared selector for project opening, SSH profiles and saved access rules.
+pub(super) fn sandbox_backend_ui(ui: &mut egui::Ui, options: &mut sandbox::Options) {
+    ui.checkbox(&mut options.enabled, "Sandbox project when available");
+    ui.add_enabled_ui(options.enabled, |ui| {
+        egui::ComboBox::from_id_salt(ui.id().with("sandbox-backend"))
+            .selected_text(options.backend.label())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut options.backend, sandbox::Backend::Bwrap, "bwrap");
+                ui.selectable_value(&mut options.backend, sandbox::Backend::Landlock, "Landlock");
+            }).response.on_hover_text("bwrap isolates namespaces. Landlock restricts file access without root or user namespaces, but does not hide host processes or file metadata. See the sandbox access rules for its limits.");
     });
 }
 
@@ -1058,6 +1071,76 @@ fn diff_view(ui: &mut egui::Ui, text: &str, palette: theme::Palette) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_backend_selector_changes_the_saved_options() {
+        let ctx = egui::Context::default();
+        let mut options = sandbox::Options {
+            enabled: true,
+            ..Default::default()
+        };
+        let frame = |options: &mut sandbox::Options, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 400.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| sandbox_backend_ui(ui, options));
+                },
+            )
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Missing selector label: {label}"))
+        };
+        let click = |options: &mut sandbox::Options, pos| {
+            let _ = frame(
+                options,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+            frame(
+                options,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+            )
+        };
+        let _ = frame(&mut options, vec![]);
+        let output = frame(&mut options, vec![]);
+        let _ = click(&mut options, position(&output, "bwrap"));
+        let output = frame(&mut options, vec![]);
+        let _ = click(&mut options, position(&output, "Landlock"));
+        assert_eq!(options.backend, sandbox::Backend::Landlock);
+        let saved = serde_json::to_string(&options).unwrap();
+        assert_eq!(
+            serde_json::from_str::<sandbox::Options>(&saved).unwrap(),
+            options
+        );
+    }
 
     fn panel_text(app: &mut EditorApp, ctx: &egui::Context) -> String {
         ctx.run(

@@ -117,8 +117,7 @@ impl Fixture {
     fn direct_list(&self) -> Vec<rode_session::Info> {
         // Inspect the daemon itself, bypassing client-side filtering for
         // older helpers, so these checks prove its records are released.
-        let mut stream =
-            std::os::unix::net::UnixStream::connect(self.runtime.join("socket")).unwrap();
+        let mut stream = rode_session::connect_control(&self.runtime).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -888,6 +887,13 @@ fn native_jobs_survive_disconnect_and_multiple_views_share_the_same_shell() {
 }
 #[test]
 fn detached_native_sandbox_keeps_running_with_its_original_access_policy() {
+    detached_sandbox(sandbox::Backend::Bwrap);
+}
+#[test]
+fn detached_native_landlock_keeps_running_with_its_original_access_policy() {
+    detached_sandbox(sandbox::Backend::Landlock);
+}
+fn detached_sandbox(backend: sandbox::Backend) {
     let mut fixture = Fixture::new();
     let project = fixture.root.path().join("project");
     fs::create_dir(&project).unwrap();
@@ -897,6 +903,7 @@ fn detached_native_sandbox_keeps_running_with_its_original_access_policy() {
         project.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
+            backend,
             ..Default::default()
         },
     )
@@ -906,7 +913,7 @@ fn detached_native_sandbox_keeps_running_with_its_original_access_policy() {
     terminal
         .send(
             format!(
-                "if test -e {}; then printf 'ACCESS_%s\\n' VISIBLE; else printf 'ACCESS_%s\\n' HIDDEN; fi\n",
+                "if cat {} >/dev/null 2>&1; then printf 'ACCESS_%s\\n' VISIBLE; else printf 'ACCESS_%s\\n' HIDDEN; fi\n",
                 rode::ssh::quote(hidden.to_str().unwrap())
             )
             .into_bytes(),
@@ -1091,6 +1098,70 @@ fn project_mount_namespace_cannot_control_an_exposed_host_service_socket() {
         return;
     }
     assert!(error.contains("outside the project sandbox"), "{error}");
+}
+
+#[test]
+fn landlock_cannot_use_the_host_service_as_an_unsandboxed_process_broker() {
+    let mut fixture = Fixture::new();
+    fixture.create(&fixture.plan());
+    let project = fixture.root.path().join("landlock-project");
+    fs::create_dir(&project).unwrap();
+    let plan = sandbox::prepare(
+        project.to_str().unwrap(),
+        &sandbox::Options {
+            enabled: true,
+            backend: sandbox::Backend::Landlock,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    if !plan.active {
+        assert_ne!(
+            std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "{}",
+            plan.reason
+        );
+        return;
+    }
+    let mut command = Command::new(&plan.prefix[0]);
+    command
+        .args(&plan.prefix[1..])
+        .args([
+            "python3",
+            "-c",
+            r#"
+import os, socket, struct, sys
+metadata = os.stat(os.path.dirname(sys.argv[1]))
+address = '\0rode-session-%s-%s-%s' % (metadata.st_uid, metadata.st_dev, metadata.st_ino)
+with socket.socket(socket.AF_UNIX) as client:
+    try: client.connect(address)
+    except PermissionError: pass
+    else: raise AssertionError('Landlock reached host abstract control socket')
+with socket.socket(socket.AF_UNIX) as client:
+    client.settimeout(5)
+    client.connect(sys.argv[1])
+    data = b'J{"action":"list"}'
+    client.sendall(struct.pack('>I', len(data)) + data)
+    def read_exact(size):
+        result = b''
+        while len(result) < size:
+            chunk = client.recv(size-len(result))
+            assert chunk
+            result += chunk
+        return result
+    reply = read_exact(struct.unpack('>I', read_exact(4))[0])
+    assert b'outside the project sandbox' in reply, reply
+"#,
+        ])
+        .arg(fixture.runtime.join("socket"));
+    let result = command.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(fixture.direct_list().len(), 1);
 }
 
 #[test]

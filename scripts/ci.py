@@ -23,6 +23,7 @@ TEST_BINARIES = {
     "project",
     "languages",
     "sandbox",
+    "landlock",
     "agents",
     "background_agents",
     "sessions",
@@ -118,6 +119,7 @@ SUITES = {
     ],
     "sandbox": [
         rust("sandbox", RODE_TEST_REQUIRE_SANDBOX="1"),
+        rust("landlock"),
         rust("agents"),
         rust("background_agents"),
         rust("sessions"),

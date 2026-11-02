@@ -1,6 +1,9 @@
 //! Project-host Git, environment, code-tool and telemetry protocols with bounded native/Python
 //! behavior.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     files,
     project::{self, Request, Response},
@@ -16,7 +19,7 @@ use std::{
 
 fn remote(request: &Request) -> anyhow::Result<Response> {
     let mut child = Command::new("python3")
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

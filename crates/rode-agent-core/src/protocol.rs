@@ -574,7 +574,7 @@ impl Chat {
                 params["effort"] = self.config.reasoning_effort.clone().into();
             }
             if self.external {
-                // bwrap already enforces the project policy for this process
+                // The outer sandbox enforces the project policy for this process
                 // and every child. Tell Codex to use that external sandbox.
                 params["sandboxPolicy"] = json!({"type":"externalSandbox","networkAccess":if self.network {"enabled"} else {"restricted"}});
             } else {

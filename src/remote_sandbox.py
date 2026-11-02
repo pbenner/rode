@@ -30,6 +30,13 @@ def sandbox_validate_root(root, home):
 def sandbox_arguments(binary, root, home, options):
     """Validate grants and build ordered bubblewrap mounts without executing the sandbox."""
     overrides = options.get("overrides", {})
+
+    def grant_path(path):
+        if options.get("backend", "bwrap") == "landlock":
+            path = os.path.realpath(path)
+            sandbox_validate_root(path, home)
+        return path
+
     defaults = POLICY["system_read_only"] + [
         "~/" + p for p in POLICY["home_read_only"] + POLICY["home_read_write"]
     ]
@@ -46,12 +53,15 @@ def sandbox_arguments(binary, root, home, options):
     if sum(len(path.encode("utf-8")) for path in readonly + writable) > 16 * 1024:
         raise ValueError("Additional sandbox paths exceed the 16 KiB total limit.")
     sandbox_validate_root(root, home)
+    if options.get("backend", "bwrap") == "landlock":
+        binary = os.path.realpath(binary)
     args = [binary, "--unshare-all", "--die-with-parent"]
     if options.get("share_network", True):
         args += ["--share-net"]
     for path in POLICY["system_read_only"]:
         flag = flags[overrides.get(path, "read_only")]
         if flag and os.path.exists(path):
+            path = grant_path(path)
             args += [flag, path, path]
     args += [
         "--proc",
@@ -75,6 +85,7 @@ def sandbox_arguments(binary, root, home, options):
             path = os.path.join(home, relative)
             override = flags[overrides["~/" + relative]] if "~/" + relative in overrides else flag
             if override and os.path.exists(path):
+                path = grant_path(path)
                 args += [override, path, path]
     mounts = [("--ro-bind" if options.get("project_read_only", False) else "--bind", root)]
     seen = {root}
@@ -101,6 +112,12 @@ def sandbox_arguments(binary, root, home, options):
             mounts.append((flag, path))
     for flag, path in sorted(mounts, key=lambda item: item[1].count("/")):
         args += [flag, path, path]
+    if options.get("backend", "bwrap") == "landlock":
+        args += ["--rode-home", os.path.realpath(home)]
+        for path, access in sorted(overrides.items()):
+            if access == "hidden":
+                path = os.path.join(home, path[2:]) if path.startswith("~/") else path
+                args += ["--rode-deny", path]
     args += ["--setenv", "HOME", home, "--setenv", "UV_LINK_MODE", "copy", "--chdir", root, "--"]
     return args
 
@@ -110,6 +127,7 @@ def prepare_project(path, options):
     if not os.path.isdir(path):
         raise ValueError("Choose a directory to open as a project.")
     plan = {
+        "backend": options.get("backend", "bwrap"),
         "root": path,
         "requested": options.get("enabled", False),
         "active": False,
@@ -121,11 +139,18 @@ def prepare_project(path, options):
         return plan
     home = os.path.expanduser("~")
     sandbox_validate_root(path, home)
-    binary = shutil.which("bwrap") if sys.platform == "linux" else None
+    if plan["backend"] not in ("bwrap", "landlock"):
+        raise ValueError("Unknown sandbox backend")
+    program = "python3" if plan["backend"] == "landlock" else "bwrap"
+    binary = shutil.which(program) if sys.platform == "linux" else None
     if binary is None:
-        plan["reason"] = "bwrap is not installed on this host; this project is open in normal mode."
+        plan["reason"] = (
+            program + " is not installed on this host; this project is open in normal mode."
+        )
         return plan
     prefix = sandbox_arguments(binary, path, home, options)
+    if plan["backend"] == "landlock":
+        prefix[1:1] = ["-I", "-S", "-c", globals()["RODE_LANDLOCK_LAUNCHER"]]
     try:
         result = subprocess.run(
             prefix + ["/bin/true"],
@@ -136,11 +161,12 @@ def prepare_project(path, options):
         )
         if result.returncode != 0:
             plan["reason"] = (
-                "bwrap cannot start on this host; normal mode: "
+                plan["backend"]
+                + " cannot start on this host; normal mode: "
                 + result.stderr.decode("utf-8", "replace")[:2048].strip()
             )
         else:
             plan.update(active=True, prefix=prefix)
     except (OSError, subprocess.TimeoutExpired) as error:
-        plan["reason"] = "bwrap cannot start on this host; normal mode: " + str(error)
+        plan["reason"] = plan["backend"] + " cannot start on this host; normal mode: " + str(error)
     return plan

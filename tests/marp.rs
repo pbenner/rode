@@ -1,6 +1,9 @@
 //! Snapshot rendering/export, atomic destination guards and native/Python renderer cleanup with
 //! deterministic fixtures.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::marp::{self, Destination, Format, Invocation, Settings};
 use std::{
     fs,
@@ -64,7 +67,11 @@ fn native_and_python_peers_render_unsaved_snapshots_and_protect_exports() {
         let run = |request: &Invocation| {
             if peer {
                 let mut command = Command::new("python3");
-                command.args(["-c", rode::files::REMOTE_HELPER, "--marp-helper"]);
+                command.args([
+                    "-c",
+                    &python_peer::source(rode::files::REMOTE_HELPER),
+                    "--marp-helper",
+                ]);
                 marp::execute(command, request, &AtomicBool::new(false))
             } else {
                 marp::run(request, &AtomicBool::new(false))
@@ -141,7 +148,11 @@ fn cancelling_native_and_python_coordinators_stops_the_cli_process_tree() {
         let worker = std::thread::spawn(move || {
             let mut command = if peer {
                 let mut c = Command::new("python3");
-                c.args(["-c", rode::files::REMOTE_HELPER, "--marp-helper"]);
+                c.args([
+                    "-c",
+                    &python_peer::source(rode::files::REMOTE_HELPER),
+                    "--marp-helper",
+                ]);
                 c
             } else {
                 let mut c = Command::new(env!("CARGO_BIN_EXE_rode"));
@@ -234,7 +245,7 @@ fn native_and_remote_style_previews_work_in_a_read_only_sandbox_without_project_
                 "--",
                 "python3",
                 "-c",
-                rode::files::REMOTE_HELPER,
+                &python_peer::source(rode::files::REMOTE_HELPER),
                 "--marp-helper",
             ]);
         } else {

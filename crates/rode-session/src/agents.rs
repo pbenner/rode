@@ -672,7 +672,7 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         prefix: vec![],
     };
     let dir = service_directories().into_iter().find(|dir| matches!(request_once(&Request::Agents, &launcher, dir), Ok(Response::Agents(infos)) if infos.iter().any(|info| info.id == id))).context("Background agent is no longer available; refresh the agent list")?;
-    let mut stream = connect_at(&dir)?;
+    let mut stream = connect_control(&dir)?;
     send_json(
         &mut stream,
         &Request::AttachAgent {

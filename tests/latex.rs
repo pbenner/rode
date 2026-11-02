@@ -1,6 +1,9 @@
 //! Generic saved-source builds, compiler/checker diagnostics, cancellation, output locking and
 //! sandbox enforcement.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     files,
     latex::{self, Invocation, Settings},
@@ -51,7 +54,11 @@ fn build(invocation: &Invocation, peer: bool, cancel: &AtomicBool) -> anyhow::Re
         Command::new(env!("CARGO_BIN_EXE_rode"))
     };
     if peer {
-        command.args(["-c", files::REMOTE_HELPER, "--latex-helper"]);
+        command.args([
+            "-c",
+            &python_peer::source(files::REMOTE_HELPER),
+            "--latex-helper",
+        ]);
     } else {
         command.arg("--latex-helper");
     }
@@ -73,7 +80,7 @@ fn build(invocation: &Invocation, peer: bool, cancel: &AtomicBool) -> anyhow::Re
 }
 fn peer_analyze(request: &project::Request) -> project::Analysis {
     let mut child = Command::new("python3")
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -330,7 +337,7 @@ fn actual_sandbox_builds_obey_project_grants() {
                 "--",
                 "python3",
                 "-c",
-                files::REMOTE_HELPER,
+                &python_peer::source(files::REMOTE_HELPER),
                 "--latex-helper",
             ]);
         } else {

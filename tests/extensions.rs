@@ -1,6 +1,9 @@
 //! Native activation preferences and opt-in API v1 executable adapters with cancellation and
 //! host-policy checks.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     extensions::{self, Feature, Registry},
     files, project,
@@ -73,7 +76,7 @@ fn adapters_format_unsaved_snapshots_and_match_the_python_peer_without_saving_fi
     assert_eq!(local.text.as_deref(), Some("UNSAVED 🦀"));
     assert_eq!(local.diagnostics[0].code, "DEMO");
     let mut child = Command::new("python3")
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -181,7 +184,11 @@ fn closing_a_coordinator_lifeline_stops_the_adapter_process() {
         let _ = fs::remove_file(&pid);
         let mut command = if remote {
             let mut command = Command::new("python3");
-            command.args(["-c", files::REMOTE_HELPER, "--extension-helper"]);
+            command.args([
+                "-c",
+                &python_peer::source(files::REMOTE_HELPER),
+                "--extension-helper",
+            ]);
             command
         } else {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
@@ -236,7 +243,11 @@ fn coordinators_finish_successfully_while_the_lifetime_pipe_stays_open() {
     for remote in [false, true] {
         let mut command = if remote {
             let mut command = Command::new("python3");
-            command.args(["-c", files::REMOTE_HELPER, "--extension-helper"]);
+            command.args([
+                "-c",
+                &python_peer::source(files::REMOTE_HELPER),
+                "--extension-helper",
+            ]);
             command
         } else {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));

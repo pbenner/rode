@@ -257,10 +257,7 @@ impl EditorApp {
                 });
         });
         ui.add_space(12.0);
-        ui.checkbox(
-            &mut self.profile.sandbox.enabled,
-            "Sandbox the remote project when bwrap is available",
-        );
+        workbench::sandbox_backend_ui(ui, &mut self.profile.sandbox);
         if self.profile.sandbox.enabled {
             ui.collapsing("Sandbox access rules", |ui| {
                 egui::ScrollArea::vertical()
@@ -431,10 +428,7 @@ impl EditorApp {
             self.browse_folder(path, ctx);
         }
         ui.separator();
-        ui.checkbox(
-            &mut self.folder_sandbox.enabled,
-            "Sandbox project when bwrap is available",
-        );
+        workbench::sandbox_backend_ui(ui, &mut self.folder_sandbox);
         if self.folder_sandbox.enabled {
             ui.label(RichText::new("If sandboxing is unavailable on this host, the project opens in clearly labelled normal mode.").small().color(palette.muted));
             ui.collapsing("Sandbox access rules", |ui| {

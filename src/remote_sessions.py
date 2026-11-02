@@ -85,7 +85,7 @@ def native_sessions(request):
         if hashlib.sha256(source.read(24 * 1024 * 1024 + 1)).hexdigest() != digest:
             raise ValueError("Installed terminal helper failed its integrity check.")
     protocol = globals()["project_run"]([executable, "protocol"], timeout=5)
-    if protocol["code"] != 0 or protocol["stdout"].strip() != "9":
+    if protocol["code"] != 0 or protocol["stdout"].strip() != "10":
         raise ValueError(
             "The packaged terminal helper uses an older protocol. Rebuild it with "
             "scripts/build-sessiond.sh or select an updated RODE_SESSION_HELPER. "
@@ -192,9 +192,9 @@ def native_sessions(request):
             root=plan["root"],
             policy=operation["policy"],
             mode=(
-                "SANDBOX · bwrap · READ ONLY"
-                if plan["active"] and plan["project_read_only"]
-                else "SANDBOX · bwrap"
+                "SANDBOX · "
+                + ("Landlock" if plan.get("backend") == "landlock" else "bwrap")
+                + (" · READ ONLY" if plan["project_read_only"] else "")
                 if plan["active"]
                 else "NORMAL MODE · sandbox unavailable"
                 if plan["requested"]

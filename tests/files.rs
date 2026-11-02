@@ -1,6 +1,9 @@
 //! Local/Python file protocol parity, content conflicts, permissions/symlinks, quoting and real
 //! PTY input.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::files::{self, Request};
 use std::{
     fs,
@@ -92,7 +95,7 @@ fn local_file_lifecycle_preserves_edits_and_detects_conflicts() {
 
 fn python(request: &Request) -> anyhow::Result<files::Response> {
     let mut child = Command::new("python3")
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

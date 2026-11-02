@@ -603,6 +603,15 @@ fn cancelling_acp_permission_requests_returns_cancelled_and_keeps_the_session() 
 
 #[test]
 fn actual_sandbox_encloses_the_agent_and_tools_without_fallback() {
+    agent_sandbox(sandbox::Backend::Bwrap);
+}
+
+#[test]
+fn actual_landlock_encloses_the_agent_and_tools_without_fallback() {
+    agent_sandbox(sandbox::Backend::Landlock);
+}
+
+fn agent_sandbox(backend: sandbox::Backend) {
     let (_temp, root, program) = fixture();
     let mut launch = launch(&root, &program, Provider::Codex, true);
     launch.config.access = Access::Full;
@@ -611,6 +620,7 @@ fn actual_sandbox_encloses_the_agent_and_tools_without_fallback() {
         root.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
+            backend,
             share_network: false,
             ..Default::default()
         },
@@ -623,7 +633,10 @@ fn actual_sandbox_encloses_the_agent_and_tools_without_fallback() {
     let scope: Value =
         serde_json::from_str(&fs::read_to_string(root.join("agent-scope.json")).unwrap()).unwrap();
     assert_eq!(scope["cwd"], root.to_string_lossy().as_ref());
-    assert_eq!(scope["private_visible"], !active);
+    assert_eq!(scope["private_readable"], !active);
+    if backend == sandbox::Backend::Bwrap {
+        assert_eq!(scope["private_visible"], !active);
+    }
     assert_eq!(
         fs::read_to_string(root.join("agent-created.txt")).unwrap(),
         "sandbox"

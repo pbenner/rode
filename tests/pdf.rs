@@ -1,5 +1,8 @@
 //! Desktop Poppler page rendering, source/budget lifetime and bounded native/Python PDF transfer.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rode::{
     files::{self, Request},
@@ -15,7 +18,7 @@ use std::{
 const FIXTURE: &[u8] = include_bytes!("fixtures/pages.pdf");
 fn peer(request: &Request) -> anyhow::Result<files::Response> {
     let mut child = Command::new("python3")
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

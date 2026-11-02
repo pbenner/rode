@@ -894,7 +894,7 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         prefix: vec![],
     };
     let dir=service_directories().into_iter().find(|dir|matches!(request_once(&Request::Runtimes,&launcher,dir),Ok(Response::Runtimes(infos)) if infos.iter().any(|i|i.id==id))).context("Runtime is no longer available; refresh the running list")?;
-    let mut stream = connect_at(&dir)?;
+    let mut stream = connect_control(&dir)?;
     send_json(
         &mut stream,
         &Request::AttachRuntime {

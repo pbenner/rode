@@ -429,7 +429,9 @@ fn write_temporary(
 pub const REMOTE_HELPER: &str = concat!(
     "RODE_SANDBOX_POLICY = ",
     include_str!("sandbox_policy.json"),
-    "\n",
+    "\nRODE_LANDLOCK_LAUNCHER = r'''",
+    include_str!("landlock_launch.py"),
+    "'''\n",
     include_str!("remote_sandbox.py"),
     "\n",
     include_str!("environment_probe.py"),

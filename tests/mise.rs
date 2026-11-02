@@ -1,4 +1,7 @@
 //! Optional mise providers preserve host/policy ownership, trust, explicit overrides and stdio.
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{environment, files, mise, project, sandbox};
 use std::{
     collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path, process::Command,
@@ -46,7 +49,7 @@ impl Fixture {
     fn execute(&self, request: &files::Request, peer: bool) -> anyhow::Result<files::Response> {
         let mut command = if peer {
             let mut command = Command::new("python3");
-            command.args(["-c", files::REMOTE_HELPER]);
+            command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
             command
         } else {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
@@ -75,7 +78,8 @@ fn ssh_terminal_initialization_respects_the_captured_provider_gate() {
         .insert("RODE_LITERAL".into(), "retained".into());
     // Capture the verified helper's wire request without creating a persistent
     // service or executing a provider while testing both sides of the gate.
-    let helper = b"#!/usr/bin/python3\nimport json,sys\nfrom pathlib import Path\nif sys.argv[1] == 'protocol':\n print('9')\nelse:\n Path('terminal-request.json').write_text(sys.stdin.read())\n print(json.dumps({'kind':'ok'}))\n";
+    let helper = "#!/usr/bin/python3\nimport json,sys\nfrom pathlib import Path\nif sys.argv[1] == 'protocol':\n print(PROTOCOL)\nelse:\n Path('terminal-request.json').write_text(sys.stdin.read())\n print(json.dumps({'kind':'ok'}))\n".replace("PROTOCOL", &rode_session::PROTOCOL.to_string());
+    let helper = helper.as_bytes();
     for enabled in [false, true] {
         let mut plan = sandbox::Plan::default();
         plan.root = fixture.root();
@@ -198,7 +202,11 @@ fn provider_is_applied_before_native_or_python_tools_and_rode_overrides_win() {
         };
         let mut arguments = mise::prefix(&fixture.settings, &fixture.root(), "auto").unwrap();
         if peer {
-            arguments.extend(["python3".into(), "-c".into(), files::REMOTE_HELPER.into()]);
+            arguments.extend([
+                "python3".into(),
+                "-c".into(),
+                python_peer::source(files::REMOTE_HELPER),
+            ]);
         } else {
             arguments.extend([env!("CARGO_BIN_EXE_rode").into(), "--file-helper".into()]);
         }

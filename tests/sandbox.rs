@@ -1,6 +1,9 @@
 //! Actual local/Python bubblewrap grants, read-only rules, nested overrides and visible
 //! unavailable-host fallback.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use rode::{
     files::{self, Request, Response},
     sandbox::{self, Options},
@@ -16,7 +19,7 @@ fn python(request: &Request, path: Option<&Path>) -> anyhow::Result<Response> {
     let binary = sandbox::find_program("python3").unwrap();
     let mut command = Command::new(binary);
     command
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

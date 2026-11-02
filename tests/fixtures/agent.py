@@ -215,6 +215,11 @@ try:
             )
         elif method in ("thread/start", "session/new"):
             assert params["cwd"] == str(root), params
+            try:
+                (root.parent / "private.txt").read_text()
+                private_readable = True
+            except OSError:
+                private_readable = False
             metadata(
                 "agent-scope.json",
                 json.dumps(
@@ -222,6 +227,7 @@ try:
                         "cwd": str(root),
                         "python": os.environ.get("VIRTUAL_ENV"),
                         "private_visible": (root.parent / "private.txt").exists(),
+                        "private_readable": private_readable,
                         "argv": sys.argv[1:],
                     }
                 ),

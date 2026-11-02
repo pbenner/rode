@@ -71,7 +71,7 @@ Standard-library Python peers avoid deploying the desktop editor and its depende
 
 Project file helpers and process trees run inside the selected host's sandbox; display/authentication resources stay outside it. This gives editor reads, shells and tools a consistent project policy without sandboxing the whole desktop application. Shared mount-policy data reduces drift between implementations.
 
-Probing distinguishes requested isolation from what the host can actually enforce, allowing visibly ordinary operation on hosts without usable bubblewrap. That fallback is decided during preparation. Retrying a denied operation outside an already-active sandbox would change the granted access, so it remains a failure. Rationale lives in `src/sandbox.rs`; the concrete access model and exceptions are in [sandbox access](sandbox.md).
+Probing distinguishes requested isolation from what the host can actually enforce, allowing visibly ordinary operation when the selected bubblewrap or Landlock backend is unavailable. Landlock uses one embedded Python standard-library launcher for local and SSH commands, with kernel access rules rather than namespaces. That fallback is decided during preparation. Retrying a denied operation outside an already-active sandbox would change the granted access, so it remains a failure. Rationale lives in `src/sandbox.rs`; the concrete access model and exceptions are in [sandbox access](sandbox.md).
 
 ### Explicit settings merges and protected source saves
 

@@ -24,13 +24,36 @@ use std::{
 };
 static HELPER_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Explicit project-host sandbox implementation. Older preferences retain bubblewrap.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    /// Mount/PID/network namespace isolation through installed bubblewrap.
+    #[default]
+    Bwrap,
+    /// Unprivileged Linux access control through the shared Python launcher.
+    Landlock,
+}
+
+impl Backend {
+    /// Short backend name used in controls and availability diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bwrap => "bwrap",
+            Self::Landlock => "Landlock",
+        }
+    }
+}
+
 /// Requested project access policy. This is user intent; consult [`Plan::active`] to determine
 /// actual isolation.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Options {
-    /// Request bubblewrap isolation when supported by the project host.
+    /// Request the selected sandbox when supported by the project host.
     pub enabled: bool,
+    /// Implementation to probe; no automatic switching to another backend.
+    pub backend: Backend,
     /// Keep the host network namespace instead of isolating networking.
     pub share_network: bool,
     /// Additional host paths mounted read-only.
@@ -99,6 +122,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             enabled: false,
+            backend: Backend::default(),
             share_network: true,
             read_only: vec![],
             read_write: vec![],
@@ -113,6 +137,9 @@ impl Default for Options {
 /// active sandbox.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Plan {
+    /// Selected implementation, retained even when its probe is unavailable.
+    #[serde(default)]
+    pub backend: Backend,
     /// Captured project environment provider; resolved inside the execution boundary at launch.
     #[serde(default)]
     pub environment: crate::environment::Settings,
@@ -120,14 +147,14 @@ pub struct Plan {
     pub root: String,
     /// Whether sandboxing was requested.
     pub requested: bool,
-    /// Whether the complete bubblewrap plan passed its capability probe.
+    /// Whether the complete selected plan passed its capability probe.
     pub active: bool,
     /// Whether the active sandbox mounts the project read-only.
     #[serde(default)]
     pub project_read_only: bool,
     /// Probe/fallback explanation for display.
     pub reason: String,
-    /// Literal bubblewrap executable/arguments ending in `--`, ready to prefix a command.
+    /// Literal sandbox launcher/arguments ending in `--`, ready to prefix a command.
     pub prefix: Vec<String>,
     #[serde(skip)]
     pub(crate) helper: Option<Arc<HelperBinary>>,
@@ -158,6 +185,7 @@ impl HelperBinary {
             builder.mode(0o700);
         }
         builder.create(&directory)?;
+        let directory = directory.canonicalize()?;
         let helper = Self {
             path: directory.join("rode"),
             directory,
@@ -242,6 +270,7 @@ pub fn prepare(root: &str, options: &Options) -> Result<Plan> {
     let mut plan = Plan {
         root: root.to_string_lossy().into(),
         requested: options.enabled,
+        backend: options.backend,
         project_read_only: options.project_read_only,
         ..Default::default()
     };
@@ -251,19 +280,36 @@ pub fn prepare(root: &str, options: &Options) -> Result<Plan> {
     #[cfg(not(target_os = "linux"))]
     {
         plan.reason =
-            "Bubblewrap sandboxing requires Linux; this project is open in normal mode.".into();
+            "Project sandboxing requires Linux; this project is open in normal mode.".into();
         return Ok(plan);
     }
     #[cfg(target_os = "linux")]
     {
         let home = crate::files::expand_home("~");
         validate_project_root(&root, &home)?;
-        let Some(binary) = find_program("bwrap") else {
-            plan.reason =
-                "bwrap is not installed on this host; this project is open in normal mode.".into();
+        let program = match options.backend {
+            Backend::Bwrap => "bwrap",
+            Backend::Landlock => "python3",
+        };
+        let Some(binary) = find_program(program) else {
+            plan.reason = format!(
+                "{program} is not installed on this host (required for {}); this project is open in normal mode.",
+                options.backend.label()
+            );
             return Ok(plan);
         };
         plan.prefix = arguments(&binary, &root, &home, options)?;
+        if options.backend == Backend::Landlock {
+            plan.prefix.splice(
+                1..1,
+                [
+                    "-I".into(),
+                    "-S".into(),
+                    "-c".into(),
+                    include_str!("landlock_launch.py").into(),
+                ],
+            );
+        }
         let mut command = Command::new(&plan.prefix[0]);
         command.args(&plan.prefix[1..]).arg("/bin/true");
         match crate::ssh::run_bounded(command, vec![], Duration::from_secs(10)) {
@@ -274,7 +320,10 @@ pub fn prepare(root: &str, options: &Options) -> Result<Plan> {
             Err(error) => {
                 plan.prefix.clear();
                 let detail: String = format!("{error:#}").chars().take(2048).collect();
-                plan.reason = format!("bwrap cannot start on this host; normal mode: {detail}");
+                plan.reason = format!(
+                    "{} cannot start on this host; normal mode: {detail}",
+                    options.backend.label()
+                );
             }
         }
         Ok(plan)
@@ -308,8 +357,9 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
     })
 }
 
-/// Build bubblewrap arguments from explicit grants; order parent mounts before nested
-/// overrides. Does not execute or prove availability of the sandbox.
+/// Build the shared literal policy arguments, using bubblewrap's mount vocabulary.
+/// Landlock consumes that vocabulary as access grants and rejects remaps/subtractive rules.
+/// Orders parent mounts before nested overrides; does not execute or prove availability.
 pub fn arguments(
     binary: &Path,
     root: &Path,
@@ -319,8 +369,31 @@ pub fn arguments(
     options.validate()?;
     validate_project_root(root, home)?;
     let policy: Policy = serde_json::from_str(include_str!("sandbox_policy.json"))?;
+    // Resolve built-in aliases once, on the project host during preparation.
+    // Landlock launch must not reinterpret a captured grant after a tool changes
+    // a symlink beneath an already-writable parent.
+    let grant_path = |path: &Path| -> Result<String> {
+        if options.backend == Backend::Landlock {
+            let path = path
+                .canonicalize()
+                .context("Cannot resolve Landlock grant")?;
+            validate_project_root(&path, home)?;
+            Ok(path.to_string_lossy().into_owned())
+        } else {
+            Ok(path.to_string_lossy().into_owned())
+        }
+    };
+    let launcher = if options.backend == Backend::Landlock {
+        // An activated venv commonly puts a project-writable interpreter alias
+        // on PATH. Capture its actual executable before any project tool runs.
+        binary
+            .canonicalize()
+            .context("Cannot resolve the Landlock interpreter")?
+    } else {
+        binary.to_owned()
+    };
     let mut args = vec![
-        binary.to_string_lossy().into(),
+        launcher.to_string_lossy().into(),
         "--unshare-all".into(),
         "--die-with-parent".into(),
     ];
@@ -336,6 +409,7 @@ pub fn arguments(
         if let Some(flag) = access.flag()
             && Path::new(&path).exists()
         {
+            let path = grant_path(Path::new(&path))?;
             args.extend([flag.into(), path.clone(), path]);
         }
     }
@@ -367,7 +441,7 @@ pub fn arguments(
             if let Some(flag) = access.flag()
                 && path.exists()
             {
-                let path = path.to_string_lossy().into_owned();
+                let path = grant_path(&path)?;
                 args.extend([flag.into(), path.clone(), path]);
             }
         }
@@ -405,6 +479,21 @@ pub fn arguments(
         args.extend([flag.into(), path.clone(), path]);
     }
     let root = root.to_string_lossy().into_owned();
+    if options.backend == Backend::Landlock {
+        args.extend([
+            "--rode-home".into(),
+            home.canonicalize()?.to_string_lossy().into_owned(),
+        ]);
+        // Hidden paths must not be re-exposed through an additive parent grant.
+        for (path, access) in &options.overrides {
+            if *access == Access::Hidden {
+                let path = path
+                    .strip_prefix("~/")
+                    .map_or_else(|| PathBuf::from(path), |p| home.join(p));
+                args.extend(["--rode-deny".into(), path.to_string_lossy().into()]);
+            }
+        }
+    }
     args.extend([
         "--setenv".into(),
         "HOME".into(),
@@ -422,10 +511,13 @@ pub fn arguments(
 impl Plan {
     /// Persistent UI label for actual isolation/read-only/fallback state.
     pub fn label(&self) -> &'static str {
-        if self.active && self.project_read_only {
-            "SANDBOX · bwrap · READ ONLY"
-        } else if self.active {
-            "SANDBOX · bwrap"
+        if self.active {
+            match (self.backend, self.project_read_only) {
+                (Backend::Bwrap, false) => "SANDBOX · bwrap",
+                (Backend::Bwrap, true) => "SANDBOX · bwrap · READ ONLY",
+                (Backend::Landlock, false) => "SANDBOX · Landlock",
+                (Backend::Landlock, true) => "SANDBOX · Landlock · READ ONLY",
+            }
         } else if self.requested {
             "NORMAL MODE · sandbox unavailable"
         } else {
@@ -460,16 +552,17 @@ impl Plan {
             None
         };
         let mut command = if let Some(helper) = &helper {
+            let destination = self.helper_destination(&helper.path, "/rode-extension-helper");
             let mut args = self.prefix[1..].to_vec();
             anyhow::ensure!(args.pop().as_deref() == Some("--"), "Invalid sandbox plan");
             args.extend([
                 "--ro-bind".into(),
                 helper.path.to_string_lossy().into(),
-                "/rode-extension-helper".into(),
+                destination.clone(),
                 "--".into(),
             ]);
             args.extend(crate::mise::prefix(&self.environment, &self.root, "")?);
-            args.push("/rode-extension-helper".into());
+            args.push(destination);
             let mut cmd = Command::new(&self.prefix[0]);
             cmd.args(args);
             cmd
@@ -516,6 +609,7 @@ impl Plan {
         } else {
             vec![]
         };
+        let destination = self.helper_destination(executable, "/rode-file-helper");
         if self.active {
             anyhow::ensure!(
                 args.pop().as_deref() == Some("--"),
@@ -524,7 +618,7 @@ impl Plan {
             args.extend([
                 "--ro-bind".into(),
                 executable.to_string_lossy().into(),
-                "/rode-file-helper".into(),
+                destination.clone(),
                 "--".into(),
             ]);
         }
@@ -533,7 +627,7 @@ impl Plan {
         }
         args.extend([
             if self.active {
-                "/rode-file-helper".into()
+                destination
             } else {
                 executable.to_string_lossy().into_owned()
             },
@@ -558,5 +652,14 @@ impl Plan {
             }),
         )?;
         serde_json::from_slice(&output).context("Invalid sandbox file response")
+    }
+
+    /// Landlock grants the original path; only bubblewrap can remap it.
+    pub(crate) fn helper_destination(&self, source: &Path, mounted: &str) -> String {
+        if self.backend == Backend::Landlock {
+            source.to_string_lossy().into_owned()
+        } else {
+            mounted.into()
+        }
     }
 }

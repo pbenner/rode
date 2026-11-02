@@ -663,13 +663,17 @@ fn automatic_queue_configuration_cannot_change_the_captured_backend() {
 
 #[test]
 fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
-    for compatible in [false, true] {
+    for (generation, queue_capable) in [
+        (None, false),
+        (None, true),
+        (Some("protocol-8"), false),
+        (Some("protocol-9"), true),
+    ] {
         let fixture = Fixture::new();
-        let directory = if compatible {
-            fixture.runtime.join("protocol-8")
-        } else {
-            fixture.runtime.clone()
-        };
+        let directory = generation.map_or_else(
+            || fixture.runtime.clone(),
+            |name| fixture.runtime.join(name),
+        );
         fs::create_dir_all(directory.parent().unwrap()).unwrap();
         fs::set_permissions(
             directory.parent().unwrap(),
@@ -687,6 +691,10 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             .arg(&id)
             .arg("legacy-policy")
             .env("RODE_TEST_RUNTIME_CAPABLE", "1")
+            .env(
+                "RODE_TEST_QUEUE_CAPABLE",
+                if queue_capable { "1" } else { "" },
+            )
             .spawn()
             .unwrap();
         struct Stop<'a>(&'a mut Child);
@@ -707,9 +715,12 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
         assert!(sessions.iter().any(|s| s.id == id && s.alive));
         let actions = fs::read_to_string(directory.join("requests")).unwrap();
         assert!(!actions.lines().any(|s| s == "create_agent"));
-        if !compatible {
+        if generation.is_none() {
             assert!(actions.lines().any(|s| s == "supports_runtimes"));
             assert!(actions.lines().any(|s| s == "supports_automatic_queue"));
+            if queue_capable {
+                assert!(actions.lines().any(|s| s == "supports_scoped_control"));
+            }
             assert!(
                 fixture
                     .runtime

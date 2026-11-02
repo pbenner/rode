@@ -1,6 +1,9 @@
 //! Byte patches, protected local/Python saves, static object parsing and sandbox access;
 //! inspected programs never execute.
 
+#[path = "support/python.rs"]
+mod python_peer;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rode::{
     binary::{self, Buffer},
@@ -16,7 +19,7 @@ use std::{
 };
 fn peer(request: &Request) -> anyhow::Result<files::Response> {
     let mut child = Command::new("python3")
-        .args(["-c", files::REMOTE_HELPER])
+        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
