@@ -396,20 +396,20 @@ impl EditorApp {
                 }
             });
         }
-        ui.heading(match self.dialog {
-            Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach image or document",
-            Dialog::Save(_) => "Save file as",
-            Dialog::HexOpen => "Open as hex / inspect binary",
-            _ => "Open file",
-        });
-        ui.label(
-            RichText::new(if matches!(self.dialog, Dialog::Save(_)) {
+        layout::heading(
+            ui,
+            match self.dialog {
+                Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach image or document",
+                Dialog::Save(_) => "Save file as",
+                Dialog::HexOpen => "Open as hex / inspect binary",
+                _ => "Open file",
+            },
+            if matches!(self.dialog, Dialog::Save(_)) {
                 "Browse folders or enter a destination path. Select a file to reuse its name."
             } else {
                 "Browse folders or enter a path. Double-click folders and files to open them."
-            })
-            .small()
-            .color(palette.muted),
+            },
+            palette,
         );
         let path_id = egui::Id::new("file-dialog-path");
         if self.dialog_focus || ui.memory(|memory| memory.focused().is_none()) {

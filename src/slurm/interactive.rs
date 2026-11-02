@@ -158,9 +158,7 @@ impl Allocation {
             "--ntasks=1".into(),
             "--pty".into(),
         ];
-        if plan.active {
-            step.extend(plan.prefix.clone());
-        }
+        step.extend(plan.execution_prefix("")?);
         step.extend([
             "/bin/sh".into(), "-c".into(),
             "if [ -z \"${SLURM_JOB_ID:-}\" ]; then printf '%s\\n' 'RODE: Slurm did not provide SLURM_JOB_ID; refusing an unallocated shell.' >&2; exit 1; fi; exec \"${SHELL:-/bin/sh}\" -l".into(),

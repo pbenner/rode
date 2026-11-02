@@ -58,7 +58,7 @@ def run():
     program = os.path.expanduser(argv[0])
     if "/" in program:
         argv[0] = program if os.path.isabs(program) else os.path.join(root, program)
-    else:
+    elif not spec.get("environment", {}).get("mise"):
         local = os.path.expanduser("~/.local/bin/" + program)
         argv[0] = shutil.which(program) or (local if os.path.isfile(local) else program)
     env = dict(os.environ, NO_COLOR="1")

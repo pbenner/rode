@@ -14,6 +14,101 @@ use std::{
 
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn mise_tools_and_tasks_resolve_on_the_project_host_over_ssh_and_proxyjump() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let root = tempfile::tempdir().unwrap();
+        let mise = root.path().join("mise");
+        std::fs::write(&mise, include_str!("fixtures/mise.py")).unwrap();
+        std::fs::set_permissions(&mise, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::create_dir(root.path().join("mise-bin")).unwrap();
+        let node = root.path().join("mise-bin/node");
+        std::fs::write(&node, "#!/bin/sh\nprintf '%s\\n' \"$RODE_MISE_VALUE\"\n").unwrap();
+        std::fs::set_permissions(node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < end,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let path = root.path().to_string_lossy().into_owned();
+        let mut plan = remote
+            .request(&Request::Prepare {
+                path: path.clone(),
+                sandbox: Default::default(),
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        plan.environment.mise = true;
+        plan.environment
+            .runtimes
+            .insert("mise".into(), mise.to_string_lossy().into_owned());
+        let metadata = |action| Request::Tool {
+            request: rode::project::Request::Mise {
+                root: path.clone(),
+                settings: plan.environment.clone(),
+                action,
+            },
+        };
+        assert!(
+            remote
+                .request_in(&metadata(rode::mise::Action::Inspect), Some(&plan))
+                .is_err()
+        );
+        remote
+            .request_in(&metadata(rode::mise::Action::Trust), Some(&plan))
+            .unwrap();
+        let reply = remote
+            .request_in(&metadata(rode::mise::Action::Inspect), Some(&plan))
+            .unwrap();
+        let Some(rode::project::Response::Mise(snapshot)) = reply.tool else {
+            panic!("Missing mise metadata")
+        };
+        assert_eq!(snapshot.tasks[0].name, "smoke");
+        let reply = remote
+            .request_in(
+                &Request::Tool {
+                    request: rode::project::Request::Runtimes {
+                        root: path.clone(),
+                        settings: Default::default(),
+                    },
+                },
+                Some(&plan),
+            )
+            .unwrap();
+        let Some(rode::project::Response::Runtimes(tools)) = reply.tool else {
+            panic!("Missing runtime versions")
+        };
+        assert_eq!(
+            tools
+                .iter()
+                .find(|tool| tool.name == "node")
+                .unwrap()
+                .version,
+            "from-mise"
+        );
+        assert!(remote.connected());
+        assert!(!root.path().join("mise-installed").exists());
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn openssh_mux_roundtrip_and_disconnect() {
     roundtrip("");
 }
@@ -595,6 +690,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                         request: rode::project::Request::Sessions {
                             root: plan.root.clone(),
                             operation: rode::sessions::Operation::Agents {
+                                mise: false,
                                 request: Box::new(request),
                             },
                             helper: Some(native_test_helper(upload)),

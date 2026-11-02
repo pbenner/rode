@@ -93,7 +93,7 @@ impl EditorApp {
     /// Render interpreter inspection and explicit environment creation controls on the project host.
     pub(in crate::app) fn python_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        ui.heading("Project interpreter");
+        ui.label(RichText::new("Project interpreter").size(15.).strong());
         self.python_environment_picker(ui, ctx);
         ui.label("Custom interpreter or environment folder (on this host)");
         ui.add(
@@ -101,7 +101,7 @@ impl EditorApp {
                 .desired_width(f32::INFINITY)
                 .hint_text(".venv or /path/to/bin/python"),
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     !self.workbench.python.env_busy,
@@ -160,8 +160,8 @@ impl EditorApp {
         {
             self.activate_python_impl(ctx, true);
         }
-        ui.separator();
-        ui.heading("Create environment");
+        ui.add_space(12.);
+        ui.label(RichText::new("Create environment").size(15.).strong());
         ui.label("Folder inside project");
         ui.text_edit_singleline(&mut self.workbench.python.venv_path);
         ui.label("Base Python executable");

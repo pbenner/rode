@@ -53,7 +53,7 @@ impl Target {
         let payload = serde_json::json!({
             "target": self,
             "root": plan.root,
-            "prefix": if plan.active { plan.prefix.clone() } else { vec![] },
+            "prefix": plan.execution_prefix(python)?,
             "python": python,
             "source": source,
         });

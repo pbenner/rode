@@ -123,12 +123,13 @@ impl State {
             .open(&mut open)
             .collapsible(false)
             .default_width(410.)
+            .frame(super::layout::dialog_frame(&ctx.style(), theme.palette))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 110.).max(180.))
                     .show(ui, |ui| {
+                        super::layout::heading(ui, "Terminal colors", "Saved per theme · applies to all terminal views", theme.palette);
                         ui.label(RichText::new(format!("Theme: {}", theme.name)).strong());
-                        ui.label("Saved separately for each color theme. Applies to all terminal views.");
                         let mut palette = self.palette(theme);
                         let settings = self.themes.entry(theme.id.clone()).or_default();
                         ui.add_space(8.);

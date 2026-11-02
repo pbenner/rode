@@ -23,11 +23,8 @@ impl rode_agent_core::Factory for Factory {
     ) -> Result<rode_agent_core::Session> {
         let mut argv = launch.config.arguments(!history)?;
         argv[0] = self.spec.executable.clone();
-        let mut argv_with_policy = if self.spec.plan.active {
-            self.spec.plan.prefix.clone()
-        } else {
-            vec![]
-        };
+        // A normal-mode plan may still carry an optional environment launcher.
+        let mut argv_with_policy = self.spec.plan.prefix.clone();
         argv_with_policy.extend(argv);
         let mut command = ProcessCommand::new(&argv_with_policy[0]);
         command

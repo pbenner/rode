@@ -71,6 +71,7 @@ SUITES = {
     "ssh": [remote("remote-smoke", transport=True)],
     "remote-smoke": [ui("project", RODE_PROJECT_UI_CASE="ssh")],
     "tools": [
+        ui("mise"),
         ui("environment"),
         ui("layout"),
         ui("languages"),
@@ -133,6 +134,9 @@ def extended_suites(paths, full=False):
         if path.startswith(("src/", "crates/", "tests/", ".github/")) or path in {
             "Cargo.toml",
             "Cargo.lock",
+            "rust-toolchain.toml",
+            "mise.toml",
+            "mise.lock",
             "scripts/ci.py",
             "scripts/ci-deps.sh",
             "scripts/test-ci.py",

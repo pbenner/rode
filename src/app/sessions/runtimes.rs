@@ -179,8 +179,7 @@ impl EditorApp {
     }
     /// Render cached retained runtimes and capture explicit attachment/confirmed-end requests.
     pub(super) fn runtimes_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.separator();
-        ui.heading("Notebook kernels & debuggers");
+        let palette = self.themes.active().palette;
         ui.label("Persistent runtimes retain variables, queued cells, outputs and debugger state on this host. Attach from the original project and sandbox. End stops the runtime and discards its retained state.");
         if ui
             .add_enabled(
@@ -229,7 +228,7 @@ impl EditorApp {
         let plan = self.session_plan();
         let policy = service::fingerprint(&plan);
         for info in self.sessions.runtimes.items.clone() {
-            ui.group(|ui| {
+            layout::card(ui, palette, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.strong(&info.name);
                     ui.small(if info.persistent { "PERSISTENT" } else { "UNTIL VIEW CLOSES" });

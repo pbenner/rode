@@ -162,9 +162,12 @@ impl EditorApp {
         let (root, host, _) = self.agent_location();
         let launch = self.agent_launch();
         let mode = launch.plan.label();
-        ui.horizontal(|ui| {
-            ui.heading("Running agents");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        layout::header(
+            ui,
+            "Running agents",
+            "Live chats on this host · attach with their original project and sandbox",
+            palette,
+            |ui| {
                 if ui
                     .add_enabled(
                         self.agents.running.pending.is_none(),
@@ -177,12 +180,12 @@ impl EditorApp {
                 if self.agents.running.pending.is_some() {
                     ui.spinner();
                 }
-            });
-        });
+            },
+        );
         ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
         ui.add(egui::Label::new(format!("Current project: {root}")).truncate())
             .on_hover_text(&root);
-        ui.add(egui::Label::new(RichText::new("Live chats on this host. Attach uses the original project and sandbox.").small().color(palette.muted)).wrap())
+        ui.add(egui::Label::new(RichText::new("Persist keeps work running after its controlling view closes.").small().color(palette.muted)).wrap())
             .on_hover_text("Persist keeps work running after its controlling view closes. Only one window can control a chat. Permission requests wait for you; they are never automatically approved.");
         if let Some(info) = self.agents.running.confirm.clone() {
             ui.separator();
@@ -234,13 +237,12 @@ impl EditorApp {
             .max_height((ctx.content_rect().height() - 300.).clamp(140., 520.))
             .show(ui, |ui| {
                 if self.agents.running.items.is_empty() {
-                    ui.add_space(16.);
-                    ui.strong("No running agents on this host");
-                    ui.add(
-                        egui::Label::new("Saved conversations are available through History.")
-                            .wrap(),
+                    layout::empty(
+                        ui,
+                        "No running agents on this host",
+                        "Saved conversations are available through History.",
+                        palette,
                     );
-                    ui.add_space(16.);
                 }
                 rows::show(ui, &self.agents.running.items, &context, palette)
             })

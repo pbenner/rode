@@ -105,7 +105,7 @@ def native_sessions(request):
             program = python if spec["python_program"] else spec["argv"][0]
             if "/" in program or program.startswith("~"):
                 program = globals()["project_resolve"](spec["root"], program)
-            else:
+            elif not operation.get("mise"):
                 program = shutil.which(program) or program
             spec["argv"][0] = program
             spec["env"] = globals()["project_environment"](python)
@@ -120,7 +120,7 @@ def native_sessions(request):
             root, program = spec["plan"]["root"], spec["executable"]
             if "/" in program or program.startswith("~"):
                 program = globals()["project_resolve"](root, program)
-            else:
+            elif not operation.get("mise"):
                 local = os.path.expanduser("~/.local/bin/" + program)
                 program = shutil.which(program) or (local if os.path.isfile(local) else program)
             spec["executable"] = program
@@ -129,6 +129,11 @@ def native_sessions(request):
     if operation["action"] == "create":
         plan = operation["plan"]
         argv = list(plan["prefix"]) if plan["active"] else []
+        # The captured plan includes the extension gate; saved environment
+        # preferences retain their opt-in even while the extension is disabled.
+        provider = plan.get("environment", {})
+        if provider.get("mise"):
+            argv += globals()["mise_launch_prefix"](plan["root"], provider, operation["python"])
         allocation = operation.get("allocation")
         argv += allocation["argv"] if allocation else [os.environ.get("SHELL", "/bin/sh"), "-l"]
         python = globals()["project_python"](plan["root"], operation["python"])
@@ -171,6 +176,13 @@ def native_sessions(request):
                 )
             else:
                 initial_input = f'{deactivate}unset VIRTUAL_ENV PYTHONHOME; export PATH={shlex.quote(folder)}:"$PATH"\n'
+        if not allocation and provider.get("mise"):
+            program = globals()["mise_program"](provider)
+            initial_input = (
+                f'_rode_mise_env="$(MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 MISE_PARANOID=1 '
+                f'{shlex.quote(program)} -C {shlex.quote(plan["root"])} env --shell bash)" '
+                '&& eval "$_rode_mise_env"; unset _rode_mise_env;\n'
+            ) + initial_input
         if not allocation and environment_input:
             initial_input += environment_input + "\n"
         payload = dict(

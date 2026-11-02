@@ -27,6 +27,8 @@ Linked worktrees share repository metadata. **Open + share main .git** explicitl
 
 ## Formatting, issues, and Python environments
 
+The optional [mise extension](mise.md), enabled through **View → Extensions**, adds project toolchains, environments and task discovery on local or SSH hosts. It is disabled by default and requires an explicit project opt-in.
+
 The **Environment** activity icon, workspace tab, status-bar control, or **Environment: Runtimes and project variables** command opens project-wide environment settings. Runtime overrides select installed Node.js/npm, Rust/Cargo, Go, Java and .NET executables on the project host. Blank entries retain PATH and the tool's project configuration. **Refresh runtime versions** probes the applied settings inside the active sandbox; it does not install runtimes. Runtime paths must already be accessible under that sandbox.
 
 **Project variables** accepts literal `NAME=value` lines, without shell expansion. **Apply environment** saves runtime overrides and variables per host/project in local preferences. They apply to new terminals and task commands; existing or reattached terminals keep their original environment. Task exports are scoped to a subshell, so they do not change an existing shell's environment. Runtime overrides and project variables configure terminal/task execution, not agent processes, formatter workers or debugger adapters. Python interpreter selection retains its existing integrations with those tools.

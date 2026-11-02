@@ -21,6 +21,7 @@ nav:
       - PDF previews: pdf.md
       - Hex and binary analysis: binary.md
       - Extensions: extensions.md
+      - mise environments and tasks: mise.md
       - Jupyter notebooks: notebooks.md
       - Markdown previews: markdown.md
       - Marp presentations: marp.md

@@ -26,6 +26,7 @@ fn registry_keeps_bundled_features_and_never_activates_installed_tools_implicitl
     let mut registry = Registry::load(&destination, Default::default());
     assert!(registry.feature(Feature::Git));
     assert!(registry.feature(Feature::Binary));
+    assert!(!registry.feature(Feature::Mise));
     assert!(!registry.enabled("test.adapter"));
     assert!(registry.commands().is_empty());
     assert!(registry.provider("rust", true, true).is_none());

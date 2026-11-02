@@ -38,6 +38,7 @@ pub mod images;
 pub mod languages;
 pub mod latex;
 pub mod marp;
+pub mod mise;
 pub mod notebook;
 pub mod pdf;
 pub mod persistence;

@@ -164,7 +164,7 @@ def run(remote=False, isolated=False):
                     command("Debug: Show debugger")
                     screenshot(window, "persistent-controls.png")
                     runtime = next(i for i in service_rpc("runtimes") if i["kind"] == "debugger")
-                    click(760, 103)
+                    click(760, 181)  # Persistence in the debugger's execution toolbar.
                     # Quit immediately after requesting persistence; closing must
                     # preserve the mutation until the host acknowledges it.
                     close_window(window, process)
@@ -181,7 +181,7 @@ def run(remote=False, isolated=False):
                     time.sleep(0.8)
                     command("Debug: Show debugger")
                     screenshot(window, "before-reattach.png")
-                    click(370, 132)
+                    click(410, 210)  # Reattach below the execution toolbar.
                     wait_for(
                         lambda: any(
                             i["id"] == runtime["id"] and i["attached"]

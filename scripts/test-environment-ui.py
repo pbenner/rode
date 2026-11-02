@@ -94,12 +94,12 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             time.sleep(0.4)
             command("Environment: Runtimes and project variables")
             screenshot(window, "environment.png")
-            click(480, 300)  # Node.js executable override.
+            click(560, 282)  # Node.js executable override in the runtime table.
             key("a", ("Control_L",))
             text(str(runtime))
             click(700, 620)  # Literal project variables.
             text("PROJECT_MODE=first")
-            click(390, 696)  # Apply environment.
+            click(430, 702)  # Apply environment in the Project variables card.
             wait(
                 lambda: settings().get("variables", {}).get("PROJECT_MODE") == "first",
                 "Environment settings were not saved",
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             assert settings()["runtimes"]["node"] == str(runtime)
             command("Tasks: Run, build and test")
             screenshot(window, "tasks.png")
-            click(430, 185)  # Run the active JavaScript file with the selected runtime.
+            click(440, 242)  # Run the active JavaScript file with the selected runtime.
             wait(lambda: (project / "task.json").exists(), "Tasks did not use the selected runtime")
             result = json.loads((project / "task.json").read_text())
             assert result["mode"] == "first" and result["argv"] == [str(project / "main.js")], (
@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             click(700, 620)
             key("a", ("Control_L",))
             text("PROJECT_MODE=second")
-            click(390, 696)
+            click(430, 702)
             wait(
                 lambda: settings().get("variables", {}).get("PROJECT_MODE") == "second",
                 "Updated project variables were not saved",
@@ -130,7 +130,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             )
             (project / "task.json").unlink()
             command("Tasks: Run, build and test")
-            click(430, 185)
+            click(440, 242)
             wait(lambda: (project / "task.json").exists(), "Updated task environment was not used")
             assert json.loads((project / "task.json").read_text())["mode"] == "second"
             assert shell_record("after-task.txt") == "first", "Task exports escaped their subshell"

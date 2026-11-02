@@ -1,0 +1,61 @@
+# Optional developer entry point, shared with GitHub Actions. System libraries
+# remain in scripts/ci-deps.sh; application dependencies remain in Cargo.lock.
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
+auto_install = false
+lockfile = true
+
+[tools]
+python = "3.12.16"
+node = "24.22.2"
+uv = "0.13.6"
+ruff = "0.17.3"
+
+[tasks."lint:rust-format"]
+run = "python3 scripts/ci.py time rust-format -- cargo fmt --all --check"
+
+[tasks."lint:python"]
+run = "python3 scripts/ci.py time python-lint -- ruff check ."
+
+[tasks."lint:python-format"]
+run = "python3 scripts/ci.py time python-format -- ruff format --check ."
+
+[tasks."lint:ci"]
+run = "python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py"
+
+[tasks."lint:packaging"]
+run = "python3 scripts/ci.py time packaging -- python3 scripts/test-packaging.py"
+
+[tasks."lint:docs"]
+run = "RUSTDOCFLAGS='-D warnings' python3 scripts/ci.py time rust-doc -- cargo doc --locked --profile ci --workspace --no-deps --document-private-items"
+
+[tasks."lint:clippy"]
+run = "python3 scripts/ci.py time --timeout 900 clippy -- cargo clippy --locked --profile ci --workspace --all-targets -- -D warnings"
+
+[tasks.lint]
+description = "Run the same formatting, regression, documentation and lint checks as CI"
+run = [
+  "'{{mise_bin}}' run lint:rust-format",
+  "'{{mise_bin}}' run lint:python",
+  "'{{mise_bin}}' run lint:python-format",
+  "'{{mise_bin}}' run lint:ci",
+  "'{{mise_bin}}' run lint:packaging",
+  "'{{mise_bin}}' run lint:docs",
+  "'{{mise_bin}}' run lint:clippy",
+]
+
+[tasks.test]
+description = "Run every ordinary workspace Rust test, including integration tests"
+run = "RODE_TEST_MISE='{{mise_bin}}' RODE_TEST_RUFF=\"$(command -v ruff)\" python3 scripts/ci.py time --timeout 600 rust-tests -- cargo test --locked --profile ci --workspace --all-targets"
+
+[tasks.build]
+run = "python3 scripts/ci.py time --timeout 600 editor-build -- cargo build --locked --profile ci --bins"
+
+[tasks."test-ui"]
+description = "Run the workspace UI suite on an isolated X display; requires system UI dependencies"
+depends = ["build"]
+run = "RODE_TEST_BINARY=\"$PWD/target/ci/rode\" RODE_TEST_SESSION_HELPER=\"$PWD/target/ci/rode-sessiond\" LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1100x24' python3 scripts/ci.py run workspace"
+
+[tasks.check]
+description = "Run lint and ordinary Rust tests using the shared CI commands"
+run = ["'{{mise_bin}}' run lint", "'{{mise_bin}}' run test"]

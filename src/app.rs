@@ -39,6 +39,7 @@ mod file_browser;
 mod icons;
 mod image_view;
 mod latex_tools;
+mod layout;
 mod lifecycle;
 mod markdown;
 mod marp_view;

@@ -18,6 +18,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/app.rs`, `src/app/lifecycle.rs` | Documents, selected workspace, guarded actions and native window lifecycle |
 | `src/app/workers.rs`, `src/app/dialogs.rs`, `src/app/appearance.rs` | Captured file/decode jobs and result routing, guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
+| `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections, empty states and dialog frames |
 | `src/app/navigation/` | Pane focus, validated shortcut presets, explorer keys and native source-editing modes |
 | `src/app/workbench.rs`, `src/app/workbench/` | Captured project preferences, Git, code tools, environments, monitoring and settings panels |
 | `src/files.rs`, `src/remote_files.py` | Bounded file protocol, content revisions and protected saves |
@@ -26,6 +27,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/project.rs`, `src/languages.rs`, `src/remote_project.py` | Installed tools, embedded language catalogue, normalized diagnostics and host counters |
 | `src/project/stash.rs`, `src/remote_git_stash.py` | Captured stash identities, Git-compatible writer locks and protected files-backend reflog removal |
 | `src/extensions.rs`, `src/app/extensions.rs`, `src/remote_extensions.py` | Native feature activation, opt-in installed adapters and their UI/preferences |
+| `src/mise.rs`, `src/remote_mise.py`, `src/mise_launch.py`, `src/remote_environment.py` | Optional mise feature, bounded tool/task discovery, host-side environment resolution before exec and shared literal environment/command helpers |
 | `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
 | `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
 | `crates/rode-agent-core/` | Shared Codex/ACP state machines, bounded chat/history, capabilities, personalities and host-service wire views |
@@ -52,6 +54,8 @@ The choices below explain the current implementation. Module-level rustdoc recor
 Keep the desktop coordinator focused on application state and shared lifecycle guards. File/decode dispatch belongs in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules and retain their existing Rust module/test paths.
 
 ### Native UI and work on demand
+
+Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, following the chat-history, running-agent and monitor layouts. Use `page` around a tool's scrolling region, `heading` (or `header` with responsive toolbar actions), and `section` for related controls. Form grids use `field_label` to reserve a readable label column or stack labels above inputs in compact views. Lists use `card` or customize `card_frame` for selection; `empty` explains an unpopulated list. Pages cap forms/lists at 1000 logical points; the monitor keeps a wider responsive grid, while document canvases, source editors and terminals retain their own space requirements. Dialogs share `dialog_frame` and a viewport-bounded scrolling budget. These helpers own presentation only: retain stable scroll/widget IDs and controller state in each domain so docking/resizing never changes task ownership or unsaved drafts.
 
 The Rust/egui application keeps the editor independent of an embedded browser application runtime. Cached layouts, virtualized rows and explicit worker jobs keep slow I/O and tool execution out of ordinary input/rendering. On-demand activation limits idle work, at the cost of waiting for a tool or preview's first result. This choice does not by itself establish a performance claim: measure relevant release workloads when changing those boundaries. Rationale lives in `src/lib.rs` and `src/app.rs`.
 

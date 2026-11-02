@@ -490,8 +490,12 @@ impl EditorApp {
     }
     /// Render cached encrypted-project state and explicit create/unlock/lock operations; passwords are not saved.
     pub(super) fn encrypted_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Encrypted projects · gocryptfs");
-        ui.small("Files are encrypted as they are written. Only the unlocked mount exposes plaintext. Passwords are never saved.");
+        layout::heading(
+            ui,
+            "Encrypted projects · gocryptfs",
+            "Files are encrypted as they are written. Only the unlocked mount exposes plaintext. Passwords are never saved.",
+            self.themes.active().palette,
+        );
         if !self.vaults.message.is_empty() {
             ui.label(&self.vaults.message);
         }

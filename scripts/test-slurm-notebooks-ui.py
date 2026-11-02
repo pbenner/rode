@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
             focus_window(window)
             command("Terminal: Allocate Slurm resources")
             screenshot(window, "reserve-form.png")
-            click(660, 602)
+            click(660, 662)  # Reserve for notebooks below the Resources card.
             wait_for(lambda: (state / "job.json").exists(), "Reserve button did not submit")
             wait_for(
                 lambda: json.loads((state / "job.json").read_text())["state"] == "RUNNING",

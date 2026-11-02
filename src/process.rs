@@ -90,6 +90,7 @@ impl Launch {
 }
 #[derive(Serialize)]
 struct RemoteLaunch {
+    environment: crate::environment::Settings,
     root: String,
     prefix: Vec<String>,
     argv: Vec<String>,
@@ -321,12 +322,9 @@ fn run_session(
         command.args(remote.channel_args(false));
         command.arg(ssh::python::PROCESS.command());
         let mut data = serde_json::to_vec(&RemoteLaunch {
+            environment: launch.plan.environment.clone(),
             root: launch.plan.root.clone(),
-            prefix: if launch.plan.active {
-                launch.plan.prefix.clone()
-            } else {
-                vec![]
-            },
+            prefix: launch.plan.execution_prefix(&launch.python)?,
             argv,
             python: launch.python.clone(),
             python_program: launch.python_program,
@@ -348,14 +346,20 @@ fn run_session(
         let mut argv = argv;
         argv[0] = if launch.python_program {
             project::python_path(&root, &launch.python)
+        } else if launch.plan.environment.mise
+            && !argv[0].contains('/')
+            && !argv[0].starts_with('~')
+        {
+            PathBuf::from(&argv[0])
         } else {
             resolve_program(&root, &argv[0])
         }
         .to_string_lossy()
         .into();
-        let mut command = if launch.plan.active {
-            let mut command = Command::new(&launch.plan.prefix[0]);
-            command.args(&launch.plan.prefix[1..]).args(&argv);
+        let prefix = launch.plan.execution_prefix(&launch.python)?;
+        let mut command = if !prefix.is_empty() {
+            let mut command = Command::new(&prefix[0]);
+            command.args(&prefix[1..]).args(&argv);
             command
         } else {
             let mut command = Command::new(&argv[0]);

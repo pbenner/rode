@@ -46,7 +46,10 @@ pub(super) fn show(
     let live = phase != Phase::Ended;
     let collapse_config = live && !state.was_live;
     state.was_live = live;
-    controls(ui, phase, view.ready, &mut actions);
+    layout::card(ui, view.palette, |ui| {
+        controls(ui, phase, view.ready, &mut actions)
+    });
+    ui.add_space(8.);
     if let Some(client) = &state.client {
         ui.label(&client.status);
         if !client.error.is_empty() {
@@ -60,44 +63,60 @@ pub(super) fn show(
         .id_salt("debug-content")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            configuration_ui(
-                ui,
-                &mut state.config,
-                settings,
-                !live,
-                collapse_config,
-                view.sandbox,
-                &mut actions,
-            );
-            if let Some(client) = &state.client {
-                stack_ui(ui, client, &mut actions);
-                scopes_ui(ui, client, &mut actions);
-            }
-            watches_ui(
-                ui,
-                &mut state.watch,
-                settings,
-                state.client.as_ref(),
-                view.palette,
-                &mut actions,
-            );
-            breakpoints_ui(ui, settings, state.client.as_ref(), &mut actions);
-            if let Some(client) = &state.client {
-                exceptions_ui(ui, settings, client, &mut actions);
-                console_ui(
+            layout::card(ui, view.palette, |ui| {
+                configuration_ui(
                     ui,
-                    client,
-                    &mut state.expression,
+                    &mut state.config,
+                    settings,
+                    !live,
+                    collapse_config,
+                    view.sandbox,
+                    &mut actions,
+                )
+            });
+            ui.add_space(12.);
+            if let Some(client) = &state.client {
+                layout::card(ui, view.palette, |ui| stack_ui(ui, client, &mut actions));
+                ui.add_space(12.);
+                layout::card(ui, view.palette, |ui| scopes_ui(ui, client, &mut actions));
+                ui.add_space(12.);
+            }
+            layout::card(ui, view.palette, |ui| {
+                watches_ui(
+                    ui,
+                    &mut state.watch,
+                    settings,
+                    state.client.as_ref(),
                     view.palette,
                     &mut actions,
-                );
+                )
+            });
+            ui.add_space(12.);
+            layout::card(ui, view.palette, |ui| {
+                breakpoints_ui(ui, settings, state.client.as_ref(), &mut actions)
+            });
+            ui.add_space(12.);
+            if let Some(client) = &state.client {
+                layout::card(ui, view.palette, |ui| {
+                    exceptions_ui(ui, settings, client, &mut actions)
+                });
+                ui.add_space(12.);
+                layout::card(ui, view.palette, |ui| {
+                    console_ui(
+                        ui,
+                        client,
+                        &mut state.expression,
+                        view.palette,
+                        &mut actions,
+                    )
+                });
             }
         });
     actions
 }
 fn controls(ui: &mut egui::Ui, phase: Phase, ready: bool, actions: &mut Actions) {
     let paused = phase == Phase::Paused;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
                 ready && phase == Phase::Ended,

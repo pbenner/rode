@@ -27,6 +27,7 @@ pub fn request_with_upload(
     upload: bool,
 ) -> Result<sessions::Reply> {
     let operation = sessions::Operation::Runtimes {
+        mise: plan.environment.mise,
         request: Box::new(request),
     };
     if let Some(remote) = remote {
@@ -149,11 +150,7 @@ impl Client {
             .collect();
         spec.policy = sessions::fingerprint(&plan);
         spec.root = plan.root.clone();
-        spec.prefix = if plan.active {
-            plan.prefix.clone()
-        } else {
-            vec![]
-        };
+        spec.prefix = plan.execution_prefix(&spec.python)?;
         spec.mode = plan.label().into();
         let identity = Identity {
             id: spec.id.clone(),

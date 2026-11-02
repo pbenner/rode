@@ -1,5 +1,7 @@
 # Extensions
 
+The optional [mise extension](mise.md) (`rode.mise`) adds project toolchain/environment integration and task discovery. It is bundled and disabled by default; enable it in this manager and opt in per project from Environment.
+
 Click the **Extensions** icon (four blocks) in the left activity bar, press **Ctrl+Shift+X**, or choose **View → Extensions** to open the extension manager. It is also available as **Extensions: Manage installed extensions** in the command palette, and works without an open project.
 
 Use the checkboxes to enable/disable native features and installed adapters. The manager also installs local tool manifests, reloads installed manifests and edits extension-specific JSON settings. Changes save immediately and merge safely with other RODE windows' edits. A running window keeps its own choices until changed or restarted.

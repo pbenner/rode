@@ -836,7 +836,12 @@ impl EditorApp {
     /// Render cached terminals, runtimes and scheduler jobs with explicit attach/end/release actions.
     pub(super) fn sessions_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        ui.heading("Terminals & Slurm");
+        layout::heading(
+            ui,
+            "Terminals & Slurm",
+            "Manage terminal sessions, allocations and running kernels on this host",
+            palette,
+        );
         let host = self
             .session_remote()
             .map(|remote| format!("SSH · {}", remote.profile.endpoint()))
@@ -892,10 +897,10 @@ impl EditorApp {
             .show(ui, |ui| {
                 ui.label("Persist: on keeps a terminal running after its last view closes. Persist: off ends it then. Shared attachments control the same shell and persistence setting.");
                 if available.is_empty() && !self.sessions.busy {
-                    ui.label(palette.tag("No native terminals on this host yet."));
+                    layout::empty(ui, "No terminals on this host", "Create a terminal to start a new session.", palette);
                 }
                 for info in available {
-                    ui.group(|ui| {
+                    layout::card(ui, palette, |ui| {
                         ui.horizontal_wrapped(|ui| {
                             ui.strong(&info.name);
                             ui.small(if info.persistent { "PERSISTENT" } else { "UNTIL LAST VIEW CLOSES" });
@@ -926,7 +931,7 @@ impl EditorApp {
                         if let Some((id, mut name)) = self.sessions.rename.clone()
                             && id == info.id
                         {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.add(egui::TextEdit::singleline(&mut name).char_limit(64));
                                 if ui.add_enabled(!self.sessions.busy, egui::Button::new("Save name")).clicked() {
                                     self.session_request(service::Operation::Rename {
@@ -942,6 +947,7 @@ impl EditorApp {
                             });
                         }
                     });
+                    ui.add_space(8.);
                 }
                 if !self.sessions.other.is_empty() {
                     ui.separator();
@@ -965,8 +971,9 @@ impl EditorApp {
                         }
                     });
                 }
-                self.slurm_allocations_ui(ui, ctx);
-                self.runtimes_ui(ui, ctx);
+                ui.add_space(12.);
+                layout::section(ui, "Your Slurm allocations", palette, |ui| self.slurm_allocations_ui(ui, ctx));
+                layout::section(ui, "Notebook kernels & debuggers", palette, |ui| self.runtimes_ui(ui, ctx));
                 self.slurm_settings_ui(ui);
             });
         if ui.button("Close").clicked() {
@@ -1043,8 +1050,6 @@ impl EditorApp {
     }
     fn slurm_allocations_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        ui.separator();
-        ui.heading("Your Slurm allocations");
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
@@ -1093,7 +1098,7 @@ impl EditorApp {
             ui.colored_label(palette.muted, snapshot.warning);
         }
         for job in snapshot.jobs {
-            ui.group(|ui| {
+            layout::card(ui, palette, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.strong(format!("Job {} · {}", job.id, job.state));
                     ui.label(format!(
@@ -1127,6 +1132,7 @@ impl EditorApp {
                 ));
                 ui.add(egui::Label::new(palette.tag(&job.tres)).truncate());
             });
+            ui.add_space(8.);
         }
     }
     /// Render window-owned terminal views using their stable keys and retained creation order.

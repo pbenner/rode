@@ -1,6 +1,7 @@
 //! Themed host charts with bounded, timestamped samples. Poll only while visible;
 //! preserve gaps and unavailable readings instead of plotting invented zeroes.
 use super::*;
+use crate::app::layout::card;
 use std::collections::VecDeque;
 
 mod dashboard;
@@ -124,15 +125,16 @@ impl EditorApp {
     pub(in crate::app) fn monitor_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         let state = &self.workbench.monitoring;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Host overview").size(18.).color(palette.text));
-            if state.monitor_busy {
-                ui.spinner();
-            }
-        });
-        ui.label(
-            RichText::new("Live telemetry · sampled while this panel is visible")
-                .color(palette.muted),
+        layout::header(
+            ui,
+            "Host overview",
+            "Live telemetry · sampled while this panel is visible",
+            palette,
+            |ui| {
+                if state.monitor_busy {
+                    ui.spinner();
+                }
+            },
         );
         if self.workspace.as_ref().is_some_and(|w| w.plan.active) {
             ui.label("Host and GPU readings are collected outside the project sandbox.");
@@ -259,19 +261,6 @@ impl EditorApp {
                 });
         });
     }
-}
-
-/// Frame content within the available column width; the caller owns spacing between cards.
-fn card(ui: &mut egui::Ui, palette: theme::Palette, contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1_f32, palette.border))
-        .corner_radius(6.)
-        .inner_margin(12.)
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            contents(ui);
-        });
 }
 
 /// Reserve equal-height title/value regions so long device names and unavailable

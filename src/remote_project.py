@@ -9,133 +9,6 @@ reserved for the final JSON reply.
 import json
 import os
 import shutil
-import signal
-import subprocess
-import threading
-import time
-
-
-def project_environment_settings(settings, env):
-    """Apply validated literal values and runtime directories on this execution host."""
-    import re
-    import shlex
-
-    variables = settings.get("variables", {})
-    runtimes = settings.get("runtimes", {})
-    if len(variables) > 64 or len(runtimes) > 32 or len(json.dumps(settings).encode()) > 65536:
-        raise ValueError("Too many project environment settings.")
-    exports = []
-    for name, value in variables.items():
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,127}", name):
-            raise ValueError("Invalid environment variable name.")
-        if len(value.encode()) > 4096 or any(c in value for c in "\0\n\r"):
-            raise ValueError("Invalid environment variable value.")
-        env[name] = value
-        exports.append(f"export {name}={shlex.quote(value)};")
-    directories = []
-    if runtimes.get("rustc") and "RUSTC" not in variables:
-        env["RUSTC"] = runtimes["rustc"]
-    if runtimes.get("rustc") and "RUSTC" not in variables:
-        exports.append(f"export RUSTC={shlex.quote(runtimes['rustc'])};")
-    for name, value in sorted(runtimes.items()):
-        if (
-            not re.fullmatch(r"[A-Za-z_0-9-]{1,64}", name)
-            or len(value.encode()) > 4096
-            or any(ord(c) < 32 or ord(c) == 127 for c in value)
-        ):
-            raise ValueError("Invalid runtime executable.")
-        if "/" in value and not os.path.isabs(value):
-            raise ValueError("Use an absolute host path for a runtime executable.")
-        if os.path.isabs(value):
-            directory = os.path.dirname(value)
-            if directory not in directories:
-                directories.append(directory)
-    if directories:
-        prefix = ":".join(directories)
-        env["PATH"] = prefix + ":" + env.get("PATH", "")
-        exports.append(f'export PATH={shlex.quote(prefix)}:"$PATH";')
-    return env, " ".join(exports)
-
-
-def project_run(args, root=None, text="", timeout=20, env=None, cancel=None):
-    """Run literal arguments in an owned group with concurrent bounded pipe draining, timeout and cancellation."""
-    limit = 8 * 1024 * 1024
-    if len(text.encode("utf-8")) > limit:
-        raise ValueError("Command input exceeds 8 MiB.")
-    process = subprocess.Popen(
-        args,
-        cwd=root,
-        env=env,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
-    captured = [bytearray(), bytearray()]
-    overflow = threading.Event()
-
-    def drain(pipe, buffer):
-        """Drain one output stream concurrently, flagging overflow beyond the shared command byte limit."""
-        try:
-            while True:
-                data = pipe.read(65536)
-                if not data:
-                    return
-                buffer.extend(data)
-                if len(buffer) > limit:
-                    overflow.set()
-                    return
-        finally:
-            pipe.close()
-
-    def write():
-        """Feed the captured UTF-8 source and close stdin even when the child stops reading."""
-        try:
-            process.stdin.write(text.encode("utf-8"))
-        except (BrokenPipeError, OSError):
-            pass
-        finally:
-            try:
-                process.stdin.close()
-            except (BrokenPipeError, OSError):
-                pass
-
-    workers = [
-        threading.Thread(target=drain, args=(pipe, captured[i]), daemon=True)
-        for i, pipe in enumerate([process.stdout, process.stderr])
-    ]
-    workers.append(threading.Thread(target=write, daemon=True))
-    for thread in workers:
-        thread.start()
-    start = time.monotonic()
-    while process.poll() is None:
-        if overflow.is_set() or time.monotonic() - start > timeout or (cancel and cancel.is_set()):
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            raise ValueError("Command exceeded its time or 8 MiB output limit.")
-        time.sleep(0.015)
-    for thread in workers:
-        thread.join(2)
-        if thread.is_alive():
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            raise ValueError("Command pipes did not close.")
-    if overflow.is_set():
-        raise ValueError("Command output exceeded 8 MiB.")
-    return dict(
-        code=process.returncode,
-        stdout=captured[0].decode("utf-8"),
-        stderr=captured[1].decode("utf-8"),
-    )
-
-
-def project_checked(output):
-    """Return successful stdout or raise a bounded combined-output failure."""
-    if output["code"]:
-        raise ValueError(output["stderr"] + output["stdout"])
-    return output["stdout"]
 
 
 def project_resolve(root, path):
@@ -276,7 +149,7 @@ def project_analyze(request, root):
         if tool == "prettier" and os.path.isfile(local):
             executable = local
         try:
-            output = project_run(
+            output = globals()["project_run"](
                 [executable, *args], root, text, env=dict(os.environ, NO_COLOR="1")
             )
         except FileNotFoundError as error:
@@ -310,7 +183,7 @@ def project_analyze(request, root):
         command = [os.path.join(os.path.dirname(python), "ruff")]
     else:
         try:
-            probe = project_run(
+            probe = globals()["project_run"](
                 [
                     python,
                     "-c",
@@ -332,7 +205,7 @@ def project_analyze(request, root):
     def execute(args, source):
         """Invoke the selected Ruff command with project environment and an actionable missing-tool error."""
         try:
-            return project_run(command + args, root, source, env=env)
+            return globals()["project_run"](command + args, root, source, env=env)
         except OSError as error:
             raise ValueError(
                 "Ruff is unavailable. Install uv on the project host for uvx ruff, or choose auto / an explicit Ruff executable in Project settings: "
@@ -340,7 +213,7 @@ def project_analyze(request, root):
             )
 
     if request["fix"]:
-        result["text"] = project_checked(
+        result["text"] = globals()["project_checked"](
             execute(
                 [
                     "check",
@@ -468,7 +341,7 @@ def project_monitor(root):
             return None
 
     try:
-        output = project_run(
+        output = globals()["project_run"](
             [
                 "nvidia-smi",
                 "--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
@@ -526,7 +399,9 @@ def project_monitor(root):
     except OSError:
         pass
     try:
-        output = project_run(["ps", "-eo", "pid,pcpu,pmem,comm", "--sort=-pcpu"], timeout=2)
+        output = globals()["project_run"](
+            ["ps", "-eo", "pid,pcpu,pmem,comm", "--sort=-pcpu"], timeout=2
+        )
         for line in output["stdout"].splitlines()[1:13]:
             fields = line.split(None, 3)
             if len(fields) == 4:
@@ -565,7 +440,7 @@ def project_git_command(args):
 def project_git(root, args, text=""):
     """Execute literal Git arguments with the same bounded environment on every route."""
     command, env = project_git_command(args)
-    return project_run(command, root, text, timeout=120, env=env)
+    return globals()["project_run"](command, root, text, timeout=120, env=env)
 
 
 def project_handle(request):
@@ -576,9 +451,11 @@ def project_handle(request):
         )
     task = request["task"]
     root = os.path.expanduser(request["root"])
+    if task == "mise":
+        return dict(kind="mise", data=mise_handle(request))  # noqa: F821 - shared host peer
     if task == "runtimes":
         settings = request.get("settings", {})
-        env, _ = project_environment_settings(settings, dict(os.environ))
+        env, _ = globals()["project_environment_settings"](settings, dict(os.environ))
         env["RUSTUP_AUTO_INSTALL"] = "0"
         env["GOTOOLCHAIN"] = "local"
         results = []
@@ -593,7 +470,7 @@ def project_handle(request):
                     if name in ("java", "javac")
                     else "--version"
                 )
-                output = project_run([program, flag], root=root, env=env, timeout=3)
+                output = globals()["project_run"]([program, flag], root=root, env=env, timeout=3)
                 if output["code"]:
                     entry["error"] = f"Unavailable (exit {output['code']})"
                 else:
@@ -631,8 +508,8 @@ def project_handle(request):
                 candidates.append(dict(name=name, python=path))
         python = project_python(root, request["selected"])
         data = json.loads(
-            project_checked(
-                project_run(
+            globals()["project_checked"](
+                globals()["project_run"](
                     [
                         python,
                         "-c",
@@ -665,7 +542,7 @@ def project_handle(request):
         command = [project_python(root, request["python"]), "-m", "venv", path]
         if not request.get("with_pip", True):
             command.append("--without-pip")
-        output = project_run(command, root, timeout=120)
+        output = globals()["project_run"](command, root, timeout=120)
         return dict(kind="command", data=output)
     if task == "analyze":
         return dict(kind="analysis", data=project_analyze(request, root))

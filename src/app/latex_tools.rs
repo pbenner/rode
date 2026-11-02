@@ -320,7 +320,17 @@ impl EditorApp {
             .id(egui::Id::new("latex-output"))
             .open(&mut open)
             .default_size([720., 480.])
+            .frame(layout::dialog_frame(
+                &ctx.style(),
+                self.themes.active().palette,
+            ))
             .show(ctx, |ui| {
+                layout::heading(
+                    ui,
+                    "LaTeX build output",
+                    "Build progress and diagnostics on the project host",
+                    self.themes.active().palette,
+                );
                 ui.horizontal_wrapped(|ui| {
                     if self.latex.busy {
                         ui.spinner();

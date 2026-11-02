@@ -35,6 +35,8 @@ pub const MAX_EXTENSIONS: usize = 64;
 /// code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
+    /// Optional mise toolchain, environment and task integration; disabled by default.
+    Mise,
     /// Project-host Git tools and source-control panels.
     Git,
     /// On-demand host and GPU monitoring.
@@ -66,6 +68,7 @@ impl Feature {
     /// Stable namespaced bundled-feature identifier used by preferences.
     pub fn id(self) -> &'static str {
         match self {
+            Self::Mise => "rode.mise",
             Self::Git => "rode.git",
             Self::Monitor => "rode.monitor",
             Self::Python => "rode.python",
@@ -345,6 +348,12 @@ impl Registry {
                 "Configurable project-host TeX builds, compiler diagnostics and native PDF preview. Optional latexindent and ChkTeX buffer tools.",
                 "LaTeX source / explicit Build",
             ),
+            (
+                Feature::Mise,
+                "mise",
+                "Use installed mise toolchains and project environments; discover and run mise tasks on the project host.",
+                "Explicit project opt-in / task action",
+            ),
         ] {
             registry.entries.push(Entry {
                 id: feature.id().into(),
@@ -398,7 +407,7 @@ impl Registry {
             self.preferences
                 .get(id)
                 .and_then(|p| p.enabled)
-                .unwrap_or(e.feature.is_some())
+                .unwrap_or(e.feature.is_some_and(|feature| feature != Feature::Mise))
         })
     }
     /// Return whether a bundled capability may activate.

@@ -40,10 +40,77 @@ fn remote(request: &Request) -> anyhow::Result<Response> {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn command_start_waits_for_a_brief_executable_writer_without_repeating_started_work() {
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("fresh-program");
+    fs::copy("/usr/bin/true", &executable).unwrap();
+    let writer = fs::OpenOptions::new()
+        .write(true)
+        .open(&executable)
+        .unwrap();
+    assert_eq!(
+        Command::new(&executable)
+            .spawn()
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::ETXTBSY)
+    );
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(writer);
+        });
+        assert!(
+            project::run(Command::new(&executable), vec![], Duration::from_secs(3))
+                .unwrap()
+                .success()
+        );
+    });
+    let source = format!(
+        "{}\n{}",
+        include_str!("../src/remote_environment.py"),
+        r#"
+import shutil, tempfile
+with tempfile.TemporaryDirectory() as directory:
+    executable = os.path.join(directory, 'fresh-program')
+    shutil.copy2('/usr/bin/true', executable)
+    writer = open(executable, 'r+b')
+    try:
+        subprocess.Popen([executable])
+        raise AssertionError('Expected a busy executable')
+    except OSError as error:
+        assert error.errno == errno.ETXTBSY
+    def release():
+        time.sleep(0.05)
+        writer.close()
+    thread = threading.Thread(target=release)
+    thread.start()
+    output = project_run([executable], timeout=3)
+    thread.join()
+    assert output['code'] == 0, output
+"#
+    );
+    assert!(
+        project::run(
+            {
+                let mut command = Command::new("python3");
+                command.args(["-c", &source]);
+                command
+            },
+            vec![],
+            Duration::from_secs(5)
+        )
+        .unwrap()
+        .success()
+    );
+}
+
+#[test]
 fn python_command_runner_tolerates_a_child_exiting_before_stdin_is_flushed() {
     let script = format!(
         "{}\n{}",
-        include_str!("../src/remote_project.py"),
+        include_str!("../src/remote_environment.py"),
         r#"
 import sys
 

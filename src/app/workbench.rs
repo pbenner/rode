@@ -116,6 +116,11 @@ pub(super) enum GitJob {
 /// UI completion metadata for a project-service request. Analysis carries the
 /// submitted document/version/epoch so stale replies cannot overwrite newer edits.
 pub(super) enum ToolJob {
+    Mise {
+        action: crate::mise::Action,
+        revision: u64,
+        settings: crate::environment::Settings,
+    },
     Extension {
         revision: u64,
         operation: String,
@@ -324,41 +329,61 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         self.pane_ui(ui, navigation::Pane::Tools);
         if panel == Panel::Debug {
-            self.debugger_ui(ui, ctx);
+            layout::page(ui, layout::PAGE_WIDTH, |ui| self.debugger_ui(ui, ctx));
             return;
         }
         if panel == Panel::Agent {
             self.agent_ui(ui, ctx);
             return;
         }
-        let host = self
-            .workspace
-            .as_ref()
-            .and_then(|w| w.remote.as_ref())
-            .map(|r| format!("SSH · {}", r.profile.endpoint()))
-            .unwrap_or_else(|| "LOCAL HOST".into());
-        ui.add(egui::Label::new(palette.tag(&host)).truncate())
-            .on_hover_text(&host);
-        if panel == Panel::Monitor && !self.monitor_ready() {
-            ui.label("Connect or reconnect to the SSH host to view its system monitor.");
-            return;
-        }
-        if panel != Panel::Monitor && !self.project_ready() {
-            ui.label("Open a project and connect to its host to use these tools.");
-            return;
-        }
-        egui::ScrollArea::vertical()
-            .id_salt(("workbench-content", panel.title()))
-            .auto_shrink([false, false])
-            .show(ui, |ui| match panel {
-                Panel::Git => self.git_ui(ui, ctx),
-                Panel::Monitor => self.monitor_ui(ui),
-                Panel::Problems => self.problems_ui(ui, ctx),
-                Panel::Environment => self.environment_ui(ui, ctx),
-                Panel::Tasks => self.tasks_ui(ui, ctx),
-                Panel::Settings => self.settings_ui(ui, ctx),
-                Panel::Agent | Panel::Debug => unreachable!(),
-            });
+        layout::page(
+            ui,
+            if panel == Panel::Monitor {
+                1740.
+            } else {
+                layout::PAGE_WIDTH
+            },
+            |ui| {
+                let host = self
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| w.remote.as_ref())
+                    .map(|r| format!("SSH · {}", r.profile.endpoint()))
+                    .unwrap_or_else(|| "LOCAL HOST".into());
+                ui.add(egui::Label::new(palette.tag(&host)).truncate())
+                    .on_hover_text(&host);
+                if panel == Panel::Monitor && !self.monitor_ready() {
+                    layout::empty(
+                        ui,
+                        "Host disconnected",
+                        "Connect or reconnect to the SSH host to view its system monitor.",
+                        palette,
+                    );
+                    return;
+                }
+                if panel != Panel::Monitor && !self.project_ready() {
+                    layout::empty(
+                        ui,
+                        "Open a project to get started",
+                        "Open a project and connect to its host to use these tools.",
+                        palette,
+                    );
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(("workbench-content", panel.title()))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match panel {
+                        Panel::Git => self.git_ui(ui, ctx),
+                        Panel::Monitor => self.monitor_ui(ui),
+                        Panel::Problems => self.problems_ui(ui, ctx),
+                        Panel::Environment => self.environment_ui(ui, ctx),
+                        Panel::Tasks => self.tasks_ui(ui, ctx),
+                        Panel::Settings => self.settings_ui(ui, ctx),
+                        Panel::Agent | Panel::Debug => unreachable!(),
+                    });
+            },
+        );
     }
 
     /// Reveal a tool without toggling it off, including an independently detached tab.
@@ -649,6 +674,29 @@ impl EditorApp {
         ctx: &egui::Context,
     ) {
         match job {
+            ToolJob::Mise {
+                action,
+                revision,
+                settings,
+            } => {
+                self.workbench.environment.mise_busy = false;
+                if revision != self.extensions.registry.revision
+                    || settings != self.workbench.prefs.environment
+                {
+                    return;
+                }
+                match result {
+                    Ok(project::Response::Mise(snapshot)) => {
+                        self.workbench.environment.mise_error.clear();
+                        self.workbench.environment.mise = Some(snapshot);
+                        if !matches!(action, crate::mise::Action::Inspect) {
+                            self.request_mise(crate::mise::Action::Inspect, ctx);
+                        }
+                    }
+                    Err(error) => self.workbench.environment.mise_error = error,
+                    _ => self.workbench.environment.mise_error = "Invalid mise response".into(),
+                }
+            }
             ToolJob::Runtimes { settings } => {
                 self.workbench.environment.busy = false;
                 if settings != self.workbench.prefs.environment {
@@ -1052,6 +1100,55 @@ mod tests {
         });
         (app, ctx)
     }
+    #[test]
+    fn tool_pages_fit_compact_and_detached_widths() {
+        let root = tempfile::tempdir().unwrap();
+        for width in [360., 680., 1440.] {
+            for panel in [
+                Panel::Git,
+                Panel::Monitor,
+                Panel::Problems,
+                Panel::Environment,
+                Panel::Tasks,
+                Panel::Settings,
+                Panel::Debug,
+            ] {
+                let (mut app, ctx) = app(root.path());
+                app.workbench.git.git_root = root.path().to_string_lossy().into();
+                app.workbench.git.branch = "main".into();
+                for tab in if panel == Panel::Git {
+                    vec![
+                        GitTab::Changes,
+                        GitTab::History,
+                        GitTab::Branches,
+                        GitTab::Stash,
+                        GitTab::Remotes,
+                        GitTab::Tags,
+                        GitTab::Worktrees,
+                        GitTab::Submodules,
+                    ]
+                } else {
+                    vec![GitTab::Changes]
+                } {
+                    app.workbench.git.git_tab = tab;
+                    for _ in 0..3 {
+                        let _ = ctx.run(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 700.))),
+                            ..Default::default()
+                        }, |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                let available = ui.available_rect_before_wrap();
+                                let content = ui.scope(|ui| app.panel_content(panel, ui, ctx)).response.rect;
+                                assert!(content.right() <= available.right() + 1.,
+                                    "{panel:?}/{tab:?} overflows at {width}: {content:?} vs {available:?}");
+                            });
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn opening_a_non_python_project_does_not_probe_python_and_disable_invalidates_tools() {
         use crate::extensions::Feature;

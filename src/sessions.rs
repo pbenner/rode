@@ -10,6 +10,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 pub enum Operation {
     /// Host-owned notebook/debugger control, outside the captured process sandbox.
     Runtimes {
+        /// Preserve bare commands for resolution by the captured mise launch wrapper.
+        #[serde(default)]
+        mise: bool,
         /// Only runtime discovery, creation and termination are accepted.
         request: Box<rode_session::Request>,
     },
@@ -17,6 +20,9 @@ pub enum Operation {
     List,
     /// Native agent operations use the same verified host helper and service.
     Agents {
+        /// Preserve bare commands for resolution by the captured mise launch wrapper.
+        #[serde(default)]
+        mise: bool,
         /// Agent-only native service request.
         request: Box<rode_session::Request>,
     },
@@ -145,7 +151,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
         },
     };
     let request = match operation {
-        Operation::Runtimes { request } => {
+        Operation::Runtimes { request, mise } => {
             let mut request = *request.clone();
             ensure!(
                 matches!(
@@ -161,6 +167,8 @@ pub fn local(operation: &Operation) -> Result<Reply> {
                 let python = project::python_path(root, &spec.python);
                 spec.argv[0] = if spec.python_program {
                     python.clone()
+                } else if *mise && !spec.argv[0].contains('/') && !spec.argv[0].starts_with('~') {
+                    PathBuf::from(&spec.argv[0])
                 } else {
                     crate::process::resolve_program(root, &spec.argv[0])
                 }
@@ -175,7 +183,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             request
         }
         Operation::List => rode_session::Request::List,
-        Operation::Agents { request } => {
+        Operation::Agents { request, mise } => {
             let mut request = *request.clone();
             ensure!(
                 matches!(
@@ -188,7 +196,13 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             );
             if let rode_session::Request::CreateAgent { spec } = &mut request {
                 let root = std::path::Path::new(&spec.plan.root);
-                spec.executable = crate::process::resolve_program(root, &spec.executable)
+                spec.executable =
+                    if *mise && !spec.executable.contains('/') && !spec.executable.starts_with('~')
+                    {
+                        PathBuf::from(&spec.executable)
+                    } else {
+                        crate::process::resolve_program(root, &spec.executable)
+                    }
                     .to_string_lossy()
                     .into();
                 spec.env = std::env::vars_os()
@@ -220,6 +234,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             } else {
                 vec![]
             };
+            argv.extend(crate::mise::prefix(&plan.environment, &plan.root, python)?);
             if let Some(launch) = allocation {
                 argv.extend(launch.argv.clone());
             } else {
@@ -269,11 +284,12 @@ pub fn local(operation: &Operation) -> Result<Reply> {
                     String::new()
                 } else {
                     let activation = initial_input(&python);
+                    let provider = crate::mise::shell_environment(&plan.environment, &plan.root);
                     let exports = environment.exports()?;
                     if exports.is_empty() {
-                        activation
+                        provider + &activation
                     } else {
-                        format!("{activation}{exports}\n")
+                        format!("{provider}{activation}{exports}\n")
                     }
                 },
                 env,

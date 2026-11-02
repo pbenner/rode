@@ -19,6 +19,8 @@ pub const TOOLS: &[(&str, &str)] = &[
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Explicit project opt-in to the optional mise extension for newly launched work.
+    pub mise: bool,
     /// Executable names mapped to literal host paths or alternative command names.
     pub runtimes: BTreeMap<String, String>,
     /// Literal values; shell expansion is never performed on these strings.

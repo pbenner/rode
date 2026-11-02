@@ -63,26 +63,25 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v5
         with:
-          components: rustfmt, clippy
+          version: '2026.10.25'
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-lint
       - name: Reset logs restored from the build cache
         run: rm -rf target/ci-results
-      - uses: astral-sh/setup-uv@v7
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh lint
-      - run: python3 scripts/ci.py time rust-format -- cargo fmt --all --check
-      - run: python3 scripts/ci.py time python-lint -- scripts/uvx.sh ruff@0.17.3 check .
-      - run: python3 scripts/ci.py time python-format -- scripts/uvx.sh ruff@0.17.3 format --check .
-      - run: python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py
-      - run: python3 scripts/ci.py time packaging -- python3 scripts/test-packaging.py
+      - run: mise run lint:rust-format
+      - run: mise run lint:python
+      - run: mise run lint:python-format
+      - run: mise run lint:ci
+      - run: mise run lint:packaging
       - name: Check Rust API documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: python3 scripts/ci.py time rust-doc -- cargo doc --locked --profile ci --workspace --no-deps --document-private-items
-      - run: python3 scripts/ci.py time --timeout 900 clippy -- cargo clippy --locked --profile ci --workspace --all-targets -- -D warnings
+        run: mise run lint:docs
+      - run: mise run lint:clippy
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -97,17 +96,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v5
+        with:
+          version: '2026.10.25'
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-build
       - name: Reset logs restored from the build cache
         run: rm -rf target/ci-results
-      - uses: astral-sh/setup-uv@v7
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh build
       - name: Prepare pinned Ruff executable
         run: |
-          scripts/uvx.sh --from ruff==0.17.3 python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import shutil
           destination = Path('target/test-tools/bin/ruff')
@@ -119,8 +119,8 @@ jobs:
         timeout-minutes: 20
         run: |
           python3 scripts/ci.py time --timeout 1200 test-build -- bash -c 'cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json'
-      - run: python3 scripts/ci.py time --timeout 600 rust-tests -- cargo test --locked --profile ci --workspace --all-targets
-      - run: python3 scripts/ci.py time --timeout 600 editor-build -- cargo build --locked --profile ci --bins
+      - run: mise run test
+      - run: mise run build
       - run: python3 scripts/ci.py time --timeout 600 static-helper -- bash scripts/build-sessiond.sh
       - run: python3 scripts/ci.py bundle
       - uses: actions/upload-artifact@v7
@@ -154,6 +154,10 @@ jobs:
         with:
           name: ci-binaries
           path: target
+      - uses: jdx/mise-action@v5
+        with:
+          version: '2026.10.25'
+          install_args: python uv rust
       - run: tar -xzf target/ci-bundle.tar.gz
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
       - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/ci.py run '${{ matrix.suite }}'
@@ -187,9 +191,11 @@ jobs:
         with:
           name: ci-binaries
           path: target
+      - uses: jdx/mise-action@v5
+        with:
+          version: '2026.10.25'
+          install_args: python uv node rust
       - run: tar -xzf target/ci-bundle.tar.gz
-      - uses: astral-sh/setup-uv@v7
-        if: contains(fromJSON('["documents","remote","runtimes"]'), matrix.suite)
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
       - name: Enable unprivileged namespaces on the disposable sandbox runner
         if: matrix.suite == 'sandbox'

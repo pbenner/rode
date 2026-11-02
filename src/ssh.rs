@@ -273,16 +273,21 @@ impl Remote {
 
     /// Build a quoted project login-shell command, retaining the actual sandbox prefix.
     pub fn shell_command(&self, plan: &crate::sandbox::Plan) -> String {
-        let prefix = if plan.active {
-            plan.prefix
-                .iter()
-                .map(|arg| quote(arg))
-                .collect::<Vec<_>>()
-                .join(" ")
-                + " "
-        } else {
-            String::new()
+        let arguments = match plan.execution_prefix("") {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                return format!(
+                    "printf '%s\\n' {} >&2; exit 1",
+                    quote(&format!("Cannot prepare project environment: {error:#}"))
+                );
+            }
         };
+        let prefix = arguments
+            .iter()
+            .map(|arg| quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+            + " ";
         format!(
             "sh -c {}",
             quote(&format!(
@@ -310,15 +315,23 @@ impl Remote {
         // a fresh login if the socket disappears between the check and spawn.
         command.args(self.channel_args(false));
         let prefix = plan
-            .filter(|p| p.active)
+            .filter(|p| p.active || p.environment_applies(request))
             .map(|p| {
-                p.prefix
-                    .iter()
-                    .map(|arg| quote(arg))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    + " "
+                let arguments = if p.environment_applies(request) {
+                    p.execution_prefix("")?
+                } else {
+                    p.prefix.clone()
+                };
+                Ok::<_, anyhow::Error>(
+                    arguments
+                        .iter()
+                        .map(|arg| quote(arg))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        + " ",
+                )
             })
+            .transpose()?
             .unwrap_or_default();
         command.arg(format!("{prefix}{}", python::HOST.command()));
         let output = run_bounded(
@@ -348,15 +361,17 @@ impl Remote {
         let mut command = Command::new("ssh");
         command.args(self.channel_args(false));
         let prefix = plan
-            .filter(|p| p.active)
             .map(|p| {
-                p.prefix
-                    .iter()
-                    .map(|a| quote(a))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    + " "
+                Ok::<_, anyhow::Error>(
+                    p.execution_prefix("")?
+                        .iter()
+                        .map(|a| quote(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        + " ",
+                )
             })
+            .transpose()?
             .unwrap_or_default();
         command.arg(format!(
             "{prefix}{} --extension-helper",
@@ -389,16 +404,13 @@ impl Remote {
         );
         let mut command = Command::new("ssh");
         command.args(self.channel_args(false));
-        let prefix = if plan.active {
-            plan.prefix
-                .iter()
-                .map(|arg| quote(arg))
-                .collect::<Vec<_>>()
-                .join(" ")
-                + " "
-        } else {
-            String::new()
-        };
+        let prefix = plan
+            .execution_prefix("")?
+            .iter()
+            .map(|arg| quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+            + " ";
         command.arg(format!("{prefix}{} --latex-helper", python::HOST.command()));
         crate::latex::execute_with_prelude(command, invocation, cancel, python::HOST.input(vec![])?)
     }
@@ -416,16 +428,14 @@ impl Remote {
         let mut command = Command::new("ssh");
         command.args(self.channel_args(false));
         let prefix = plan
-            .filter(|p| p.active)
-            .map(|p| {
-                p.prefix
-                    .iter()
-                    .map(|arg| quote(arg))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    + " "
-            })
-            .unwrap_or_default();
+            .map(|p| p.execution_prefix(""))
+            .transpose()?
+            .unwrap_or_default()
+            .iter()
+            .map(|arg| quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+            + " ";
         command.arg(format!("{prefix}{} --marp-helper", python::HOST.command()));
         crate::marp::execute_with_prelude(command, invocation, cancel, python::HOST.input(vec![])?)
     }

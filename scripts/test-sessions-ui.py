@@ -264,7 +264,7 @@ def run():
                 screenshot(window, "reattach-list.png")
                 # The runtime section changes keyboard focus order. Select the
                 # first terminal's actual Attach control and await its host view.
-                click(657, 277)
+                click(665, 294)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and info["clients"] == 1 for info in infos()
@@ -279,7 +279,7 @@ def run():
                 )
                 other, other_window = launch()
                 command("Terminal: Sessions and Slurm allocations")
-                click(657, 277)
+                click(665, 294)
                 wait_for(
                     lambda: any(
                         info["id"] == first["id"] and info["clients"] == 2 for info in infos()
@@ -309,7 +309,7 @@ def run():
                 screenshot(window, "before-release.png")
                 # The fixture has two terminal rows, followed by job 42. Focus
                 # order also includes live refresh controls; do not count Tabs.
-                click(650, 538)  # Release allocation 42; confirmation comes first.
+                click(670, 600)  # Release allocation 42 in its card; confirmation comes first.
                 time.sleep(0.3)
                 assert not released.exists(), "Release ran without confirmation"
                 screenshot(window, "release-confirmation.png")

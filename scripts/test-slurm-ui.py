@@ -138,12 +138,12 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
             click(1210, 108)
             screenshot(window, "form.png")
             # Request two GPUs through the real number field and form action.
-            click(592, 400)
-            click(592, 400)
+            click(592, 394)
+            click(592, 394)
             key("a", ("Control_L",))
             text("2")
             key("Return")
-            click(498, 593)
+            click(500, 662)  # Allocate in new terminal below the Resources card.
             wait_for(
                 lambda: any(info.get("allocation") for info in rpc("list")),
                 "Allocation form did not create a terminal",
@@ -194,9 +194,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
             command("Terminal: Sessions and Slurm allocations")
             screenshot(window, "reattach-list.png")
             # The original nonpersistent shell ended on exit, leaving this one row.
-            for _ in range(5):
-                key("Tab")
-            key("Return")
+            click(647, 294)  # Attach the retained Slurm session.
             time.sleep(1)
             screenshot(window, "reattached.png")
             click(600, 755)
@@ -208,7 +206,7 @@ with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
             click(1210, 108)
             screenshot(window, "release.png")
             assert not (state / "cancelled").exists()
-            click(682, 343)
+            click(682, 296)  # Release allocation in the current-job toolbar.
             screenshot(window, "release-confirmation.png")
             assert not (state / "cancelled").exists(), "Clicking Release skipped confirmation"
             key("Return", ("Alt_L",))

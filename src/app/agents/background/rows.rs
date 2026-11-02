@@ -113,7 +113,7 @@ fn row(
     let attachment = context.attachment(info);
     let narrow = ui.available_width() < 540.;
     let mut action = None;
-    let response = egui::Frame::new()
+    let response = crate::app::layout::card_frame(palette)
         .fill(if attachment.current {
             palette.active
         } else {
@@ -127,8 +127,6 @@ fn row(
                 palette.border
             },
         ))
-        .corner_radius(6)
-        .inner_margin(12)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.set_min_height(if narrow { 166. } else { 132. });

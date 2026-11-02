@@ -128,7 +128,12 @@ impl EditorApp {
     /// Validate requested resources and queue an explicit allocation on the selected project host.
     pub(in crate::app) fn slurm_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        ui.heading("Interactive Slurm allocation");
+        layout::heading(
+            ui,
+            "Interactive Slurm allocation",
+            "Reserve compute resources and open a terminal on the allocated node",
+            palette,
+        );
         let host = self
             .session_remote()
             .map(|r| format!("SSH · {}", r.profile.endpoint()))
@@ -166,80 +171,83 @@ impl EditorApp {
             .id_salt("allocation-form")
             .max_height((ctx.content_rect().height() - 320.).clamp(140., 460.))
             .show(ui, |ui| {
-                let draft = &mut self.sessions.allocation_draft;
-                egui::Grid::new("slurm-resources")
-                    .num_columns(2)
-                    .spacing([12., 6.])
-                    .show(ui, |ui| {
-                        ui.label("GPUs (total)");
-                        ui.add(egui::DragValue::new(&mut draft.gpus).range(0..=65536));
-                        ui.end_row();
-                        for (label, value, hint) in [
-                            (
-                                "Time (H or H:MM)",
-                                &mut draft.time,
-                                "2 or 2:30; full Slurm time also accepted",
-                            ),
-                            (
-                                "Memory per node (GB)",
-                                &mut draft.memory,
-                                "80; explicit units such as 80000M also accepted",
-                            ),
-                        ] {
-                            ui.label(label);
-                            ui.add(
-                                egui::TextEdit::singleline(value)
-                                    .hint_text(hint)
-                                    .char_limit(1024)
-                                    .desired_width(300.),
-                            );
-                            ui.end_row();
-                        }
-                    });
-                ui.collapsing("Advanced resources / site settings", |ui| {
-                    egui::Grid::new("slurm-advanced")
-                        .num_columns(2)
+                layout::section(ui, "Resources", palette, |ui| {
+                    let draft = &mut self.sessions.allocation_draft;
+                    let compact = ui.available_width() < 460.;
+                    egui::Grid::new("slurm-resources")
+                        .num_columns(if compact { 1 } else { 2 })
                         .spacing([12., 6.])
                         .show(ui, |ui| {
+                            layout::field_label(ui, "GPUs (total)", compact);
+                            ui.add(egui::DragValue::new(&mut draft.gpus).range(0..=65536));
+                            ui.end_row();
                             for (label, value, hint) in [
-                                ("Partition", &mut draft.partition, "Site default"),
-                                ("Account", &mut draft.account, "Site default"),
-                                ("QoS", &mut draft.qos, "Site default"),
-                                ("Reservation", &mut draft.reservation, "None"),
                                 (
-                                    "GRES per node",
-                                    &mut draft.gres,
-                                    "Optional gpu:a100:2; replaces the total GPU field",
+                                    "Time (H or H:MM)",
+                                    &mut draft.time,
+                                    "2 or 2:30; full Slurm time also accepted",
                                 ),
                                 (
-                                    "Node features",
-                                    &mut draft.constraint,
-                                    "Optional --constraint value",
+                                    "Memory per node (GB)",
+                                    &mut draft.memory,
+                                    "80; explicit units such as 80000M also accepted",
                                 ),
                             ] {
-                                ui.label(label);
+                                layout::field_label(ui, label, compact);
                                 ui.add(
                                     egui::TextEdit::singleline(value)
                                         .hint_text(hint)
                                         .char_limit(1024)
-                                        .desired_width(320.),
+                                        .desired_width(ui.available_width().min(300.)),
                                 );
                                 ui.end_row();
                             }
-                            ui.label("Nodes");
-                            ui.add(egui::DragValue::new(&mut draft.nodes).range(1..=4096));
-                            ui.end_row();
-                            ui.label("CPUs per task");
-                            ui.add(egui::DragValue::new(&mut draft.cpus).range(1..=65536));
-                            ui.end_row();
                         });
-                    ui.label("Launch executables / site wrappers");
-                    ui.label("salloc");
-                    ui.text_edit_singleline(&mut draft.allocator);
-                    ui.label("srun");
-                    ui.text_edit_singleline(&mut draft.runner);
+                    ui.collapsing("Advanced resources / site settings", |ui| {
+                        egui::Grid::new("slurm-advanced")
+                            .num_columns(if compact { 1 } else { 2 })
+                            .spacing([12., 6.])
+                            .show(ui, |ui| {
+                                for (label, value, hint) in [
+                                    ("Partition", &mut draft.partition, "Site default"),
+                                    ("Account", &mut draft.account, "Site default"),
+                                    ("QoS", &mut draft.qos, "Site default"),
+                                    ("Reservation", &mut draft.reservation, "None"),
+                                    (
+                                        "GRES per node",
+                                        &mut draft.gres,
+                                        "Optional gpu:a100:2; replaces the total GPU field",
+                                    ),
+                                    (
+                                        "Node features",
+                                        &mut draft.constraint,
+                                        "Optional --constraint value",
+                                    ),
+                                ] {
+                                    layout::field_label(ui, label, compact);
+                                    ui.add(
+                                        egui::TextEdit::singleline(value)
+                                            .hint_text(hint)
+                                            .char_limit(1024)
+                                            .desired_width(ui.available_width().min(320.)),
+                                    );
+                                    ui.end_row();
+                                }
+                                layout::field_label(ui, "Nodes", compact);
+                                ui.add(egui::DragValue::new(&mut draft.nodes).range(1..=4096));
+                                ui.end_row();
+                                layout::field_label(ui, "CPUs per task", compact);
+                                ui.add(egui::DragValue::new(&mut draft.cpus).range(1..=65536));
+                                ui.end_row();
+                            });
+                        ui.label("Launch executables / site wrappers");
+                        ui.label("salloc");
+                        ui.text_edit_singleline(&mut draft.allocator);
+                        ui.label("srun");
+                        ui.text_edit_singleline(&mut draft.runner);
+                    });
+                    self.slurm_settings_ui(ui);
                 });
-                self.slurm_settings_ui(ui);
             });
         ui.label("Interactive terminals use Persist to survive closing RODE. Notebook reservations always start persistent; their view is a progress log, not a shell. Release the allocation explicitly when finished.");
         if self.session_plan().active {
@@ -248,7 +256,7 @@ impl EditorApp {
         if !self.sessions.allocation_error.is_empty() {
             ui.colored_label(palette.error, &self.sessions.allocation_error);
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let interactive = ui
                 .add_enabled(
                     !self.session_busy(),

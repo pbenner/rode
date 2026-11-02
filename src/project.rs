@@ -26,6 +26,15 @@ const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "task", rename_all = "snake_case")]
 pub enum Request {
+    /// Inspect or explicitly manage mise on the project host, inside the selected sandbox.
+    Mise {
+        /// Project root used for configuration discovery and execution.
+        root: String,
+        /// Captured executable/runtime overrides; resolved environment values are never stored.
+        settings: crate::environment::Settings,
+        /// Explicit inspection, trust or installation operation.
+        action: crate::mise::Action,
+    },
     /// Inspect configured runtime executables inside the project boundary.
     Runtimes {
         /// Working directory on the execution host.
@@ -146,6 +155,8 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum Response {
+    /// Optional mise tool/task metadata or explicit setup output.
+    Mise(crate::mise::Snapshot),
     /// Runtime availability and version strings.
     Runtimes(Vec<Runtime>),
     /// Installed adapter reply.
@@ -347,6 +358,13 @@ pub struct Analysis {
 /// this off the UI thread.
 pub fn local(request: &Request) -> Result<Response> {
     match request {
+        Request::Mise {
+            root,
+            settings,
+            action,
+        } => Ok(Response::Mise(crate::mise::execute(
+            root, settings, *action,
+        )?)),
         Request::Runtimes { root, settings } => {
             settings.validate()?;
             let mut env = std::env::vars_os()
@@ -889,12 +907,25 @@ pub(crate) fn run_controlled_stream(
     anyhow::ensure!(!cancel.load(Ordering::Acquire), "Extension task cancelled.");
     let description = command.get_program().to_string_lossy().into_owned();
     crate::process::new_session(&mut command);
-    let mut child = command
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Cannot run {description}"))?;
+        .stderr(Stdio::piped());
+    // A just-written executable can temporarily remain open across a concurrent
+    // fork. Match supervised agent startup's bounded ETXTBSY handling; never
+    // retry permission failures, nonzero exits or commands that already started.
+    let spawn_until = Instant::now() + timeout.min(Duration::from_secs(1));
+    let mut child = loop {
+        anyhow::ensure!(!cancel.load(Ordering::Acquire), "Extension task cancelled.");
+        match command.spawn() {
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < spawn_until =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => break result.with_context(|| format!("Cannot run {description}"))?,
+        }
+    };
     let mut stdin = child.stdin.take().context("Missing command stdin")?;
     let stdout = child.stdout.take().context("Missing command stdout")?;
     let stderr = child.stderr.take().context("Missing command stderr")?;

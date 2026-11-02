@@ -1,5 +1,7 @@
 # Development
 
+For a shared local/CI toolchain, install [mise](mise.md#developing-rode-with-mise), then run `mise trust`, `mise install --locked` and `mise run check`. The repository pins the tooling and exposes the same check tasks used by GitHub Actions. Direct Cargo/Python commands below remain available; install their OS dependencies separately.
+
 Start with the [source architecture and maintenance guide](architecture.md) for module responsibilities, host boundaries and lifecycle contracts. Its [design decisions and tradeoffs](architecture.md#design-decisions-and-tradeoffs) explain why the boundaries exist and point to the owning modules' in-source rationale. Public Rust types, fields and methods have API documentation; all four library crates warn on missing public documentation. When revisiting a design choice, update its rationale and consequences alongside the code.
 
 Build the public documentation with `scripts/uvx.sh --from mkdocs==1.6.1 mkdocs build --strict`. Repository-relative links to files outside `docs/` must also be exported or rewritten in `scripts/docs_hook.py`; file existence alone does not make them part of the published site.
@@ -98,6 +100,8 @@ RODE_TEST_RUFF=/path/to/ruff RODE_TEST_BINARY="$PWD/target/release/rode" RODE_WO
 Screenshots and logs go to `target/ui-smoke/`, `target/layout-ui/`, `target/project-ui/`, and `target/workbench-ui/`. Set `RODE_TEST_RUFF` for the Rust and SSH tests too, to exercise real Ruff formatting/checking. The smoke tests cover editing, saves, terminal commands, themes/preferences, local/remote folder browsing, sandbox/fallback, Git staging/commits, Python environments, and saved project policies. Namespace-isolation tests report when the host cannot run bubblewrap. These are basic regression checks, not a benchmark suite. `RODE_SMOKE_TEST=1 ./target/release/rode` provides a separate five-second launch/exit check.
 
 `cargo test --lib workbench::git::rows` renders and scrolls mixed Git file states at narrow and wide pane widths, checking stable list/action columns, single-row alignment with long Unicode paths, and compact-menu actions bound to the correct file. The native workbench check above exercises staging and committing through the surrounding panel.
+
+Shared tool presentation lives in `src/app/layout.rs`; see the [UI layout conventions](architecture.md#native-ui-and-work-on-demand) before adding a panel. `cargo test --lib tool_pages_fit_compact_and_detached_widths` checks every non-chat tool panel and Git subtab at compact and detached widths. `cargo test --lib forms_expand_after_a_short_command_palette_and_keep_actions_visible` checks modal sizing, form-label readability and action visibility when a short palette is replaced by a larger form.
 
 `scripts/test-file-browser-ui.py` also runs locally on its own; screenshots/logs go to `target/file-browser-ui/`. Library tests cover stale picker results, relative destinations, preserved Save As names and project-environment guards.
 

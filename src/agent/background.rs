@@ -21,6 +21,7 @@ pub fn request(
     upload: bool,
 ) -> Result<service::Reply> {
     let operation = service::Operation::Agents {
+        mise: launch.plan.environment.mise,
         request: Box::new(request),
     };
     if let Some(remote) = &launch.remote {
@@ -121,7 +122,7 @@ impl Client {
                         root: plan.root.clone(),
                         active: plan.active,
                         project_read_only: plan.project_read_only,
-                        prefix: plan.prefix,
+                        prefix: plan.execution_prefix(&launch.python)?,
                     },
                     executable,
                     env: BTreeMap::new(),

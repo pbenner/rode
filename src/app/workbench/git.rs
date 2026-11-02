@@ -86,6 +86,12 @@ impl EditorApp {
     /// Render cached source-control views and explicit host actions without running Git during layout.
     pub(in crate::app) fn git_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
+        layout::heading(
+            ui,
+            "Source control",
+            "Review changes and manage this repository",
+            palette,
+        );
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(!self.workbench.git.git_busy, egui::Button::new("Refresh"))
@@ -179,10 +185,26 @@ impl EditorApp {
                 }
             }
         });
-        ui.separator();
+        ui.add_space(8.);
         ui.add_enabled_ui(!self.workbench.git.git_busy,|ui| {
-            match self.workbench.git.git_tab {
-                GitTab::Changes => self.git_changes_ui(ui,ctx),
+            let tab = self.workbench.git.git_tab;
+            if tab == GitTab::Changes {
+                self.git_changes_ui(ui, ctx);
+                return;
+            }
+            let title = match tab {
+                GitTab::History => "Commit history",
+                GitTab::Branches => "Branches",
+                GitTab::Stash => "Stashes",
+                GitTab::Remotes => "Remotes",
+                GitTab::Tags => "Tags",
+                GitTab::Worktrees => "Worktrees",
+                GitTab::Submodules => "Submodules",
+                GitTab::Changes => unreachable!(),
+            };
+            layout::section(ui, title, palette, |ui| {
+            match tab {
+                GitTab::Changes => unreachable!(),
                 GitTab::History => self.git_history_ui(ui,ctx),
                 GitTab::Branches => self.git_branches_ui(ui,ctx),
                 GitTab::Stash => self.git_stash_ui(ui,ctx),
@@ -213,7 +235,7 @@ impl EditorApp {
                     let metadata = self.workbench.git.git_tab_data.lines().find_map(|line|line.strip_prefix("worktree ")).map(|root|format!("{root}/.git"));
                     for worktree in self.workbench.git.git_tab_data.clone().split("\n\n") {
                         let Some(path) = worktree.lines().find_map(|line|line.strip_prefix("worktree ")) else { continue; };
-                        ui.group(|ui| {
+                        layout::card(ui, palette, |ui| {
                             ui.monospace(path);
                             if let Some(branch) = worktree.lines().find_map(|line|line.strip_prefix("branch refs/heads/")) { ui.label(branch); }
                             if ui.small_button("Open project").clicked() {
@@ -256,6 +278,7 @@ impl EditorApp {
                     if ui.button("Sync URLs").clicked() { self.git_mutate(strings(&["submodule","sync","--recursive"]),"Sync submodules",ctx); }
                 }
             }
+            });
         });
         ui.separator();
         ui.horizontal_wrapped(|ui| {
@@ -677,6 +700,7 @@ impl EditorApp {
                 .id(egui::Id::new("git-diff"))
                 .open(&mut diff.open)
                 .default_size([900., 600.])
+                .frame(layout::dialog_frame(&ctx.style(), palette))
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         if ui
@@ -761,34 +785,37 @@ impl EditorApp {
             egui::Window::new("Git output / history")
                 .open(&mut self.workbench.git.show_output)
                 .default_size([850., 580.])
+                .frame(layout::dialog_frame(&ctx.style(), palette))
                 .show(ctx, |ui| {
                     diff_view(ui, &self.workbench.git.git_output, palette);
                 });
         }
         if let Some((message, mutation)) = self.workbench.git.confirm.clone() {
-            egui::Modal::new(egui::Id::new("git-confirm")).show(ctx, |ui| {
-                ui.set_max_width(480.);
-                ui.heading("Confirm Git operation");
-                ui.label(message);
-                ui.horizontal(|ui| {
-                    if ui.button("Continue").clicked() {
-                        self.workbench.git.confirm = None;
-                        match mutation {
-                            Mutation::Command(args) => {
-                                self.git_mutate(args, "Requested operation", ctx)
+            egui::Modal::new(egui::Id::new("git-confirm"))
+                .frame(layout::dialog_frame(&ctx.style(), palette))
+                .show(ctx, |ui| {
+                    ui.set_max_width(480.);
+                    ui.heading("Confirm Git operation");
+                    ui.label(message);
+                    ui.horizontal(|ui| {
+                        if ui.button("Continue").clicked() {
+                            self.workbench.git.confirm = None;
+                            match mutation {
+                                Mutation::Command(args) => {
+                                    self.git_mutate(args, "Requested operation", ctx)
+                                }
+                                Mutation::Stash {
+                                    action,
+                                    reference,
+                                    oid,
+                                } => self.git_stash(action, reference, oid, ctx),
                             }
-                            Mutation::Stash {
-                                action,
-                                reference,
-                                oid,
-                            } => self.git_stash(action, reference, oid, ctx),
                         }
-                    }
-                    if ui.button("Cancel").clicked() {
-                        self.workbench.git.confirm = None;
-                    }
+                        if ui.button("Cancel").clicked() {
+                            self.workbench.git.confirm = None;
+                        }
+                    });
                 });
-            });
         }
     }
     /// Serialize a literal-argument Git request against the discovered repository root

@@ -274,12 +274,11 @@ impl EditorApp {
         let Dialog::MarpExport(id, format) = self.dialog else {
             return;
         };
-        ui.heading(format!(
-            "Export Marp · {}",
-            format.extension().to_ascii_uppercase()
-        ));
-        ui.label(
+        layout::heading(
+            ui,
+            &format!("Export Marp · {}", format.extension().to_ascii_uppercase()),
             "Export the current buffer on its project host. The Markdown source stays unsaved.",
+            self.themes.active().palette,
         );
         let input = ui.add(
             egui::TextEdit::singleline(&mut self.dialog_input)

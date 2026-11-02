@@ -22,25 +22,28 @@ impl EditorApp {
     /// back to the source editor; explicit check/format buttons queue host work.
     pub(in crate::app) fn problems_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Check file").clicked() {
-                self.format_active(false, false, ctx);
-            }
-            if ui.button("Format").clicked() {
-                self.format_active(true, false, ctx);
-            }
-            if ui.button("Ruff safe fixes").clicked() {
-                self.format_active(true, true, ctx);
+        layout::heading(
+            ui,
+            "Problems",
+            "Current buffer diagnostics · stale results are discarded",
+            palette,
+        );
+        layout::section(ui, "Code checks", palette, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Check file").clicked() {
+                    self.format_active(false, false, ctx);
+                }
+                if ui.button("Format").clicked() {
+                    self.format_active(true, false, ctx);
+                }
+                if ui.button("Ruff safe fixes").clicked() {
+                    self.format_active(true, true, ctx);
+                }
+            });
+            if !self.workbench.code_tools.tool_error.is_empty() {
+                ui.colored_label(palette.error, &self.workbench.code_tools.tool_error);
             }
         });
-        if !self.workbench.code_tools.tool_error.is_empty() {
-            ui.colored_label(palette.error, &self.workbench.code_tools.tool_error);
-        }
-        ui.label(
-            RichText::new("Current buffer diagnostics · stale results are discarded")
-                .small()
-                .color(palette.muted),
-        );
         let mut count = 0;
         let mut jump = None;
         for doc in &self.documents {
@@ -49,35 +52,45 @@ impl EditorApp {
                 continue;
             }
             count += issues.len();
-            ui.add_space(8.);
-            ui.label(RichText::new(format!("{}  ({})", doc.name(), issues.len())).strong());
-            for issue in issues {
-                let text = format!(
-                    "{}:{}  {}  {}",
-                    issue.row, issue.column, issue.code, issue.message
-                );
-                let color = if issue.severity == "error" {
-                    palette.error
-                } else {
-                    palette.accent
-                };
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(text).color(color))
-                            .wrap()
-                            .frame(false),
-                    )
-                    .clicked()
-                {
-                    jump = Some((doc.id, issue.row, issue.column));
-                }
-            }
+            layout::section(
+                ui,
+                &format!("{}  ({})", doc.name(), issues.len()),
+                palette,
+                |ui| {
+                    for issue in issues {
+                        let text = format!(
+                            "{}:{}  {}  {}",
+                            issue.row, issue.column, issue.code, issue.message
+                        );
+                        let color = if issue.severity == "error" {
+                            palette.error
+                        } else {
+                            palette.accent
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(text).color(color))
+                                    .wrap()
+                                    .frame(false),
+                            )
+                            .clicked()
+                        {
+                            jump = Some((doc.id, issue.row, issue.column));
+                        }
+                    }
+                },
+            );
         }
         if let Some((id, row, col)) = jump {
             self.jump_to_issue(id, row, col);
         }
         if count == 0 {
-            ui.label("No current issues reported in open files.");
+            layout::empty(
+                ui,
+                "No current issues",
+                "No current issues reported in open files.",
+                palette,
+            );
         }
         if !self.workbench.code_tools.checking.is_empty() {
             ui.horizontal(|ui| {
@@ -105,6 +118,20 @@ impl EditorApp {
             command
         } else {
             format!("( {exports} {command}; )")
+        };
+        let command = if self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.plan.environment.mise)
+        {
+            format!(
+                "MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 MISE_PARANOID=1 {} -C {} exec -- /bin/sh -c {}",
+                crate::mise::shell_program(&self.workbench.prefs.environment),
+                crate::ssh::quote(&self.root()),
+                crate::ssh::quote(&command)
+            )
+        } else {
+            command
         };
         self.show_terminal = true;
         self.terminal_intent();

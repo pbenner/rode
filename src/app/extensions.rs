@@ -82,6 +82,7 @@ impl EditorApp {
     pub(super) fn set_extension(&mut self, id: &str, enabled: bool) {
         self.cancel_extensions();
         self.extensions.registry.set_enabled(id, enabled);
+        self.sync_project_environment();
         // Invalidates all source-tool results, including jobs queued before disabling.
         self.workbench.invalidate_tools();
         if !enabled {
@@ -157,8 +158,13 @@ impl EditorApp {
     }
     /// Render installed/native feature controls and explicit manifest/settings operations.
     pub(super) fn extensions_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Extensions");
-        ui.label("Bundled native features and API v1 project-host tool adapters.");
+        let palette = self.themes.active().palette;
+        layout::heading(
+            ui,
+            "Extensions",
+            "Bundled native features and project-host tool adapters",
+            palette,
+        );
         ui.small(format!("Manifests: {}", api::directory().display()));
         let entries = self.extensions.registry.entries.clone();
         let mut toggle = None;
@@ -177,30 +183,33 @@ impl EditorApp {
             .show(ui, |ui| {
                 for entry in entries {
                     ui.push_id(&entry.id, |ui| {
-                        let mut enabled = self.extensions.registry.enabled(&entry.id);
-                        ui.horizontal(|ui| {
-                            if ui.checkbox(&mut enabled, &entry.name).changed() {
-                                toggle = Some((entry.id.clone(), enabled));
-                            }
-                            ui.small(if entry.feature.is_some() {
-                                "BUNDLED"
-                            } else {
-                                "INSTALLED TOOL"
+                        layout::card(ui, palette, |ui| {
+                            let mut enabled = self.extensions.registry.enabled(&entry.id);
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.checkbox(&mut enabled, &entry.name).changed() {
+                                    toggle = Some((entry.id.clone(), enabled));
+                                }
+                                ui.small(if entry.feature.is_some() {
+                                    "BUNDLED"
+                                } else {
+                                    "INSTALLED TOOL"
+                                });
+                                if entry.manifest.is_some() && ui.small_button("Settings").clicked()
+                                {
+                                    settings = Some(entry.id.clone());
+                                }
                             });
-                            if entry.manifest.is_some() && ui.small_button("Settings").clicked() {
-                                settings = Some(entry.id.clone());
+                            ui.label(&entry.description);
+                            ui.small(format!("{} · {}", entry.id, entry.activation));
+                            if let Some(manifest) = entry.manifest {
+                                ui.monospace(format!(
+                                    "{} {}",
+                                    manifest.tool.program,
+                                    manifest.tool.args.join(" ")
+                                ));
                             }
                         });
-                        ui.label(&entry.description);
-                        ui.small(format!("{} · {}", entry.id, entry.activation));
-                        if let Some(manifest) = entry.manifest {
-                            ui.monospace(format!(
-                                "{} {}",
-                                manifest.tool.program,
-                                manifest.tool.args.join(" ")
-                            ));
-                        }
-                        ui.separator();
+                        ui.add_space(8.);
                     });
                 }
             });
@@ -254,8 +263,9 @@ impl EditorApp {
             }
         }
         ui.small("Enabling an installed adapter permits it to run on the project host with the project's current sandbox/access. Programs must already be installed there. No automatic upload or tool installation.");
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.extensions.install_path).hint_text("Desktop path to extension.json").desired_width(320.));
+        ui.add_space(8.);
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.extensions.install_path).hint_text("Desktop path to extension.json").desired_width(ui.available_width().min(320.)));
             if ui.button("Install manifest").clicked() {
                 match api::install(&files::expand_home(&self.extensions.install_path), &api::directory()) {
                     Ok(()) => { self.reload_extensions(); self.notify("Extension manifest installed, initially disabled. Review it before enabling.",false); }
@@ -330,8 +340,18 @@ impl EditorApp {
         if self.extensions.output_open {
             egui::Window::new("Extension output")
                 .default_size([700., 400.])
+                .frame(layout::dialog_frame(
+                    &ctx.style(),
+                    self.themes.active().palette,
+                ))
                 .open(&mut self.extensions.output_open)
                 .show(ctx, |ui| {
+                    layout::heading(
+                        ui,
+                        "Extension output",
+                        "Results from the project-host tool adapter",
+                        self.themes.active().palette,
+                    );
                     egui::ScrollArea::both().show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::multiline(&mut self.extensions.output.as_str())

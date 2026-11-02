@@ -13,28 +13,30 @@ impl EditorApp {
         }
         let palette = self.themes.active().palette;
         if let Some(action) = self.pending.clone() {
-            let modal = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
-                ui.set_width(400.0);
-                ui.heading("Keep your changes?");
-                ui.add_space(8.0);
-                ui.label(
+            let modal = egui::Modal::new(egui::Id::new("unsaved"))
+                .frame(layout::dialog_frame(&ctx.style(), palette))
+                .show(ctx, |ui| {
+                    ui.set_width(400_f32.min((ctx.content_rect().width() - 64.).max(1.)));
+                    ui.heading("Keep your changes?");
+                    ui.add_space(8.0);
+                    ui.label(
                     "You have unsaved edits. Save them before continuing, or discard them here.",
                 );
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    if palette.primary(ui, "Keep editing").clicked() {
-                        self.pending = None;
-                        self.focus_editor(ctx);
-                    }
-                    if ui
-                        .button(RichText::new("Discard changes").color(palette.error))
-                        .clicked()
-                    {
-                        self.pending = None;
-                        self.perform(action, ctx);
-                    }
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        if palette.primary(ui, "Keep editing").clicked() {
+                            self.pending = None;
+                            self.focus_editor(ctx);
+                        }
+                        if ui
+                            .button(RichText::new("Discard changes").color(palette.error))
+                            .clicked()
+                        {
+                            self.pending = None;
+                            self.perform(action, ctx);
+                        }
+                    });
                 });
-            });
             if modal.should_close() {
                 self.pending = None;
                 self.focus_editor(ctx);
@@ -54,70 +56,83 @@ impl EditorApp {
         }
         let encrypted_dialog = self.dialog == Dialog::Encrypted;
         let file_dialog = file_browser::is_file_dialog(&self.dialog);
-        let response = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
-            let sizing = ui.is_sizing_pass();
-            let focus = self.dialog_focus;
-            if sizing {
-                // Area's first pass is invisible and disables widgets. Keep
-                // keyboard input for its first interactive pass instead of
-                // consuming Enter against an empty command/path field.
-                self.dialog_events = ctx.input_mut(|input| {
-                    let (keyboard, other) = std::mem::take(&mut input.events)
-                        .into_iter()
-                        .partition(|event| {
-                            matches!(
-                                event,
-                                egui::Event::Text(_)
-                                    | egui::Event::Key { .. }
-                                    | egui::Event::Paste(_)
-                                    | egui::Event::Copy
-                                    | egui::Event::Cut
-                                    | egui::Event::Ime(_)
-                            )
-                        });
-                    input.events = other;
-                    keyboard
-                });
-                ctx.request_repaint();
-            }
-            ui.set_width(
-                if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions) {
-                    680_f32.min(ctx.content_rect().width() - 50.)
+        let response = egui::Modal::new(egui::Id::new("dialog"))
+            .frame(layout::dialog_frame(&ctx.style(), palette))
+            .show(ctx, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                let sizing = ui.is_sizing_pass();
+                let focus = self.dialog_focus;
+                if sizing {
+                    // Area's first pass is invisible and disables widgets. Keep
+                    // keyboard input for its first interactive pass instead of
+                    // consuming Enter against an empty command/path field.
+                    self.dialog_events = ctx.input_mut(|input| {
+                        let (keyboard, other) = std::mem::take(&mut input.events)
+                            .into_iter()
+                            .partition(|event| {
+                                matches!(
+                                    event,
+                                    egui::Event::Text(_)
+                                        | egui::Event::Key { .. }
+                                        | egui::Event::Paste(_)
+                                        | egui::Event::Copy
+                                        | egui::Event::Cut
+                                        | egui::Event::Ime(_)
+                                )
+                            });
+                        input.events = other;
+                        keyboard
+                    });
+                    ctx.request_repaint();
+                }
+                let width: f32 = if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions)
+                {
+                    680.
                 } else if self.dialog == Dialog::Connect {
                     500.
                 } else {
                     540.
-                },
-            );
-            if self.dialog == Dialog::Extensions {
-                self.extensions_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Encrypted {
-                self.encrypted_ui(ui, ctx);
-            } else if matches!(self.dialog, Dialog::MarpExport(..)) {
-                self.marp_export_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Connect {
-                self.connect_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Shortcuts {
-                self.help_dialog(ui);
-            } else if self.dialog == Dialog::Commands {
-                self.command_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Sessions {
-                self.sessions_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Slurm {
-                self.slurm_dialog(ui, ctx);
-            } else if self.dialog == Dialog::AgentSessions {
-                self.background_agents_dialog(ui, ctx);
-            } else if self.dialog == Dialog::TerminalExit {
-                self.terminal_exit_dialog(ui, ctx);
-            } else if self.dialog == Dialog::Folder {
-                self.folder_dialog(ui, ctx);
-            } else {
-                self.path_dialog(ui, ctx);
-            }
-            if sizing {
-                self.dialog_focus = focus;
-            }
-        });
+                };
+                ui.set_width(width.min((ctx.content_rect().width() - 64.).max(1.)));
+                egui::ScrollArea::vertical()
+                    .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
+                    .auto_shrink([false, true])
+                    // The modal Area can retain a short command palette's
+                    // height. Give forms their viewport budget before measuring
+                    // content, then shrink short dialogs to their actual height.
+                    .min_scrolled_height((ctx.content_rect().height() - 80.).max(1.))
+                    .max_height((ctx.content_rect().height() - 80.).max(1.))
+                    .show(ui, |ui| {
+                        if self.dialog == Dialog::Extensions {
+                            self.extensions_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Encrypted {
+                            self.encrypted_ui(ui, ctx);
+                        } else if matches!(self.dialog, Dialog::MarpExport(..)) {
+                            self.marp_export_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Connect {
+                            self.connect_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Shortcuts {
+                            self.help_dialog(ui);
+                        } else if self.dialog == Dialog::Commands {
+                            self.command_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Sessions {
+                            self.sessions_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Slurm {
+                            self.slurm_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::AgentSessions {
+                            self.background_agents_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::TerminalExit {
+                            self.terminal_exit_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Folder {
+                            self.folder_dialog(ui, ctx);
+                        } else {
+                            self.path_dialog(ui, ctx);
+                        }
+                    });
+                if sizing {
+                    self.dialog_focus = focus;
+                }
+            });
         if response.should_close()
             && !(self.dialog == Dialog::TerminalExit && self.session_exit_pending())
             && !self.vaults.locking
@@ -141,16 +156,16 @@ impl EditorApp {
     pub(super) fn connect_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         ui.label(palette.tag("REMOTE WORKSPACE"));
-        ui.heading("Connect via SSH");
-        ui.label(
-            RichText::new("OpenSSH under the hood. Your existing configuration works here.")
-                .color(palette.muted),
+        layout::heading(
+            ui,
+            "Connect via SSH",
+            "OpenSSH under the hood. Your existing configuration works here.",
+            palette,
         );
-        ui.add_space(12.0);
         if !self.profiles.is_empty() || !self.aliases.is_empty() {
             egui::ComboBox::from_id_salt("profiles")
                 .selected_text("Load a saved connection or SSH alias")
-                .width(450.0)
+                .width(ui.available_width())
                 .show_ui(ui, |ui| {
                     for profile in &self.profiles {
                         if ui.selectable_label(false, profile.label()).clicked() {
@@ -178,64 +193,69 @@ impl EditorApp {
                 });
             ui.add_space(8.0);
         }
-        egui::Grid::new("connection-fields")
-            .num_columns(2)
-            .spacing([18.0, 10.0])
-            .show(ui, |ui| {
-                for (label, field, hint) in [
-                    (
-                        "Host / alias",
-                        &mut self.profile.host,
-                        "workstation or user@host.example.org",
-                    ),
-                    (
-                        "Remote folder",
-                        &mut self.profile.root,
-                        "~/projects/my-project",
-                    ),
-                    ("Username", &mut self.profile.user, "From SSH config"),
-                    (
-                        "Port",
-                        &mut self.profile.port,
-                        "From SSH config (usually 22)",
-                    ),
-                    (
-                        "Identity file",
-                        &mut self.profile.identity,
-                        "~/.ssh/id_ed25519 (optional)",
-                    ),
-                    (
-                        "Jump host(s)",
-                        &mut self.profile.jump,
-                        "user@login-host (optional, comma-separated)",
-                    ),
-                    (
-                        "SSH config file",
-                        &mut self.profile.config,
-                        "~/.ssh/config (default)",
-                    ),
-                    (
-                        "Profile name",
-                        &mut self.profile.name,
-                        "Optional friendly name",
-                    ),
-                ] {
-                    ui.label(label);
-                    let response = ui.add(
-                        egui::TextEdit::singleline(field)
-                            // Loading saved profiles can insert a dropdown above
-                            // these fields while the user is already typing.
-                            .id(egui::Id::new(("connection-field", label)))
-                            .hint_text(hint)
-                            .desired_width(340.0),
-                    );
-                    if self.dialog_focus && label == "Host / alias" {
-                        response.request_focus();
-                        self.dialog_focus = false;
+        let compact = ui.available_width() < 460.;
+        layout::card(ui, palette, |ui| {
+            let field_width =
+                (ui.available_width() - if compact { 8. } else { 154. }).clamp(1., 340.);
+            egui::Grid::new("connection-fields")
+                .num_columns(if compact { 1 } else { 2 })
+                .spacing([18.0, 10.0])
+                .show(ui, |ui| {
+                    for (label, field, hint) in [
+                        (
+                            "Host / alias",
+                            &mut self.profile.host,
+                            "workstation or user@host.example.org",
+                        ),
+                        (
+                            "Remote folder",
+                            &mut self.profile.root,
+                            "~/projects/my-project",
+                        ),
+                        ("Username", &mut self.profile.user, "From SSH config"),
+                        (
+                            "Port",
+                            &mut self.profile.port,
+                            "From SSH config (usually 22)",
+                        ),
+                        (
+                            "Identity file",
+                            &mut self.profile.identity,
+                            "~/.ssh/id_ed25519 (optional)",
+                        ),
+                        (
+                            "Jump host(s)",
+                            &mut self.profile.jump,
+                            "user@login-host (optional, comma-separated)",
+                        ),
+                        (
+                            "SSH config file",
+                            &mut self.profile.config,
+                            "~/.ssh/config (default)",
+                        ),
+                        (
+                            "Profile name",
+                            &mut self.profile.name,
+                            "Optional friendly name",
+                        ),
+                    ] {
+                        layout::field_label(ui, label, compact);
+                        let response = ui.add(
+                            egui::TextEdit::singleline(field)
+                                // Loading saved profiles can insert a dropdown above
+                                // these fields while the user is already typing.
+                                .id(egui::Id::new(("connection-field", label)))
+                                .hint_text(hint)
+                                .desired_width(field_width),
+                        );
+                        if self.dialog_focus && label == "Host / alias" {
+                            response.request_focus();
+                            self.dialog_focus = false;
+                        }
+                        ui.end_row();
                     }
-                    ui.end_row();
-                }
-            });
+                });
+        });
         ui.add_space(12.0);
         ui.checkbox(
             &mut self.profile.sandbox.enabled,
@@ -332,17 +352,15 @@ impl EditorApp {
         } else {
             "THIS MACHINE".into()
         }));
-        ui.heading(if self.folder_remote {
-            "Open remote project folder"
-        } else {
-            "Open project folder"
-        });
-        ui.label(
-            RichText::new(
-                "Browse folders, then open the project. Absolute paths and ~/ are supported.",
-            )
-            .small()
-            .color(palette.muted),
+        layout::heading(
+            ui,
+            if self.folder_remote {
+                "Open remote project folder"
+            } else {
+                "Open project folder"
+            },
+            "Browse folders, then open the project. Absolute paths and ~/ are supported.",
+            palette,
         );
         let input_id = egui::Id::new("project-dialog-path");
         if self.dialog_focus {
@@ -457,7 +475,12 @@ impl EditorApp {
     pub(super) fn help_dialog(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         ui.label(palette.tag("MAKE YOURSELF AT HOME"));
-        ui.heading("Keyboard shortcuts");
+        layout::heading(
+            ui,
+            "Keyboard shortcuts",
+            "Customize navigation and review editor shortcuts",
+            palette,
+        );
         let focus = std::mem::take(&mut self.dialog_focus);
         self.navigation.bindings.ui(ui, focus);
         ui.add_space(8.0);
@@ -557,5 +580,78 @@ impl EditorApp {
                         });
                     });
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forms_expand_after_a_short_command_palette_and_keep_actions_visible() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let mut render = |dialog| {
+            app.set_dialog(dialog);
+            let mut visible = Vec::new();
+            for _ in 0..4 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1380., 900.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| app.dialogs(ctx),
+                );
+                if !output.shapes.is_empty() {
+                    for shape in &output.shapes {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && ["Host / alias", "Remote folder", "GPUs (total)"]
+                                .contains(&text.galley.text())
+                        {
+                            assert_eq!(
+                                text.galley.rows.len(),
+                                1,
+                                "Form label broke into fragments: {}",
+                                text.galley.text()
+                            );
+                        }
+                    }
+                }
+                visible = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape {
+                            let center = text.pos + text.galley.size() / 2.;
+                            if shape.clip_rect.contains(center) {
+                                return Some(text.galley.text().to_owned());
+                            }
+                        }
+                        None
+                    })
+                    .collect();
+            }
+            visible
+        };
+        for (dialog, field, action) in [
+            (Dialog::Connect, "Host / alias", "Connect"),
+            (Dialog::Slurm, "GPUs (total)", "Allocate in new terminal"),
+            (Dialog::Extensions, "Extensions", "Close"),
+        ] {
+            render(Dialog::Commands);
+            let visible = render(dialog);
+            assert!(
+                visible.iter().any(|label| label == field),
+                "Missing {field}: {visible:?}"
+            );
+            assert!(
+                visible.iter().any(|label| label == action),
+                "Missing {action}: {visible:?}"
+            );
+        }
     }
 }

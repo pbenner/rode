@@ -153,23 +153,23 @@ def run(remote=False):
                     click(x, y - (30 if "[Sandbox]" in state else 0))
 
                 # Controls occupy the workspace beside the explorer.
-                tool_click(350, 343)  # Stage all
+                tool_click(385, 407)  # Stage all, below the page heading and Git tabs.
                 wait_for(
                     lambda: bool(git("diff", "--cached", "--name-only").strip()),
                     "Native Stage all failed",
                 )
                 screenshot(window, label + "-git-staged.png")
-                tool_click(700, 455)  # Commit message below the single-line file row
+                tool_click(700, 520)  # Commit message below the single-line file row.
                 text("Native project commit")
-                tool_click(510, 502)  # Commit staged
+                tool_click(550, 565)  # Commit staged.
                 wait_for(
                     lambda: git("log", "-1", "--format=%s").strip() == "Native project commit",
                     "Native commit failed",
                 )
                 command("Project: Settings and sandbox access")
                 screenshot(window, label + "-settings.png")
-                tool_click(321, 235)  # Disable format-on-save through the visible UI.
-                tool_click(370, 398)  # Save tool settings
+                tool_click(373, 310)  # Disable format-on-save in the Code tools card.
+                tool_click(430, 474)  # Save tool settings.
                 preferences = base / "data-home/rode/app.ron"
                 wait_for(
                     preferences.exists, "Project settings were not saved while the app was open"

@@ -437,6 +437,12 @@ impl EditorApp {
     }
     /// Render cached inspection/configuration state, then apply returned actions after UI borrows end.
     pub(super) fn debugger_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        layout::heading(
+            ui,
+            "Debugger",
+            "Launch, pause and inspect programs on the project host",
+            self.themes.active().palette,
+        );
         if self.debugger.draft_generation != Some(self.generation) {
             self.debugger
                 .config

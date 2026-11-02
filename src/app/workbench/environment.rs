@@ -13,9 +13,120 @@ pub(super) struct State {
     pub(super) busy: bool,
     pub(super) error: String,
     open_python: bool,
+    pub(super) mise: Option<crate::mise::Snapshot>,
+    pub(super) mise_busy: bool,
+    pub(super) mise_error: String,
 }
 
 impl EditorApp {
+    /// Copy only applied opt-in settings into future launch plans; running sessions are untouched.
+    pub(in crate::app) fn sync_project_environment(&mut self) {
+        let mut settings = self.workbench.prefs.environment.clone();
+        settings.mise &= self.feature(crate::extensions::Feature::Mise);
+        if let Some(workspace) = &mut self.workspace {
+            workspace.plan.environment = if settings.mise {
+                settings
+            } else {
+                Default::default()
+            };
+        }
+    }
+
+    pub(in crate::app) fn request_mise(
+        &mut self,
+        action: crate::mise::Action,
+        ctx: &egui::Context,
+    ) {
+        if self.workbench.environment.mise_busy || !self.feature(crate::extensions::Feature::Mise) {
+            return;
+        }
+        self.workbench.environment.mise_busy = true;
+        self.dispatch_tool(
+            project::Request::Mise {
+                root: self.root(),
+                settings: self.workbench.prefs.environment.clone(),
+                action,
+            },
+            ToolJob::Mise {
+                action,
+                revision: self.extensions.registry.revision,
+                settings: self.workbench.prefs.environment.clone(),
+            },
+            ctx,
+        );
+    }
+
+    /// Native surface of the optional bundled extension; metadata excludes resolved secrets.
+    fn mise_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, tasks: bool) {
+        if !self.feature(crate::extensions::Feature::Mise) {
+            return;
+        }
+        let palette = self.themes.active().palette;
+        layout::section(ui, "mise", palette, |ui| {
+            ui.small("Uses mise installed on this project host, inside the current sandbox. Tool installation and configuration trust are explicit actions.");
+            if !tasks {
+                let state = &mut self.workbench.environment;
+                ui.checkbox(&mut state.draft.mise, "Use mise for new project processes");
+                ui.label("mise executable (blank: host PATH or ~/.local/bin/mise)");
+                ui.add(
+                    egui::TextEdit::singleline(
+                        state.draft.runtimes.entry("mise".into()).or_default(),
+                    )
+                    .hint_text("mise or /path/to/mise"),
+                );
+                ui.small("Apply environment saves this choice. Explicit Rode variables and interpreter paths take precedence. Existing sessions keep their environment.");
+            }
+            let busy = self.workbench.environment.mise_busy;
+            let mut action = None;
+            ui.horizontal_wrapped(|ui| {
+                for (label, operation) in [
+                    ("Refresh mise tools and tasks", crate::mise::Action::Inspect),
+                    ("Trust project configuration", crate::mise::Action::Trust),
+                    ("Install declared tools", crate::mise::Action::Install),
+                ] {
+                    if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                        action = Some(operation);
+                    }
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
+            if let Some(action) = action {
+                self.request_mise(action, ctx);
+            }
+            if !self.workbench.environment.mise_error.is_empty() {
+                ui.colored_label(
+                    self.themes.active().palette.error,
+                    &self.workbench.environment.mise_error,
+                );
+            }
+            let snapshot = self.workbench.environment.mise.clone();
+            if let Some(snapshot) = snapshot {
+                if !snapshot.version.is_empty() {
+                    ui.label(&snapshot.version);
+                }
+                if !snapshot.tools.is_empty() {
+                    ui.label(format!("Project tools: {}", snapshot.tools.join(", ")));
+                }
+                if !snapshot.output.is_empty() {
+                    ui.label(&snapshot.output);
+                }
+                if tasks {
+                    for task in snapshot.tasks {
+                        ui.horizontal_wrapped(|ui| {
+                        if ui.button(&task.name).clicked() {
+                            let program = crate::mise::shell_program(&self.workbench.prefs.environment);
+                            let command = format!("MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 MISE_PARANOID=1 {} -C {} run {}", program, crate::ssh::quote(&self.root()), crate::ssh::quote(&task.name));
+                            self.send_project_command(command, ctx);
+                        }
+                        ui.label(&task.description);
+                    });
+                    }
+                }
+            }
+        });
+    }
     /// Reveal the interpreter section in Environment, refreshing discovery when it is already open.
     pub(in crate::app) fn open_python_environment(&mut self, ctx: &egui::Context) {
         self.workbench.environment.open_python = true;
@@ -43,6 +154,7 @@ impl EditorApp {
     /// Edit literal project variables/runtime overrides and apply them after validation;
     /// existing terminal processes retain their original environment.
     pub(in crate::app) fn environment_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let palette = self.themes.active().palette;
         let key = self.workbench.key.clone();
         let state = &mut self.workbench.environment;
         if state.key.as_ref() != Some(&key) {
@@ -56,114 +168,140 @@ impl EditorApp {
                 .collect::<Vec<_>>()
                 .join("\n");
         }
-        ui.heading("Project environment");
-        ui.label(
-            "Runtime paths and variables are saved for this project on its local or SSH host.",
+        layout::heading(
+            ui,
+            "Project environment",
+            "Runtime paths and variables for new terminals and tasks on this host",
+            palette,
         );
-        ui.label("New terminals and task commands use these settings. Existing and reattached terminals keep their environment.");
-        ui.separator();
-        ui.heading("Runtimes and toolchains");
-        ui.small("Leave an override blank to use the host's PATH and existing project toolchain configuration.");
-        let executable_width = (ui.available_width() * 0.4).clamp(80., 240.);
-        let version_width = (ui.available_width() - executable_width - 130.).max(60.);
-        egui::Grid::new("runtime-executables")
-            .num_columns(3)
-            .striped(true)
-            .show(ui, |ui| {
-                ui.strong("Tool");
-                ui.strong("Executable override");
-                ui.strong("Version");
-                ui.end_row();
-                for (program, label) in environment::TOOLS {
-                    ui.label(*label);
-                    ui.add(
-                        egui::TextEdit::singleline(
-                            state.draft.runtimes.entry((*program).into()).or_default(),
-                        )
-                        .desired_width(executable_width)
-                        .min_size(egui::vec2(executable_width, 20.))
-                        .char_limit(4096)
-                        .hint_text(format!("auto ({program}) or /path/to/{program}")),
-                    );
-                    let info = state.runtimes.iter().find(|info| info.name == *program);
-                    let status = info
-                        .map(|info| {
-                            if info.error.is_empty() {
-                                info.version.as_str()
-                            } else {
-                                "Unavailable"
-                            }
-                        })
-                        .unwrap_or("Not checked");
-                    let detail = info
-                        .map(|info| {
-                            format!(
-                                "{}\n{}",
-                                info.executable,
-                                if info.error.is_empty() {
-                                    &info.version
-                                } else {
-                                    &info.error
-                                }
+        let refresh = layout::section(ui, "Runtimes and toolchains", palette, |ui| {
+            ui.small("Leave an override blank to use the host's PATH and existing project toolchain configuration.");
+            let compact = ui.available_width() < 520.;
+            let executable_width = if compact {
+                ui.available_width()
+            } else {
+                (ui.available_width() * 0.4).clamp(80., 240.)
+            };
+            let version_width = (ui.available_width() - executable_width - 168.).max(60.);
+            egui::Grid::new("runtime-executables")
+                .num_columns(if compact { 1 } else { 3 })
+                .spacing([12., 8.])
+                .striped(!compact)
+                .show(ui, |ui| {
+                    if !compact {
+                        ui.strong("Tool");
+                        ui.strong("Executable override");
+                        ui.strong("Version");
+                        ui.end_row();
+                    }
+                    for (program, label) in environment::TOOLS {
+                        layout::field_label(ui, label, compact);
+                        ui.add(
+                            egui::TextEdit::singleline(
+                                state.draft.runtimes.entry((*program).into()).or_default(),
                             )
-                        })
-                        .unwrap_or_default();
-                    ui.add_sized(
-                        [version_width, 20.],
-                        egui::Label::new(status).truncate().halign(Align::LEFT),
-                    )
-                    .on_hover_text(detail);
-                    ui.end_row();
-                }
-            });
-        let mut refresh = false;
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!state.busy, egui::Button::new("Refresh runtime versions"))
-                .on_hover_text("Probe applied settings on the project host, inside its sandbox")
-                .clicked()
-            {
-                refresh = true;
-            }
-            if state.busy {
-                ui.spinner();
-            }
-        });
-        ui.separator();
-        ui.heading("Project variables");
-        ui.small(
-            "One NAME=value per line. Values are literal and saved in local project preferences.",
-        );
-        ui.add(
-            egui::TextEdit::multiline(&mut state.variables)
-                .desired_rows(4)
-                .desired_width(f32::INFINITY)
-                .char_limit(65536)
-                .hint_text("APP_MODE=development\nDATA_DIR=/scratch/data"),
-        );
-        if ui.button("Apply environment").clicked() {
-            let result = (|| -> anyhow::Result<Settings> {
-                let mut settings = state.draft.clone();
-                settings
-                    .runtimes
-                    .retain(|_, value| !value.trim().is_empty());
-                settings.variables = Settings::parse_variables(&state.variables)?;
-                settings.validate()?;
-                Ok(settings)
-            })();
-            match result {
-                Ok(settings) => {
-                    self.workbench.prefs.environment = settings.clone();
-                    self.workbench.draft.environment = settings;
-                    self.workbench.save_preferences();
-                    self.workbench.environment.error.clear();
-                    self.status =
-                        "Project environment saved · applies to new terminals and tasks".into();
+                            .desired_width(executable_width)
+                            .min_size(egui::vec2(executable_width, 20.))
+                            .char_limit(4096)
+                            .hint_text(format!("auto ({program}) or /path/to/{program}")),
+                        );
+                        if compact {
+                            ui.end_row();
+                        }
+                        let info = state.runtimes.iter().find(|info| info.name == *program);
+                        let status = info
+                            .map(|info| {
+                                if info.error.is_empty() {
+                                    info.version.as_str()
+                                } else {
+                                    "Unavailable"
+                                }
+                            })
+                            .unwrap_or("Not checked");
+                        let detail = info
+                            .map(|info| {
+                                format!(
+                                    "{}\n{}",
+                                    info.executable,
+                                    if info.error.is_empty() {
+                                        &info.version
+                                    } else {
+                                        &info.error
+                                    }
+                                )
+                            })
+                            .unwrap_or_default();
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(
+                                if compact {
+                                    ui.available_width()
+                                } else {
+                                    version_width
+                                },
+                                20.,
+                            ),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add(egui::Label::new(status).truncate())
+                                    .on_hover_text(detail);
+                            },
+                        );
+                        ui.end_row();
+                    }
+                });
+            let mut refresh = false;
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(!state.busy, egui::Button::new("Refresh runtime versions"))
+                    .on_hover_text("Probe applied settings on the project host, inside its sandbox")
+                    .clicked()
+                {
                     refresh = true;
                 }
-                Err(error) => self.workbench.environment.error = error.to_string(),
+                if state.busy {
+                    ui.spinner();
+                }
+            });
+            refresh
+        });
+        self.mise_ui(ui, ctx, false);
+        let mut refresh = refresh;
+        layout::section(ui, "Project variables", palette, |ui| {
+            let state = &mut self.workbench.environment;
+            ui.small(
+            "One NAME=value per line. Values are literal and saved in local project preferences.",
+        );
+            ui.add(
+                egui::TextEdit::multiline(&mut state.variables)
+                    .desired_rows(4)
+                    .desired_width(f32::INFINITY)
+                    .char_limit(65536)
+                    .hint_text("APP_MODE=development\nDATA_DIR=/scratch/data"),
+            );
+            if ui.button("Apply environment").clicked() {
+                let result = (|| -> anyhow::Result<Settings> {
+                    let mut settings = state.draft.clone();
+                    settings
+                        .runtimes
+                        .retain(|_, value| !value.trim().is_empty());
+                    settings.variables = Settings::parse_variables(&state.variables)?;
+                    settings.validate()?;
+                    Ok(settings)
+                })();
+                match result {
+                    Ok(settings) => {
+                        self.workbench.prefs.environment = settings.clone();
+                        self.workbench.draft.environment = settings;
+                        self.workbench.save_preferences();
+                        self.workbench.environment.error.clear();
+                        self.status =
+                            "Project environment saved · applies to new terminals and tasks".into();
+                        refresh = true;
+                    }
+                    Err(error) => self.workbench.environment.error = error.to_string(),
+                }
             }
-        }
+        });
         if !self.workbench.environment.error.is_empty() {
             ui.colored_label(
                 self.themes.active().palette.error,
@@ -171,97 +309,120 @@ impl EditorApp {
             );
         }
         if refresh {
+            self.sync_project_environment();
             self.refresh_runtimes(ctx);
         }
-        ui.separator();
         if self.feature(crate::extensions::Feature::Python) {
-            let open = std::mem::take(&mut self.workbench.environment.open_python);
-            let active_python = self
-                .documents
-                .get(self.active)
-                .and_then(|doc| crate::languages::detect(doc.path.as_deref()))
-                .is_some_and(|language| language.id == "python");
-            let section =
-                egui::CollapsingHeader::new("Python interpreter and virtual environments")
-                    .id_salt("environment-python")
-                    .default_open(active_python)
-                    .open(open.then_some(true))
-                    .show(ui, |ui| self.python_ui(ui, ctx));
-            if open {
-                ui.scroll_to_rect(section.header_response.rect, Some(Align::TOP));
-            }
+            layout::card(ui, palette, |ui| {
+                let open = std::mem::take(&mut self.workbench.environment.open_python);
+                let active_python = self
+                    .documents
+                    .get(self.active)
+                    .and_then(|doc| crate::languages::detect(doc.path.as_deref()))
+                    .is_some_and(|language| language.id == "python");
+                let section =
+                    egui::CollapsingHeader::new("Python interpreter and virtual environments")
+                        .id_salt("environment-python")
+                        .default_open(active_python)
+                        .open(open.then_some(true))
+                        .show(ui, |ui| self.python_ui(ui, ctx));
+                if open {
+                    ui.scroll_to_rect(section.header_response.rect, Some(Align::TOP));
+                }
+            });
         }
     }
 
     /// Render explicit run/build/test entry points for the active project and language.
     pub(in crate::app) fn tasks_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Project tasks");
-        ui.label("Commands run in the project terminal on this host, with the saved Environment settings.");
-        let language = self
-            .documents
-            .get(self.active)
-            .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
-        let language_tools = self.feature(crate::extensions::Feature::Languages);
-        if !language_tools {
-            ui.label("Enable Language tools in Extensions to run, build or test source projects.");
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    language_tools && language.is_some_and(|l| l.run.is_some()),
-                    egui::Button::new("Run current file / project"),
-                )
-                .clicked()
-            {
-                self.run_active(false, ctx);
+        let palette = self.themes.active().palette;
+        layout::heading(
+            ui,
+            "Project tasks",
+            "Run, build and test on this host using the saved Environment settings",
+            palette,
+        );
+        self.mise_ui(ui, ctx, true);
+        layout::section(ui, "Run and build", palette, |ui| {
+            let language = self
+                .documents
+                .get(self.active)
+                .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
+            let language_tools = self.feature(crate::extensions::Feature::Languages);
+            if !language_tools {
+                ui.label(
+                    "Enable Language tools in Extensions to run, build or test source projects.",
+                );
             }
-            if ui
-                .add_enabled(
-                    language_tools && language.is_some_and(|l| l.build.is_some()),
-                    egui::Button::new("Build project"),
-                )
-                .clicked()
-            {
-                self.run_active(true, ctx);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        language_tools && language.is_some_and(|l| l.run.is_some()),
+                        egui::Button::new("Run current file / project"),
+                    )
+                    .clicked()
+                {
+                    self.run_active(false, ctx);
+                }
+                if ui
+                    .add_enabled(
+                        language_tools && language.is_some_and(|l| l.build.is_some()),
+                        egui::Button::new("Build project"),
+                    )
+                    .clicked()
+                {
+                    self.run_active(true, ctx);
+                }
+            });
+            if let Some(language) = language {
+                ui.label(format!("Active language: {}", language.id));
+                let test = match language.id.as_str() {
+                    "rust" => Some(("cargo", vec!["test"])),
+                    "go" => Some(("go", vec!["test", "./..."])),
+                    "javascript" | "typescript" | "jsx" | "tsx" => Some(("npm", vec!["test"])),
+                    _ => None,
+                };
+                if let Some((program, arguments)) = test
+                    && ui
+                        .add_enabled(language_tools, egui::Button::new("Run project tests"))
+                        .clicked()
+                {
+                    if self.documents.iter().any(Document::dirty) {
+                        self.notify("Save modified files before running tests.", true);
+                    } else {
+                        let command =
+                            std::iter::once(self.workbench.prefs.environment.program(program))
+                                .chain(arguments.into_iter().map(str::to_owned))
+                                .map(|arg| ssh::quote(&arg))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                        self.send_project_command(
+                            format!("cd -- {} && {command}", ssh::quote(&self.root())),
+                            ctx,
+                        );
+                    }
+                }
+            } else {
+                layout::empty(
+                    ui,
+                    "Select a source file",
+                    "Open a source file to select its run, build and test commands.",
+                    palette,
+                );
             }
         });
-        if let Some(language) = language {
-            ui.label(format!("Active language: {}", language.id));
-            let test = match language.id.as_str() {
-                "rust" => Some(("cargo", vec!["test"])),
-                "go" => Some(("go", vec!["test", "./..."])),
-                "javascript" | "typescript" | "jsx" | "tsx" => Some(("npm", vec!["test"])),
-                _ => None,
-            };
-            if let Some((program, arguments)) = test
-                && ui
-                    .add_enabled(language_tools, egui::Button::new("Run project tests"))
-                    .clicked()
-            {
-                if self.documents.iter().any(Document::dirty) {
-                    self.notify("Save modified files before running tests.", true);
-                } else {
-                    let command =
-                        std::iter::once(self.workbench.prefs.environment.program(program))
-                            .chain(arguments.into_iter().map(str::to_owned))
-                            .map(|arg| ssh::quote(&arg))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                    self.send_project_command(
-                        format!("cd -- {} && {command}", ssh::quote(&self.root())),
-                        ctx,
-                    );
-                }
-            }
-        } else {
-            ui.label("Open a source file to select its run, build and test commands.");
-        }
         if self.feature(crate::extensions::Feature::Python) {
-            egui::CollapsingHeader::new("Python tasks")
-                .default_open(language.is_some_and(|l| l.id == "python"))
-                .show(ui, |ui| self.python_tasks_ui(ui, ctx));
+            let language = self
+                .documents
+                .get(self.active)
+                .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
+            layout::card(ui, palette, |ui| {
+                egui::CollapsingHeader::new("Python tasks")
+                    .default_open(language.is_some_and(|l| l.id == "python"))
+                    .show(ui, |ui| self.python_tasks_ui(ui, ctx));
+            });
+            ui.add_space(12.);
         }
-        ui.separator();
         if ui.button("Open project terminal").clicked() {
             self.focus_pane(navigation::Pane::Terminal, ctx);
         }

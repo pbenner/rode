@@ -54,7 +54,15 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(ci.extended_suites(["README.md", "docs/editing.md"]), [])
 
     def test_shared_changes_and_full_runs_keep_all_extended_coverage(self):
-        for path in ["src/app.rs", "crates/rode-session/src/lib.rs", "Cargo.lock", "tests/pdf.rs"]:
+        for path in [
+            "src/app.rs",
+            "crates/rode-session/src/lib.rs",
+            "Cargo.lock",
+            "tests/pdf.rs",
+            "mise.toml",
+            "mise.lock",
+            "rust-toolchain.toml",
+        ]:
             self.assertEqual(ci.extended_suites([path]), ci.EXTENDED)
         self.assertEqual(ci.extended_suites([], full=True), ci.EXTENDED)
         self.assertEqual(ci.extended_suites(["scripts/build-sessiond.sh"]), ci.EXTENDED)
@@ -71,6 +79,7 @@ class SelectionTests(unittest.TestCase):
             "workspace",
             "navigation",
             "environment",
+            "mise",
             "debugger",
             "terminal-keys",
             "sessions",

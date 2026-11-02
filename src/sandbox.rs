@@ -113,6 +113,9 @@ impl Default for Options {
 /// active sandbox.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Plan {
+    /// Captured project environment provider; resolved inside the execution boundary at launch.
+    #[serde(default)]
+    pub environment: crate::environment::Settings,
     /// Canonical project root on the project host.
     pub root: String,
     /// Whether sandboxing was requested.
@@ -464,13 +467,22 @@ impl Plan {
                 helper.path.to_string_lossy().into(),
                 "/rode-extension-helper".into(),
                 "--".into(),
-                "/rode-extension-helper".into(),
             ]);
+            args.extend(crate::mise::prefix(&self.environment, &self.root, "")?);
+            args.push("/rode-extension-helper".into());
             let mut cmd = Command::new(&self.prefix[0]);
             cmd.args(args);
             cmd
         } else {
-            Command::new(rode_session::current_executable()?)
+            let mut argv = crate::mise::prefix(&self.environment, &self.root, "")?;
+            argv.push(
+                rode_session::current_executable()?
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            let mut command = Command::new(&argv[0]);
+            command.args(&argv[1..]);
+            command
         };
         command.arg(flag);
         Ok((command, helper))
@@ -478,7 +490,7 @@ impl Plan {
     /// Run a blocking file request under this plan; active-sandbox failures never retry outside
     /// it.
     pub fn local_request(&self, request: &crate::files::Request) -> Result<crate::files::Response> {
-        if !self.active {
+        if !self.active && !self.environment_applies(request) {
             return crate::files::local(request);
         }
         let helper = match &self.helper {
@@ -496,24 +508,46 @@ impl Plan {
         request: &crate::files::Request,
         executable: &Path,
     ) -> Result<crate::files::Response> {
-        if !self.active {
+        if !self.active && !self.environment_applies(request) {
             return crate::files::local(request);
         }
-        let mut args = self.prefix[1..].to_vec();
-        anyhow::ensure!(
-            args.pop().as_deref() == Some("--"),
-            "Invalid sandbox launch plan"
-        );
+        let mut args = if self.active {
+            self.prefix[1..].to_vec()
+        } else {
+            vec![]
+        };
+        if self.active {
+            anyhow::ensure!(
+                args.pop().as_deref() == Some("--"),
+                "Invalid sandbox launch plan"
+            );
+            args.extend([
+                "--ro-bind".into(),
+                executable.to_string_lossy().into(),
+                "/rode-file-helper".into(),
+                "--".into(),
+            ]);
+        }
+        if self.environment_applies(request) {
+            args.extend(crate::mise::prefix(&self.environment, &self.root, "")?);
+        }
         args.extend([
-            "--ro-bind".into(),
-            executable.to_string_lossy().into(),
-            "/rode-file-helper".into(),
-            "--".into(),
-            "/rode-file-helper".into(),
+            if self.active {
+                "/rode-file-helper".into()
+            } else {
+                executable.to_string_lossy().into_owned()
+            },
             "--file-helper".into(),
         ]);
-        let mut command = Command::new(&self.prefix[0]);
-        command.args(args);
+        let command = if self.active {
+            let mut command = Command::new(&self.prefix[0]);
+            command.args(args);
+            command
+        } else {
+            let mut command = Command::new(&args[0]);
+            command.args(&args[1..]);
+            command
+        };
         let output = crate::ssh::run_bounded(
             command,
             serde_json::to_vec(request)?,
