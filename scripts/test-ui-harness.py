@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from ui_harness import focus_window, wait_for_window
+from ui_harness import focus_window, wait_for_project, wait_for_window
 
 
 class WindowReadinessTests(unittest.TestCase):
@@ -70,6 +70,32 @@ class WindowReadinessTests(unittest.TestCase):
             focus_window(0x123)
             self.assertEqual(self.query_attributes.call_count, 3)
             focus.assert_called_once()
+
+    def test_project_waits_past_initial_mapping_and_pending_preparation(self):
+        for suffix in ("", " [Sandbox]"):
+            with self.subTest(suffix=suffix):
+                self.query_attributes.reset_mock()
+                self.query_attributes.side_effect = [
+                    subprocess.CompletedProcess(
+                        [], 0, stdout=f'xwininfo: Window id: 0x123 "{title}"\n'
+                    )
+                    for title in (
+                        "RODE",
+                        "RODE · project-other",
+                        "RODE · project [Opening project]",
+                        "RODE · project" + suffix,
+                    )
+                ]
+                wait_for_project(0x123, self.process, "startup.log", "/tmp/project")
+                self.assertEqual(self.query_attributes.call_count, 4)
+
+    def test_project_timeout_reports_pending_title(self):
+        self.query_attributes.return_value = subprocess.CompletedProcess(
+            [], 0, stdout='xwininfo: Window id: 0x123 "RODE · project [Opening project]"\n'
+        )
+        with patch("ui_harness.time.monotonic", side_effect=[0, 0, 21]):
+            with self.assertRaisesRegex(AssertionError, r"Opening project.*startup.log"):
+                wait_for_project(0x123, self.process, "startup.log", "/tmp/project")
 
     def test_focus_timeout_reports_the_state_without_calling_xsetinputfocus(self):
         self.query_attributes.return_value = self.state("IsUnMapped")

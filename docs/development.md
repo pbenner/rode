@@ -72,7 +72,7 @@ python3 scripts/ci.py bundle
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1100x24' python3 scripts/ci.py run workspace
 ```
 
-The bundle includes the pinned Ruff executable in `target/ci/tools/ruff`; document and runtime suites validate it before starting. Document jobs also install uv for the default `uvx ruff` path. The private SSH fixture exposes the invoking process's `PATH` so both sides use the same installed test tools.
+The bundle includes the pinned Ruff executable in `target/ci/tools/ruff`; document and runtime suites validate it before starting. Document jobs also install uv for the default `uvx ruff` path. The private SSH fixture exposes the invoking process's `PATH` and copies installed `uv`/`uvx` executables into its temporary home so sandboxed tests can use them without accessing the real home. Its loopback daemon permits up to 64 concurrent unauthenticated connections to accommodate parallel direct and ProxyJump tests without sshd's default random throttling.
 
 For the ordinary Rust build job, run `RODE_TEST_RUFF="$PWD/target/test-tools/bin/ruff" cargo test --locked --profile ci --workspace --all-targets`. Building with `--no-run` does not execute tests, and filters such as `--lib app::` omit integration tests under `tests/`. Targeted checks help during development but do not establish that the full build job passes. Optional installed-tool tests still need the overrides and dependencies of their owning extended suite.
 

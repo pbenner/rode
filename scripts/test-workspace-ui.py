@@ -27,6 +27,7 @@ from ui_harness import (
     request_close,
     screenshot,
     text,
+    wait_for_project,
     wait_for_window,
     x11,
 )
@@ -118,6 +119,7 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 time.sleep(0.3)
 
             window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus(window)
             key("p", ("Control_L",))
             text("main.txt")

@@ -99,7 +99,8 @@ def connection_form(window, name):
     time.sleep(0.3)
     key("a", ("Control_L",))
     text(name + ".invalid")
-    for _ in range(7):
+    # Include the optional remote-helper path before the profile-name field.
+    for _ in range(8):
         key("Tab")
     key("a", ("Control_L",))
     text(name)

@@ -25,6 +25,7 @@ from ui_harness import (
     key,
     screenshot,
     text,
+    wait_for_project,
     wait_for_window,
     x11,
 )
@@ -92,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-files-ui-") as directory:
         window = None
         try:
             window = wait_for_window(process, log_path)
-            time.sleep(0.5)
+            wait_for_project(window, process, log_path, root)
             focus_window(window)
             key("a", ("Control_L", "Shift_L"))
             state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)

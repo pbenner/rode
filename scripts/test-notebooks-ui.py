@@ -91,11 +91,19 @@ def run(remote=False):
             )
             wrapper.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + os.environ["PATH"]
+            # The fixture has a private HOME. A uv/mise venv may link to a
+            # separate Python installation, which also needs a read-only grant.
             # Grants apply to the selected remote interpreter; no package upload.
             config = base / "data/rode"
             config.mkdir(parents=True)
             policy = json.dumps(
-                {"enabled": True, "share_network": False, "read_only": [str(PYTHON.parent.parent)]}
+                {
+                    "enabled": True,
+                    "share_network": False,
+                    "read_only": sorted(
+                        {str(PYTHON.parent.parent), str(PYTHON.resolve().parent.parent)}
+                    ),
+                }
             )
             host_key = json.dumps(
                 [["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""], str(project)],

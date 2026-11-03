@@ -153,6 +153,33 @@ def wait_for_window(process, log_path, timeout=20):
     )
 
 
+def wait_for_project(window, process, log_path, project, timeout=20):
+    """Wait for project preparation before sending shortcuts or using layout coordinates."""
+    deadline = time.monotonic() + timeout
+    environment = dict(os.environ, LC_ALL="C.UTF-8")
+    expected = f"RODE · {Path(project).name}"
+    title = ""
+    while time.monotonic() < deadline:
+        assert_running(process, log_path)
+        attributes = subprocess.run(
+            ["xwininfo", "-id", hex(window)],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=3,
+        )
+        match = re.search(r'^xwininfo: Window id: \S+ "(.*)"$', attributes.stdout, re.MULTILINE)
+        title = match[1] if match and attributes.returncode == 0 else ""
+        if (
+            title == expected or title.startswith(expected + " [")
+        ) and "[Opening project]" not in title:
+            return
+        time.sleep(0.05)
+    raise AssertionError(
+        f"Project {project} was not ready within {timeout}s. Title: {title!r}. Log: {log_path}"
+    )
+
+
 def focus_window(window, timeout=20):
     """Focus only a mapped window; XSetInputFocus aborts Python on an unmapped X window."""
     deadline = time.monotonic() + timeout

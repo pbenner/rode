@@ -284,6 +284,10 @@ class SshFixtureTests(unittest.TestCase):
                 "Path(path+'.pub').write_text('ssh-ed25519 Zml4dHVyZQ== fixture\\n')\n"
             )
             keygen.chmod(0o755)
+            for tool in ("uv", "uvx"):
+                path = base / tool
+                path.write_text("#!/bin/sh\nprintf 'fixture tool\\n'\n")
+                path.chmod(0o755)
             environment = dict(
                 os.environ, PATH=str(base) + os.pathsep + os.environ["PATH"], CARGO="/no-cargo"
             )
@@ -326,7 +330,15 @@ class SshFixtureTests(unittest.TestCase):
                 'env=dict(os.environ,SHELL=expected,SSH_ORIGINAL_COMMAND="printf \'%s\' \\"$SHELL\\"")\n'
                 "result=subprocess.run([host],env=env,text=True,capture_output=True)\n"
                 "assert result.returncode == 0, result.stderr\n"
-                "assert result.stdout == expected, result.stdout\n",
+                "assert result.stdout == expected, result.stdout\n"
+                "env['SSH_ORIGINAL_COMMAND']='command -v uv; command -v uvx'\n"
+                "result=subprocess.run([host],env=env,text=True,capture_output=True,check=True)\n"
+                "for name, value in zip(('uv','uvx'),result.stdout.splitlines(),strict=True):\n"
+                " tool=Path(value)\n"
+                " assert tool == host.parent/'home/.local/bin'/name, value\n"
+                " assert not tool.is_symlink(), value\n"
+                " assert tool.stat().st_mode & 0o777 == 0o700, value\n"
+                " assert subprocess.check_output([tool],text=True) == 'fixture tool\\n'\n",
             ]
             result = subprocess.run(
                 command + normal_shell_probe,

@@ -43,6 +43,19 @@ EOF
     chmod 700 "$test_shell"
     export RODE_TEST_PROJECT_SHELL="$test_shell"
     test_shell_export="export SHELL='$test_shell'"
+else
+    # The sandbox exposes this fixture's home, not the invoking user's home.
+    # Copy the installed uv tools together so default Ruff can find uvx and its
+    # sibling uv without granting access to the real home or installing tools.
+    uv_path=$(command -v uv || true)
+    uvx_path=$(command -v uvx || true)
+    if [[ "$uv_path" == /* && "$uvx_path" == /* ]]; then
+        mkdir -p "$test_dir/home/.local/bin"
+        cp -L "$uv_path" "$test_dir/home/.local/bin/uv"
+        cp -L "$uvx_path" "$test_dir/home/.local/bin/uvx"
+        chmod 700 "$test_dir/home/.local/bin/uv" "$test_dir/home/.local/bin/uvx"
+        test_path="$test_dir/home/.local/bin:$test_path"
+    fi
 fi
 cat > "$test_dir/host-shell" <<EOF
 #!/bin/sh
@@ -68,6 +81,9 @@ KbdInteractiveAuthentication no
 UsePAM no
 AllowUsers $test_user
 LogLevel VERBOSE
+# Parallel direct/ProxyJump tests exceed sshd's default ten-login throttle.
+# Keep a bounded limit on this private loopback daemon without random drops.
+MaxStartups 64
 AcceptEnv CODEX_HOME RODE_CODEX_CACHE
 # The fixture runs on this host; expose the same CI-installed tools to its child shells.
 SetEnv "PATH=$test_path"
