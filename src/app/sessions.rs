@@ -7,6 +7,7 @@
 //! utilization.
 use super::*;
 use crate::project;
+use crate::sandbox::PlanExt as _;
 use crate::{sessions as service, slurm};
 use anyhow::Context;
 use std::collections::VecDeque;
@@ -442,7 +443,7 @@ impl EditorApp {
             let _vault_work = vault_work;
             let result = (|| -> anyhow::Result<project::Response> {
                 if let Some(remote) = remote {
-                    let helper = Some(service::helper(upload)?);
+                    let helper = service::remote_helper(&remote, upload)?;
                     remote
                         .request_in(
                             &Request::Tool {

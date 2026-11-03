@@ -1,25 +1,19 @@
-//! Actual local/Python bubblewrap grants, read-only rules, nested overrides and visible
+//! Actual desktop/headless bubblewrap grants, read-only rules, nested overrides and visible
 //! unavailable-host fallback.
 
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     files::{self, Request, Response},
     sandbox::{self, Options},
 };
-use std::{
-    fs,
-    io::Write,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{fs, io::Write, path::Path, process::Stdio};
 
-fn python(request: &Request, path: Option<&Path>) -> anyhow::Result<Response> {
-    let binary = sandbox::find_program("python3").unwrap();
-    let mut command = Command::new(binary);
+fn headless(request: &Request, path: Option<&Path>) -> anyhow::Result<Response> {
+    let mut command = native_peer::command();
     command
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -54,7 +48,7 @@ fn normal_and_sandbox_project_preparation_match_on_both_backends() {
             },
         };
         let local = files::local(&request).unwrap();
-        let remote = python(&request, None).unwrap();
+        let remote = headless(&request, None).unwrap();
         assert_eq!(local.path, remote.path);
         assert_eq!(local.entries.len(), 1);
         let local = local.project.unwrap();
@@ -67,7 +61,7 @@ fn normal_and_sandbox_project_preparation_match_on_both_backends() {
             );
             assert!(
                 remote.active,
-                "Required Python sandbox unavailable: {}",
+                "Required headless sandbox unavailable: {}",
                 remote.reason
             );
         }
@@ -77,7 +71,10 @@ fn normal_and_sandbox_project_preparation_match_on_both_backends() {
             "Local: {} / remote: {}",
             local.reason, remote.reason
         );
-        assert_eq!(local.prefix, remote.prefix);
+        assert_eq!(
+            native_peer::policy_arguments(&local),
+            native_peer::policy_arguments(&remote)
+        );
         if enabled && !local.active {
             eprintln!("Sandbox unavailable in this environment: {}", local.reason);
         }
@@ -95,7 +92,7 @@ fn missing_and_unusable_bwrap_allow_normal_remote_project_work() {
             ..Default::default()
         },
     };
-    let response = python(&request, Some(tools.path())).unwrap();
+    let response = headless(&request, Some(tools.path())).unwrap();
     let plan = response.project.unwrap();
     assert!(plan.requested && !plan.active);
     assert!(plan.reason.contains("not installed"));
@@ -110,7 +107,7 @@ fn missing_and_unusable_bwrap_allow_normal_remote_project_work() {
         )
         .unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
-        let response = python(&request, Some(tools.path())).unwrap();
+        let response = headless(&request, Some(tools.path())).unwrap();
         let plan = response.project.unwrap();
         assert!(plan.requested && !plan.active);
         assert!(plan.reason.contains("user namespaces disabled"));
@@ -128,7 +125,7 @@ fn active_local_sandbox_allows_project_edits_and_hides_unrelated_files() {
         enabled: true,
         ..Default::default()
     };
-    let plan = sandbox::prepare(project.path().to_str().unwrap(), &options).unwrap();
+    let plan = native_peer::prepare(project.path().to_str().unwrap(), &options).unwrap();
     if !plan.active {
         eprintln!("Cannot exercise namespace isolation here: {}", plan.reason);
         return;
@@ -267,8 +264,11 @@ fn configurable_default_grants_and_read_only_projects_are_enforced_by_both_hosts
         sandbox: options,
     };
     let local = files::local(&request).unwrap().project.unwrap();
-    let peer = python(&request, None).unwrap().project.unwrap();
-    assert_eq!(local.prefix, peer.prefix);
+    let peer = headless(&request, None).unwrap().project.unwrap();
+    assert_eq!(
+        native_peer::policy_arguments(&local),
+        native_peer::policy_arguments(&peer)
+    );
     assert!(
         !local
             .prefix
@@ -354,8 +354,11 @@ fn nested_access_rules_override_parent_grants_without_being_masked() {
             sandbox: options,
         };
         let plan = files::local(&request).unwrap().project.unwrap();
-        let peer = python(&request, None).unwrap().project.unwrap();
-        assert_eq!(plan.prefix, peer.prefix);
+        let peer = headless(&request, None).unwrap().project.unwrap();
+        assert_eq!(
+            native_peer::policy_arguments(&plan),
+            native_peer::policy_arguments(&peer)
+        );
         if !plan.active {
             eprintln!("Nested mount test unavailable: {}", plan.reason);
             return;

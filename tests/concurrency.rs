@@ -1,6 +1,7 @@
-//! Local Rust helpers and the Python SSH peer coordinate on the same file inodes.
-#[path = "support/python.rs"]
-mod python_peer;
+//! Local Rust helpers and the headless host helper coordinate on the same file inodes.
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     files::{self, Request},
@@ -13,11 +14,9 @@ use std::{
     sync::Arc,
 };
 
-fn writer(request: &Request, python: bool) -> Child {
-    let mut command = if python {
-        let mut command = Command::new("python3");
-        command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
-        command
+fn writer(request: &Request, headless: bool) -> Child {
+    let mut command = if headless {
+        native_peer::command()
     } else {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
         command.arg("--file-helper");
@@ -39,7 +38,7 @@ fn writer(request: &Request, python: bool) -> Child {
 }
 
 #[test]
-fn simultaneous_existing_file_saves_have_one_winner_across_rust_and_python() {
+fn simultaneous_existing_file_saves_have_one_winner_across_native_helpers() {
     use std::os::fd::AsRawFd;
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("quoted ' 🦀.txt");
@@ -165,7 +164,7 @@ fn editing_the_preferences_file_and_changing_a_setting_cooperate() {
 #[test]
 fn parallel_sandboxed_helpers_do_not_collide_even_with_identical_namespace_pids() {
     let root = tempfile::tempdir().unwrap();
-    let plan = rode::sandbox::prepare(
+    let plan = native_peer::prepare(
         root.path().to_str().unwrap(),
         &rode::sandbox::Options {
             enabled: true,

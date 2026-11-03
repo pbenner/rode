@@ -1,6 +1,6 @@
-//! Exercise the native and concatenated SSH services with an isolated uvx peer.
-#[path = "support/python.rs"]
-mod python_peer;
+//! Exercise the desktop and headless host services with an isolated uvx peer.
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{files, project};
 use std::{
@@ -54,9 +54,7 @@ else:
             };
             for remote in [false, true] {
                 let mut command = if remote {
-                    let mut command = Command::new("python3");
-                    command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
-                    command
+                    native_peer::command()
                 } else {
                     let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
                     command.arg("--file-helper");

@@ -216,3 +216,64 @@ fn run_step(step: usize) {
             process.kill()
             process.wait()
         log.close()
+
+# A file directly in HOME must not be mistaken for a whole-home sandbox project.
+with tempfile.TemporaryDirectory(prefix="rode-file-ui-") as directory:
+    home = Path(directory)
+    path = home / "individual file.txt"
+    path.write_text("standalone contents\n")
+    preferences = home / "data-home/rode/app.ron"
+    preferences.parent.mkdir(parents=True)
+    defaults = {"enabled": True}
+    preferences.write_text(json.dumps({"sandbox_defaults": json.dumps(defaults)}))
+    environment = dict(
+        os.environ,
+        HOME=directory,
+        XDG_CONFIG_HOME=directory + "/config",
+        XDG_DATA_HOME=directory + "/data-home",
+    )
+    with (ARTIFACTS / "standalone-file.log").open("w") as log:
+        process = subprocess.Popen(
+            [str(BINARY), path.name], cwd=directory, env=environment, stdout=log, stderr=log
+        )
+        try:
+            window = wait_for_window(process, ARTIFACTS / "standalone-file.log")
+            focus_window(window)
+            deadline = time.monotonic() + 15
+            while True:
+                assert_running(process, ARTIFACTS / "standalone-file.log")
+                attributes = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                if "[File mode]" in attributes:
+                    break
+                if time.monotonic() >= deadline:
+                    screenshot(window, "standalone-file-failure.png")
+                    raise AssertionError("HOME file did not open without a project")
+                time.sleep(0.05)
+            screenshot(window, "standalone-file.png")
+            key("End", ("Control_L",))
+            text("saved without a project")
+            key("s", ("Control_L",))
+            while path.read_text() != "standalone contents\nsaved without a project":
+                assert_running(process, ARTIFACTS / "standalone-file.log")
+                if time.monotonic() >= deadline:
+                    screenshot(window, "standalone-save-failure.png")
+                    raise AssertionError("Standalone Ctrl+S did not save to the original file")
+                time.sleep(0.05)
+            close_window(window, process)
+            saved = re.search(
+                r'"sandbox_defaults"\s*:\s*("(?:\\.|[^"\\])*")', preferences.read_text()
+            )
+            assert saved and json.loads(json.loads(saved[1])) == defaults, (
+                "Standalone startup must not change project sandbox preferences"
+            )
+            print(
+                "Relative HOME file startup, editing, saving and unchanged sandbox defaults passed."
+            )
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()

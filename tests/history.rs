@@ -1,5 +1,9 @@
 //! History is agent-owned: browsing never sends a prompt, and restore replaces
 //! the current process only after a project-validated acknowledgement and replay.
+
+#[path = "support/native.rs"]
+mod native_peer;
+
 use rode::{
     agent::{
         Access, Approval, Config, Launch, Provider,
@@ -29,7 +33,7 @@ fn fixture(provider: Provider, isolated: bool) -> (tempfile::TempDir, Launch) {
             acp_program: program.to_string_lossy().into(),
             ..Default::default()
         },
-        plan: sandbox::prepare(
+        plan: native_peer::prepare(
             temp.path().to_str().unwrap(),
             &sandbox::Options {
                 enabled: isolated,

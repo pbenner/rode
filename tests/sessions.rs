@@ -1,6 +1,9 @@
 //! Real native service/PTYS, shared attachment, explicit persistence, upgrade compatibility and
 //! idle/child cleanup in private runtimes.
 
+#[path = "support/native.rs"]
+mod native_peer;
+
 use portable_pty::CommandBuilder;
 use rode::{sandbox, sessions, terminal::Terminal};
 use rode_session::{Request, Response};
@@ -139,9 +142,10 @@ impl Fixture {
         infos
     }
     fn plan(&self) -> sandbox::Plan {
-        let mut plan = sandbox::Plan::default();
-        plan.root = self.root.path().to_string_lossy().into();
-        plan
+        sandbox::Plan {
+            root: self.root.path().to_string_lossy().into(),
+            ..Default::default()
+        }
     }
 }
 #[test]
@@ -899,7 +903,7 @@ fn detached_sandbox(backend: sandbox::Backend) {
     fs::create_dir(&project).unwrap();
     let hidden = fixture.root.path().join("secret");
     fs::write(&hidden, "private").unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         project.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -1106,7 +1110,7 @@ fn landlock_cannot_use_the_host_service_as_an_unsandboxed_process_broker() {
     fixture.create(&fixture.plan());
     let project = fixture.root.path().join("landlock-project");
     fs::create_dir(&project).unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         project.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,

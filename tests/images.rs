@@ -1,8 +1,9 @@
-//! Codec decoding, orientation, shared-memory limits and native/Python binary transport under
+//! Codec decoding, orientation, shared-memory limits and desktop/headless binary transport under
 //! actual sandbox grants.
 
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbImage};
@@ -13,7 +14,7 @@ use rode::{
 use std::{
     fs,
     io::{Cursor, Write},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::Arc,
 };
 
@@ -31,8 +32,7 @@ fn fixture(format: ImageFormat) -> Vec<u8> {
     result.into_inner()
 }
 fn peer(request: &Request) -> anyhow::Result<files::Response> {
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -190,7 +190,7 @@ fn active_sandbox_image_reads_cannot_escape_through_paths_or_symlinks() {
     fs::write(&private, fixture(ImageFormat::Png)).unwrap();
     fs::copy(&private, project.join("inside.png")).unwrap();
     std::os::unix::fs::symlink(&private, project.join("escape.png")).unwrap();
-    let plan = rode::sandbox::prepare(
+    let plan = native_peer::prepare(
         project.to_str().unwrap(),
         &rode::sandbox::Options {
             enabled: true,

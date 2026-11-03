@@ -1,4 +1,4 @@
-//! Embedded language detection, installed stdin tools and local/Python diagnostics parity
+//! Embedded language detection, installed stdin tools and local/headless diagnostics parity
 //! without automatic installation.
 
 use rode::{app, languages, theme::Themes};

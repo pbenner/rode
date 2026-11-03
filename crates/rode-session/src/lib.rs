@@ -1651,6 +1651,37 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
 /// Entry point shared by the standalone headless helper and the GUI binary's
 /// local fallback. No windowing code is linked into rode-sessiond.
 pub fn cli(args: &[String]) -> Result<()> {
+    if args.first().is_some_and(|s| s == "--landlock-launch") {
+        return rode_host_core::landlock::launch(&args[1..]);
+    }
+    if args.first().is_some_and(|s| s == "--mise-launch") {
+        rode_host_core::supervisor::signals()?;
+        return rode_host_core::mise::native::launch(&args[1..]);
+    }
+    match args.first().map(String::as_str) {
+        Some("--slurm-step") => return rode_host_core::slurm::native::step(&args[1..]),
+        Some("--compute-step") => return rode_host_core::slurm::native::compute(&args[1..], false),
+        Some("--compute-runtime") => {
+            return rode_host_core::slurm::native::compute(&args[1..], true);
+        }
+        _ => {}
+    }
+    if args.len() == 1 {
+        match args[0].as_str() {
+            "host-rpc" => return host::serve(),
+            "--runtime-cache" => return rode_host_core::runtime_cache::serve(),
+            "--process" => return rode_host_core::supervisor::serve(),
+            "--workspace-request" => return host::workspace_request(),
+            "--host-worker" => return host::worker(),
+            "--file-helper" => return host::file_request(),
+            "--debug-helper" => return rode_host_core::debugger::bridge::coordinator(),
+            "--vault-helper" => return rode_host_core::vault::coordinator(),
+            "--latex-helper" => return rode_host_core::latex::coordinator(),
+            "--marp-helper" => return rode_host_core::marp::coordinator(),
+            "--extension-helper" => return rode_host_core::extensions::coordinator(),
+            _ => {}
+        }
+    }
     match args.first().map(String::as_str) {
         Some("protocol") if args.len() == 1 => {
             println!("{PROTOCOL}");
@@ -1702,3 +1733,9 @@ pub fn report_error(args: &[String], error: &anyhow::Error) {
         eprintln!("{error:#}");
     }
 }
+
+/// Project policy to persistent-service request conversion.
+pub mod workspace;
+
+/// Native connection-owned host RPC composition.
+pub mod host;

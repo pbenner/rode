@@ -64,7 +64,7 @@ Normal terminal keys, including Tab and control keys, keep working. While a debu
 
 ## SSH, sandboxing and lifetime
 
-Adapters and programs run **on the project host** using the existing authenticated OpenSSH connection. RODE provisions its native session helper for managed controllers; no remote desktop installation, extra network listener or SSH port forwarding is required. The remote coordinator uses Python 3's standard library; the configured debugger/runtime is a separate host prerequisite. There is no desktop-local fallback for remote programs or sources.
+Adapters and programs run **on the project host** using the existing authenticated OpenSSH connection. RODE provisions its native session helper for managed controllers; no remote desktop installation, extra network listener or SSH port forwarding is required. The remote coordinator uses Rust; the configured debugger/runtime is a separate host prerequisite. There is no desktop-local fallback for remote programs or sources.
 
 In sandbox mode the adapter, debuggee and interactive PTYs share **one** sandbox session, including its mount, PID and network namespaces. Project commands obey its filesystem and network grants. Debugging does not widen those grants or automatically retry in normal mode. Some adapters use internal loopback connections or need kernel ptrace permissions: a host policy or unshared network may prevent them from working. Keep the visible sandbox policy and adjust it explicitly if needed. Native debugging also depends on the host's ptrace policy; containers may restrict disabling ASLR, so `extra: {"disableASLR": false}` can help without granting additional permissions.
 

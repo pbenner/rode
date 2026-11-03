@@ -1,6 +1,8 @@
 # Source architecture
 
-RODE has four Rust library crates: `rode` supplies desktop/editor services, `rode-agent-core` supplies headless agent controllers, `rode-runtime-core` supplies headless notebook/DAP controllers, and `rode-session` supplies their native host service and PTYs. The desktop uses egui/eframe. Local services are Rust; SSH peers use the remote host's Python standard library to deploy/control the native helper without requiring a remote editor or GUI libraries.
+RODE has six Rust library crates. `rode` owns the egui/eframe desktop; `rode-host-protocol` owns bounded host wire contracts; `rode-host-core` owns shared headless filesystem, command, environment and sandbox services; `rode-agent-core` and `rode-runtime-core` own agent and notebook/DAP controllers; `rode-session` composes the native host gateway and independent persistent service. The native SSH backend links no GUI libraries and needs no Python for general host operations. Only Python-specific interpreter and Jupyter adapters use Python at runtime.
+
+The [native host architecture](#native-host-architecture) below records the host services, deployment contract and supported limits.
 
 Build browsable API documentation with:
 
@@ -8,7 +10,7 @@ Build browsable API documentation with:
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --open
 ```
 
-The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html`, `target/doc/rode_runtime_core/index.html` and `target/doc/rode_session/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures.
+The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html`, `target/doc/rode_runtime_core/index.html` `target/doc/rode_session/index.html`, `target/doc/rode_host_core/index.html` and `target/doc/rode_host_protocol/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures.
 
 ## Source map
 
@@ -21,29 +23,31 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections, empty states and dialog frames |
 | `src/app/navigation/` | Pane focus, validated shortcut presets, explorer keys and native source-editing modes |
 | `src/app/workbench.rs`, `src/app/workbench/` | Captured project preferences, Git, code tools, environments, monitoring and settings panels |
-| `src/files.rs`, `src/remote_files.py` | Bounded file protocol, content revisions and protected saves |
-| `src/ssh.rs`, `src/sandbox.rs`, `src/remote_sandbox.py` | Authenticated transport identity, actual host-policy preparation and sandbox execution |
+| `crates/rode-host-protocol/src/files.rs`, `crates/rode-host-core/src/files.rs`, `src/files.rs` | Wire-only file results, shared revision-checked saves and desktop decode attachments |
+| `src/host/`, `crates/rode-session/src/host.rs` | Verified native deployment, connection-owned RPC, captured contexts and scoped workers |
+| `crates/rode-host-core/src/` | Shared project/Git/tools, sandbox launchers, process supervision, runtime cache and compute launch |
+| `src/ssh.rs`, `src/sandbox.rs`, `crates/rode-host-core/src/landlock.rs` | Authenticated transport identity, actual host-policy preparation and sandbox execution |
 | `src/persistence.rs` | Locked preference deltas, atomic configuration writes and private framework snapshots |
-| `src/project.rs`, `src/languages.rs`, `src/remote_project.py` | Installed tools, embedded language catalogue, normalized diagnostics and host counters |
-| `src/project/stash.rs`, `src/remote_git_stash.py` | Captured stash identities, Git-compatible writer locks and protected files-backend reflog removal |
-| `src/extensions.rs`, `src/app/extensions.rs`, `src/remote_extensions.py` | Native feature activation, opt-in installed adapters and their UI/preferences |
-| `src/mise.rs`, `src/remote_mise.py`, `src/mise_launch.py`, `src/remote_environment.py` | Optional mise feature, bounded tool/task discovery, host-side environment resolution before exec and shared literal environment/command helpers |
-| `src/process.rs`, `src/remote_agent.py` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
-| `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `src/remote_codex.py`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
+| `src/project.rs`, `src/languages.rs`, `crates/rode-host-core/src/project.rs` | Installed tools, embedded language catalogue, normalized diagnostics and host counters |
+| `crates/rode-host-core/src/project/stash.rs`, `crates/rode-host-core/src/project/stash/transaction.rs` | Captured stash identities, Git-compatible writer locks and protected files-backend reflog removal |
+| `src/extensions.rs`, `src/app/extensions.rs`, `crates/rode-host-core/src/extensions.rs` | Native feature activation, opt-in installed adapters and their UI/preferences |
+| `src/mise.rs`, `crates/rode-host-core/src/mise/native.rs`, `crates/rode-host-core/src/environment.rs` | Optional mise feature, bounded tool/task discovery, host-side environment resolution before exec and shared literal environment/command helpers |
+| `src/process.rs`, `crates/rode-host-core/src/supervisor.rs` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
+| `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `crates/rode-host-core/src/runtime_cache.rs`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
 | `crates/rode-agent-core/` | Shared Codex/ACP state machines, bounded chat/history, capabilities, personalities and host-service wire views |
 | `crates/rode-runtime-core/`, `crates/rode-session/src/runtimes.rs`, `src/runtime.rs` | Shared notebook/DAP controllers, bounded output/state replay, exclusive leases, mutation acknowledgements and native runtime discovery |
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs`, `src/app/agents/background.rs` | Project-host preparation, disposable agent attachment, live-session discovery, history and permission/question UI |
 | `crates/rode-session/src/agents.rs`, `agents/transport.rs` | Headless agent ownership, fixed sandbox/executable/environment, controller leases, bounded subprocess I/O and lifetime cleanup |
 | `src/agent/personality.rs` | Bounded response-style hints, explicit default resets and display-only history cleanup; independent of tools and execution policies |
 | `crates/rode-agent-core/src/controls.rs`, `controls/catalog.rs`, `src/agent/controls.rs`, `src/app/agents/controls.rs` | Shared bounded model paging, metadata-only discovery and native model/access selectors |
-| `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `src/remote_debugger.py` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
+| `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `crates/rode-host-core/src/debugger/bridge.rs` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
 | `src/images.rs`, `src/pdf.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, memory leases, retained snapshots and specialized tabs |
 | `src/app/markdown.rs` | Unsaved-source Markdown rendering and sandbox-aware linked assets |
-| `src/notebook/`, `src/notebook.rs`, `src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
-| `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` modules and Python peers | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
+| `src/notebook/`, `src/notebook.rs`, `crates/rode-host-core/src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
+| `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` and `crates/rode-host-core/src/` modules | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
-| `src/slurm.rs`, `src/slurm/`, `src/app/sessions/allocation.rs`, `src/remote_sessions.py` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
-| `src/vault.rs`, `src/remote_vault.py`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
+| `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
+| `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
 | `tests/`, `tests/fixtures/`, `scripts/test-*.py` | Service integration tests, deterministic peers and isolated native UI checks |
 
@@ -65,13 +69,13 @@ One UI-thread owner avoids concurrent mutation of source buffers. Cancellation a
 
 System OpenSSH preserves the user's aliases, keys, jump hosts, agents and authentication workflow. A separate authentication master lets independent file/tool/project-shell channels reuse the same connection. Multiplex-only slave arguments prevent a lost socket from starting an unexpected fresh login; disconnect is handled as an explicit state transition with recoverable buffers.
 
-Standard-library Python peers avoid deploying the desktop editor and its dependencies to every file host. The tradeoff is maintaining equivalent native/Python service behavior and testing both. Persistent terminals use a separate native helper because their owner must survive a file channel or editor process. Rationale lives in `src/ssh.rs` and `crates/rode-session/src/lib.rs`; [remote setup](remote.md) records the prerequisites.
+Native SSH deploys a small verified helper and reuses the same Rust services as local execution. Its distribution and protocol checks replace the general interpreter prerequisite. Persistent sessions have a separate process owner because their jobs must survive a gateway or editor exit. Rationale lives in `src/ssh.rs` and `crates/rode-session/src/lib.rs`; [remote setup](remote.md) records the prerequisites.
 
 ### Sandbox preparation and enforcement
 
 Project file helpers and process trees run inside the selected host's sandbox; display/authentication resources stay outside it. This gives editor reads, shells and tools a consistent project policy without sandboxing the whole desktop application. Shared mount-policy data reduces drift between implementations.
 
-Probing distinguishes requested isolation from what the host can actually enforce, allowing visibly ordinary operation when the selected bubblewrap or Landlock backend is unavailable. Landlock uses one embedded Python standard-library launcher for local and SSH commands, with kernel access rules rather than namespaces. That fallback is decided during preparation. Retrying a denied operation outside an already-active sandbox would change the granted access, so it remains a failure. Rationale lives in `src/sandbox.rs`; the concrete access model and exceptions are in [sandbox access](sandbox.md).
+Probing distinguishes requested isolation from what the host can actually enforce, allowing visibly ordinary operation when the selected bubblewrap or Landlock backend is unavailable. Local and SSH workspaces use a single-threaded Rust Landlock launcher. It enforces kernel access rules rather than namespaces. That fallback is decided during preparation. Retrying a denied operation outside an already-active sandbox would change the granted access, so it remains a failure. Rationale lives in `src/sandbox.rs`; the concrete access model and exceptions are in [sandbox access](sandbox.md).
 
 ### Explicit settings merges and protected source saves
 
@@ -156,7 +160,7 @@ Capture these identifiers and the source snapshot before dispatch. Check them be
 
 ## File saves and shared preferences
 
-Source and binary reads produce a content digest. A save captures the submitted bytes and expected revision, follows the destination's symlink target, locks the current inode and verifies that it still represents the path after waiting. The writer compares the digest, writes a neighboring temporary inode, preserves existing permissions and publishes atomically. New destinations use publication that refuses replacement. These locks coordinate RODE's Rust/Python writers; unrelated programs still have best-effort conflict detection.
+Source and binary reads produce a content digest. A save captures the submitted bytes and expected revision, follows the destination's symlink target, locks the current inode and verifies that it still represents the path after waiting. The writer compares the digest, writes a neighboring temporary inode, preserves existing permissions and publishes atomically. New destinations use publication that refuses replacement. These locks coordinate RODE's local and SSH writers; unrelated programs still have best-effort conflict detection.
 
 An acknowledgement updates the saved baseline to the submitted snapshot. Edits typed while the save ran remain dirty. Save As must not authorize silently replacing an unrelated existing file. Preview tabs use dedicated read-only paths and never enter text formatting or source saving.
 
@@ -187,13 +191,13 @@ Confirmed runtime terminations use a bounded worker separate from read-only disc
 
 Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Hidden monitors stop scheduling samples; hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
 
-## Protocols and Python peers
+## Protocols and feature adapters
 
-`files::REMOTE_HELPER` concatenates the sandbox/project/session/extension/Marp/LaTeX peers, shared JSON policy/catalogue data and the final file dispatcher. Some fragments intentionally use globals/imports supplied by earlier fragments. They are not independent Python packages. Keep their names, concatenation order and Rust wire types aligned. `remote_agent.py`, `remote_debugger.py`, `remote_vault.py` and `notebook_kernel.py` have their own process entry points.
+The native gateway protocol is described [below](#protocol-and-channel-contract). File/project operations use tagged JSON request/reply shapes shared by the desktop and headless helper. Long-lived agent/kernel/coordinator transports use bounded JSON lines. DAP messages use Content-Length measured in bytes. Binary/image/PDF/PTY payloads use explicit base64 where required by their protocol. Stdout is protocol-only; diagnostics belong on stderr or in explicit result fields.
 
-File/project operations use tagged JSON request/reply shapes. Long-lived agent/kernel/coordinator transports use bounded JSON lines. SSH Python peers are sent in a bounded length-prefixed stdin prelude, then executed from a private temporary script with a short role-specific filename. The script removes its file and directory before running the original helper source; exact unbuffered prelude reads leave the following JSON/binary protocol untouched. This keeps helper source out of process arguments without adding a remote installation or persistent cache, at the cost of staging one temporary file per helper. exec retains the supervised PID and process group. DAP messages use Content-Length measured in bytes, including non-ASCII JSON. Binary/image/PDF/PTY payloads use explicit base64 where required by their protocol. Stdout is protocol-only; diagnostic text belongs on stderr or in an explicit result field.
+`environment_probe.py` inspects the selected Python interpreter. `notebook_kernel.py` integrates with installed Jupyter packages. These are language-specific adapters, not file transport, process supervision or sandbox launchers. Development/test and packaging scripts may also use Python.
 
-Input, output, frames, directory rows, subprocess duration and retained document data have explicit limits near their implementation. Reject over-limit input with a useful error; do not bypass an active policy or retry on the desktop. When changing a schema, update both native and Python peers and use the [relevant parity, sandbox and SSH tests](development.md).
+Input, output, frames, directory rows, subprocess duration and retained data have explicit limits. Reject over-limit input; never bypass an active policy or retry on the desktop. When changing a schema, update the shared Rust types and the [contract, sandbox and SSH tests](development.md).
 
 ## Following an operation through the code
 
@@ -229,29 +233,88 @@ These conventions prevent otherwise plausible changes from silently retargeting 
 | Start/stop/persistence request acceptance | Ownership transferred to a worker/controller. Callers still poll for startup errors or lifetime acknowledgement before reporting completion or exiting. |
 | No cached result versus an empty successful result | A probe may not have run, may be pending or may have failed. Preserve errors and pending flags separately from a valid empty list. |
 
-### Python entry points and composition
-
-`files::REMOTE_HELPER` is the authoritative concatenation order. It embeds sandbox policy, then `remote_sandbox.py`, `environment_probe.py`, `remote_project.py`, `remote_git_stash.py`, `remote_sessions.py`, `remote_extensions.py`, `remote_marp.py` and `remote_latex.py`, followed by the language catalogue and `remote_files.py` dispatcher. Function globals are resolved in that assembled interpreter; some fragments intentionally use services defined elsewhere in the composition. Preserve both the ordering and the final protocol-only stdout.
-
-| Helper | Invocation and ownership |
-| --- | --- |
-| Assembled file helper | One selected-host file/project request and JSON reply. Adapter/build entry points can use a retained stdin lifeline for cancellation. |
-| `remote_agent.py` | Captured subprocess launch followed by bounded forwarded input. EOF/signals stop only the owned child group. |
-| `remote_debugger.py` | Coordinator for DAP and its integrated PTYs. Reader/writer threads isolate pipe backpressure; terminal requests use literal arguments. |
-| `notebook_kernel.py` | One Jupyter bridge with bounded execution-tagged output. Interrupt/control input remains independent of queued execution; EOF owns kernel cleanup. |
-| `remote_codex.py` | Explicit verified deployment/setup of the optional native runtime, separate from conversation execution. |
-| `remote_vault.py` | Mount verification and lease broker. Retained references and normal unmount determine the truthful lock result. |
-| `slurm/step.py` | Revalidates the captured allocation on the login host, then replaces itself with a stdio compute step. The compute bootstrap resolves Python under the compute host's policy. |
-| `ssh/python_stage.py` | Writes and execs the staged helper, removing its temporary source before execution while preserving subsequent protocol bytes. |
-
-Worker callbacks document their EOF, byte-bound and cleanup behavior beside the implementation. Do not turn a read-only discovery helper into an execution path, print diagnostics into a protocol stream, or resolve remote executable paths using the desktop filesystem.
-
 ## Documentation maintenance
 
 Document a public item's behavior, units, indexing, side effects and lifetime where those affect its use. State error/absence semantics when an empty result differs from failure, and explain whether a function blocks or merely queues work. Use module comments for shared invariants instead of repeating them on every private getter.
 
 Apply the same contract to internal APIs shared between modules: state types, UI entry points, worker dispatch/completion methods and lifetime operations. Small private formatting helpers and trait implementations can rely on the owning module/type contract when an additional comment would only repeat the code. A private item's visibility is not a reason to omit its cancellation, indexing or ownership requirements.
 
-Private comments should explain ordering and ownership that the code alone cannot show: lock publication, stale-result rejection, preserved source snapshots and signal scope. Keep comments close to that decision and update them when behavior changes. Rustdoc links and missing public docs are checked in CI. Python helper docstrings describe their host/protocol contracts; the existing Ruff checks remain the formatting/lint workflow.
+Private comments should explain ordering and ownership that the code alone cannot show: lock publication, stale-result rejection, preserved source snapshots and signal scope. Keep comments close to that decision and update them when behavior changes. Rustdoc links and missing public docs are checked in CI. Python feature-adapter and test-script docstrings describe their contracts; Ruff checks their formatting and lint.
 
 For a design choice, record the motivating constraint, the selected approach and its costs or limits. If a change revisits that choice, update both the owning module's rationale and the relevant guide section, including compatibility/lifetime effects and the checks that substantiate the new behavior. An API-description update alone does not explain a changed design tradeoff.
+
+## Native host architecture
+
+OpenSSH owns authentication, host verification and multiplexed channels. `rode-sessiond` owns native host commands independently of the persistent session service. There is one Rust host implementation and no alternative interpreter transport.
+
+### Process and dependency boundaries
+
+```text
+Desktop worker -> OpenSSH master -> connection-owned host-rpc gateway
+                                       |                   |
+                          captured project context    narrow administration
+                                       |                   |
+                          sandbox -> --host-worker    existing session service
+                          files / Git / tools         sandboxed persistent jobs
+
+Separate multiplexed channels -> bounded process/build/debugger streams
+```
+
+| Component | Owner and contract |
+| --- | --- |
+| `rode-host-protocol` | Versioned framing and generic file/host envelopes; Serde-only, no OS or GUI services |
+| `rode-host-core` | Shared safe files, locks, Git, installed tools, environment/mise, sandbox, supervisor, runtime cache, vault and Slurm services; no desktop/session dependency |
+| `rode-session::host` | Gateway, request composition, opaque project contexts and fresh scoped worker processes |
+| `rode-session::workspace` | Session administration DTOs and launch conversion, shared with the desktop |
+| Existing session controllers | Persistent PTYs, agents, notebook/debugger state, leases, protected IPC and service generations |
+| Desktop `src/host/native.rs` | Remote-architecture selection, verified bootstrap, bounded request scheduling and connection failure reporting |
+| Desktop facades | `files`, `project`, `sandbox`, `sessions` compose host services with UI attachments and local helper discovery |
+
+The dependency direction is `protocol <- host-core <- session`. Agent/runtime controllers remain headless. Image/PDF decoding, notebook documents, textures, source buffers and preference merging remain in the desktop. Wire file results contain only encoded data, entries, paths and revisions.
+
+Local services use host core directly or a retained native helper. Landlock and mise launchers use Rust on both local and SSH hosts. Python remains a feature dependency for interpreter inspection and Jupyter, and may be used by development tooling.
+
+### Contexts and authority
+
+The gateway opens no listener and stores at most 128 opaque contexts per connection. Preparation captures the canonical root, requested grants, actual enforcement result and helper generation. Environment changes derive a new context without changing grants. Context IDs from another connection are rejected. Reconnect when the context limit is reached; old contexts are not silently evicted while work may reference them.
+
+Ordinary file/tool RPC runs in a fresh helper process under the captured plan. Caller-supplied prefixes cannot replace that plan. Unscoped RPC permits only pre-project directory browsing, read-only host monitoring and session administration. Scoped workers reject preparation, monitoring and session administration. Specialist process/build channels retain their captured launch plan and existing cancellation ownership.
+
+Requested but unavailable sandboxing remains visibly normal during preparation. An active sandbox failure stays failed. Native errors never retry through Python, another host, another backend or unrestricted commands. The Rust Landlock launcher preserves the ABI 6 baseline, signal/abstract-socket scoping, network-off seccomp policy, protected runtime dependencies and inherited-descriptor closure. Bubblewrap retains its distinct namespace semantics.
+
+Session service IPC remains protected independently of RPC: same-UID and namespace checks, Linux abstract control sockets and rejecting filesystem discovery endpoints. A restricted worker cannot use an outer service as an unrestricted command broker. Gateway/stdin descriptors are not inherited by project children.
+
+### Protocol and channel contract
+
+Host wire version 1 is separate from session protocol 10. A fixed preamble and handshake verify the selected helper digest, architecture and wire version before operations. The helper advertises implemented capabilities. Stdout is exclusively protocol data; stderr supplies bounded diagnostics. Startup banners, wrong versions or wrong executable identity fail explicitly.
+
+- Each physical frame is a big-endian 32-bit length plus at most 64 KiB of data. A zero length ends the message. Lengths are checked before allocation.
+- JSON envelopes are capped at 64 MiB to retain existing base64 file/image/PDF payload contracts. Existing text/decoded-image limits still apply. Version 1 does not introduce a separate binary payload protocol or structured error taxonomy.
+- The desktop allows four pending calls; the gateway has four workers and four queued requests. Replies carry request IDs and may arrive out of order. A worker handles one operation, then exits.
+- RPC writes have a 45-second deadline and responses a 160-second deadline. Gateway input EOF cancels owned transient commands. Process/build streams keep their existing narrower operation limits and cancellation paths.
+- Terminal and long-lived process streams use separate channels on the same master. They retain their own bounded queues and cannot be blocked behind a bulk RPC response. Host OpenSSH channel limits still apply.
+- Lost acknowledgements are uncertain outcomes. RODE does not replay a save, Git mutation, deployment or session creation after channel loss. Revision checks and explicit reconnect/reattach provide recovery; there is no exactly-once guarantee across gateway restarts.
+
+The implementation uses existing threads and bounded channels, with no new async runtime. Memory remains bounded, but multiple maximum-sized JSON replies can still consume substantial memory; the message cap is a compatibility ceiling, not an idle allocation or a performance claim.
+
+### Deployment and lifetime
+
+`src/host/bootstrap.sh` is a fixed POSIX bootstrap. It checks required utilities, directory ownership/modes, exact size and SHA-256 before publishing an executable. The desktop selects a Linux x86_64/aarch64 ELF matching the remote architecture. It neither downloads nor builds a helper implicitly. See [host prerequisites and overrides](remote.md#host-service-backends).
+
+The private cache is `~/.rode-host/host-<digest>`. A unique temporary directory and non-replacing hardlink publication make simultaneous installs safe; interrupted uploads clean only their own staging directory. Existing generations are reverified and preserved on verification failure. There is no automatic garbage collection. Keep referenced helpers while persistent jobs run. This cache is separate from the older session-helper cache, whose live service generations remain untouched.
+
+The gateway lasts for one SSH connection and owns transient work only. The existing service owns persistent jobs, retains their original policy/environment and can coexist with older live service generations. Session control from the gateway runs through a short-lived administration process with its captured runtime directory; it does not mutate the gateway's shared environment. Generic supervisors remain alive for their child lifetime, including bubblewrap's parent-death relationship.
+
+Codex cache deployment streams explicitly supplied pinned bytes, verifies private paths, sizes, digests, licenses and executable artifacts, then publishes under a stable lock. It performs no download or authentication. Vault coordination exposes the existing narrow mount/lease protocol, with passwords on stdin and unchanged project-lock guards.
+
+### Slurm boundary
+
+Native Slurm revalidates the exact owned running allocation on the scheduler host. The compute bootstrap verifies scheduler-provided job identity, architecture, ownership/mode and SHA-256 of a **shared helper path before execution**. The compute helper reapplies the captured sandbox and environment before resolving the runtime. Scheduler GPU visibility is preserved; stale login-host allocation/GPU variables are removed before `srun`.
+
+The helper cache, project, tools and granted paths must therefore be available on compute nodes. Native per-node staging is not implemented. A missing/mismatched shared helper or failed compute sandbox is an error, never a login-node runtime fallback. Python remains required for the Jupyter adapter, not for scheduler supervision or native debugger coordination.
+
+### Validation and supported limits
+
+Shared contract tests exercise desktop and headless entry points. Direct/ProxyJump SSH tests and a fixture without Python on PATH cover the remote transport. `tests/native_host.rs` exercises concurrent responses, context identity, handshake rejection, verified deployment and cancellation. Sandbox suites exercise actual kernel enforcement when available and fail when their required-enforcement flags are set.
+
+Linux x86_64 is the locally validated architecture. Artifact selection supports aarch64 but does not establish execution coverage there. Slurm integration requires a shared helper path; per-node staging is not implemented. Real Jupyter, debugger, FUSE and site Slurm validation requires the corresponding installed tools and host capabilities. Fixture coverage does not establish performance or compatibility on every cluster.

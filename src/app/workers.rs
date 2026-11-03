@@ -5,31 +5,52 @@
 //! before changing buffers; decoding and blocking host I/O stay on workers.
 
 use super::*;
+use crate::sandbox::PlanExt as _;
 use anyhow::Context;
+use std::collections::BTreeMap;
 
 /// Resolve a local startup file to its parent before restoring that folder's
 /// saved policy. Run on the dispatch worker; project pickers and SSH requests
-/// keep directory-only semantics. The file stays captured until project commit.
-fn resolve_startup_path(request: &mut Request, job: &mut Job) -> anyhow::Result<()> {
+/// keep directory-only semantics. A file whose inferred project would expose
+/// HOME opens without a project when isolation came only from global defaults.
+/// Explicit CLI requests and saved project policies must still be enforced.
+pub(super) fn resolve_startup_path(
+    request: &mut Request,
+    job: &mut Job,
+    policies: &BTreeMap<String, sandbox::Options>,
+    home: &std::path::Path,
+) -> anyhow::Result<()> {
     if let (
         Request::Prepare { path, .. },
         Job::Prepare {
             remote: false,
-            restore_saved: Some(_),
+            restore_saved: Some(force),
+            options,
+            token,
             open_file,
             ..
         },
-    ) = (request, job)
+    ) = (request, &mut *job)
     {
         let target = files::expand_home(path)
             .canonicalize()
             .with_context(|| format!("Cannot open {path}"))?;
         if target.is_file() {
-            *path = target
+            let parent = target
                 .parent()
-                .context("File has no containing directory")?
-                .to_string_lossy()
-                .into_owned();
+                .context("File has no containing directory")?;
+            *path = parent.to_string_lossy().into_owned();
+            if options.enabled
+                && !*force
+                && !policies.contains_key(path)
+                && sandbox::project_root_contains_home(parent, home)?
+            {
+                *job = Job::StandaloneFile {
+                    path: target.to_string_lossy().into_owned(),
+                    token: *token,
+                };
+                return Ok(());
+            }
             *open_file = Some(target.to_string_lossy().into_owned());
         }
     }
@@ -171,8 +192,22 @@ impl EditorApp {
                     None => files::local(request),
                 },
             };
-            let result = resolve_startup_path(&mut request, &mut job)
-                .and_then(|()| execute(&request))
+            let resolved = resolve_startup_path(
+                &mut request,
+                &mut job,
+                &restore_policies,
+                &files::expand_home("~"),
+            );
+            let result = resolved
+                .and_then(|()| {
+                    if matches!(&job, Job::StandaloneFile { .. }) {
+                        // No directory listing, project services or sandbox probe for
+                        // this file. The UI queues its ordinary reader after startup.
+                        Ok(Response::default())
+                    } else {
+                        execute(&request)
+                    }
+                })
                 .and_then(|response| {
                     if let Job::Prepare {
                         restore_saved: Some(force),
@@ -461,7 +496,11 @@ impl EditorApp {
                     result,
                 } if generation == self.generation => {
                     match &job {
-                        Job::Prepare { token, .. } if *token != self.project_token => continue,
+                        Job::Prepare { token, .. } | Job::StandaloneFile { token, .. }
+                            if *token != self.project_token =>
+                        {
+                            continue;
+                        }
                         Job::Reload { id, version }
                             if !self
                                 .documents
@@ -485,7 +524,7 @@ impl EditorApp {
                         }
                         Job::BrowseFiles { .. } => self.file_browser.loading = false,
                         Job::AgentAttachment { .. } => {}
-                        Job::Prepare { .. } => self.preparing = false,
+                        Job::Prepare { .. } | Job::StandaloneFile { .. } => self.preparing = false,
                         Job::Browse { .. } => self.folder_loading = false,
                         Job::List(path) => {
                             self.loading.remove(path);
@@ -602,6 +641,7 @@ impl EditorApp {
                                     doc.edit_version = doc.edit_version.wrapping_add(1);
                                 }
                             }
+                            Job::StandaloneFile { path, .. } => self.open_file(path, ctx),
                             Job::Prepare {
                                 remote,
                                 options,

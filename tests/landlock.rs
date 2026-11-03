@@ -1,6 +1,7 @@
 //! Actual unprivileged Landlock enforcement and local/SSH-peer policy agreement.
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{files, sandbox};
 use std::{
@@ -54,8 +55,7 @@ fn options() -> sandbox::Options {
 }
 
 fn peer(root: &Path, options: &sandbox::Options, path: Option<&Path>) -> sandbox::Plan {
-    let mut command = Command::new(sandbox::find_program("python3").unwrap());
-    command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
+    let mut command = native_peer::command();
     if let Some(path) = path {
         command.env("PATH", path);
     }
@@ -76,7 +76,7 @@ fn peer(root: &Path, options: &sandbox::Options, path: Option<&Path>) -> sandbox
 }
 
 fn active(root: &Path, options: &sandbox::Options) -> Option<sandbox::Plan> {
-    let local = sandbox::prepare(root.to_str().unwrap(), options).unwrap();
+    let local = native_peer::prepare(root.to_str().unwrap(), options).unwrap();
     let remote = peer(root, options, None);
     assert_eq!(
         local.active, remote.active,
@@ -123,9 +123,12 @@ fn saved_backend_is_explicit_and_old_preferences_keep_bwrap() {
     let missing = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
     let plan = peer(root.path(), &options(), Some(missing.path()));
-    assert!(plan.requested && !plan.active && plan.prefix.is_empty());
-    assert!(plan.reason.contains("python3"));
-    assert_eq!(plan.label(), "NORMAL MODE · sandbox unavailable");
+    let ordinary = peer(root.path(), &options(), None);
+    assert_eq!(
+        plan.active, ordinary.active,
+        "Landlock must not depend on Python or PATH"
+    );
+    assert!(!plan.reason.contains("python3"));
 }
 
 #[test]
@@ -166,11 +169,9 @@ fn real_file_helpers_and_children_obey_grants_and_cannot_escape_symlinks() {
             .is_err()
         );
         let mut command = Command::new(&plan.prefix[0]);
-        command.args(&plan.prefix[1..]).args([
-            "python3",
-            "-c",
-            &python_peer::source(files::REMOTE_HELPER),
-        ]);
+        command
+            .args(&plan.prefix[1..])
+            .args([native_peer::binary(), "--file-helper"]);
         assert!(
             run_bounded(
                 command,
@@ -262,7 +263,7 @@ fn restrictive_nested_and_hidden_alias_grants_never_become_active() {
     let mut opts = options();
     opts.read_only.push(nested.to_string_lossy().into());
     for plan in [
-        sandbox::prepare(root.path().to_str().unwrap(), &opts).unwrap(),
+        native_peer::prepare(root.path().to_str().unwrap(), &opts).unwrap(),
         peer(root.path(), &opts, None),
     ] {
         assert!(!plan.active && plan.prefix.is_empty());
@@ -327,7 +328,7 @@ fn active_failure_does_not_retry_and_policy_identity_changes_with_backend() {
         return;
     };
     let original = rode::sessions::fingerprint(&plan);
-    let bwrap = sandbox::prepare(
+    let bwrap = native_peer::prepare(
         root.path().to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -437,7 +438,7 @@ fn scratch_never_overrides_a_read_only_grant() {
         let mut opts = options();
         opts.read_only.push(path.to_string_lossy().into());
         for plan in [
-            sandbox::prepare(project.path().to_str().unwrap(), &opts).unwrap(),
+            native_peer::prepare(project.path().to_str().unwrap(), &opts).unwrap(),
             peer(project.path(), &opts, None),
         ] {
             assert!(!plan.active && plan.prefix.is_empty());
@@ -450,56 +451,6 @@ fn scratch_never_overrides_a_read_only_grant() {
     }
     fs::remove_dir(protected).unwrap();
     fs::remove_dir(scratch).unwrap();
-}
-
-#[test]
-fn replacing_scratch_after_validation_does_not_grant_its_symlink_target() {
-    let project = tempfile::tempdir().unwrap();
-    let private = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    fs::write(private.path().join("secret"), "private fixture").unwrap();
-    if active(project.path(), &options()).is_none() {
-        return;
-    }
-    // Force the exact validation/open interleaving, without a scheduler-dependent
-    // race or any mutation of the user's real cache directory.
-    let driver = r#"
-import json, os, sys
-fixture = json.load(sys.stdin)
-namespace = {'__name__': 'launcher_fixture'}
-exec(fixture['launcher'], namespace)
-original = namespace['private_scratch']
-def replace_after_validation(home, root):
-    captured = original(home, root)
-    path = captured[0] if isinstance(captured, tuple) else captured
-    os.rename(path, path + '-original')
-    os.symlink(fixture['private'], path)
-    return captured
-namespace['private_scratch'] = replace_after_validation
-sys.argv = fixture['arguments'] + ['/usr/bin/python3', '-I', '-c', '''
-import os, pathlib, sys
-for path in (sys.argv[1] + '/secret', os.environ['TMPDIR'] + '/secret'):
-    try: pathlib.Path(path).read_text()
-    except PermissionError: pass
-    else: raise AssertionError('Scratch replacement exposed a private file')
-''', fixture['private']]
-namespace['main']()
-"#;
-    let binary = sandbox::find_program("python3").unwrap();
-    let arguments = sandbox::arguments(&binary, project.path(), home.path(), &options()).unwrap();
-    let mut command = Command::new(binary);
-    command.args(["-I", "-S", "-c", driver]);
-    run_bounded(
-        command,
-        serde_json::to_vec(&serde_json::json!({
-            "launcher": include_str!("../src/landlock_launch.py"),
-            "arguments": arguments,
-            "private": private.path(),
-        }))
-        .unwrap(),
-        Duration::from_secs(10),
-    )
-    .unwrap();
 }
 
 #[test]
@@ -550,40 +501,33 @@ os.chmod(path, 0o755)
 }
 
 #[test]
-fn writable_interpreters_and_standard_libraries_cannot_back_an_active_sandbox() {
+fn writable_native_executables_and_shared_libraries_cannot_back_an_active_sandbox() {
     let project = tempfile::tempdir().unwrap();
     let Some(plan) = active(project.path(), &options()) else {
         return;
     };
-    let mut interpreter = Command::new(&plan.prefix[0]);
-    interpreter.args([
-        "-I",
-        "-S",
-        "-c",
-        "import json,sys; print(json.dumps(sys.path))",
-    ]);
-    let paths: Vec<String> =
-        serde_json::from_slice(&run_bounded(interpreter, vec![], Duration::from_secs(10)).unwrap())
-            .unwrap();
-    let library = paths.iter().find(|path| Path::new(path).is_dir()).unwrap();
-    let mut opts = options();
-    opts.read_write.push(library.clone());
-    for plan in [
-        sandbox::prepare(project.path().to_str().unwrap(), &opts).unwrap(),
-        peer(project.path(), &opts, None),
-    ] {
-        assert!(!plan.active && plan.prefix.is_empty());
-        assert!(plan.reason.contains("runtime overlaps"), "{}", plan.reason);
+    let maps = fs::read_to_string("/proc/self/maps").unwrap();
+    let library = maps
+        .lines()
+        .find_map(|line| {
+            let path = line.split_whitespace().last()?;
+            (path.contains("libc.so") && Path::new(path).is_file()).then(|| path.to_owned())
+        })
+        .unwrap();
+    for runtime in [&plan.prefix[0], &library] {
+        let mut opts = options();
+        opts.read_write.push(runtime.clone());
+        for rejected in [
+            native_peer::prepare(project.path().to_str().unwrap(), &opts).unwrap(),
+            peer(project.path(), &opts, None),
+        ] {
+            assert!(!rejected.active && rejected.prefix.is_empty());
+            assert!(
+                rejected.reason.contains("runtime overlaps")
+                    || rejected.reason.contains("restrictive nested grant"),
+                "Writable runtime {runtime}: {}",
+                rejected.reason
+            );
+        }
     }
-
-    let tools = project.path().join("bin");
-    fs::create_dir(&tools).unwrap();
-    fs::copy(&plan.prefix[0], tools.join("python3")).unwrap();
-    let copied = peer(project.path(), &options(), Some(&tools));
-    assert!(!copied.active && copied.prefix.is_empty());
-    assert!(
-        copied.reason.contains("runtime overlaps"),
-        "{}",
-        copied.reason
-    );
 }

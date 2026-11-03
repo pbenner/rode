@@ -1,7 +1,8 @@
-//! Desktop Poppler page rendering, source/budget lifetime and bounded native/Python PDF transfer.
+//! Desktop Poppler page rendering, source/budget lifetime and bounded desktop/headless PDF transfer.
 
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rode::{
@@ -12,13 +13,12 @@ use rode::{
 use std::{
     fs,
     io::Write,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Arc, atomic::AtomicBool},
 };
 const FIXTURE: &[u8] = include_bytes!("fixtures/pages.pdf");
 fn peer(request: &Request) -> anyhow::Result<files::Response> {
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -149,7 +149,7 @@ fn sandbox_pdf_reads_cannot_escape_through_paths_or_symlinks() {
     fs::write(&outside, FIXTURE).unwrap();
     fs::write(project.join("inside.pdf"), FIXTURE).unwrap();
     std::os::unix::fs::symlink(&outside, project.join("escape.pdf")).unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         project.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,

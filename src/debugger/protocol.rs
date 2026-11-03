@@ -108,12 +108,14 @@ impl Client {
         };
         let argv = if let Some(target) = &target {
             target.debugger_argv(&plan, &python)?
+        } else if let Some(helper) = &plan.native_helper {
+            vec![helper.clone(), "--debug-helper".into()]
         } else {
             vec![
-                "python3".into(),
-                "-u".into(),
-                "-c".into(),
-                include_str!("../remote_debugger.py").into(),
+                rode_host_core::command::current_executable()?
+                    .to_string_lossy()
+                    .into(),
+                "--debug-helper".into(),
             ]
         };
         if managed {

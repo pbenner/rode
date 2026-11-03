@@ -1,7 +1,7 @@
 //! Regression checks for special files, canonical grants and inherited terminal access.
 //! Every subprocess has a deadline so failures cannot hang the test runner.
-#[path = "support/python.rs"]
-mod python_peer;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{files, persistence, sandbox};
 use serde_json::json;
@@ -43,7 +43,7 @@ fn request(mut command: Command, payload: &impl serde::Serialize) -> Output {
 }
 
 #[test]
-fn native_and_python_reads_and_saves_reject_fifos_without_a_writer() {
+fn desktop_and_headless_reads_and_saves_reject_fifos_without_a_writer() {
     use std::os::unix::fs::symlink;
     let root = tempfile::tempdir().unwrap();
     let fifo = root.path().join("pipe.txt");
@@ -63,9 +63,7 @@ fn native_and_python_reads_and_saves_reject_fifos_without_a_writer() {
                 "write_binary",
             ] {
                 let mut command = if python {
-                    let mut command = Command::new("python3");
-                    command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
-                    command
+                    native_peer::command()
                 } else {
                     let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
                     command.arg("--file-helper");
@@ -139,10 +137,6 @@ fn symlinked_home_cannot_be_exposed_by_project_or_additional_grants() {
     fs::create_dir_all(home.join("allowed-project")).unwrap();
     fs::create_dir(&project).unwrap();
     symlink(&home, &alias).unwrap();
-    let peer = format!(
-        "__name__='security_peer'\n{}\nr=json.load(sys.stdin);print(json.dumps(sandbox_arguments('/usr/bin/bwrap',r['root'],r['home'],r['options'])))",
-        python_peer::source(files::REMOTE_HELPER)
-    );
     let mut cases = vec![];
     for exposed in [&home, &private] {
         cases.push((exposed.clone(), sandbox::Options::default(), false));
@@ -169,16 +163,21 @@ fn symlinked_home_cannot_be_exposed_by_project_or_additional_grants() {
         if !allowed {
             assert!(result.unwrap_err().to_string().contains("home directory"));
         }
-        let mut command = Command::new("python3");
-        command.args(["-c", &peer]);
+        let mut command = native_peer::command();
+        command.env("HOME", &alias);
         let output = request(
             command,
-            &json!({"root":project,"home":alias,"options":options}),
+            &files::Request::Prepare {
+                path: project.to_string_lossy().into_owned(),
+                sandbox: options,
+            },
         );
-        assert_eq!(output.status.success(), allowed);
-        if !allowed {
-            assert!(String::from_utf8_lossy(&output.stderr).contains("home directory"));
-        }
+        assert_eq!(
+            output.status.success(),
+            allowed,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
@@ -192,7 +191,7 @@ fn background_terminal_child() {
     let root = tempfile::tempdir().unwrap();
     let code = "import json,os\ntry:\n fd=os.open('/dev/tty',os.O_RDWR);os.close(fd);tty=True\nexcept OSError:\n tty=False\nprint(json.dumps({'tty':tty}))";
     for enabled in [false, true] {
-        let plan = sandbox::prepare(
+        let plan = native_peer::prepare(
             root.path().to_str().unwrap(),
             &sandbox::Options {
                 enabled,

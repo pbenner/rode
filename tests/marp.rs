@@ -1,8 +1,8 @@
-//! Snapshot rendering/export, atomic destination guards and native/Python renderer cleanup with
+//! Snapshot rendering/export, atomic destination guards and desktop/headless renderer cleanup with
 //! deterministic fixtures.
 
-#[path = "support/python.rs"]
-mod python_peer;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::marp::{self, Destination, Format, Invocation, Settings};
 use std::{
@@ -59,19 +59,15 @@ fn marp_detection_and_unicode_source_urls_are_bounded_data() {
 }
 
 #[test]
-fn native_and_python_peers_render_unsaved_snapshots_and_protect_exports() {
+fn desktop_and_headless_peers_render_unsaved_snapshots_and_protect_exports() {
     for peer in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let mut invocation = fixture(root.path());
         invocation.text.push_str("\nRODE_TEST_RECORD");
         let run = |request: &Invocation| {
             if peer {
-                let mut command = Command::new("python3");
-                command.args([
-                    "-c",
-                    &python_peer::source(rode::files::REMOTE_HELPER),
-                    "--marp-helper",
-                ]);
+                let mut command = Command::new(native_peer::binary());
+                command.arg("--marp-helper");
                 marp::execute(command, request, &AtomicBool::new(false))
             } else {
                 marp::run(request, &AtomicBool::new(false))
@@ -138,7 +134,7 @@ fn native_and_python_peers_render_unsaved_snapshots_and_protect_exports() {
 }
 
 #[test]
-fn cancelling_native_and_python_coordinators_stops_the_cli_process_tree() {
+fn cancelling_desktop_and_headless_coordinators_stops_the_cli_process_tree() {
     for peer in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let mut invocation = fixture(root.path());
@@ -147,12 +143,8 @@ fn cancelling_native_and_python_coordinators_stops_the_cli_process_tree() {
         let control = cancel.clone();
         let worker = std::thread::spawn(move || {
             let mut command = if peer {
-                let mut c = Command::new("python3");
-                c.args([
-                    "-c",
-                    &python_peer::source(rode::files::REMOTE_HELPER),
-                    "--marp-helper",
-                ]);
+                let mut c = Command::new(native_peer::binary());
+                c.arg("--marp-helper");
                 c
             } else {
                 let mut c = Command::new(env!("CARGO_BIN_EXE_rode"));
@@ -232,7 +224,7 @@ fn native_and_remote_style_previews_work_in_a_read_only_sandbox_without_project_
         share_network: false,
         ..Default::default()
     };
-    let plan = rode::sandbox::prepare(root.to_str().unwrap(), &options).unwrap();
+    let plan = native_peer::prepare(root.to_str().unwrap(), &options).unwrap();
     if !plan.active {
         eprintln!("Read-only Marp sandbox unavailable: {}", plan.reason);
         return;
@@ -241,13 +233,7 @@ fn native_and_remote_style_previews_work_in_a_read_only_sandbox_without_project_
         let mut command = Command::new(&plan.prefix[0]);
         command.args(&plan.prefix[1..plan.prefix.len() - 1]);
         if peer {
-            command.args([
-                "--",
-                "python3",
-                "-c",
-                &python_peer::source(rode::files::REMOTE_HELPER),
-                "--marp-helper",
-            ]);
+            command.args(["--", native_peer::binary(), "--marp-helper"]);
         } else {
             command.args([
                 "--ro-bind",

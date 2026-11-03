@@ -1,6 +1,9 @@
 //! nbformat preservation and versioned outputs; real installed Jupyter kernels are enabled only
 //! through the test override.
 
+#[path = "support/native.rs"]
+mod native_peer;
+
 use rode::{
     notebook::{
         self, Notebook,
@@ -112,7 +115,7 @@ fn installed_python_kernel_keeps_state_streams_errors_and_real_png_outputs() {
         return;
     };
     let root = tempfile::tempdir().unwrap();
-    let plan = sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+    let plan = native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
     let mut kernel = Kernel::start(plan, None, python, "python3".into(), Arc::new(|| {})).unwrap();
     kernel
         .run(vec![
@@ -192,7 +195,7 @@ fn kernel_interrupt_and_scope_cleanup_stop_only_the_owned_kernel() {
         return;
     };
     let root = tempfile::tempdir().unwrap();
-    let plan = sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+    let plan = native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
     let mut kernel = Kernel::start(plan, None, python, "python3".into(), Arc::new(|| {})).unwrap();
     let marker = root.path().join("pid");
     let code = format!(
@@ -243,7 +246,7 @@ fn actual_sandbox_encloses_kernel_and_its_file_operations_without_network_sharin
     std::fs::create_dir(&root).unwrap();
     let outside = base.path().join("secret");
     std::fs::write(&outside, "private").unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         root.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -314,7 +317,7 @@ fn default_python_kernel_uses_the_selected_interpreter_despite_a_shadowing_kerne
     )
     .unwrap();
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let plan = sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
+    let plan = native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
     let mut kernel = Kernel::start(
         plan,
         None,

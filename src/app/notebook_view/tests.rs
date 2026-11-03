@@ -209,7 +209,22 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
         remote: None,
         ready: true,
         connected: true,
-        plan: sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap(),
+        plan: sandbox::prepare_with_helper(
+            root.path().to_str().unwrap(),
+            &Default::default(),
+            &std::env::var_os("RODE_TEST_SESSION_HELPER")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::current_exe()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .join("rode-sessiond")
+                }),
+        )
+        .unwrap(),
         sandbox_options: Default::default(),
     });
     app.run_notebook(true, &ctx);
@@ -260,7 +275,22 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
         remote: None,
         ready: true,
         connected: true,
-        plan: sandbox::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap(),
+        plan: sandbox::prepare_with_helper(
+            root.path().to_str().unwrap(),
+            &Default::default(),
+            &std::env::var_os("RODE_TEST_SESSION_HELPER")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::current_exe()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .parent()
+                        .unwrap()
+                        .join("rode-sessiond")
+                }),
+        )
+        .unwrap(),
         sandbox_options: Default::default(),
     });
     app.run_notebook(true, &ctx);

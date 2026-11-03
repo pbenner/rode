@@ -8,6 +8,24 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "--landlock-launch"
+                | "--mise-launch"
+                | "--slurm-step"
+                | "--compute-step"
+                | "--compute-runtime"
+                | "--process"
+                | "--runtime-cache"
+        )
+    }) {
+        if let Err(error) = rode_session::cli(&args) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|a| a == "--codex") {
         if let Err(error) = rode::bundled::codex(&args[1..]) {
             eprintln!("{error:#}");
@@ -104,7 +122,16 @@ fn main() -> eframe::Result {
                 "File request exceeds its limit"
             );
             let request = serde_json::from_slice(&input)?;
-            let response = rode::files::local(&request)?;
+            let response = if let rode::files::Request::Prepare { path, sandbox } = &request {
+                let plan = rode::sandbox::prepare_native(path, sandbox)?;
+                let mut response = rode::files::local(&rode::files::Request::List {
+                    path: plan.root.clone(),
+                })?;
+                response.project = Some(plan);
+                response
+            } else {
+                rode::files::local(&request)?
+            };
             serde_json::to_writer(std::io::stdout().lock(), &response)?;
             Ok(())
         })();
@@ -116,7 +143,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--sandbox]\n\nA local file opens in a tab with its containing directory as the workspace.\nSSH aliases and settings from ~/.ssh/config are honored.\nRemote file access requires python3; authentication happens in the terminal.\nThemes: phosphor (default), carbon, code-dark, matrix, amber, ice, neon, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
+            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--sandbox]\n\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nSSH aliases and settings from ~/.ssh/config are honored.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: phosphor (default), carbon, code-dark, matrix, amber, ice, neon, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
         );
         println!(
             "\nOptional Codex runtime: rode --codex [ARGUMENTS], e.g. rode --codex login.\nInstall rode-codex or supply an installed Codex executable."

@@ -1,6 +1,9 @@
 //! Codex/ACP protocol, cancellation, sandbox scope and owned subprocess cleanup using
 //! deterministic peers.
 
+#[path = "support/native.rs"]
+mod native_peer;
+
 use rode::{
     agent::{
         Access, Approval, Config, Launch, Personality, Provider,
@@ -28,7 +31,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     (temp, root, program)
 }
 fn launch(root: &Path, program: &Path, provider: Provider, isolated: bool) -> Launch {
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         root.to_str().unwrap(),
         &sandbox::Options {
             enabled: isolated,
@@ -616,7 +619,7 @@ fn agent_sandbox(backend: sandbox::Backend) {
     let mut launch = launch(&root, &program, Provider::Codex, true);
     launch.config.access = Access::Full;
     launch.config.approval = Approval::Never;
-    launch.plan = sandbox::prepare(
+    launch.plan = native_peer::prepare(
         root.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -703,7 +706,7 @@ fn local_provider_uses_only_the_configured_endpoint_and_no_cloud_credentials() {
 fn read_only_projects_block_agent_writes_when_bwrap_is_available() {
     let (_temp, root, program) = fixture();
     let mut request = launch(&root, &program, Provider::Codex, false);
-    request.plan = sandbox::prepare(
+    request.plan = native_peer::prepare(
         root.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -883,15 +886,15 @@ fn ssh_stdio_supervisor_forwards_attachment_sized_messages_without_an_ssh_server
         sync::mpsc,
     };
     let root = tempfile::tempdir().unwrap();
-    let mut child = Command::new("python3")
-        .args(["-c", include_str!("../src/remote_agent.py")])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+        .arg("--process")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut input = child.stdin.take().unwrap();
-    let launch = json!({"root":root.path(),"prefix":[],"argv":["python3","-c","import sys; print(len(sys.stdin.buffer.readline()), flush=True)"],"python":"off"});
+    let launch = json!({"root":root.path(),"prefix":[],"argv":["python3","-c","import sys; print(len(sys.stdin.buffer.readline()), flush=True)"],"python":"off", "environment":{}, "python_program":false});
     writeln!(input, "{launch}").unwrap();
     let payload = serde_json::to_vec(&json!({"image":"a".repeat(400_000)})).unwrap();
     input.write_all(&payload).unwrap();

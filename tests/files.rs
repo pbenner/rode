@@ -1,8 +1,8 @@
-//! Local/Python file protocol parity, content conflicts, permissions/symlinks, quoting and real
+//! Desktop/headless file protocol parity, content conflicts, permissions/symlinks, quoting and real
 //! PTY input.
 
-#[path = "support/python.rs"]
-mod python_peer;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::files::{self, Request};
 use std::{
@@ -93,9 +93,8 @@ fn local_file_lifecycle_preserves_edits_and_detects_conflicts() {
     exercise(files::local);
 }
 
-fn python(request: &Request) -> anyhow::Result<files::Response> {
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+fn headless(request: &Request) -> anyhow::Result<files::Response> {
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -116,14 +115,14 @@ fn python(request: &Request) -> anyhow::Result<files::Response> {
 
 #[test]
 fn remote_helper_has_same_file_semantics() {
-    exercise(python);
+    exercise(headless);
 }
 
 #[test]
 #[cfg(unix)]
 fn saves_preserve_executable_permissions_and_symlinks() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    for run in [files::local, python] {
+    for run in [files::local, headless] {
         let root = TempDir::new().unwrap();
         let target = root.path().join("job.sh");
         let link = root.path().join("link.sh");

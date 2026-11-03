@@ -11,8 +11,8 @@
 //! hosts, agents and interactive authentication use the user's existing setup.
 //! A separate master lets file/tool channels share that authenticated identity
 //! without tying it to the lifetime of a project shell or collecting credentials
-//! in the editor. Small per-request Python peers trade duplicated service code
-//! for avoiding a remote editor installation or a new network listener.
+//! in the editor. The native backend deploys a verified headless helper sharing
+//! local Rust services. It installs no remote GUI and opens no application listener.
 //!
 //! Slave channels disable fresh-login fallback. Otherwise a master disappearing
 //! between the liveness check and spawn could unexpectedly reauthenticate or
@@ -23,16 +23,10 @@ use crate::files::{self, Request, Response};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
-    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicU64, Ordering},
 };
-pub(crate) mod python;
 
 static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(0);
 
@@ -162,6 +156,7 @@ pub struct Remote {
     pub profile: Profile,
     /// Private Unix socket path for all multiplexed channels.
     pub socket: PathBuf,
+    pub(crate) native: std::sync::Arc<crate::host::native::State>,
 }
 
 /// Quote one argument for a POSIX remote shell, including embedded single quotes.
@@ -183,7 +178,7 @@ pub fn remote_shell(root: &str) -> String {
 
 impl Remote {
     /// Allocate a private connection runtime after validating the profile; authentication
-    /// starts separately.
+    /// starts separately. Unknown fields from older saved profiles are ignored.
     pub fn new(profile: Profile) -> Result<Self> {
         profile.validate()?;
         #[cfg(not(unix))]
@@ -204,6 +199,7 @@ impl Remote {
             Ok(Self {
                 profile,
                 socket: directory.join("ssh"),
+                native: Default::default(),
             })
         }
     }
@@ -309,41 +305,7 @@ impl Remote {
         if !self.connected() {
             bail!("SSH is disconnected. Reconnect to continue; your unsaved edits are preserved.");
         }
-        let mut command = Command::new("ssh");
-        // The master already applied all connection settings. Slave channels
-        // must use only its socket: re-reading ProxyJump could otherwise start
-        // a fresh login if the socket disappears between the check and spawn.
-        command.args(self.channel_args(false));
-        let prefix = plan
-            .filter(|p| p.active || p.environment_applies(request))
-            .map(|p| {
-                let arguments = if p.environment_applies(request) {
-                    p.execution_prefix("")?
-                } else {
-                    p.prefix.clone()
-                };
-                Ok::<_, anyhow::Error>(
-                    arguments
-                        .iter()
-                        .map(|arg| quote(arg))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        + " ",
-                )
-            })
-            .transpose()?
-            .unwrap_or_default();
-        command.arg(format!("{prefix}{}", python::HOST.command()));
-        let output = run_bounded(
-            command,
-            python::HOST.input(serde_json::to_vec(request)?)?,
-            Duration::from_secs(if matches!(request, Request::Tool { .. }) {
-                150
-            } else {
-                45
-            }),
-        )?;
-        serde_json::from_slice(&output).context("Invalid response from remote host. Check that python3 is available and non-interactive shell startup prints no banners.")
+        self.native.client(self)?.request(request, plan)
     }
 
     /// Send a cancellable adapter request over this existing SSH master, applying the
@@ -373,19 +335,13 @@ impl Remote {
             })
             .transpose()?
             .unwrap_or_default();
-        command.arg(format!(
-            "{prefix}{} --extension-helper",
-            python::HOST.command()
-        ));
-        crate::extensions::execute_with_prelude(
-            command,
-            request,
-            cancel,
-            python::HOST.input(vec![])?,
-        )
+        let helper = quote(&self.native.client(self)?.executable);
+        command.arg(format!("{prefix}{helper} --extension-helper"));
+        crate::extensions::execute_with_prelude(command, request, cancel, vec![])
     }
     /// Close only this connection's master and remove its private socket directory.
     pub fn cleanup(&self) {
+        self.native.close();
         let _ = std::fs::remove_file(&self.socket);
         if let Some(parent) = self.socket.parent() {
             let _ = std::fs::remove_dir(parent);
@@ -411,8 +367,9 @@ impl Remote {
             .collect::<Vec<_>>()
             .join(" ")
             + " ";
-        command.arg(format!("{prefix}{} --latex-helper", python::HOST.command()));
-        crate::latex::execute_with_prelude(command, invocation, cancel, python::HOST.input(vec![])?)
+        let helper = quote(&self.native.client(self)?.executable);
+        command.arg(format!("{prefix}{helper} --latex-helper"));
+        crate::latex::execute_with_prelude(command, invocation, cancel, vec![])
     }
     /// Run a cancellable Marp coordinator over the existing master and actual project policy.
     pub fn marp_request(
@@ -436,76 +393,13 @@ impl Remote {
             .collect::<Vec<_>>()
             .join(" ")
             + " ";
-        command.arg(format!("{prefix}{} --marp-helper", python::HOST.command()));
-        crate::marp::execute_with_prelude(command, invocation, cancel, python::HOST.input(vec![])?)
+        let helper = quote(&self.native.client(self)?.executable);
+        command.arg(format!("{prefix}{helper} --marp-helper"));
+        crate::marp::execute_with_prelude(command, invocation, cancel, vec![])
     }
 }
 
-/// Concurrently drain both pipes and stdin so large saves cannot deadlock SSH.
-pub(crate) fn run_bounded(
-    mut command: Command,
-    input: Vec<u8>,
-    timeout: Duration,
-) -> Result<Vec<u8>> {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Could not run OpenSSH; install the ssh client")?;
-    let mut stdin = child.stdin.take().context("Missing SSH stdin")?;
-    let stdout = child.stdout.take().context("Missing SSH stdout")?;
-    let stderr = child.stderr.take().context("Missing SSH stderr")?;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = stdin.write_all(&input);
-    });
-    let out_tx = tx.clone();
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stdout.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes);
-        let _ = out_tx.send((true, bytes, result));
-    });
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stderr.take(64 * 1024 + 1).read_to_end(&mut bytes);
-        let _ = tx.send((false, bytes, result));
-    });
-    let start = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(
-                "SSH operation timed out. The remote host may be unreachable; your edits are still open."
-            );
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let mut output = Vec::new();
-    let mut error = Vec::new();
-    for _ in 0..2 {
-        let (is_out, bytes, result) = rx
-            .recv_timeout(Duration::from_secs(2))
-            .context("SSH output exceeded its limit or did not close")?;
-        result?;
-        if is_out {
-            output = bytes;
-        } else {
-            error = bytes;
-        }
-    }
-    if !status.success() {
-        bail!("{}", String::from_utf8_lossy(&error).trim());
-    }
-    if output.len() > 64 * 1024 * 1024 {
-        bail!("SSH response exceeded its size limit.");
-    }
-    Ok(output)
-}
+pub(crate) use rode_host_core::command::run_bounded;
 
 /// Discover bounded host aliases from the default OpenSSH configuration.
 pub fn aliases() -> Vec<String> {
@@ -624,6 +518,23 @@ pub fn display_name(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_compatibility_profiles_keep_connection_settings() {
+        let profile: Profile = serde_json::from_value(serde_json::json!({
+            "host": "cluster", "jump": "login", "root": "/work/project",
+            "backend": "legacy_python"
+        }))
+        .unwrap();
+        assert_eq!(profile.host, "cluster");
+        assert_eq!(profile.jump, "login");
+        assert_eq!(profile.root, "/work/project");
+        assert!(
+            serde_json::to_value(profile)
+                .unwrap()
+                .get("backend")
+                .is_none()
+        );
+    }
     #[test]
     fn parallel_connections_own_distinct_private_directories() {
         let barrier = std::sync::Barrier::new(32);

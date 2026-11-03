@@ -206,7 +206,7 @@ impl EditorApp {
         });
         layout::section(ui, "Sandbox access", palette, |ui| {
             ui.label(RichText::new("Changes take effect after applying and probing the new policy. Editor buffers stay open; the project shell restarts.").small().color(palette.muted));
-            sandbox_options_ui(ui, &mut self.workbench.draft.sandbox);
+            sandbox_options_ui(ui, &mut self.workbench.draft.sandbox, palette);
             ui.add_space(8.);
             if ui
                 .add_enabled(!self.preparing, egui::Button::new("Apply sandbox settings"))

@@ -1,4 +1,8 @@
 //! Optional real CLI checks. Only a loopback fixture receives inference-shaped requests.
+
+#[path = "support/native.rs"]
+mod native_peer;
+
 use rode::{
     agent::{
         Config, Event, Launch, Provider, Session,
@@ -63,7 +67,7 @@ fn bundled_auto_discovery_initializes_on_the_project_host_without_external_auth(
 #[ignore = "private subprocess entry point for bundled Codex with isolated credentials"]
 fn bundled_auto_child() {
     let root = std::env::var("RODE_BUNDLE_PROJECT").unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         &root,
         &sandbox::Options {
             enabled: std::env::var("RODE_BUNDLE_SANDBOX").unwrap() == "1",
@@ -131,7 +135,7 @@ fn installed_codex_initializes_a_project_with_an_isolated_local_provider() {
     let session = Session::start(
         Launch {
             config,
-            plan: sandbox::prepare(root.to_str().unwrap(), &Default::default()).unwrap(),
+            plan: native_peer::prepare(root.to_str().unwrap(), &Default::default()).unwrap(),
             remote: None,
             python: "auto".into(),
         },
@@ -264,7 +268,7 @@ fn codex_turn(program: &str, isolated: bool) {
             personality: rode::agent::Personality::JacksonLamb,
             ..Default::default()
         },
-        plan: sandbox::prepare(
+        plan: native_peer::prepare(
             root.to_str().unwrap(),
             &sandbox::Options {
                 enabled: isolated,

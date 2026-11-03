@@ -1,6 +1,6 @@
-//! Native/Python stash identity, Git writer locking and reflog parity.
-#[path = "support/python.rs"]
-mod python_peer;
+//! Desktop/headless stash identity, Git writer locking and reflog parity.
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     files,
@@ -43,8 +43,7 @@ fn invoke(
         oid: oid.into(),
     };
     let response = if peer {
-        let mut child = Command::new("python3")
-            .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+        let mut child = native_peer::command()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -164,7 +163,7 @@ fn interrupted_workers_release_git_locks_even_without_language_cleanup() {
         child.stdin.take().unwrap(),
         &serde_json::json!({
             "binary": env!("CARGO_BIN_EXE_rode"),
-            "peer": files::REMOTE_HELPER,
+            "peer_binary": native_peer::binary(),
         }),
     )
     .unwrap();

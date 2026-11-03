@@ -58,7 +58,18 @@ def cleanup_result(cipher, remote, environment):
             os.environ["RODE_TEST_SSH_CONFIG"],
             "-T",
             "rode-test",
-            shlex.join(["python3", "-u", "-c", (ROOT / "src/remote_vault.py").read_text()]),
+            shlex.join(
+                [
+                    str(
+                        Path(
+                            os.environ.get(
+                                "RODE_TEST_SESSION_HELPER", BINARY.parent / "rode-sessiond"
+                            )
+                        ).resolve()
+                    ),
+                    "--vault-helper",
+                ]
+            ),
         ]
     request = dict(
         settings=dict(cipherdir=str(cipher), program="/usr/bin/true", unmount_program=""),

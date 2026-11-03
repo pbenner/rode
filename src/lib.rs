@@ -19,11 +19,9 @@
 //! indexing. This favors bounded, on-demand tools over automatically activating
 //! every installed capability.
 //!
-//! Local and SSH services share request models and host-policy rules. Small
-//! standard-library Python peers avoid installing the desktop application and
-//! its dependencies on every remote host; the cost is maintaining parity tests
-//! for two implementations. The native host service is separate because
-//! persistent shells and agents need an owner that outlives GUI/SSH attachments.
+//! Local and SSH services share headless Rust host algorithms and policy
+//! rules. The native gateway is connection-owned; the persistent service remains
+//! separate because its jobs must outlive GUI/SSH attachments.
 #![warn(missing_docs)]
 
 pub mod agent;
@@ -34,6 +32,7 @@ pub mod debugger;
 pub mod environment;
 pub mod extensions;
 pub mod files;
+mod host;
 pub mod images;
 pub mod languages;
 pub mod latex;

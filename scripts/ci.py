@@ -18,6 +18,7 @@ EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox"]
 TEST_BINARIES = {
     "runtimes",
     "ssh_roundtrip",
+    "native_host",
     "debugger",
     "notebooks",
     "project",
@@ -69,7 +70,18 @@ SUITES = {
         ui("agent-persistence"),
     ],
     "terminals": [ui("sessions"), ui("slurm"), ui("codex-install")],
-    "ssh": [remote("remote-smoke", transport=True)],
+    "ssh": [
+        rust("native_host"),
+        remote("remote-smoke", transport=True),
+        (
+            ["bash", "scripts/test-ssh.sh"],
+            {
+                "RODE_SSH_TEST_FILTER": "native_generic_operations",
+                "RODE_SSH_TEST_NO_PYTHON": "1",
+            },
+            180,
+        ),
+    ],
     "remote-smoke": [ui("project", RODE_PROJECT_UI_CASE="ssh")],
     "tools": [
         ui("mise"),
@@ -118,6 +130,7 @@ SUITES = {
         ui("notebooks", RODE_NOTEBOOK_UI_REMOTE_ONLY="1"),
     ],
     "sandbox": [
+        rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("sandbox", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("landlock"),
         rust("agents"),

@@ -513,13 +513,14 @@ fn remote_call(
     );
     let mut command = Command::new("ssh");
     command.args(remote.channel_args(false)).arg(format!(
-        "python3 -c {} {}",
-        ssh::quote(include_str!("remote_codex.py")),
-        ssh::quote(&data)
+        "exec {} --runtime-cache",
+        ssh::quote(&remote.native.client(remote)?.executable)
     ));
+    let mut prelude = data.into_bytes();
+    prelude.push(b'\n');
     let output = project::run_controlled_stream(
         command,
-        input,
+        std::io::Cursor::new(prelude).chain(input),
         Duration::from_secs(180),
         cancel,
         false,

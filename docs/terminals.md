@@ -65,7 +65,7 @@ scripts/build-sessiond.sh
 
 Package `rode-sessiond-static` beside `rode`, or set desktop `RODE_SESSION_HELPER` to the helper file. Static helpers take precedence over the ordinary sibling. The script supports `x86_64` and `aarch64`; cross compilation requires a suitable linker/toolchain. It builds the opt-in `rode-sessiond-standalone` target in the `rode-session` library package, keeping desktop dependencies out of the musl build, then copies it to the discovery name `rode-sessiond-static`. The helper must match the **remote** architecture and current terminal protocol. A stale explicit or packaged helper produces a rebuild instruction before starting new work. The static build needs no remote Rust installation, GUI libraries, or compatible glibc. Linux x86_64 is the tested combination.
 
-On first use, RODE transfers this checksum-verified helper through its authenticated SSH channel to `~/.local/share/rode/session-helpers/sessiond-<sha256>`. Files/directories are owner-only. No separate TCP listener or application port forwarding is used. Remote file editing itself retains its existing Python-only transport and remains usable without this helper. Temporary terminals are also available without it.
+The [native SSH helper](remote.md#host-service-backends) is verified and published at `~/.rode-host/host-<sha256>` for both ordinary host work and session control. The cache is private to the user. No separate TCP listener or application port forwarding is used. Helper generations referenced by live jobs are retained; existing session protocol generations and service ownership remain independent of the connection gateway.
 
 ## Lifetime and limits
 

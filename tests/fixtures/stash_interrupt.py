@@ -74,11 +74,7 @@ for peer in (False, True):
                     " while not Path('release-hook').exists(): time.sleep(.02)\n"
                 )
                 hook.chmod(0o755)
-                source = root / "peer.py"
-                source.write_text(spec["peer"])
-                command = (
-                    [sys.executable, str(source)] if peer else [spec["binary"], "--file-helper"]
-                )
+                command = [spec["peer_binary"] if peer else spec["binary"], "--file-helper"]
                 request = json.dumps(
                     dict(
                         op="tool",

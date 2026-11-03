@@ -5,15 +5,18 @@
 //! contain settings only, while queues, telemetry histories and transcripts remain
 //! window-owned.
 
+use crate::sandbox::PlanExt as _;
 mod code_tools;
 mod environment;
 mod git;
 mod monitoring;
 mod python;
+mod sandbox_access;
 mod settings;
 mod workspace;
 use super::*;
 use crate::project::{self, Diagnostic};
+pub(super) use sandbox_access::{options_ui as sandbox_options_ui, rules_ui as sandbox_rules_ui};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub(super) use workspace::{Surface, ToolTab};
@@ -966,46 +969,6 @@ fn bytes(value: u64) -> String {
     }
 }
 
-/// Edit requested sandbox grants. The host preparation probe separately determines
-/// whether those requested options can become an active execution plan.
-pub(super) fn sandbox_options_ui(ui: &mut egui::Ui, options: &mut sandbox::Options) {
-    sandbox_backend_ui(ui, options);
-    ui.add_enabled_ui(options.enabled,|ui| {
-        ui.checkbox(&mut options.share_network,"Allow network access");
-        ui.checkbox(&mut options.project_read_only,"Project is read only");
-        ui.label("Built-in shared paths");
-        egui::Grid::new(ui.id().with("sandbox-access")).num_columns(2).striped(true).show(ui,|ui| {
-            for (path,default) in sandbox::default_mounts() {
-                ui.monospace(&path);
-                let mut access = options.overrides.get(&path).copied().unwrap_or(default);
-                egui::ComboBox::from_id_salt(("access",&path)).selected_text(access.label()).show_ui(ui,|ui| {
-                    for value in [sandbox::Access::Hidden,sandbox::Access::ReadOnly,sandbox::Access::ReadWrite] { ui.selectable_value(&mut access,value,value.label()); }
-                });
-                if access == default { options.overrides.remove(&path); } else { options.overrides.insert(path,access); }
-                ui.end_row();
-            }
-        });
-        ui.add_space(8.); ui.label("Additional shared paths (absolute or ~/)");
-        let mut rows: Vec<_> = options.read_only.iter().map(|p|(p.clone(),sandbox::Access::ReadOnly)).chain(options.read_write.iter().map(|p|(p.clone(),sandbox::Access::ReadWrite))).collect();
-        let mut remove = None;
-        for (index,(path,access)) in rows.iter_mut().enumerate() { ui.push_id(("extra-mount",index),|ui| { ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(path).desired_width((ui.available_width()-155.).max(80.)).hint_text("/scratch/data"));
-            egui::ComboBox::from_id_salt("mode").width(90.).selected_text(access.label()).show_ui(ui,|ui| {
-                ui.selectable_value(access,sandbox::Access::ReadOnly,"Read only"); ui.selectable_value(access,sandbox::Access::ReadWrite,"Read + write");
-            });
-            if icons::small(ui, Icon::Close, "Remove path grant").clicked() { remove = Some(index); }
-        }); }); }
-        if let Some(index) = remove { rows.remove(index); }
-        if ui.button("+ Add folder or file").clicked() { rows.push((String::new(),sandbox::Access::ReadOnly)); }
-        options.read_only = rows.iter().filter(|(_,a)|*a == sandbox::Access::ReadOnly).map(|(p,_)|p.clone()).collect();
-        options.read_write = rows.into_iter().filter(|(_,a)|*a == sandbox::Access::ReadWrite).map(|(p,_)|p).collect();
-        ui.label(RichText::new(match options.backend {
-            sandbox::Backend::Bwrap => "Private /tmp and hidden home. Unavailable bwrap is visibly normal mode. Shared writable caches retain their contents and access.",
-            sandbox::Backend::Landlock => "Requires Python 3 and Linux Landlock ABI 6. Restricts file access, not host process visibility or file metadata. Uses private project scratch via TMPDIR; cannot hide names or subtract child grants. Unavailable enforcement is visibly normal mode.",
-        }).small());
-    });
-}
-
 /// Compact shared selector for project opening, SSH profiles and saved access rules.
 pub(super) fn sandbox_backend_ui(ui: &mut egui::Ui, options: &mut sandbox::Options) {
     ui.checkbox(&mut options.enabled, "Sandbox project when available");
@@ -1199,6 +1162,11 @@ mod tests {
                 let (mut app, ctx) = app(root.path());
                 app.workbench.git.git_root = root.path().to_string_lossy().into();
                 app.workbench.git.branch = "main".into();
+                app.workbench.draft.sandbox.read_only = vec![format!(
+                    "/data/ユニコード/{}measurements.csv",
+                    "long-directory/".repeat(20)
+                )];
+                app.workbench.draft.sandbox.read_write = vec!["~/results".into()];
                 for tab in if panel == Panel::Git {
                     vec![
                         GitTab::Changes,

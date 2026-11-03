@@ -17,7 +17,6 @@
 //! and independent terminal shells. Coordinators handle their own child lifetimes.
 use crate::{files, project, sandbox, ssh};
 use anyhow::{Context, Result, bail, ensure};
-use serde::Serialize;
 use serde_json::Value;
 use std::{
     io::{BufRead, BufReader, Write},
@@ -35,19 +34,7 @@ use std::{
 /// controlling terminal. A new process group alone still permits `/dev/tty`
 /// access across the sandbox boundary. Interactive PTYs establish their own
 /// session through portable-pty instead of calling this helper.
-pub(crate) fn new_session(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    // The post-fork hook only calls the async-signal-safe setsid syscall and
-    // captures errno on failure; it does not allocate or acquire Rust locks.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-}
+pub(crate) use rode_host_core::command::new_session;
 
 /// Launch description for one supervised project-host JSON-line subprocess. Argument vectors
 /// are literal; executable validation does not grant sandbox access.
@@ -88,15 +75,7 @@ impl Launch {
         Ok(())
     }
 }
-#[derive(Serialize)]
-struct RemoteLaunch {
-    environment: crate::environment::Settings,
-    root: String,
-    prefix: Vec<String>,
-    argv: Vec<String>,
-    python: String,
-    python_program: bool,
-}
+type RemoteLaunch = rode_host_core::supervisor::Spec;
 
 pub use rode_agent_core::Event;
 
@@ -320,8 +299,12 @@ fn run_session(
         );
         let mut command = Command::new("ssh");
         command.args(remote.channel_args(false));
-        command.arg(ssh::python::PROCESS.command());
+        command.arg(format!(
+            "exec {} --process",
+            ssh::quote(&remote.native.client(remote)?.executable)
+        ));
         let mut data = serde_json::to_vec(&RemoteLaunch {
+            native_debug: launch.native_debug,
             environment: launch.plan.environment.clone(),
             root: launch.plan.root.clone(),
             prefix: launch.plan.execution_prefix(&launch.python)?,
@@ -334,7 +317,7 @@ fn run_session(
             "Process launch request exceeds 256 KiB."
         );
         data.push(b'\n');
-        (command, Some(ssh::python::PROCESS.input(data)?))
+        (command, Some(data))
     } else if launch.native_debug {
         let (command, helper) = launch.plan.coordinator_command("--debug-helper")?;
         helper_binary = helper;
@@ -456,23 +439,7 @@ fn run_session(
 
 /// Resolve path-like programs relative to the captured host root, otherwise search
 /// PATH and the host's local bin before leaving the bare command for spawn diagnostics.
-pub(crate) fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
-    if program.contains('/') || program.starts_with('~') {
-        let path = files::expand_home(program);
-        if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        }
-    } else {
-        sandbox::find_program(program)
-            .or_else(|| {
-                let local = files::expand_home("~/.local/bin").join(program);
-                local.is_file().then_some(local)
-            })
-            .unwrap_or_else(|| PathBuf::from(program))
-    }
-}
+pub(crate) use rode_host_core::command::resolve_program;
 
 fn read_line(reader: &mut impl BufRead, limit: usize) -> Result<Option<Vec<u8>>> {
     let mut result = Vec::new();

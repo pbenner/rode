@@ -5,6 +5,7 @@
 //! Linked assets resolve relative to the source on its host; custom image loading enforces
 //! the existing sandbox and shared preview budget without HTTP/file fallback loaders.
 use super::*;
+use crate::sandbox::PlanExt as _;
 use egui::load::{
     LoadError, SizeHint, SizedTexture, TextureLoadResult, TextureLoader, TexturePoll,
 };

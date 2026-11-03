@@ -13,9 +13,11 @@ rode /path/to/project
 rode /path/to/project/main.py
 ```
 
-A directory opens as a project. A file opens immediately in its normal editor or preview, with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
+A directory opens as a project. A file opens immediately in its normal editor or preview, normally with its containing directory as the workspace. Relative paths work too, such as `rode main.py`; quote paths containing spaces. Saved sandbox settings for that directory still apply, and `--sandbox` requests isolation for it explicitly.
 
-This installs **both `rode` and `rode-sessiond`** into Cargo's binary directory, normally `~/.cargo/bin`, without root access. RODE discovers the sibling helper for SSH persistent terminals on compatible Linux hosts. For older/different Linux hosts, build a static helper with `scripts/build-sessiond.sh`; see [terminal setup](terminals.md#remote-helper-and-packaging).
+If global sandbox defaults would reject a file's containing directory because it is your home directory or an ancestor, RODE opens just the file without a project. The window shows **File mode**, and the banner shows **Local file · Normal mode**: file reads and saves are unsandboxed, no project tools or terminal start automatically, and sandbox preferences are unchanged. This exception does not override `--sandbox`, an explicitly saved folder policy, or directory arguments. For sandboxed editing, keep files in a project subdirectory and open that project.
+
+This installs **both `rode` and `rode-sessiond`** into Cargo's binary directory, normally `~/.cargo/bin`, without root access. RODE discovers the sibling helper for native SSH host services and persistent sessions on compatible Linux hosts. See [SSH setup](remote.md#host-service-backends). For older/different Linux hosts, build a static helper with `scripts/build-sessiond.sh`; see [helper setup](terminals.md#remote-helper-and-packaging).
 
 For Codex chat, click **Install Codex** in the chat panel, install the optional `rode-codex` package, or use an existing executable. Authenticate locally with `rode --codex login`, then leave the agent executable set to `auto`; see [agent setup](agents.md). VS Code, Node.js and npm are not needed. Editing and other tools work without Codex.
 

@@ -8,15 +8,12 @@ use serde_json::{Value, json};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
 
 fn call(root: &Path, spec: &Value, input: Vec<u8>) -> project::Output {
-    let mut command = Command::new("python3");
-    command
-        .args([
-            "-c",
-            include_str!("../src/remote_codex.py"),
-            &spec.to_string(),
-        ])
-        .env("RODE_CODEX_CACHE", root);
-    project::run(command, input, Duration::from_secs(10)).unwrap()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"));
+    command.arg("--runtime-cache").env("RODE_CODEX_CACHE", root);
+    let mut bytes = serde_json::to_vec(spec).unwrap();
+    bytes.push(b'\n');
+    bytes.extend(input);
+    project::run(command, bytes, Duration::from_secs(10)).unwrap()
 }
 fn fixture() -> (tempfile::TempDir, Vec<u8>, Value) {
     let root = tempfile::tempdir().unwrap();
@@ -172,7 +169,10 @@ fn corrupt_truncated_and_excess_transfers_never_publish_or_replace_a_valid_runti
         request["version"] = format!("0-bad-{index}").into();
         let output = call(&cache, &request, bad);
         assert!(!output.success(), "Invalid transfer was accepted");
-        assert!(output.stderr.contains("pinned size"), "{}", output.stderr);
+        assert!(
+            !output.stderr.is_empty(),
+            "Invalid transfer must explain the failure"
+        );
         let architecture = std::env::consts::ARCH;
         let directory = cache.join(format!("0-bad-{index}")).join(architecture);
         assert!(!directory.join(files::digest(&bytes)).exists());

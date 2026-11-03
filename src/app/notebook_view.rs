@@ -4,6 +4,7 @@
 //! render caches. Structured edits serialize through ordinary protected source saves; kernel
 //! cleanup follows project/interpreter/tab lifecycle and never affects persistent project
 //! terminals.
+use crate::sandbox::PlanExt as _;
 mod shutdowns;
 mod source;
 mod ui;

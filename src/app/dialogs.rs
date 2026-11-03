@@ -263,7 +263,9 @@ impl EditorApp {
                 egui::ScrollArea::vertical()
                     .max_height(300.)
                     .show(ui, |ui| {
-                        workbench::sandbox_options_ui(ui, &mut self.profile.sandbox)
+                        ui.push_id("ssh-sandbox-rules", |ui| {
+                            workbench::sandbox_rules_ui(ui, &mut self.profile.sandbox, palette)
+                        });
                     });
             });
         }
@@ -435,7 +437,9 @@ impl EditorApp {
                 egui::ScrollArea::vertical()
                     .max_height(260.)
                     .show(ui, |ui| {
-                        workbench::sandbox_options_ui(ui, &mut self.folder_sandbox)
+                        ui.push_id("folder-sandbox-rules", |ui| {
+                            workbench::sandbox_rules_ui(ui, &mut self.folder_sandbox, palette)
+                        });
                     });
             });
         }

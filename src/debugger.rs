@@ -1,5 +1,4 @@
 //! Project debugging through installed DAP adapters and host-owned controllers.
-const REQUEST_LIMIT: usize = 256;
 pub mod bridge;
 pub mod framing;
 pub mod protocol;

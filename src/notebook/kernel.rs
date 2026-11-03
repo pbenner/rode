@@ -432,7 +432,7 @@ fn argv(
             "python3".into(),
             "-u".into(),
             "-c".into(),
-            include_str!("../notebook_kernel.py").into(),
+            include_str!("../../crates/rode-host-core/src/notebook_kernel.py").into(),
         ])
     }
 }

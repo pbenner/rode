@@ -56,8 +56,10 @@ impl Fixture {
         infos
     }
     fn create(&mut self, start: Start, argv: Vec<String>, python: &str, persistent: bool) -> Info {
-        let mut plan = sandbox::Plan::default();
-        plan.root = self.root.path().to_string_lossy().into();
+        let plan = sandbox::Plan {
+            root: self.root.path().to_string_lossy().into(),
+            ..Default::default()
+        };
         let spec = Spec {
             sources: BTreeMap::new(),
             id: rode_session::new_id().unwrap(),
@@ -96,8 +98,10 @@ impl Fixture {
         *info
     }
     fn attach(&self, info: &Info) -> process::Session {
-        let mut plan = sandbox::Plan::default();
-        plan.root = self.root.path().to_string_lossy().into();
+        let plan = sandbox::Plan {
+            root: self.root.path().to_string_lossy().into(),
+            ..Default::default()
+        };
         process::Session::start(
             process::Launch {
                 argv: vec![
@@ -192,7 +196,7 @@ fn missing_notebook_dependencies_report_the_interpreter_and_install_command() {
             "-S".into(), // Exclude installed site packages, even on hosts with Jupyter.
             "-u".into(),
             "-c".into(),
-            include_str!("../src/notebook_kernel.py").into(),
+            include_str!("../crates/rode-host-core/src/notebook_kernel.py").into(),
         ],
         python,
         false,
@@ -240,7 +244,7 @@ fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattach
             python.clone(),
             "-u".into(),
             "-c".into(),
-            include_str!("../src/notebook_kernel.py").into(),
+            include_str!("../crates/rode-host-core/src/notebook_kernel.py").into(),
         ],
         &python,
         true,
@@ -413,10 +417,8 @@ fn debugger_pause_stack_variables_and_terminal_survive_detach_with_epoch_guards(
             settings: Box::new(settings),
         },
         vec![
-            "python3".into(),
-            "-u".into(),
-            "-c".into(),
-            include_str!("../src/remote_debugger.py").into(),
+            env!("CARGO_BIN_EXE_rode-sessiond").into(),
+            "--debug-helper".into(),
         ],
         "/usr/bin/python3",
         true,

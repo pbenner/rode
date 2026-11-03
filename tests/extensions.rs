@@ -1,8 +1,8 @@
 //! Native activation preferences and opt-in API v1 executable adapters with cancellation and
 //! host-policy checks.
 
-#[path = "support/python.rs"]
-mod python_peer;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     extensions::{self, Feature, Registry},
@@ -54,7 +54,7 @@ fn registry_keeps_bundled_features_and_never_activates_installed_tools_implicitl
     assert!(bad.validate().is_err());
 }
 #[test]
-fn adapters_format_unsaved_snapshots_and_match_the_python_peer_without_saving_files() {
+fn adapters_format_unsaved_snapshots_and_match_the_headless_helper_without_saving_files() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("source.rs");
     fs::write(&path, "disk").unwrap();
@@ -75,8 +75,7 @@ fn adapters_format_unsaved_snapshots_and_match_the_python_peer_without_saving_fi
     };
     assert_eq!(local.text.as_deref(), Some("UNSAVED 🦀"));
     assert_eq!(local.diagnostics[0].code, "DEMO");
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -183,12 +182,8 @@ fn closing_a_coordinator_lifeline_stops_the_adapter_process() {
     for remote in [false, true] {
         let _ = fs::remove_file(&pid);
         let mut command = if remote {
-            let mut command = Command::new("python3");
-            command.args([
-                "-c",
-                &python_peer::source(files::REMOTE_HELPER),
-                "--extension-helper",
-            ]);
+            let mut command = Command::new(native_peer::binary());
+            command.arg("--extension-helper");
             command
         } else {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
@@ -242,12 +237,8 @@ fn coordinators_finish_successfully_while_the_lifetime_pipe_stays_open() {
     };
     for remote in [false, true] {
         let mut command = if remote {
-            let mut command = Command::new("python3");
-            command.args([
-                "-c",
-                &python_peer::source(files::REMOTE_HELPER),
-                "--extension-helper",
-            ]);
+            let mut command = Command::new(native_peer::binary());
+            command.arg("--extension-helper");
             command
         } else {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));

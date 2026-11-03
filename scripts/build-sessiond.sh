@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the small static Linux PTY helper for hosts without GUI/Rust packages.
+# Build the static Linux host/session helper without GUI dependencies.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 helper_arch=${1:-$(uname -m)}

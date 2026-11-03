@@ -208,6 +208,11 @@ enum Job {
         /// Local startup file to open only after its containing project is accepted.
         open_file: Option<String>,
     },
+    /// Local CLI file opened without inferring an unsafe whole-home project.
+    StandaloneFile {
+        path: String,
+        token: u64,
+    },
     Browse {
         remote: bool,
         token: u64,
@@ -1595,9 +1600,35 @@ impl EditorApp {
     fn workspace_banner(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let Some(workspace) = &self.workspace else {
-            if self.last_window_title != "RODE" {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Title("RODE".into()));
-                self.last_window_title = "RODE".into();
+            let file = self
+                .documents
+                .get(self.active)
+                .and_then(|d| d.path.as_deref());
+            let title = file.map_or_else(
+                || "RODE".into(),
+                |path| format!("RODE · {} [File mode]", ssh::display_name(path)),
+            );
+            if self.last_window_title != title {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+                self.last_window_title = title;
+            }
+            if file.is_some() {
+                egui::TopBottomPanel::top("workspace-banner")
+                    .exact_height(38.0)
+                    .frame(theme::frame(palette.raised))
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("LOCAL FILE").strong());
+                            ui.separator();
+                            ui.label(RichText::new("NORMAL MODE").monospace().size(11.0))
+                                .on_hover_text("No project is open. File access is not sandboxed; project sandbox preferences are unchanged.");
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.button("Open project…").clicked() {
+                                    self.open_local_folder_dialog();
+                                }
+                            });
+                        });
+                    });
             }
             return;
         };

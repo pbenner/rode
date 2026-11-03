@@ -45,12 +45,23 @@ struct Job {
     created: Instant,
 }
 impl Store {
+    fn reap_unattached(&self) {
+        self.jobs.lock().unwrap().retain(|_, job| {
+            let shared = job.shared.lock().unwrap();
+            !(job.completed.load(Ordering::Acquire)
+                && !shared.view.info.persistent
+                && !shared.view.info.attached
+                && (shared.ever_attached || job.created.elapsed() > Duration::from_secs(30)))
+        });
+    }
     /// Report any retained runtime record, including completed persistent inspection/output state.
     pub fn live(&self) -> bool {
+        self.reap_unattached();
         !self.jobs.lock().unwrap().is_empty()
     }
     /// Return retained runtime metadata sorted by creation time without starting a controller.
     pub fn list(&self) -> Vec<Info> {
+        self.reap_unattached();
         let mut infos: Vec<_> = self
             .jobs
             .lock()
@@ -242,7 +253,9 @@ impl Store {
             job.completed.store(true, Ordering::Release);
             let shared = job.shared.lock().unwrap();
             let remove = job.discard.load(Ordering::Acquire)
-                || (!shared.view.info.persistent && !shared.view.info.attached);
+                || (!shared.view.info.persistent
+                    && !shared.view.info.attached
+                    && shared.ever_attached);
             drop(shared);
             if remove && let Some(jobs) = jobs.upgrade() {
                 jobs.lock().unwrap().remove(&id);

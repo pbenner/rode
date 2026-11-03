@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-description = "Native persistent PTY service for the RODE editor"
+description = "Headless native host gateway and persistent sessions for the RODE editor"
 repository = "https://github.com/pbenner/rode"
 autobins = false
 
@@ -14,6 +14,8 @@ autobins = false
 standalone = []
 
 [dependencies]
+rode-host-core = { path = "../rode-host-core" }
+rode-host-protocol = { path = "../rode-host-protocol" }
 anyhow = "1"
 base64 = "0.22"
 libc = "0.2"

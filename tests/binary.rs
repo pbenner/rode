@@ -1,8 +1,9 @@
-//! Byte patches, protected local/Python saves, static object parsing and sandbox access;
+//! Byte patches, protected local/headless saves, static object parsing and sandbox access;
 //! inspected programs never execute.
 
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rode::{
@@ -18,8 +19,7 @@ use std::{
     sync::Arc,
 };
 fn peer(request: &Request) -> anyhow::Result<files::Response> {
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -197,7 +197,7 @@ fn active_sandbox_binary_reads_and_writes_obey_grants() {
     fs::write(&inside, [0, 1, 2]).unwrap();
     let outside = root.path().join("secret.bin");
     fs::write(&outside, [0, 9]).unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         project.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,

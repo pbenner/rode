@@ -8,11 +8,11 @@ Review date: **2026-10-29**. This review covers the current local/SSH file servi
 
 **Availability issue.** Native and Python file readers opened a path before checking that its descriptor represented a regular file. Opening a FIFO for reading can wait indefinitely for a writer, so the later type check never runs. Save revision checks and preference loading/transactions had the same opening pattern. A special file could therefore retain a worker or prevent the corresponding operation from finishing.
 
-The shared native regular-file opener and Python peer now open with `O_NONBLOCK` and check the opened descriptor before reading or locking. Regular files and ordinary file symlinks retain their behavior. Checking only the pathname before opening would leave a replacement race, so descriptor validation remains necessary. This addresses special-file opening; it does not promise a timeout for every filesystem or failing network mount.
+The shared native regular-file opener opens with `O_NONBLOCK` and check the opened descriptor before reading or locking. Regular files and ordinary file symlinks retain their behavior. Checking only the pathname before opening would leave a replacement race, so descriptor validation remains necessary. This addresses special-file opening; it does not promise a timeout for every filesystem or failing network mount.
 
 Regression tests invoke both backends in deadline-bounded subprocesses. They cover text/automatic/hex/image/PDF reads, text/binary saves, symlinks to FIFOs, and preference reads/transactions without a FIFO writer. Existing file lifecycle, symlink/permission and concurrent-save tests check ordinary behavior.
 
-Implementation: `src/persistence.rs`, `src/files.rs`, `src/remote_files.py`. Regression coverage: `tests/security.rs`.
+Implementation: `src/persistence.rs`, `src/files.rs`, `crates/rode-host-core/src/files.rs`. Regression coverage: `tests/security.rs`.
 
 ### A symlinked home could bypass broad-grant rejection
 
@@ -22,7 +22,7 @@ Both backends now check the original home path and its resolved location before 
 
 Regression tests cover whole-home and parent roots, read-only/read-write additional grants, native/Python agreement, and an allowed subproject through the same home alias. The tests build mount arguments without needing to mount or expose an actual user's home.
 
-Implementation: `src/sandbox.rs`, `src/remote_sandbox.py`. Regression coverage: `tests/security.rs`.
+Implementation: `src/sandbox.rs`, `crates/rode-host-core/src/landlock.rs`. Regression coverage: `tests/security.rs`.
 
 ### Background tools retained the launcher's controlling terminal
 

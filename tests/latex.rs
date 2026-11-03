@@ -1,8 +1,8 @@
 //! Generic saved-source builds, compiler/checker diagnostics, cancellation, output locking and
 //! sandbox enforcement.
 
-#[path = "support/python.rs"]
-mod python_peer;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     files,
@@ -49,19 +49,11 @@ fn fixture(root: &Path) -> Settings {
 }
 fn build(invocation: &Invocation, peer: bool, cancel: &AtomicBool) -> anyhow::Result<latex::Reply> {
     let mut command = if peer {
-        Command::new("python3")
+        Command::new(native_peer::binary())
     } else {
         Command::new(env!("CARGO_BIN_EXE_rode"))
     };
-    if peer {
-        command.args([
-            "-c",
-            &python_peer::source(files::REMOTE_HELPER),
-            "--latex-helper",
-        ]);
-    } else {
-        command.arg("--latex-helper");
-    }
+    command.arg("--latex-helper");
     for (name, test_name) in [
         ("TEXMF", "RODE_TEST_TEXMF"),
         ("TEXFORMATS", "RODE_TEST_TEXFORMATS"),
@@ -79,8 +71,7 @@ fn build(invocation: &Invocation, peer: bool, cancel: &AtomicBool) -> anyhow::Re
     latex::execute(command, invocation, cancel)
 }
 fn peer_analyze(request: &project::Request) -> project::Analysis {
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -312,7 +303,7 @@ fn actual_sandbox_builds_obey_project_grants() {
     fs::write(&hidden, "hidden").unwrap();
     let path = project.join("main.tex");
     fs::write(&path, format!("ASSERT_HIDDEN={}\n", hidden.display())).unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         project.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -333,13 +324,7 @@ fn actual_sandbox_builds_obey_project_grants() {
         let mut command = Command::new(&plan.prefix[0]);
         command.args(&plan.prefix[1..plan.prefix.len() - 1]);
         if peer {
-            command.args([
-                "--",
-                "python3",
-                "-c",
-                &python_peer::source(files::REMOTE_HELPER),
-                "--latex-helper",
-            ]);
+            command.args(["--", native_peer::binary(), "--latex-helper"]);
         } else {
             command.args([
                 "--ro-bind",

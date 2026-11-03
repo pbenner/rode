@@ -16,8 +16,8 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import ARTIFACTS, BINARY, click, close_window, focus_window, key, screenshot, text
 
 
-def wait_for(check, message):
-    deadline = time.monotonic() + 10
+def wait_for(check, message, timeout=10):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if check():
             return
@@ -118,14 +118,25 @@ def run(remote=False):
                 time.sleep(1.0)
                 screenshot(window, label + "-problems.png")
                 command("Ruff: Apply safe fixes")
-                time.sleep(0.4)
-                # Return focus to the editor; normal Ctrl+S belongs to the shell when focused.
-                key("space", ("Control_L",))
-                key("e")
-                key("s", ("Control_L",))
+                last_save = 0.0
+
+                def fixes_saved():
+                    nonlocal last_save
+                    if "import os" not in source.read_text():
+                        return True
+                    # A remote fix can arrive after an earlier Save captured the old
+                    # buffer. The palette targets the document regardless of panel focus.
+                    if time.monotonic() - last_save >= 1.0:
+                        command("Save file")
+                        last_save = time.monotonic()
+                    return False
+
                 wait_for(
-                    lambda: "import os" not in source.read_text(),
+                    fixes_saved,
                     "Ruff safe fixes were not applied to the buffer",
+                    # Formatting and checking each have their own bounded host job;
+                    # a cold uvx cache or slow SSH channel can exceed ten seconds.
+                    timeout=40,
                 )
                 command("Python: Select environment")
                 screenshot(window, label + "-python.png")

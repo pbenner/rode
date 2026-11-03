@@ -13,7 +13,7 @@ def on_page_markdown(markdown, **_kwargs):
     for source, destination in {
         "../themes/README.md": "theme-format.md",
         "../docs/syntax-themes.md": "syntax-themes.md",
-        "../src/sandbox_policy.json": "https://github.com/pbenner/rode/blob/main/src/sandbox_policy.json",
+        "../crates/rode-host-core/src/sandbox_policy.json": "https://github.com/pbenner/rode/blob/main/crates/rode-host-core/src/sandbox_policy.json",
     }.items():
         markdown = markdown.replace(f"]({source})", f"]({destination})")
     return markdown.replace("](../assets/", "](images/").replace("](../examples/", "](examples/")

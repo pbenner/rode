@@ -35,7 +35,7 @@ pub fn request_with_upload(
             request: project::Request::Sessions {
                 root: plan.root.clone(),
                 operation,
-                helper: Some(sessions::helper(upload)?),
+                helper: sessions::remote_helper(remote, upload)?,
                 directory: std::env::var("RODE_SESSION_DIR").ok(),
             },
         })?;
@@ -389,7 +389,9 @@ impl Client {
                     process::Event::Exited(code) => {
                         failed = true;
                         connected = false;
-                        if !matches!(self.lifecycle, Lifecycle::Ending(_) | Lifecycle::Ended) {
+                        if self.error.is_none()
+                            && !matches!(self.lifecycle, Lifecycle::Ending(_) | Lifecycle::Ended)
+                        {
                             self.error = Some(format!(
                                 "Runtime view disconnected ({code:?}); persistent work may still be running. Reattach from Sessions."
                             ));

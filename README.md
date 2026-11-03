@@ -3,7 +3,7 @@
 A lightweight native Rust code editor for local and SSH projects, with persistent work sessions and configurable project-wide sandboxing. Tools start on demand, background work is bounded, and there is no automatic project-wide indexing.
 
 - **[Work that survives editor exit](docs/terminals.md).** Enable persistence separately for terminals, coding agents, notebook kernels and debuggers, locally or over SSH. Reattach after editor exit or SSH loss with running work, kernel variables and debugger pause state retained. Terminals also support multiple attached windows without tmux/screen.
-- **[Remote projects through your SSH setup](docs/remote.md).** Use existing OpenSSH aliases, keys and jump hosts. File access and project shells reuse the authenticated connection; Git, tools and debuggers run where the files live.
+- **[Remote projects through your SSH setup](docs/remote.md).** Use existing OpenSSH aliases, keys and jump hosts. Shared native Rust services handle local and remote files and tools without a general Python prerequisite. File access and project shells reuse the authenticated connection; Git, tools and debuggers run where the files live.
 - **[One sandbox policy for the project](docs/sandbox.md).** Choose bubblewrap or rootless Landlock locally or over SSH; editor I/O, shells, agents and tools share the active policy. The backends have different isolation limits; unavailable enforcement is clearly labelled normal mode.
 - **[Coding agents on the project host](docs/agents.md).** Use Codex, local models through Ollama, or ACP agents. Browse saved conversations and control model, reasoning and tool permissions. Approvals cannot widen the active project sandbox.
 - **[Slurm CPU/GPU allocations](docs/slurm.md).** Request resources for interactive shells, notebook kernels and debuggers. Run on compute nodes through the existing SSH connection, with persistent reservations for longer work.
@@ -23,13 +23,15 @@ Also included:
 ```sh
 cargo install --locked --path .
 rode /path/to/project
-# Or open a file directly (its folder becomes the workspace):
+# Or open a file directly:
 rode /path/to/project/main.py
 # Or connect to a remote computer:
 rode --ssh user@host --remote-path '~/project'
 ```
 
-Linux is the validated platform. Build with Rust 1.88+; Cargo installs both the editor and its headless terminal helper. Remote access requires OpenSSH, a POSIX shell, and Python 3. For hosts needing a static helper, see [terminal setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).
+Files normally use their containing folder as the workspace. With sandbox defaults enabled, a file directly in your home directory opens in **File mode · Normal mode** instead: no project or project tools are started, and your sandbox preferences stay unchanged. Explicit `--sandbox` requests and saved folder policies still apply. See [file startup](docs/getting-started.md#run).
+
+Linux is the validated platform. Build with Rust 1.88+; Cargo installs both the editor and its headless host/session helper. Remote access uses OpenSSH and a POSIX shell. RODE uses a verified native Rust helper for SSH host operations; Python is not required for ordinary editing, terminals or sandbox enforcement. Python/Jupyter features retain their own dependencies. See [remote prerequisites](docs/remote.md#host-service-backends) and [static helper setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).
 
 Debian/Ubuntu packages are built for release version tags or manually through **Actions → Package Debian → Run workflow**. Build locally with `scripts/build-deb.sh`; see [packaging and installation](docs/packaging.md).
 

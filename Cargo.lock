@@ -2271,6 +2271,8 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "rode-agent-core",
+ "rode-host-core",
+ "rode-host-protocol",
  "rode-runtime-core",
  "rode-session",
  "ron",
@@ -2296,6 +2298,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "rode-host-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "libc",
+ "portable-pty",
+ "rode-host-protocol",
+ "rode-runtime-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "rode-host-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rode-runtime-core"
 version = "0.1.0"
 dependencies = [
@@ -2315,6 +2341,8 @@ dependencies = [
  "libc",
  "portable-pty",
  "rode-agent-core",
+ "rode-host-core",
+ "rode-host-protocol",
  "rode-runtime-core",
  "serde",
  "serde_json",

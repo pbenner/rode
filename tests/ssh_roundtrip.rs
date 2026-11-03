@@ -840,8 +840,10 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
             };
             let info = info.clone();
             let attach = |remote: &Remote| {
-                let mut control = rode::sandbox::Plan::default();
-                control.root = plan.root.clone();
+                let control = rode::sandbox::Plan {
+                    root: plan.root.clone(),
+                    ..Default::default()
+                };
                 let mut argv = vec![reply.executable.clone()];
                 argv.extend(reply.prefix.clone());
                 argv.extend(["attach-agent".into(), info.id.clone(), policy.clone()]);
@@ -1035,50 +1037,50 @@ fn roundtrip(jump: &str) {
         remote.connected(),
         "Closing another instance's SSH master disconnected this one"
     );
-    let write = remote
-        .request(&Request::Write {
-            path: path.clone(),
-            text: "fn main() { println!(\"hello remote host 🦀\"); }\n".into(),
-            expected: None,
+    let normal = remote
+        .request(&Request::Prepare {
+            path: root.path().to_string_lossy().into_owned(),
+            sandbox: Default::default(),
         })
+        .unwrap()
+        .project
         .unwrap();
-    let read = remote
-        .request(&Request::Read { path: path.clone() })
-        .unwrap();
+    let request = |request: &Request| remote.request_in(request, Some(&normal));
+    let write = request(&Request::Write {
+        path: path.clone(),
+        text: "fn main() { println!(\"hello remote host 🦀\"); }\n".into(),
+        expected: None,
+    })
+    .unwrap();
+    let read = request(&Request::Read { path: path.clone() }).unwrap();
     assert_eq!(write.revision, read.revision);
     assert!(read.text.contains("hello remote host 🦀"));
     // A multi-megabyte save exercises simultaneous pipe draining; it must not deadlock.
     let large = "αβγ Rust remote host\n".repeat(100_000);
-    remote
-        .request(&Request::Write {
-            path: path.clone(),
-            text: large.clone(),
-            expected: Some(read.revision),
-        })
-        .unwrap();
+    request(&Request::Write {
+        path: path.clone(),
+        text: large.clone(),
+        expected: Some(read.revision),
+    })
+    .unwrap();
     assert_eq!(
-        remote
-            .request(&Request::Read { path: path.clone() })
-            .unwrap()
-            .text,
+        request(&Request::Read { path: path.clone() }).unwrap().text,
         large
     );
     assert!(
-        remote
-            .request(&Request::Write {
-                path: path.clone(),
-                text: "stale".into(),
-                expected: Some(write.revision)
-            })
-            .unwrap_err()
-            .to_string()
-            .contains("conflict")
-    );
-    let list = remote
-        .request(&Request::List {
-            path: root.path().to_str().unwrap().into(),
+        request(&Request::Write {
+            path: path.clone(),
+            text: "stale".into(),
+            expected: Some(write.revision)
         })
-        .unwrap();
+        .unwrap_err()
+        .to_string()
+        .contains("conflict")
+    );
+    let list = request(&Request::List {
+        path: root.path().to_str().unwrap().into(),
+    })
+    .unwrap();
     assert!(list.entries.iter().any(|e| e.path == path));
     // Open two project folders through the same authenticated connection. A
     // non-root test sshd uses non-TTY channels; the local PTY remains real.
@@ -1535,15 +1537,28 @@ fn bundled_runtime_roundtrip(remote: &Remote, root: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
     let cache = parent.join("cache ' 🦀");
+    let native_helper = remote
+        .request(&Request::Prepare {
+            path: root.to_string_lossy().into(),
+            sandbox: Default::default(),
+        })
+        .unwrap()
+        .project
+        .unwrap()
+        .native_helper
+        .unwrap();
     let call = |spec: &Value, bytes: Vec<u8>| {
         let mut command = Command::new("ssh");
-        command.args(remote.channel_args(false)).arg(format!(
-            "RODE_CODEX_CACHE={} python3 -c {} {}",
+        command.args(remote.channel_args(false));
+        command.arg(format!(
+            "RODE_CODEX_CACHE={} {} --runtime-cache",
             rode::ssh::quote(cache.to_str().unwrap()),
-            rode::ssh::quote(include_str!("../src/remote_codex.py")),
-            rode::ssh::quote(&spec.to_string())
+            rode::ssh::quote(&native_helper)
         ));
-        let text = rode::project::run(command, bytes, Duration::from_secs(10))
+        let mut input = serde_json::to_vec(spec).unwrap();
+        input.push(b'\n');
+        input.extend(bytes);
+        let text = rode::project::run(command, input, Duration::from_secs(10))
             .unwrap()
             .checked()
             .unwrap();
@@ -2002,10 +2017,7 @@ Inputs: {:?}",
             })
             .unwrap_err()
             .to_string();
-        assert!(
-            error.contains("older protocol") && error.contains("build-sessiond.sh"),
-            "{error}"
-        );
+        assert!(error.contains("fixed native helper"), "{error}");
     }
     let response = request(rode::sessions::Operation::List).unwrap();
     let Some(rode::project::Response::Sessions(reply)) = response.tool else {
@@ -2516,23 +2528,39 @@ fn binary_extension_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan, outsi
     assert_eq!(reply.output, if plan.active { "False" } else { "True" });
 }
 
+fn interpreter_grants(python: &str) -> Vec<String> {
+    // The isolated sshd has its own HOME. A uv-managed venv may link into the
+    // desktop user's .local tree, so grant that interpreter's installation too.
+    let configured = std::path::Path::new(python);
+    let real = configured.canonicalize().unwrap();
+    let mut paths = [configured, real.as_path()]
+        .into_iter()
+        .map(|path| {
+            path.parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 fn notebook_roundtrip(remote: &Remote, root: &str, outside: &str) {
     use rode::notebook::kernel::{Event, Kernel, Run};
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
         return;
     };
-    let env = std::path::Path::new(&python)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
     let plan = remote
         .request(&Request::Prepare {
             path: root.into(),
             sandbox: rode::sandbox::Options {
                 enabled: true,
                 share_network: false,
-                read_only: vec![env.to_string_lossy().into()],
+                read_only: interpreter_grants(&python),
                 ..Default::default()
             },
         })
@@ -2749,17 +2777,12 @@ fn debugger_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
     if let Ok(python) =
         std::env::var("RODE_TEST_DEBUGPY").or_else(|_| std::env::var("RODE_TEST_JUPYTER"))
     {
-        let env = std::path::Path::new(&python)
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
         let policy = remote
             .request(&Request::Prepare {
                 path: plan.root.clone(),
                 sandbox: rode::sandbox::Options {
                     enabled: true,
-                    read_only: vec![env.to_string_lossy().into()],
+                    read_only: interpreter_grants(&python),
                     ..Default::default()
                 },
             })
@@ -2909,4 +2932,199 @@ fn native_debugger_roundtrip(remote: &Remote, root: &str) {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(remote.connected());
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn native_generic_operations_need_no_remote_python() {
+    if std::env::var("RODE_SSH_TEST_NO_PYTHON").as_deref() != Ok("1") {
+        eprintln!("Set RODE_SSH_TEST_NO_PYTHON=1 for the native host without Python fixture");
+        return;
+    }
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").unwrap();
+    for jump in ["", "rode-jump"] {
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            Command::new("ssh")
+                .args(remote.channel_args(false))
+                .arg("if command -v python3 >/dev/null 2>&1; then exit 99; fi")
+                .status()
+                .unwrap()
+                .success(),
+            "Python must be absent from the fixture PATH"
+        );
+        let base = tempfile::tempdir().unwrap();
+        for sandboxed in [false, true] {
+            let root = base
+                .path()
+                .join(if sandboxed { "isolated" } else { "normal" });
+            std::fs::create_dir(&root).unwrap();
+            let plan = remote
+                .request(&Request::Prepare {
+                    path: root.to_string_lossy().into(),
+                    sandbox: rode::sandbox::Options {
+                        enabled: sandboxed,
+                        backend: rode::sandbox::Backend::Landlock,
+                        ..Default::default()
+                    },
+                })
+                .unwrap()
+                .project
+                .unwrap();
+            if sandboxed && !plan.active {
+                assert_ne!(
+                    std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                    Ok("1"),
+                    "{}",
+                    plan.reason
+                );
+                eprintln!(
+                    "Native Landlock unavailable on this kernel: {}",
+                    plan.reason
+                );
+                continue;
+            }
+            let path = root.join("native ' 🦀.rs").to_string_lossy().into_owned();
+            let saved = remote
+                .request_in(
+                    &Request::Write {
+                        path: path.clone(),
+                        text: "native file service".into(),
+                        expected: None,
+                    },
+                    Some(&plan),
+                )
+                .unwrap();
+            let read = remote
+                .request_in(&Request::Read { path }, Some(&plan))
+                .unwrap();
+            assert_eq!(read.text, "native file service");
+            assert_eq!(read.revision, saved.revision);
+            let response = remote
+                .request_in(
+                    &Request::Tool {
+                        request: rode::project::Request::Git {
+                            root: root.to_string_lossy().into(),
+                            args: vec!["init".into(), "--quiet".into()],
+                            input: None,
+                        },
+                    },
+                    Some(&plan),
+                )
+                .unwrap();
+            assert!(
+                matches!(response.tool, Some(rode::project::Response::Command(output)) if output.success())
+            );
+            native_provider_and_terminal_without_python(&remote, plan);
+        }
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+fn native_provider_and_terminal_without_python(remote: &Remote, mut plan: rode::sandbox::Plan) {
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
+    let root = Path::new(&plan.root);
+    let mise = root.join("fixture-mise");
+    fs::write(&mise, "#!/bin/sh\ncase \"$*\" in\n'ls --current --json') printf '%s\\n' '{}' ;;\n'env --json') printf '%s\\n' '{\"RODE_PROVIDER\":\"native\"}' ;;\n*) printf '%s\\n' 'export RODE_PROVIDER=native' ;;\nesac\n").unwrap();
+    fs::set_permissions(&mise, fs::Permissions::from_mode(0o700)).unwrap();
+    plan.environment.mise = true;
+    plan.environment
+        .runtimes
+        .insert("mise".into(), mise.to_string_lossy().into());
+    let process = rode::process::Session::start(
+        rode::process::Launch {
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf '{\"provider\":\"%s\"}\\n' \"$RODE_PROVIDER\"".into(),
+            ],
+            plan: plan.clone(),
+            remote: Some(remote.clone()),
+            python: "off".into(),
+            python_program: false,
+            native_debug: false,
+            line_limit: 8192,
+        },
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        match process.poll() {
+            Some(rode::process::Event::Message(value)) => {
+                assert_eq!(value["provider"], "native");
+                break;
+            }
+            Some(rode::process::Event::Error(error)) => panic!("{error}"),
+            Some(rode::process::Event::Exited(code)) => {
+                panic!("Provider exited before reply: {code:?}")
+            }
+            _ => {}
+        }
+        assert!(Instant::now() < until, "Native process did not reply");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let directory = root
+        .parent()
+        .unwrap()
+        .join("sessions")
+        .to_string_lossy()
+        .into_owned();
+    let request = |operation| {
+        remote
+            .request(&Request::Tool {
+                request: rode::project::Request::Sessions {
+                    root: plan.root.clone(),
+                    operation,
+                    helper: None,
+                    directory: Some(directory.clone()),
+                },
+            })
+            .unwrap()
+    };
+    let reply = request(rode::sessions::Operation::Create {
+        id: rode_session::new_id().unwrap(),
+        name: "Native provider".into(),
+        plan: Box::new(plan.clone()),
+        policy: rode::sessions::fingerprint(&plan),
+        python: "off".into(),
+        environment: Box::new(plan.environment.clone()),
+        persistent: false,
+        allocation: None,
+    });
+    let Some(rode::project::Response::Sessions(reply)) = reply.tool else {
+        panic!()
+    };
+    let rode_session::Response::Session(info) = &reply.response else {
+        panic!()
+    };
+    let view = native_attach(remote, &reply, info);
+    view.send(b"printf 'PROVIDER_%s\\n' \"$RODE_PROVIDER\"\n".to_vec())
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(10);
+    while !view.contents().contains("PROVIDER_native") {
+        assert!(Instant::now() < until, "{}", view.contents());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    request(rode::sessions::Operation::End {
+        id: info.id.clone(),
+        policy: info.policy.clone(),
+    });
 }

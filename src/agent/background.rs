@@ -29,7 +29,7 @@ pub fn request(
             request: project::Request::Sessions {
                 root: launch.plan.root.clone(),
                 operation,
-                helper: Some(service::helper(upload)?),
+                helper: service::remote_helper(remote, upload)?,
                 directory: std::env::var("RODE_SESSION_DIR").ok(),
             },
         })?;

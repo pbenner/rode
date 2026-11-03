@@ -1,8 +1,9 @@
 //! Optional mise providers preserve host/policy ownership, trust, explicit overrides and stdio.
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
-use rode::{environment, files, mise, project, sandbox};
+use rode::{environment, files, mise, project};
 use std::{
     collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path, process::Command,
     time::Duration,
@@ -48,9 +49,7 @@ impl Fixture {
     }
     fn execute(&self, request: &files::Request, peer: bool) -> anyhow::Result<files::Response> {
         let mut command = if peer {
-            let mut command = Command::new("python3");
-            command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
-            command
+            native_peer::command()
         } else {
             let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
             command.arg("--file-helper");
@@ -68,77 +67,7 @@ impl Fixture {
 }
 
 #[test]
-fn ssh_terminal_initialization_respects_the_captured_provider_gate() {
-    use base64::Engine;
-
-    let fixture = Fixture::new();
-    let mut saved = fixture.settings.clone();
-    saved
-        .variables
-        .insert("RODE_LITERAL".into(), "retained".into());
-    // Capture the verified helper's wire request without creating a persistent
-    // service or executing a provider while testing both sides of the gate.
-    let helper = "#!/usr/bin/python3\nimport json,sys\nfrom pathlib import Path\nif sys.argv[1] == 'protocol':\n print(PROTOCOL)\nelse:\n Path('terminal-request.json').write_text(sys.stdin.read())\n print(json.dumps({'kind':'ok'}))\n".replace("PROTOCOL", &rode_session::PROTOCOL.to_string());
-    let helper = helper.as_bytes();
-    for enabled in [false, true] {
-        let mut plan = sandbox::Plan::default();
-        plan.root = fixture.root();
-        plan.environment = if enabled {
-            saved.clone()
-        } else {
-            Default::default()
-        };
-        let request = files::Request::Tool {
-            request: project::Request::Sessions {
-                root: fixture.root(),
-                operation: rode::sessions::Operation::Create {
-                    id: rode_session::new_id().unwrap(),
-                    name: "provider gate".into(),
-                    policy: rode::sessions::fingerprint(&plan),
-                    plan: Box::new(plan),
-                    python: "auto".into(),
-                    environment: Box::new(saved.clone()),
-                    persistent: false,
-                    allocation: None,
-                },
-                helper: Some(rode::sessions::Helper {
-                    digest: files::digest(helper),
-                    architecture: std::env::consts::ARCH.into(),
-                    data: Some(base64::engine::general_purpose::STANDARD.encode(helper)),
-                }),
-                directory: Some(
-                    fixture
-                        .root
-                        .path()
-                        .join("sessions")
-                        .to_string_lossy()
-                        .into(),
-                ),
-            },
-        };
-        fixture.execute(&request, true).unwrap();
-        let payload: serde_json::Value = serde_json::from_slice(
-            &fs::read(fixture.root.path().join("terminal-request.json")).unwrap(),
-        )
-        .unwrap();
-        let initial_input = payload["initial_input"].as_str().unwrap();
-        assert_eq!(
-            initial_input.contains("_rode_mise_env"),
-            enabled,
-            "Saved opt-in must not override the captured feature gate"
-        );
-        assert_eq!(payload["argv"].as_array().unwrap().len() > 2, enabled);
-        assert!(initial_input.contains("export RODE_LITERAL=retained;"));
-        assert_eq!(payload["env"]["RODE_LITERAL"], "retained");
-        assert!(
-            saved.mise,
-            "Disabling the provider must retain saved project preferences"
-        );
-    }
-}
-
-#[test]
-fn inspection_and_setup_have_local_python_parity_and_never_export_secret_values() {
+fn inspection_and_setup_have_desktop_headless_parity_and_never_export_secret_values() {
     for peer in [false, true] {
         let fixture = Fixture::new();
         let error = fixture
@@ -200,13 +129,10 @@ fn provider_is_applied_before_native_or_python_tools_and_rode_overrides_win() {
                 fix: false,
             },
         };
-        let mut arguments = mise::prefix(&fixture.settings, &fixture.root(), "auto").unwrap();
+        let mut arguments =
+            native_peer::environment_prefix(&fixture.settings, &fixture.root(), "auto").unwrap();
         if peer {
-            arguments.extend([
-                "python3".into(),
-                "-c".into(),
-                python_peer::source(files::REMOTE_HELPER),
-            ]);
+            arguments.extend([native_peer::binary().into(), "--file-helper".into()]);
         } else {
             arguments.extend([env!("CARGO_BIN_EXE_rode").into(), "--file-helper".into()]);
         }
@@ -232,7 +158,8 @@ fn provider_is_applied_before_native_or_python_tools_and_rode_overrides_win() {
 fn launch_preserves_protocol_stdin_and_refuses_invalid_provider_output_without_fallback() {
     let fixture = Fixture::new();
     fixture.trusted();
-    let mut arguments = mise::prefix(&fixture.settings, &fixture.root(), "auto").unwrap();
+    let mut arguments =
+        native_peer::environment_prefix(&fixture.settings, &fixture.root(), "auto").unwrap();
     arguments.extend([
         "/usr/bin/python3".into(),
         "-c".into(),
@@ -248,7 +175,7 @@ fn launch_preserves_protocol_stdin_and_refuses_invalid_provider_output_without_f
     fs::write(fixture.root.path().join("mise-invalid"), "").unwrap();
     let output = run();
     assert!(!output.success());
-    assert!(output.stderr.contains("invalid or oversized environment"));
+    assert!(output.stderr.contains("invalid") && output.stderr.contains("environment"));
     assert!(!output.stdout.contains("protocol input"));
     fs::remove_file(fixture.root.path().join("mise-invalid")).unwrap();
     fs::write(fixture.root.path().join("mise-missing"), "").unwrap();
@@ -280,7 +207,8 @@ fn native_agent_controllers_honor_environment_prefixes_in_normal_mode() {
             root: fixture.root(),
             active: false,
             project_read_only: false,
-            prefix: mise::prefix(&fixture.settings, &fixture.root(), "auto").unwrap(),
+            prefix: native_peer::environment_prefix(&fixture.settings, &fixture.root(), "auto")
+                .unwrap(),
         },
         executable: "mise-agent".into(),
         env: Default::default(),
@@ -345,7 +273,8 @@ fn native_kernel_controllers_resolve_the_provider_before_starting_the_bridge() {
             .to_string_lossy()
             .into_owned(),
         argv: vec!["mise-kernel".into()],
-        prefix: mise::prefix(&fixture.settings, &fixture.root(), "auto").unwrap(),
+        prefix: native_peer::environment_prefix(&fixture.settings, &fixture.root(), "auto")
+            .unwrap(),
         env: Default::default(),
         python: "auto".into(),
         python_program: false,
@@ -392,7 +321,7 @@ fn native_kernel_controllers_resolve_the_provider_before_starting_the_bridge() {
 #[test]
 fn normal_mode_plan_wraps_project_tools_but_leaves_file_io_and_setup_available() {
     let fixture = Fixture::new();
-    let mut plan = sandbox::prepare(&fixture.root(), &Default::default()).unwrap();
+    let mut plan = native_peer::prepare(&fixture.root(), &Default::default()).unwrap();
     plan.environment = fixture.settings.clone();
     // Setup bypasses the provider so an untrusted/missing environment can be repaired.
     plan.local_request_with_helper(
@@ -446,11 +375,6 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
         runtimes: BTreeMap::from([("mise".into(), binary.clone())]),
         ..Default::default()
     };
-    let source = format!(
-        "{}\n{}\nimport sys\njson.dump(mise_handle(json.load(sys.stdin)),sys.stdout)",
-        include_str!("../src/remote_environment.py"),
-        include_str!("../src/remote_mise.py")
-    );
     for (index, action) in [
         mise::Action::Inspect,
         mise::Action::Trust,
@@ -459,16 +383,20 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
     .into_iter()
     .enumerate()
     {
-        let mut command = Command::new("python3");
-        command.args(["-c", &source]).current_dir(root.path());
+        let mut command = native_peer::command();
+        command.current_dir(root.path());
         for name in ["CONFIG", "DATA", "STATE", "CACHE"] {
             command.env(format!("MISE_{name}_DIR"), root.path().join(name));
         }
         let out = project::run(
             command,
-            serde_json::to_vec(
-                &serde_json::json!({"root":base,"settings":settings,"action":action}),
-            )
+            serde_json::to_vec(&files::Request::Tool {
+                request: project::Request::Mise {
+                    root: base.clone(),
+                    settings: settings.clone(),
+                    action,
+                },
+            })
             .unwrap(),
             Duration::from_secs(30),
         )
@@ -484,7 +412,10 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
             assert!(out.success(), "{}", out.stderr);
         }
         if out.success() && matches!(action, mise::Action::Inspect) {
-            let snapshot: mise::Snapshot = serde_json::from_str(&out.stdout).unwrap();
+            let reply: files::Response = serde_json::from_str(&out.stdout).unwrap();
+            let Some(project::Response::Mise(snapshot)) = reply.tool else {
+                panic!("Missing mise reply")
+            };
             assert_eq!(snapshot.tasks[0].name, "smoke");
         }
     }

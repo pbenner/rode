@@ -21,6 +21,7 @@ fn runtime_shutdown_and_drop_preserve_the_correct_lifetime_during_startup() {
         "drop_foreground",
         "drop_persistent",
         "drop_ending",
+        "startup_failure",
     ] {
         let root = tempfile::tempdir().unwrap();
         let helper = root.path().join("helper.py");
@@ -139,8 +140,10 @@ fn runtime_lifetime_probe() {
         return;
     };
     let root = PathBuf::from(std::env::var_os("RODE_LIFECYCLE_ROOT").unwrap());
-    let mut plan = sandbox::Plan::default();
-    plan.root = root.to_string_lossy().into();
+    let plan = sandbox::Plan {
+        root: root.to_string_lossy().into(),
+        ..Default::default()
+    };
     let host = Host {
         id: rode_session::new_id().unwrap(),
         policy: sessions::fingerprint(&plan),
@@ -155,12 +158,20 @@ fn runtime_lifetime_probe() {
         policy: host.policy.clone(),
         mode: host.plan.label().into(),
         document: root.join("demo.ipynb").to_string_lossy().into(),
-        argv: vec!["python3".into(), "-u".into(), "-c".into(), bridge.into()],
+        argv: if scenario == "startup_failure" {
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                "echo 'early runtime failure' >&2; exit 1".into(),
+            ]
+        } else {
+            vec!["python3".into(), "-u".into(), "-c".into(), bridge.into()]
+        },
         prefix: vec![],
         env: BTreeMap::new(),
         python: "off".into(),
         python_program: false,
-        persistent: scenario != "drop_foreground",
+        persistent: !matches!(scenario.as_str(), "drop_foreground" | "startup_failure"),
         target: None,
         start: Start::Notebook {
             name: "python3".into(),
@@ -187,6 +198,34 @@ fn runtime_lifetime_probe() {
         // poll the client: this is the exact window that used to orphan a job.
         prepared.recv_timeout(Duration::from_secs(10)).unwrap();
         assert!(client.info.is_none());
+        if scenario == "startup_failure" {
+            // The process has already exited when its first view attaches.
+            until(|| {
+                host.infos()
+                    .iter()
+                    .any(|info| info.id == host.id && !info.alive)
+            });
+            until(|| {
+                client.poll();
+                client.error.is_some()
+            });
+            assert!(
+                client
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("early runtime failure"),
+                "{:?}",
+                client.error
+            );
+            client.end();
+            until(|| {
+                client.poll();
+                !client.pending()
+            });
+            host.wait_absent();
+            return;
+        }
         if scenario == "end_connected" {
             until(|| {
                 client.poll();

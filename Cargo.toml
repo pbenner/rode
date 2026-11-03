@@ -14,6 +14,8 @@ name = "rode-sessiond"
 path = "src/bin/rode-sessiond.rs"
 
 [dependencies]
+rode-host-protocol = { path = "crates/rode-host-protocol" }
+rode-host-core = { path = "crates/rode-host-core" }
 rode-session = { path = "crates/rode-session" }
 rode-agent-core = { path = "crates/rode-agent-core" }
 rode-runtime-core = { path = "crates/rode-runtime-core" }
@@ -56,5 +58,5 @@ debug = 0
 incremental = false
 
 [workspace]
-members = ["crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
-default-members = [".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
+members = ["crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
+default-members = ["crates/rode-host-protocol", "crates/rode-host-core", ".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]

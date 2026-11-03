@@ -1,8 +1,8 @@
 //! Deterministic scheduler parsing, exact-ID ownership checks and cancellation argument
 //! isolation; no real allocation is cancelled.
 
-#[path = "support/python.rs"]
-mod python_peer;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     files,
@@ -17,9 +17,7 @@ use std::{
 };
 fn execute(request: &Request, peer: bool) -> anyhow::Result<Response> {
     let mut command = if peer {
-        let mut command = Command::new("python3");
-        command.args(["-c", &python_peer::source(files::REMOTE_HELPER)]);
-        command
+        native_peer::command()
     } else {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rode"));
         command.arg("--file-helper");
@@ -50,6 +48,60 @@ fn execute(request: &Request, peer: bool) -> anyhow::Result<Response> {
         .tool
         .unwrap())
 }
+#[test]
+fn interactive_compute_uses_the_headless_helper_after_the_desktop_image_is_released() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = root.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    for name in ["salloc", "srun"] {
+        let path = tools.join(name);
+        fs::write(&path, include_str!("fixtures/slurm.py")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let state = root.path().join("slurm-state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("grant"), "").unwrap();
+    let mise = tools.join("mise");
+    fs::write(&mise, "#!/bin/sh\nprintf '%s\\n' '{}'\n").unwrap();
+    fs::set_permissions(&mise, fs::Permissions::from_mode(0o700)).unwrap();
+    let helper = rode::sandbox::HelperBinary::new().unwrap();
+    let desktop = helper.path.clone();
+    let plan = rode::sandbox::Plan {
+        root: root.path().to_string_lossy().into(),
+        native_helper: Some(desktop.to_string_lossy().into()),
+        helper: Some(helper),
+        environment: rode::environment::Settings {
+            mise: true,
+            runtimes: std::collections::BTreeMap::from([(
+                "mise".into(),
+                mise.to_string_lossy().into(),
+            )]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let allocation = slurm::Allocation {
+        allocator: tools.join("salloc").to_string_lossy().into(),
+        runner: tools.join("srun").to_string_lossy().into(),
+        ..Default::default()
+    };
+    let launch = allocation
+        .launch(&plan, &rode_session::new_id().unwrap())
+        .unwrap();
+    drop(plan);
+    assert!(!desktop.exists());
+    let mut command = Command::new(&launch.argv[0]);
+    command
+        .args(&launch.argv[1..])
+        .current_dir(root.path())
+        .env("SHELL", "/bin/true");
+    rode::project::run(command, vec![], std::time::Duration::from_secs(10))
+        .unwrap()
+        .checked()
+        .unwrap();
+    assert!(state.join("ended").exists());
+}
+
 #[test]
 fn slurm_tres_counts_do_not_double_count_typed_gpu_resources() {
     for (tres, expected) in [
@@ -154,10 +206,12 @@ fn allocation_fields_are_literal_and_compute_sandbox_failure_never_falls_back() 
         time: "2:30".into(),
         ..Default::default()
     };
-    let mut plan = rode::sandbox::Plan::default();
-    plan.active = true;
-    plan.prefix = vec!["/bin/false".into()];
-    plan.root = root.path().to_string_lossy().into();
+    let plan = rode::sandbox::Plan {
+        active: true,
+        prefix: vec!["/bin/false".into()],
+        root: root.path().to_string_lossy().into(),
+        ..Default::default()
+    };
     let id = rode_session::new_id().unwrap();
     let launch = settings.launch(&plan, &id).unwrap();
     let output = Command::new(&launch.argv[0])
@@ -226,18 +280,27 @@ fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy(
         queue: "tools/squeue".into(),
         runner: "tools/srun".into(),
     };
-    let mut plan = rode::sandbox::Plan::default();
-    plan.root = root.path().to_string_lossy().into();
-    let mut argv = target.notebook_argv(&plan, "off").unwrap();
+    let source =
+        std::env::var("RODE_TEST_SESSION_HELPER").unwrap_or_else(|_| native_peer::binary().into());
+    let helper = root.path().join("compute-helper");
+    fs::copy(source, &helper).unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    let plan = rode::sandbox::Plan {
+        root: root.path().to_string_lossy().into(),
+        native_helper: Some(helper.to_string_lossy().into()),
+        ..Default::default()
+    };
+    let runtime = root.path().join("fixture-runtime");
+    fs::write(&runtime, "#!/usr/bin/python3\nimport json,os,sys\nrequest=json.loads(sys.stdin.readline())\nprint(json.dumps(dict(request=request,job=os.environ['SLURM_JOB_ID'],gpu=os.environ['CUDA_VISIBLE_DEVICES'],cwd=os.getcwd())))\n").unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+    let argv = target
+        .notebook_argv(&plan, runtime.to_str().unwrap())
+        .unwrap();
     let mut payload: serde_json::Value = serde_json::from_str(argv.last().unwrap()).unwrap();
-    payload["source"] = serde_json::json!(
-        "import json,os,sys\nrequest=json.loads(sys.stdin.readline())\nprint(json.dumps(dict(request=request,job=os.environ['SLURM_JOB_ID'],gpu=os.environ['CUDA_VISIBLE_DEVICES'],cwd=os.getcwd())))"
-    );
-    *argv.last_mut().unwrap() = payload.to_string();
     let execute = |argv: &[String], peer: bool| {
         let mut command = if peer {
-            let mut cmd = Command::new("python3");
-            cmd.args(["-u", "-c", include_str!("../src/remote_agent.py")]);
+            let mut cmd = Command::new(native_peer::binary());
+            cmd.arg("--process");
             cmd
         } else {
             let mut cmd = Command::new(&argv[0]);
@@ -258,7 +321,7 @@ fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy(
             .unwrap();
         let mut input = child.stdin.take().unwrap();
         if peer {
-            writeln!(input, "{}", serde_json::json!({"root":plan.root,"prefix":[],"argv":argv,"python":"off","python_program":false})).unwrap();
+            writeln!(input, "{}", serde_json::json!({"root":plan.root,"prefix":[],"argv":argv,"python":"off","python_program":false,"environment":{}})).unwrap();
         }
         writeln!(input, "{{\"code\":\"hello\"}}").unwrap();
         // Keep the peer's request channel open until its owned child has replied.
@@ -270,7 +333,8 @@ fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy(
         let output = execute(&argv, peer);
         assert!(
             output.status.success(),
-            "{}",
+            "peer={peer}, status={}: {}",
+            output.status,
             String::from_utf8_lossy(&output.stderr)
         );
         let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();

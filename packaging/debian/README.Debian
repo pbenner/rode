@@ -5,9 +5,10 @@ Run `rode` or launch RODE from your desktop's Development menu.
 Open a local project with `rode /path/to/project`.
 Connect over SSH with `rode --ssh user@host --remote-path '~/project'`.
 
-The package includes the static rode-sessiond helper for persistent local/SSH
-terminals. Remote file access requires Python 3 on the remote host. Optional
-features use installed project-host tools; configure them inside RODE.
+The package includes the static rode-sessiond helper for native SSH host services
+and persistent local/SSH sessions. General host operations do not require
+Python. Python interpreter inspection and Jupyter features retain their own
+dependencies. Optional tools must be installed on the project host.
 
 Codex is optional: install the separate rode-codex package, or configure an
 existing executable in Agent settings. The editor package never downloads a

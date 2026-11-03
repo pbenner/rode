@@ -1,5 +1,8 @@
-//! DAP framing/state, interactive debug PTYs and owned-target cleanup on native/Python
+//! DAP framing/state, interactive debug PTYs and owned-target cleanup on desktop/headless
 //! coordinators; real installed adapters are opt-in.
+
+#[path = "support/native.rs"]
+mod native_peer;
 
 #[path = "support/process.rs"]
 mod fixture_process;
@@ -63,16 +66,14 @@ fn make(root: &Path, peer: bool, isolated: bool, python: String, settings: Setti
                 .into(),
         );
     }
-    let plan = sandbox::prepare(root.to_str().unwrap(), &options).unwrap();
+    let plan = native_peer::prepare(root.to_str().unwrap(), &options).unwrap();
     if isolated && !plan.active {
         eprintln!("bwrap unavailable: {}", plan.label());
     }
     let argv = if peer {
         vec![
-            "python3".into(),
-            "-u".into(),
-            "-c".into(),
-            include_str!("../src/remote_debugger.py").into(),
+            env!("CARGO_BIN_EXE_rode-sessiond").into(),
+            "--debug-helper".into(),
         ]
     } else {
         let helper = root.join("rode-helper");
@@ -507,9 +508,11 @@ fn real_debugpy_attach_detaches_without_ending_the_external_process() {
 fn attach_rejects_active_sandbox_before_starting_any_process() {
     let mut settings = Settings::default();
     settings.config.attach = true;
-    let mut plan = sandbox::Plan::default();
-    plan.active = true;
-    plan.root = "/project".into();
+    let plan = sandbox::Plan {
+        active: true,
+        root: "/project".into(),
+        ..Default::default()
+    };
     let result = Client::start(
         plan,
         None,

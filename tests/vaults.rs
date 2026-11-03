@@ -1,4 +1,4 @@
-//! Encrypted-mount identity, lease/locking safeguards and native/Python lifecycle parity, using
+//! Encrypted-mount identity, lease/locking safeguards and desktop/headless lifecycle parity, using
 //! real FUSE only when available.
 
 use rode::{files, vault};
@@ -15,17 +15,13 @@ struct Peer {
     output: BufReader<ChildStdout>,
 }
 impl Peer {
-    fn new(request: &vault::Open, python: bool) -> Self {
-        let mut command = if python {
-            Command::new("python3")
+    fn new(request: &vault::Open, headless: bool) -> Self {
+        let mut command = Command::new(if headless {
+            env!("CARGO_BIN_EXE_rode-sessiond")
         } else {
-            Command::new(env!("CARGO_BIN_EXE_rode"))
-        };
-        if python {
-            command.args(["-u", "-c", include_str!("../src/remote_vault.py")]);
-        } else {
-            command.arg("--vault-helper");
-        }
+            env!("CARGO_BIN_EXE_rode")
+        });
+        command.arg("--vault-helper");
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -103,44 +99,13 @@ fn cleanup_runtime(path: &Path) {
     fs::remove_dir(runtime).unwrap();
 }
 #[test]
-fn fast_python_peer_tools_preserve_exit_status_and_redacted_diagnostics() {
-    let source = include_str!("../src/remote_vault.py");
-    let script = format!(
-        r#"
-import subprocess, sys
-namespace = {{"__name__": "vault_test"}}
-exec({source:?}, namespace)
-class AlreadyExited(subprocess.Popen):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.wait(timeout=5)
-subprocess.Popen = AlreadyExited
-assert namespace["run_tool"]("/usr/bin/true", [], "fixture-password") == (0, "")
-code, message = namespace["run_tool"](sys.executable,
-    ["-c", "import sys; sys.stderr.write('fixture-password rejected'); sys.exit(7)"],
-    "fixture-password")
-assert code == 7, (code, message)
-assert message == "[redacted] rejected", message
-"#
-    );
-    let output = Command::new("python3")
-        .args(["-c", &script])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-#[test]
 fn a_successful_tool_without_a_real_mount_never_opens_plaintext() {
-    for python in [false, true] {
+    for headless in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let cipher = root.path().join("storage with 'quotes'");
         fs::create_dir(&cipher).unwrap();
         fs::write(cipher.join("gocryptfs.conf"), "test fixture").unwrap();
-        let mut peer = Peer::new(&request(&cipher, "/usr/bin/true", false), python);
+        let mut peer = Peer::new(&request(&cipher, "/usr/bin/true", false), headless);
         let vault::Reply::Error { message } = peer.next() else {
             panic!("A non-mount was accepted");
         };
@@ -158,12 +123,12 @@ fn a_successful_tool_without_a_real_mount_never_opens_plaintext() {
 }
 #[test]
 fn initialization_refuses_existing_plaintext_and_invalid_passwords() {
-    for python in [false, true] {
+    for headless in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let cipher = root.path().join("plain");
         fs::create_dir(&cipher).unwrap();
         fs::write(cipher.join("important.txt"), "keep source").unwrap();
-        let mut peer = Peer::new(&request(&cipher, "/usr/bin/true", true), python);
+        let mut peer = Peer::new(&request(&cipher, "/usr/bin/true", true), headless);
         let vault::Reply::Error { message } = peer.next() else {
             panic!()
         };
@@ -177,7 +142,7 @@ fn initialization_refuses_existing_plaintext_and_invalid_passwords() {
         cleanup_runtime(&cipher);
         let mut invalid = request(root.path(), "/usr/bin/true", false);
         invalid.password = "bad\npassword".into();
-        let mut peer = Peer::new(&invalid, python);
+        let mut peer = Peer::new(&invalid, headless);
         let vault::Reply::Error { message } = peer.next() else {
             panic!()
         };
@@ -192,11 +157,11 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
         eprintln!("Installed gocryptfs is needed for the real encryption test");
         return;
     }
-    for python in [false, true] {
+    for headless in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let cipher = root.path().join("encrypted");
         let open = request(&cipher, "gocryptfs", true);
-        let mut first = Peer::new(&open, python);
+        let mut first = Peer::new(&open, headless);
         let reply = first.next();
         let config = fs::read_to_string(cipher.join("gocryptfs.conf")).unwrap();
         assert!(
@@ -230,7 +195,7 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
             assert!(!cipher.join("confidential.txt").exists());
             let mut second_request = request(&cipher, "gocryptfs", false);
             second_request.password.clear();
-            let mut second = Peer::new(&second_request, !python);
+            let mut second = Peer::new(&second_request, !headless);
             assert!(matches!(second.next(), vault::Reply::Opened { .. }));
             let vault::Reply::Closed {
                 locked, message, ..
@@ -279,18 +244,18 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
                         restricted += 1
                     }
                     _ => panic!(
-                        "Unexpected concurrent close reply (first Python={python}): {details}"
+                        "Unexpected concurrent close reply (first headless={headless}): {details}"
                     ),
                 }
             }
             assert_eq!(
                 shared, 1,
-                "Exactly one concurrent close must release a shared lease (first Python={python}): {details}"
+                "Exactly one concurrent close must release a shared lease (first headless={headless}): {details}"
             );
             assert_eq!(
                 locked + restricted,
                 1,
-                "The final close must lock or explicitly refuse unverifiable namespaces (first Python={python}): {details}"
+                "The final close must lock or explicitly refuse unverifiable namespaces (first headless={headless}): {details}"
             );
             if restricted == 1 {
                 // FUSE access does not imply permission to inspect every other
@@ -333,7 +298,7 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
         // Password validation is independent of whether the kernel permits FUSE.
         let mut wrong = request(&cipher, "gocryptfs", false);
         wrong.password = "incorrect-password".into();
-        let mut peer = Peer::new(&wrong, python);
+        let mut peer = Peer::new(&wrong, headless);
         let vault::Reply::Error { message } = peer.next() else {
             panic!()
         };
@@ -344,64 +309,4 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
         drop(peer);
         cleanup_runtime(&cipher);
     }
-}
-
-#[test]
-fn python_peer_releases_a_shared_close_lease_atomically_without_fuse() {
-    let root = tempfile::tempdir().unwrap();
-    let code = r#"
-import fcntl, runpy, sys
-scope = runpy.run_path(sys.argv[1], run_name='vault_unit_fixture')
-class MockMount(scope['Mount']):
-    inspection_error = None
-    def mounted(self):
-        return 'fixture'
-    def unmount_locked(self):
-        # Only the actual FUSE syscall is replaced: operation locks, view leases,
-        # failure retention and shared close are the production implementation.
-        with self.lock_file('views.lock') as lease:
-            try:
-                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise ValueError('Another RODE window still has this encrypted project open.') from None
-            if self.inspection_error:
-                raise ValueError(self.inspection_error)
-settings = dict(cipherdir=sys.argv[2], program='gocryptfs', unmount_program='')
-first, second = MockMount(settings, False), MockMount(settings, False)
-for mount in (first, second):
-    with mount.operation():
-        mount.acquire()
-reply = scope['close'](first, retain_on_failure=True)
-assert not reply['locked'] and first.lease is not None
-reply = scope['close'](first, retain_on_failure=True, close_shared=True)
-assert not reply['locked'] and first.lease is None
-# Namespace inspection refusal must keep the final lease even on window close.
-# Only the known shared-view refusal permits abandoning a lease without locking.
-second.inspection_error = 'Cannot verify other mount namespaces; project remains unlocked.'
-reply = scope['close'](second, retain_on_failure=True, close_shared=True)
-assert not reply['locked'] and reply['message'] == second.inspection_error
-assert second.lease is not None and second.directory is not None
-with second.lock_file('views.lock') as exclusive:
-    try:
-        fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        pass
-    else:
-        raise AssertionError('A refused lock lost the final view lease')
-second.inspection_error = None
-reply = scope['close'](second, retain_on_failure=True, close_shared=True)
-assert reply['locked'] and second.lease is None
-"#;
-    let output = Command::new("python3")
-        .args(["-c", code])
-        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/remote_vault.py"))
-        .arg(root.path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    cleanup_runtime(root.path());
 }

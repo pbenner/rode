@@ -2,7 +2,7 @@
 
 For a shared local/CI toolchain, install [mise](mise.md#developing-rode-with-mise), then run `mise trust`, `mise install --locked` and `mise run check`. The repository pins the tooling and exposes the same check tasks used by GitHub Actions. Direct Cargo/Python commands below remain available; install their OS dependencies separately.
 
-Start with the [source architecture and maintenance guide](architecture.md) for module responsibilities, host boundaries and lifecycle contracts. Its [design decisions and tradeoffs](architecture.md#design-decisions-and-tradeoffs) explain why the boundaries exist and point to the owning modules' in-source rationale. Public Rust types, fields and methods have API documentation; all four library crates warn on missing public documentation. When revisiting a design choice, update its rationale and consequences alongside the code.
+Start with the [source architecture and maintenance guide](architecture.md) for module responsibilities, host boundaries and lifecycle contracts. Its [design decisions and tradeoffs](architecture.md#design-decisions-and-tradeoffs) explain why the boundaries exist and point to the owning modules' in-source rationale. Public Rust types, fields and methods have API documentation; all six library crates warn on missing public documentation. When revisiting a design choice, update its rationale and consequences alongside the code.
 
 Build the public documentation with `scripts/uvx.sh --from mkdocs==1.6.1 mkdocs build --strict`. Repository-relative links to files outside `docs/` must also be exported or rewritten in `scripts/docs_hook.py`; file existence alone does not make them part of the published site.
 
@@ -13,11 +13,28 @@ cargo clippy --workspace --all-targets -- -D warnings
 RODE_TEST_RUFF=/path/to/ruff cargo test --workspace --all-targets
 ```
 
-Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_agent_core/index.html` for agent protocols, `target/doc/rode_runtime_core/index.html` for notebook/debugger controllers, and `target/doc/rode_session/index.html` for the native host service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
+Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_host_core/index.html` for shared headless services, `target/doc/rode_host_protocol/index.html` for wire contracts, `target/doc/rode_agent_core/index.html` for agent protocols, `target/doc/rode_runtime_core/index.html` for notebook/debugger controllers, and `target/doc/rode_session/index.html` for the native gateway and persistent service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
 
-The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; Python helper docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
+The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; Python feature-adapter docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
 
 Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
+
+## Native SSH validation
+
+Build the headless helper independently of desktop dependencies, then test it explicitly:
+
+```sh
+cargo build -p rode-session --features standalone --bin rode-sessiond-standalone --release
+export RODE_HOST_HELPER="$PWD/target/release/rode-sessiond-standalone"
+export RODE_TEST_SESSION_HELPER="$RODE_HOST_HELPER"
+RODE_TEST_REQUIRE_SANDBOX=1 RODE_TEST_REQUIRE_LANDLOCK=1 cargo test --test native_host
+bash scripts/test-ssh.sh
+RODE_SSH_TEST_NO_PYTHON=1 RODE_SSH_TEST_FILTER=native_generic_operations bash scripts/test-ssh.sh
+```
+
+Use the static helper from `scripts/build-sessiond.sh` for the release/platform matrix. Set the real-tool fixture variables documented below for Jupyter/debugger integration; an optional-tool skip is not coverage of that feature. The no-Python fixture removes Python from its remote command path and exercises files, Git, native Landlock, mise process launches and persistent terminal creation through direct SSH and ProxyJump. `native_host` additionally checks protocol rejection, concurrent replies, revisions, connection identity, sandbox denial, EOF cancellation, runtime-cache integrity and the compute-launch boundary with a fake scheduler. CI supplies the native helper for all remote suites.
+
+Shared embedded Python feature adapters and JSON policy/catalogue data live in `crates/rode-host-core/src/`. Ruff checks the whole repository, including these files. Keep a single canonical source for assets shared by desktop and helper.
 
 ## CI tiers and timings
 
@@ -33,9 +50,9 @@ Fast UI checks run in four isolated jobs: `workspace`, `agents`, `terminals` and
 
 `scripts/ci.py` owns the suite manifest and PR selection. Changes under `src/`, `crates/`, `tests/` or `.github/`, Cargo changes, and shared harness changes select every extended job. Individual UI-script changes select their associated extended jobs; documentation-only PRs keep the fast checks. Add the **full-ci** PR label to force the complete extended tier. **Run workflow → full** also includes release packaging; disabling full runs only the fast tier. The nightly check runs at 03:23 UTC. The existing required **linux** check aggregates the fast jobs and reports independently of extended results. Repositories that require extended coverage before merging should also require the corresponding extended checks in branch protection.
 
-The sandbox job adjusts the unprivileged-user-namespace AppArmor setting only on its disposable GitHub runner. `RODE_TEST_REQUIRE_SANDBOX=1` requires both Rust and Python project preparation to activate the real sandbox; unavailable sandboxing fails that job. Ordinary jobs retain explicit fallback coverage and print unavailable-host diagnostics.
+The sandbox job adjusts the unprivileged-user-namespace AppArmor setting only on its disposable GitHub runner. `RODE_TEST_REQUIRE_SANDBOX=1` requires both desktop and headless project preparation to activate the real sandbox; unavailable sandboxing fails that job. Ordinary jobs retain explicit fallback coverage and print unavailable-host diagnostics.
 
-The same suite includes `landlock`. On a host with Landlock ABI 6, run `RODE_TEST_REQUIRE_LANDLOCK=1 cargo test --test landlock --test agents --test sessions` to require actual enforcement. Ordinary CI still supports older kernels and reports Landlock availability skips. `RODE_TEST_REQUIRE_LANDLOCK=1 RODE_SSH_TEST_FILTER=landlock_file bash scripts/test-ssh.sh` checks the real direct/ProxyJump path. Direct Python-peer tests compress their code argument through `tests/support/python.rs` to avoid Linux's per-argument size limit; production streams helper source through stdin.
+The same suite includes `landlock`. On a host with Landlock ABI 6, run `RODE_TEST_REQUIRE_LANDLOCK=1 cargo test --test landlock --test agents --test sessions` to require actual enforcement. Ordinary CI still supports older kernels and reports Landlock availability skips. `RODE_TEST_REQUIRE_LANDLOCK=1 RODE_SSH_TEST_FILTER=landlock_file bash scripts/test-ssh.sh` checks the real direct/ProxyJump path. Direct helper tests use `tests/support/native.rs` to exercise the same services through a separate headless process.
 
 Every test command has a deadline and writes its log and elapsed time under `target/ci-results/<suite>/`. Timings also appear in the Actions job summary. Long console output retains both the beginning and end, so SSH daemon chatter cannot hide an earlier test assertion; the artifact retains the complete log. Job limits bound setup/build hangs; failure logs and screenshots are uploaded even after test failures, with separate artifact names per job. Tests are not automatically retried. Use the recorded timings to rebalance jobs before tightening budgets; a sub-ten-minute fast tier is a target, not an assumed runner speed.
 
@@ -137,7 +154,7 @@ After regeneration, check all three files visually, use `ffprobe` to check durat
 
 ## Concurrent processes
 
-`cargo test --test persistence --test concurrency` starts real subprocesses to exercise field-level preference/profile merging, external configuration edits, malformed-file preservation, lock release after a killed writer, private GUI snapshots, parallel sandboxed helpers with identical namespace PIDs, concurrent environment creation, and simultaneous local/Python-peer document saves. Existing-file checks force writers to wait on the same inode, then verify that only one buffer based on the old revision can win. Save As tests verify atomic creation without overwriting another writer. Native two-window screenshots/logs go to `target/multiprocess-ui/`.
+`cargo test --test persistence --test concurrency` starts real subprocesses to exercise field-level preference/profile merging, external configuration edits, malformed-file preservation, lock release after a killed writer, private GUI snapshots, parallel sandboxed helpers with identical namespace PIDs, concurrent environment creation, and simultaneous desktop/headless document saves. Existing-file checks force writers to wait on the same inode, then verify that only one buffer based on the old revision can win. Save As tests verify atomic creation without overwriting another writer. Native two-window screenshots/logs go to `target/multiprocess-ui/`.
 
 The SSH fixture also opens two independent masters for the same alias and checks that closing one preserves the other. The project UI check (`RODE_SSH_UI=1`) exercises banner/palette disconnect, compact connection controls, dirty buffers across reconnect, local file/folder access after explicit and unexpected disconnect, and persistent versus nonpersistent terminal lifetime. Library tests also cover failed logins, stale replies, disconnected Save As and prevention of remote/local path rebinding. See [configuration and multiple windows](configuration.md) for supported filesystem behavior and limitations.
 
@@ -145,11 +162,11 @@ The SSH fixture also opens two independent masters for the same alias and checks
 
 ## Security checks
 
-`cargo test --test security --test files --test sandbox --test persistence --test concurrency` checks special-file rejection with subprocess deadlines, canonical home grant restrictions, controlling-terminal isolation under a real PTY, local/Python parity, protected saves and shared configuration. Run `cargo test --test sessions --test agents --test debugger` for process lifecycle checks, and `scripts/test-ssh.sh` for direct/ProxyJump transport and sandbox integration. With an installed cargo-audit, `cargo audit --file Cargo.lock` checks the current advisory database. The [security review](security.md) records reproduced findings, fixes, maintenance warnings and the scope of the audit.
+`cargo test --test security --test files --test sandbox --test persistence --test concurrency` checks special-file rejection with subprocess deadlines, canonical home grant restrictions, controlling-terminal isolation under a real PTY, desktop/headless contract parity, protected saves and shared configuration. Run `cargo test --test sessions --test agents --test debugger` for process lifecycle checks, and `scripts/test-ssh.sh` for direct/ProxyJump transport and sandbox integration. With an installed cargo-audit, `cargo audit --file Cargo.lock` checks the current advisory database. The [security review](security.md) records reproduced findings, fixes, maintenance warnings and the scope of the audit.
 
 ## Image checks
 
-`cargo test --test images` checks all supported codecs, alpha and EXIF orientation, GPU downsampling, corrupt/oversized input rejection, local/Python binary-protocol parity, and actual sandbox access. Library tests cover shared pixel-budget release, stale reloads, and read-only save commands. The direct/ProxyJump SSH fixture also transfers and decodes images under the active project policy. `scripts/test-images-ui.py` checks rendered PNG pixels, zoom, JPEG tabs, reload, both themes, compact layout, read-only saves, and preservation of dirty text. It can run locally on its own, or with `RODE_IMAGES_UI=1` in the SSH fixture. Screenshots/logs go to `target/images-ui/`.
+`cargo test --test images` checks all supported codecs, alpha and EXIF orientation, GPU downsampling, corrupt/oversized input rejection, desktop/headless binary-protocol parity, and actual sandbox access. Library tests cover shared pixel-budget release, stale reloads, and read-only save commands. The direct/ProxyJump SSH fixture also transfers and decodes images under the active project policy. `scripts/test-images-ui.py` checks rendered PNG pixels, zoom, JPEG tabs, reload, both themes, compact layout, read-only saves, and preservation of dirty text. It can run locally on its own, or with `RODE_IMAGES_UI=1` in the SSH fixture. Screenshots/logs go to `target/images-ui/`.
 
 ## Markdown checks
 
@@ -207,7 +224,7 @@ scripts/uvx.sh ruff@0.17.3 check .
 scripts/uvx.sh ruff@0.17.3 format --check .
 ```
 
-Python helpers require only the standard library. Their source files are concatenated by Rust into one SSH program; keep their wire format and local/remote behavior aligned. The repository Ruff configuration covers the helpers, test harness, and documentation hook.
+Only interpreter inspection and the Jupyter bridge use Python adapters. The Jupyter bridge requires the installed packages documented in the notebook guide. Ruff covers these adapters, the test harness and documentation hook.
 
 ## Documentation
 
@@ -230,7 +247,7 @@ Linux is validated; the automated SSH daemon fixture does not cover every authen
 
 ## Language tools checks
 
-`cargo test --test languages --test project` checks filename/grammar coverage, colored Go/Python/TS/TSX/TOML/Dockerfile tokens across themes, Unicode issue columns, stdin formatting and source preservation, and active sandbox enforcement. Real Go/clang-format checks run when those tools are on PATH. Set `RODE_TEST_PRETTIER` to an installed Prettier executable and `RODE_TEST_RUFF` for their real local/Python-peer parity checks. The SSH fixture also checks installed project-local formatter selection and syntax diagnostics in both direct and ProxyJump sandboxed sessions.
+`cargo test --test languages --test project` checks filename/grammar coverage, colored Go/Python/TS/TSX/TOML/Dockerfile tokens across themes, Unicode issue columns, stdin formatting and source preservation, and active sandbox enforcement. Real Go/clang-format checks run when those tools are on PATH. Set `RODE_TEST_PRETTIER` to an installed Prettier executable and `RODE_TEST_RUFF` for their real desktop/headless parity checks. The SSH fixture also checks installed project-local formatter selection and syntax diagnostics in both direct and ProxyJump sandboxed sessions.
 
 With Go on PATH and `RODE_TEST_PRETTIER` set, run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-languages-ui.py` for actual Go format/run/build, TypeScript formatting/Problems, and saves after syntax errors. Screenshots/logs and `toolchain.json` go to `target/languages-ui/`. The standard-library-only Go fixture declares its actual minimum (Go 1.16), disables toolchain/module downloads and uses private caches; shell startup and user Go configuration cannot redirect its tools. CI installs Go, clang-format, shfmt and a pinned test Prettier; the application itself never installs those tools.
 
@@ -248,7 +265,7 @@ For native local and SSH viewing: `RODE_TEST_BINARY="$PWD/target/release/rode" R
 
 ## Native terminals and Slurm
 
-`cargo test --test sessions --test slurm` exercises native PTY persistence after views exit, in-place persistence changes shared across views, last-view cleanup for nonpersistent sessions, two simultaneous views sharing input/output, per-session cleanup, concurrent service creation, fresh caller environments, login-startup activation without reactivation on attach, and real bwrap lifetime/access checks. The native supervisor keeps bwrap's spawning thread alive; closing the request channel must not trigger `--die-with-parent`. Slurm tests use fake queue/cancel executables to check TRES counts, pending/unknown resources, local/Python-peer parity, exact allocation IDs, UID filtering, and removal of inherited cancellation overrides. They never allocate or cancel real jobs.
+`cargo test --test sessions --test slurm` exercises native PTY persistence after views exit, in-place persistence changes shared across views, last-view cleanup for nonpersistent sessions, two simultaneous views sharing input/output, per-session cleanup, concurrent service creation, fresh caller environments, login-startup activation without reactivation on attach, and real bwrap lifetime/access checks. The native supervisor keeps bwrap's spawning thread alive; closing the request channel must not trigger `--die-with-parent`. Slurm tests use fake queue/cancel executables to check TRES counts, pending/unknown resources, desktop/headless parity, exact allocation IDs, UID filtering, and removal of inherited cancellation overrides. They never allocate or cancel real jobs.
 
 The interactive Slurm fixture additionally waits for an explicit grant, starts a real PTY shell with scheduler/GPU environment variables, preserves allocation metadata across rename/shared reattachment, and cancels the exact owned fixture job. Command tests check literal quoting, H/H:MM and GB conversion, bounds, and refusal to fall back when the compute sandbox fails. `RODE_SSH_TEST_FILTER=interactive_slurm scripts/test-ssh.sh` narrows the isolated SSH run to allocated shells with and without a sandbox, directly and through ProxyJump. The complete SSH run includes these cases too.
 
@@ -288,7 +305,7 @@ Run `RODE_TEST_JUPYTER=/absolute/interpreter RODE_TEST_BINARY="$PWD/target/relea
 
 ## Marp checks
 
-`cargo test --test marp` exercises snapshots, preserved source, export conflicts/atomic replacement and symlink protection, conversion limits, native/Python coordinator cancellation (including a detached browser-shaped child), and read-only bwrap preview without project writes. `cargo test --lib marp_view` checks source saves, dirty guards, cached previews and independent export errors; native UI tests cover focus and interaction. Full Rust checks include the existing Markdown/PDF tests after their shared-view refactoring.
+`cargo test --test marp` exercises snapshots, preserved source, export conflicts/atomic replacement and symlink protection, conversion limits, desktop/headless coordinator cancellation (including a detached browser-shaped child), and read-only bwrap preview without project writes. `cargo test --lib marp_view` checks source saves, dirty guards, cached previews and independent export errors; native UI tests cover focus and interaction. Full Rust checks include the existing Markdown/PDF tests after their shared-view refactoring.
 
 For real conversion, install the test CLI into an ignored development directory and point the tests at an installed browser:
 
@@ -311,7 +328,7 @@ Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x
 
 ## Encrypted-project checks
 
-`cargo test --lib --test vaults` checks mount identity, leases, underlying mountpoint protection, initialization refusal for existing plaintext, buffer/exit protection, deferred cleanup, operation draining and password handling on native/Python peers. A Python component test uses real host file locks with a mock unmount to check atomic shared-close release without FUSE. With installed gocryptfs it also initializes a real encrypted configuration and rejects an incorrect password. If working FUSE is available, the same test performs real encrypted writes, shared-window refusal, release and locking; `/dev/fuse` is absent in the current development environment, so that mount round trip could not be validated here. CI installs gocryptfs/FUSE tools; actual kernel mount availability still depends on the runner.
+`cargo test --lib --test vaults` checks mount identity, leases, underlying mountpoint protection, initialization refusal for existing plaintext, buffer/exit protection, deferred cleanup, operation draining and password handling through desktop and headless Rust helpers. Native component tests also check shared view locks without FUSE. With installed gocryptfs it also initializes a real encrypted configuration and rejects an incorrect password. If working FUSE is available, the same test performs real encrypted writes, shared-window refusal, release and locking; `/dev/fuse` is absent in the current development environment, so that mount round trip could not be validated here. CI installs gocryptfs/FUSE tools; actual kernel mount availability still depends on the runner.
 
 FUSE access does not guarantee permission to inspect other same-account mount namespaces. In that specific case, the real-mount test requires an explicitly unlocked refusal and readable mounted content, then stops its own lease peers and normally unmounts only its fixture. Other close failures still fail the test, with both protocol replies included in the assertion. The FUSE-independent component check verifies that namespace-verification refusal retains the final view lease and that locking succeeds after the restriction is removed; the application's namespace checks remain required.
 

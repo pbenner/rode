@@ -1,6 +1,146 @@
 //! Editor lifecycle, document and appearance regressions.
 
 use super::*;
+use std::collections::BTreeMap;
+
+#[test]
+fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
+    let file = tempfile::Builder::new()
+        .prefix(".rode-startup-")
+        .suffix(".txt")
+        .tempfile_in(files::expand_home("~"))
+        .unwrap();
+    std::fs::write(file.path(), "standalone contents\n").unwrap();
+    let path = file.path().canonicalize().unwrap();
+    let ctx = egui::Context::default();
+    let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let defaults = sandbox::Options {
+        enabled: true,
+        ..Default::default()
+    };
+    let mut storage = MemoryStorage::default();
+    storage.0.insert(
+        "sandbox_defaults".into(),
+        serde_json::to_string(&defaults).unwrap(),
+    );
+    cc.storage = Some(&storage);
+    let mut app = EditorApp::new(
+        &cc,
+        Startup {
+            local: Some(path.clone()),
+            ..Default::default()
+        },
+    );
+    // A late startup result must not discard a buffer edited while it was loading.
+    app.new_file();
+    app.documents[0].text = "keep these edits".into();
+    app.documents[0].modified = true;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.preparing || !app.opening.is_empty() {
+        app.poll(&ctx);
+        assert!(
+            Instant::now() < deadline,
+            "Startup stalled: {:?}",
+            app.notice
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.documents.len(), 2, "{:?}", app.notice);
+    assert_eq!(app.documents[0].text, "keep these edits");
+    assert!(app.documents[0].dirty());
+    assert!(app.workspace.is_none() && !app.project_ready());
+    assert!(app.terminal.is_none() && app.directories.is_empty());
+    assert_eq!(app.sandbox_defaults, defaults);
+    assert!(app.sandbox_policies_for_host(false).is_empty());
+    let doc = &mut app.documents[app.active];
+    assert_eq!(doc.path.as_deref(), path.to_str());
+    assert_eq!(doc.text, "standalone contents\n");
+    doc.text.push_str("edited\n");
+    doc.modified = true;
+    doc.edit_version += 1;
+    app.save_active(&ctx, false);
+    while app.documents[app.active].saving {
+        app.poll(&ctx);
+        assert!(Instant::now() < deadline, "Save stalled: {:?}", app.notice);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "standalone contents\nedited\n"
+    );
+    assert!(!app.documents[app.active].dirty());
+    // Standalone writes still enforce revision checks against external edits.
+    std::fs::write(&path, "external change\n").unwrap();
+    app.documents[app.active].text.push_str("unsaved edit\n");
+    app.documents[app.active].modified = true;
+    app.documents[app.active].edit_version += 1;
+    app.save_active(&ctx, false);
+    while app.documents[app.active].saving {
+        app.poll(&ctx);
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change\n");
+    assert!(app.documents[app.active].dirty());
+    let _ = ctx.run(Default::default(), |ctx| app.workspace_banner(ctx));
+    assert!(app.last_window_title.ends_with("[File mode]"));
+}
+
+#[test]
+fn startup_file_mode_never_overrides_explicit_policies_or_directory_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let file = home.join("notes λ.txt");
+    let project_file = project.join("notes.txt");
+    std::fs::write(&file, "home").unwrap();
+    std::fs::write(&project_file, "project").unwrap();
+    let alias = directory.path().join("home-alias");
+    std::os::unix::fs::symlink(&home, &alias).unwrap();
+    for (input, force, saved, standalone) in [
+        (file.clone(), false, false, true),
+        (alias.join("notes λ.txt"), false, false, true),
+        (file.clone(), true, false, false),
+        (file.clone(), false, true, false),
+        (home.clone(), false, false, false),
+        (project_file, false, false, false),
+    ] {
+        let options = sandbox::Options {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut request = Request::Prepare {
+            path: input.to_string_lossy().into_owned(),
+            sandbox: Default::default(),
+        };
+        let mut job = Job::Prepare {
+            remote: false,
+            options: options.clone(),
+            keep_buffers: false,
+            token: 7,
+            documents_at_start: vec![],
+            restore_saved: Some(force),
+            open_file: None,
+        };
+        let policies = if saved {
+            BTreeMap::from([(
+                home.canonicalize().unwrap().to_string_lossy().into_owned(),
+                options,
+            )])
+        } else {
+            BTreeMap::new()
+        };
+        workers::resolve_startup_path(&mut request, &mut job, &policies, &alias).unwrap();
+        assert_eq!(
+            matches!(job, Job::StandaloneFile { token: 7, .. }),
+            standalone,
+            "{input:?}, force={force}, saved={saved}"
+        );
+    }
+    // An unresolvable HOME is an error, not a reason to drop the requested policy.
+    assert!(sandbox::project_root_contains_home(&home, &directory.path().join("missing")).is_err());
+}
 
 #[test]
 fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {

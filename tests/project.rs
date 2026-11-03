@@ -1,8 +1,9 @@
-//! Project-host Git, environment, code-tool and telemetry protocols with bounded native/Python
+//! Project-host Git, environment, code-tool and telemetry protocols with bounded desktop/headless
 //! behavior.
 
-#[path = "support/python.rs"]
-mod python_peer;
+use rode::sandbox::PlanExt as _;
+#[path = "support/native.rs"]
+mod native_peer;
 
 use rode::{
     files,
@@ -18,8 +19,7 @@ use std::{
 };
 
 fn remote(request: &Request) -> anyhow::Result<Response> {
-    let mut child = Command::new("python3")
-        .args(["-c", &python_peer::source(files::REMOTE_HELPER)])
+    let mut child = native_peer::command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -70,86 +70,19 @@ fn command_start_waits_for_a_brief_executable_writer_without_repeating_started_w
                 .success()
         );
     });
-    let source = format!(
-        "{}\n{}",
-        include_str!("../src/remote_environment.py"),
-        r#"
-import shutil, tempfile
-with tempfile.TemporaryDirectory() as directory:
-    executable = os.path.join(directory, 'fresh-program')
-    shutil.copy2('/usr/bin/true', executable)
-    writer = open(executable, 'r+b')
-    try:
-        subprocess.Popen([executable])
-        raise AssertionError('Expected a busy executable')
-    except OSError as error:
-        assert error.errno == errno.ETXTBSY
-    def release():
-        time.sleep(0.05)
-        writer.close()
-    thread = threading.Thread(target=release)
-    thread.start()
-    output = project_run([executable], timeout=3)
-    thread.join()
-    assert output['code'] == 0, output
-"#
-    );
-    assert!(
-        project::run(
-            {
-                let mut command = Command::new("python3");
-                command.args(["-c", &source]);
-                command
-            },
-            vec![],
-            Duration::from_secs(5)
-        )
-        .unwrap()
-        .success()
-    );
 }
 
 #[test]
-fn python_command_runner_tolerates_a_child_exiting_before_stdin_is_flushed() {
-    let script = format!(
-        "{}\n{}",
-        include_str!("../src/remote_environment.py"),
-        r#"
-import sys
-
-start_process = subprocess.Popen
-
-def already_exited(*args, **kwargs):
-    process = start_process(*args, **kwargs)
-    # Force the valid scheduling order where the child exits before its writer runs.
-    process.wait(timeout=5)
-    return process
-
-subprocess.Popen = already_exited
-errors = []
-threading.excepthook = lambda args: errors.append(str(args.exc_value))
-for text in ("buffered input", "x" * (1024 * 1024)):
-    output = project_run([sys.executable, "-c", "raise SystemExit(0)"], text=text)
-    for thread in threading.enumerate():
-        if thread is not threading.current_thread():
-            thread.join(timeout=2)
-    assert output == dict(code=0, stdout="", stderr=""), output
-    assert not errors, errors
-"#
-    );
-    let output = Command::new("python3")
-        .args(["-c", &script])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn command_runner_tolerates_a_child_exiting_before_stdin_is_flushed() {
+    for input in [b"buffered input".to_vec(), vec![b'x'; 1024 * 1024]] {
+        let output =
+            project::run(Command::new("/usr/bin/true"), input, Duration::from_secs(5)).unwrap();
+        assert!(output.success(), "{}", output.stderr);
+    }
 }
 
 #[test]
-fn runtime_overrides_and_literal_variables_match_on_native_and_python_hosts() {
+fn runtime_overrides_and_literal_variables_match_on_desktop_and_headless_hosts() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let program = root.path().join("runtime tool 'quoted'");
@@ -633,7 +566,7 @@ fn project_local_formatter_obeys_sandbox_grants() {
     // A deterministic installed formatter that tries to read outside the project.
     fs::write(&tool, format!("#!/usr/bin/python3\nimport sys,os\nassert not os.path.exists({:?})\nsys.stdout.write(sys.stdin.read())\n",outside.to_str().unwrap())).unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-    let plan = sandbox::prepare(
+    let plan = native_peer::prepare(
         root.to_str().unwrap(),
         &sandbox::Options {
             enabled: true,
@@ -693,7 +626,7 @@ fn shell_formatter_preserves_invalid_buffers_and_reports_positions() {
 }
 
 #[test]
-fn installed_kernel_discovery_matches_on_native_and_python_hosts_without_starting_kernels() {
+fn installed_kernel_discovery_matches_on_desktop_and_headless_hosts_without_starting_kernels() {
     let directory = tempfile::tempdir().unwrap();
     let package = directory.path().join("jupyter_client");
     fs::create_dir(&package).unwrap();
