@@ -13,7 +13,6 @@ pub(super) struct Running {
     items: Vec<Info>,
     pending: Option<mpsc::Receiver<Result<rode_session::Response, String>>>,
     pub(super) mutating: bool,
-    ready: bool,
     last: Option<Instant>,
     error: String,
     confirm: Option<Info>,
@@ -77,7 +76,6 @@ impl EditorApp {
             return;
         }
         let launch = self.agent_launch();
-        let upload = !self.agents.running.ready;
         self.agents.running.mutating = end.is_some();
         if end.is_some() {
             self.agents.running.error.clear();
@@ -93,7 +91,7 @@ impl EditorApp {
         self.agents.running.last = Some(Instant::now());
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = agent::background::request(&launch, request, upload)
+            let result = agent::background::request(&launch, request)
                 .map(|reply| reply.response)
                 .map_err(|error| format!("{error:#}"));
             let _ = sender.send(result);
@@ -125,7 +123,6 @@ impl EditorApp {
                         .filter(|info| !info.history_browser)
                         .collect();
                     self.agents.running.error.clear();
-                    self.agents.running.ready = true;
                 }
                 Ok(rode_session::Response::Ok) => {
                     self.agents.running.last = None;

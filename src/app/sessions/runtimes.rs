@@ -12,7 +12,6 @@ pub(super) struct Browser {
     confirm: Option<ending::Request>,
     endings: Option<ending::Queue>,
     attaching: Option<Info>,
-    helper_ready: bool,
     document: Option<String>,
     debugger: bool,
 }
@@ -51,13 +50,11 @@ impl EditorApp {
         self.sessions.runtimes.pending = Some(rx);
         self.sessions.runtimes.last = Some(Instant::now());
         let wake = ctx.clone();
-        let upload = !self.sessions.runtimes.helper_ready;
         std::thread::spawn(move || {
             let request = rode_session::Request::Runtimes;
-            let result =
-                crate::runtime::request_with_upload(&plan, remote.as_ref(), request, upload)
-                    .map(|r| r.response)
-                    .map_err(|e| format!("{e:#}"));
+            let result = crate::runtime::request(&plan, remote.as_ref(), request)
+                .map(|r| r.response)
+                .map_err(|e| format!("{e:#}"));
             let _ = tx.send(result);
             wake.request_repaint();
         });
@@ -87,7 +84,6 @@ impl EditorApp {
             self.sessions.runtimes.pending = None;
             match result {
                 Ok(rode_session::Response::Runtimes(items)) => {
-                    self.sessions.runtimes.helper_ready = true;
                     self.sessions.runtimes.items = items;
                     self.sessions.runtimes.error.clear();
                     if std::mem::take(&mut self.sessions.runtimes.debugger) {

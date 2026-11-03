@@ -23,6 +23,7 @@ ssh-keygen -q -t ed25519 -N '' -f "$test_dir/client"
 test_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 test_user=$(id -un)
 test_path=$PATH
+test_shell_export=
 if [[ "${RODE_SSH_TEST_NO_PYTHON:-0}" == 1 ]]; then
     mkdir -m 700 "$test_dir/native-path"
     for program in sh uname id stat sha256sum wc head mktemp ln chmod cut mkdir rm rmdir git bwrap true env; do
@@ -30,12 +31,25 @@ if [[ "${RODE_SSH_TEST_NO_PYTHON:-0}" == 1 ]]; then
         if [[ "$program_path" == /* ]]; then ln -s "$program_path" "$test_dir/native-path/$program"; fi
     done
     test_path="$test_dir/native-path"
+    # Login profiles belong to the machine, not this fixture, and can invoke
+    # Python or consume terminal input. Use a private interactive shell with no
+    # profile loading; the Rust sandbox fixture grants this exact script read-only.
+    test_shell="$test_dir/project-shell"
+    cat > "$test_shell" <<'EOF'
+#!/bin/sh
+unset ENV
+exec /bin/sh -i
+EOF
+    chmod 700 "$test_shell"
+    export RODE_TEST_PROJECT_SHELL="$test_shell"
+    test_shell_export="export SHELL='$test_shell'"
 fi
 cat > "$test_dir/host-shell" <<EOF
 #!/bin/sh
 # Apply the fixture home after the account's initial shell startup files.
 export HOME='$test_dir/home'
 export PATH='$test_path'
+$test_shell_export
 if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then
     exec /bin/sh -c "\$SSH_ORIGINAL_COMMAND"
 fi

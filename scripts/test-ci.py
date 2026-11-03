@@ -316,6 +316,49 @@ class SshFixtureTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("transport ran\nUI ran", result.stdout)
+            normal_shell_probe = [
+                sys.executable,
+                "-c",
+                "import os,subprocess\nfrom pathlib import Path\n"
+                "host=Path(os.environ['RODE_TEST_SSH_CONFIG']).with_name('host-shell')\n"
+                'expected="/fixture/shell with \' quote"\n'
+                'env=dict(os.environ,SHELL=expected,SSH_ORIGINAL_COMMAND="printf \'%s\' \\"$SHELL\\"")\n'
+                "result=subprocess.run([host],env=env,text=True,capture_output=True)\n"
+                "assert result.returncode == 0, result.stderr\n"
+                "assert result.stdout == expected, result.stdout\n",
+            ]
+            result = subprocess.run(
+                command + normal_shell_probe,
+                env=environment | {"RODE_SSH_RUN_TRANSPORT": "0"},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            profile = base / "must-not-source"
+            profile.write_text("exit 88\n")
+            shell_probe = [
+                sys.executable,
+                "-c",
+                "import os,subprocess\n"
+                "shell=os.environ['RODE_TEST_PROJECT_SHELL']\n"
+                "result=subprocess.run([shell,'-l'],input='echo FIXTURE_SHELL_OK; exit'+chr(10),text=True,capture_output=True)\n"
+                "assert result.returncode == 0, result.stderr\n"
+                "assert 'FIXTURE_SHELL_OK' in result.stdout, result.stdout\n",
+            ]
+            result = subprocess.run(
+                command + shell_probe,
+                env=environment
+                | {
+                    "RODE_SSH_RUN_TRANSPORT": "0",
+                    "RODE_SSH_TEST_NO_PYTHON": "1",
+                    "ENV": str(profile),
+                },
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Maximum UTF-8 source bytes in one kernel execution, shared by desktop and service clients.
+pub const MAX_CODE: usize = 128 * 1024;
+
 /// One versioned cell execution snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
@@ -143,7 +146,7 @@ impl Kernel {
             "Too many queued cells."
         );
         ensure!(
-            runs.iter().all(|r| r.code.len() <= 128 * 1024),
+            runs.iter().all(|r| r.code.len() <= MAX_CODE),
             "Code cells are limited to 128 KiB per execution."
         );
         self.queue = runs.into();

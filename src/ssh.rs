@@ -164,18 +164,6 @@ pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Build a login-shell command rooted at the supplied remote directory.
-pub fn remote_shell(root: &str) -> String {
-    let root = if root == "~" {
-        "\"$HOME\"".into()
-    } else if let Some(rest) = root.strip_prefix("~/") {
-        format!("\"$HOME\"/{}", quote(rest))
-    } else {
-        quote(root)
-    };
-    format!("cd -- {root} && exec \"${{SHELL:-/bin/sh}}\" -l")
-}
-
 impl Remote {
     /// Allocate a private connection runtime after validating the profile; authentication
     /// starts separately. Unknown fields from older saved profiles are ignored.

@@ -51,6 +51,16 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
 | `tests/`, `tests/fixtures/`, `scripts/test-*.py` | Service integration tests, deterministic peers and isolated native UI checks |
 
+## Migration boundaries
+
+The native gateway in `src/host/native.rs` selects, verifies and deploys one helper per SSH connection. Terminal, agent and runtime requests reuse that connection; they do not rediscover binaries, track upload-ready flags or send replacement executables. The session request's optional `helper` wire field remains for older clients and compatibility fixtures. The gateway checks its identity against the already selected helper and refuses replacement. New desktop callers use `None`.
+
+Retain compatibility paths when they protect live work or saved user data: session protocol generations route to existing services without restarting jobs; the version-1 fixture exercises old terminals; saved SSH profiles ignore removed backend fields; ACP's legacy mode selector supports agents without modern configuration controls. These paths have callers and regression coverage. An unused launcher or a function that only returns a constant is not a substitute for such a contract: remove its callers and obsolete state together.
+
+`environment_probe.py` and `notebook_kernel.py` remain active language-specific adapters. They inspect Python installations and integrate with Jupyter respectively. They are not remnants of the removed general Python host backend. Direct agent/notebook/DAP library clients also remain supported alongside GUI-managed controllers and are exercised by integration tests.
+
+Runtime command validation belongs to `rode_runtime_core::service::Spec::validate_command` and runs before host executable resolution as well as controller creation. The per-execution notebook source limit lives in `rode_runtime_core::notebook::MAX_CODE`, re-exported by the desktop model, so moving execution into the service cannot leave a stale desktop-only limit.
+
 ## Design decisions and tradeoffs
 
 The choices below explain the current implementation. Module-level rustdoc records ownership and local constraints; the main service modules also include **Design decisions** sections beside the code they constrain. The sections below describe consequences as well as benefits; they are not a list of proposed features.
@@ -140,6 +150,8 @@ Normal unmount must succeed after jobs/other references stop. Lazy unmount could
 Paths are interpreted on the host captured for an operation. For an SSH workspace, `localhost` in agent settings also means the remote host. Avoid using a desktop filesystem lookup to resolve a remote source or executable.
 
 The SSH master owns interactive authentication and its private ControlMaster socket. Slave channels use that socket with fresh-login fallback disabled. Losing a connection invalidates its workspace; retained documents become unbound recovery buffers. Only an explicit same-host/project reconnect restores their bindings. Local Save As creates a separate copy.
+
+Native terminal attachments can receive shell diagnostics before the first binary frame because OpenSSH's stderr shares the view's PTY. `src/terminal/framing.rs` publishes complete diagnostic lines while waiting, with a total prelude limit of 64 KiB, and then switches to strict frame decoding. Startup failure text remains visible when no frame arrives. This tolerance applies to terminal attachments only: the native host RPC channel still requires its exact handshake and silent stdout.
 
 Sandbox options express requested access; `Plan::active` records whether the complete host probe succeeded. Active plans prefix project file/tool/agent/debugger/kernel execution. A failed active operation stays failed. Project-folder discovery intentionally reads the selected host so another project can be chosen; ordinary file/hex/Save As browsing uses the current project plan. Monitoring intentionally samples read-only host counters outside the project sandbox. Encrypted-mount management is a separate host-filesystem operation before a decrypted project can be prepared.
 

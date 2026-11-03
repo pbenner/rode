@@ -176,7 +176,7 @@ fn unicode_find_offsets_are_valid_and_non_overlapping() {
 
 #[test]
 fn ssh_arguments_and_shell_paths_do_not_inject_commands() {
-    use rode::ssh::{Profile, quote, remote_shell};
+    use rode::ssh::{Profile, quote};
     let profile = Profile {
         host: "workstation".into(),
         user: "researcher".into(),
@@ -218,10 +218,6 @@ fn ssh_arguments_and_shell_paths_do_not_inject_commands() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8(output.stdout).unwrap(), value);
-    assert_eq!(
-        remote_shell("~/a b"),
-        "cd -- \"$HOME\"/'a b' && exec \"${SHELL:-/bin/sh}\" -l"
-    );
 }
 
 #[test]

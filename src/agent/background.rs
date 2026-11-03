@@ -15,11 +15,7 @@ use std::{
 };
 
 /// Local/SSH service operation using the same verified helper as native terminals.
-pub fn request(
-    launch: &Launch,
-    request: rode_session::Request,
-    upload: bool,
-) -> Result<service::Reply> {
+pub fn request(launch: &Launch, request: rode_session::Request) -> Result<service::Reply> {
     let operation = service::Operation::Agents {
         mise: launch.plan.environment.mise && !launch.config.files_only(),
         request: Box::new(request),
@@ -29,7 +25,7 @@ pub fn request(
             request: project::Request::Sessions {
                 root: launch.plan.root.clone(),
                 operation,
-                helper: service::remote_helper(remote, upload)?,
+                helper: None,
                 directory: std::env::var("RODE_SESSION_DIR").ok(),
             },
         })?;
@@ -141,7 +137,6 @@ impl Client {
                     rode_session::Request::CreateAgent {
                         spec: Box::new(spec),
                     },
-                    true,
                 )?;
                 let rode_session::Response::Agent(info) = &reply.response else {
                     anyhow::bail!("Unexpected background-agent creation reply");
@@ -154,7 +149,6 @@ impl Client {
                             id: id.clone(),
                             policy: info.policy.clone(),
                         },
-                        false,
                     )?;
                     anyhow::bail!("Agent start cancelled");
                 }
@@ -170,7 +164,6 @@ impl Client {
                         id,
                         policy: info.policy,
                     },
-                    false,
                 );
             }
             preparing.pending.store(false, Ordering::Release);
@@ -216,7 +209,7 @@ impl Client {
         client.ready = rx;
         let preparing = client.preparing.clone();
         std::thread::spawn(move || {
-            let result = request(&launch, rode_session::Request::Agents, true)
+            let result = request(&launch, rode_session::Request::Agents)
                 .map(|reply| (reply, info))
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(result);

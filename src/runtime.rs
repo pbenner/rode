@@ -17,15 +17,6 @@ pub fn request(
     remote: Option<&ssh::Remote>,
     request: rode_session::Request,
 ) -> Result<sessions::Reply> {
-    request_with_upload(plan, remote, request, true)
-}
-/// Reuse a previously verified helper without resending its executable payload.
-pub fn request_with_upload(
-    plan: &sandbox::Plan,
-    remote: Option<&ssh::Remote>,
-    request: rode_session::Request,
-    upload: bool,
-) -> Result<sessions::Reply> {
     let operation = sessions::Operation::Runtimes {
         mise: plan.environment.mise,
         request: Box::new(request),
@@ -35,7 +26,7 @@ pub fn request_with_upload(
             request: project::Request::Sessions {
                 root: plan.root.clone(),
                 operation,
-                helper: sessions::remote_helper(remote, upload)?,
+                helper: None,
                 directory: std::env::var("RODE_SESSION_DIR").ok(),
             },
         })?;
@@ -56,18 +47,17 @@ fn end_on_host(
     remote: Option<&ssh::Remote>,
     identity: &Identity,
 ) -> Result<()> {
-    request_with_upload(
+    request(
         plan,
         remote,
         rode_session::Request::EndRuntime {
             id: identity.id.clone(),
             policy: identity.policy.clone(),
         },
-        false,
     )?;
     let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        let reply = request_with_upload(plan, remote, rode_session::Request::Runtimes, false)?;
+        let reply = request(plan, remote, rode_session::Request::Runtimes)?;
         if let rode_session::Response::Runtimes(infos) = reply.response
             && infos.iter().all(|i| i.id != identity.id)
         {

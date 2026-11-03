@@ -134,18 +134,7 @@ impl Store {
             spec.policy.len() == 64 && spec.policy.bytes().all(|v| v.is_ascii_hexdigit()),
             "Invalid runtime policy fingerprint"
         );
-        ensure!(
-            !spec.argv.is_empty()
-                && spec.argv.len() <= 256
-                && spec.argv.iter().all(|v| !v.contains('\0'))
-                && spec.argv.iter().map(String::len).sum::<usize>() <= 256 * 1024,
-            "Runtime command exceeds its limit"
-        );
-        ensure!(
-            spec.prefix.len() <= 256
-                && spec.prefix.iter().map(String::len).sum::<usize>() <= 64 * 1024,
-            "Runtime sandbox command exceeds its limit"
-        );
+        spec.validate_command()?;
         ensure!(
             spec.env
                 .iter()

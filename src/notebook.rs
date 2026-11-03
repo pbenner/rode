@@ -25,8 +25,7 @@ pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CELLS: usize = 1024;
 /// Maximum source size per cell in bytes.
 pub const MAX_SOURCE: usize = 256 * 1024;
-/// Maximum code bytes in one execution request.
-pub const MAX_CODE: usize = 128 * 1024;
+pub use rode_runtime_core::notebook::MAX_CODE;
 /// Maximum retained outputs per code cell.
 pub const MAX_OUTPUTS: usize = 256;
 /// Maximum serialized outputs per cell in bytes.

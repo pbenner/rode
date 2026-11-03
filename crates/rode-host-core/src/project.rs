@@ -70,7 +70,9 @@ pub enum Request<S = serde_json::Value, H = serde_json::Value> {
         root: String,
         /// Session creation/discovery/mutation request.
         operation: S,
-        /// Optional checksum-verified native helper deployment payload.
+        /// Compatibility metadata from older clients. The native gateway checks
+        /// its identity against the connection's helper; it never deploys a
+        /// replacement from this field. Current clients use `None`.
         helper: Option<H>,
         /// Optional explicit remote service runtime directory.
         directory: Option<String>,

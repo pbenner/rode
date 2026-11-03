@@ -48,6 +48,31 @@ pub struct Spec {
     /// Notebook kernelspec, or debugger initialization payload.
     pub start: Start,
 }
+impl Spec {
+    /// Check the command before a host resolves `argv[0]` or the service reserves a
+    /// controller. Arguments stay literal; empty commands and NULs are invalid.
+    pub fn validate_command(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.argv.is_empty()
+                && !self.argv[0].is_empty()
+                && self.argv.len() <= 256
+                && self.argv.iter().all(|v| !v.contains('\0'))
+                && self.argv.iter().map(String::len).sum::<usize>() <= 256 * 1024,
+            "Runtime command is empty, invalid or exceeds its limit"
+        );
+        anyhow::ensure!(
+            self.prefix.len() <= 256
+                && self
+                    .prefix
+                    .first()
+                    .is_none_or(|program| !program.is_empty())
+                && self.prefix.iter().all(|v| !v.contains('\0'))
+                && self.prefix.iter().map(String::len).sum::<usize>() <= 64 * 1024,
+            "Runtime sandbox command is invalid or exceeds its limit"
+        );
+        Ok(())
+    }
+}
 /// Initial controller configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

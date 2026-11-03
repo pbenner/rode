@@ -72,14 +72,17 @@ pub enum Operation {
         policy: String,
     },
 }
-/// Checksum-verified native helper deployment metadata for an SSH host.
+/// Legacy per-request helper metadata retained for wire compatibility.
+/// Native connections deploy once during their verified handshake; this value
+/// can only confirm that identity and cannot replace the connection's helper.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Helper {
     /// Lowercase SHA-256 of helper bytes.
     pub digest: String,
     /// Target helper architecture label.
     pub architecture: String,
-    /// Optional standard base64 helper bytes; omitted when only checking a cached deployment.
+    /// Old base64 deployment payload, ignored by the native gateway.
+    /// Current clients leave it absent and reuse the connection-owned helper.
     pub data: Option<String>,
 }
 /// Control result and matching executable identity needed for later attachment.
@@ -121,6 +124,7 @@ pub fn local(operation: &Operation, launcher: crate::Launcher) -> Result<Reply> 
                 "Only runtime control requests are accepted"
             );
             if let crate::Request::CreateRuntime { spec } = &mut request {
+                spec.validate_command()?;
                 let root = std::path::Path::new(&spec.root);
                 let python = project::python_path(root, &spec.python);
                 spec.argv[0] = if spec.python_program {
@@ -310,6 +314,57 @@ fn terminal_request(operation: &Operation) -> Result<crate::Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn malformed_runtime_commands_are_rejected_before_host_resolution() {
+        use rode_runtime_core::service::{Spec, Start};
+        for (argv, prefix) in [
+            (vec![], vec![]),
+            (vec![String::new()], vec![]),
+            (vec!["bad\0program".into()], vec![]),
+            (vec!["python3".into()], vec!["bad\0prefix".into()]),
+            (vec!["python3".into()], vec![String::new()]),
+            (vec!["python3".into(), "x".repeat(256 * 1024)], vec![]),
+        ] {
+            let operation = Operation::Runtimes {
+                mise: false,
+                request: Box::new(crate::Request::CreateRuntime {
+                    spec: Box::new(Spec {
+                        sources: BTreeMap::new(),
+                        id: "test".into(),
+                        name: "Notebook".into(),
+                        root: "/project".into(),
+                        policy: "a".repeat(64),
+                        mode: "NORMAL MODE".into(),
+                        document: "/project/book.ipynb".into(),
+                        argv,
+                        prefix,
+                        env: BTreeMap::new(),
+                        python: "auto".into(),
+                        python_program: true,
+                        persistent: false,
+                        target: None,
+                        start: Start::Notebook {
+                            name: "python3".into(),
+                        },
+                    }),
+                }),
+            };
+            let error = local(
+                &operation,
+                crate::Launcher {
+                    executable: "/must-not-start-a-helper".into(),
+                    prefix: vec![],
+                },
+            )
+            .unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.starts_with("Runtime ") && message.contains("command"),
+                "{error:#}"
+            );
+        }
+    }
+
     #[test]
     fn terminals_use_native_mise_only_when_the_captured_provider_is_enabled() {
         let saved = rode_host_core::environment::Settings {

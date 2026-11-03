@@ -258,6 +258,41 @@ fn an_unlinked_running_image_can_start_an_independent_native_service() {
 }
 
 #[test]
+fn native_attachments_survive_startup_warnings_and_continue_framed_output() {
+    let mut fixture = Fixture::new();
+    let plan = sandbox::Plan {
+        root: fixture.root.path().to_string_lossy().into(),
+        ..Default::default()
+    };
+    let info = fixture.create(&plan);
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args([
+        "-c",
+        "printf 'shell startup warning\\n' >&2; exec \"$@\"",
+        "attach-with-warning",
+    ]);
+    command.args([
+        env!("CARGO_BIN_EXE_rode"),
+        "--session-service",
+        "attach",
+        "--framed",
+        &info.id,
+        &info.policy,
+    ]);
+    command.env("RODE_SESSION_DIR", &fixture.runtime);
+    let view = Terminal::spawn_native(
+        &eframe::egui::Context::default(),
+        command,
+        "Startup warning".into(),
+    )
+    .unwrap();
+    view.send(b"printf 'ATTACHED_%s\\n' after-warning\n".to_vec())
+        .unwrap();
+    wait(|| view.contents().contains("ATTACHED_after-warning"));
+    assert!(view.is_alive());
+}
+
+#[test]
 fn native_ssh_attach_never_runs_a_synchronous_connection_probe() {
     if Command::new("ssh").arg("-V").output().is_err() {
         eprintln!("OpenSSH is needed for the asynchronous attach check");

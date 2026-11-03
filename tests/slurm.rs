@@ -14,6 +14,7 @@ use std::{
     io::Write,
     os::unix::fs::PermissionsExt,
     process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 fn execute(request: &Request, peer: bool) -> anyhow::Result<Response> {
     let mut command = if peer {
@@ -307,7 +308,7 @@ fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy(
             cmd.args(&argv[1..]);
             cmd
         };
-        let mut child = command
+        command
             .current_dir(root.path())
             .env("SLURM_JOB_ID", "stale")
             .env("CUDA_VISIBLE_DEVICES", "wrong")
@@ -316,9 +317,20 @@ fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy(
             .env("SLURM_CLUSTERS", "wrong-cluster")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        // A parallel PTY fork may inherit the just-closed copy writer until
+        // exec. Match production's bounded ETXTBSY handling for this new helper.
+        let until = Instant::now() + Duration::from_secs(2);
+        let mut child = loop {
+            match command.spawn() {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < until =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
         let mut input = child.stdin.take().unwrap();
         if peer {
             writeln!(input, "{}", serde_json::json!({"root":plan.root,"prefix":[],"argv":argv,"python":"off","python_program":false,"environment":{}})).unwrap();

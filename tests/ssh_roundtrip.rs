@@ -658,14 +658,13 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
     impl Drop for Cleanup {
         fn drop(&mut self) {
             for info in &self.1 {
-                let _ = runtime::request_with_upload(
+                let _ = runtime::request(
                     &self.0,
                     None,
                     rode_session::Request::EndRuntime {
                         id: info.id.clone(),
                         policy: info.policy.clone(),
                     },
-                    false,
                 );
             }
         }
@@ -691,13 +690,7 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
         (remote, login)
     };
     let infos = |plan: &rode::sandbox::Plan, remote: &Remote| {
-        let reply = runtime::request_with_upload(
-            plan,
-            Some(remote),
-            rode_session::Request::Runtimes,
-            false,
-        )
-        .unwrap();
+        let reply = runtime::request(plan, Some(remote), rode_session::Request::Runtimes).unwrap();
         let rode_session::Response::Runtimes(infos) = reply.response else {
             panic!()
         };
@@ -936,14 +929,13 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
             "Debugger shutdown ended the notebook kernel"
         );
         assert!(remote.connected());
-        runtime::request_with_upload(
+        runtime::request(
             &plan,
             Some(&remote),
             rode_session::Request::EndRuntime {
                 id: kernel_info.id,
                 policy: kernel_info.policy,
             },
-            false,
         )
         .unwrap();
         drop(client);
@@ -3199,6 +3191,9 @@ fn native_generic_operations_need_no_remote_python() {
                     sandbox: rode::sandbox::Options {
                         enabled: sandboxed,
                         backend: rode::sandbox::Backend::Landlock,
+                        read_only: std::env::var("RODE_TEST_PROJECT_SHELL")
+                            .into_iter()
+                            .collect(),
                         ..Default::default()
                     },
                 })

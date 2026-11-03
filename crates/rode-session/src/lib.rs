@@ -59,8 +59,6 @@ mod runtimes;
 
 /// Runtime-directory generation; distinct from optional protocol feature levels.
 pub const VERSION: u32 = 1;
-/// Feature level that supports explicit persistence toggles.
-pub const PERSISTENCE_PROTOCOL: u32 = 2;
 /// Current feature level, including confined native agent file tools.
 pub const PROTOCOL: u32 = 11;
 /// Explanation shown for older services whose lifetime policy cannot be changed.

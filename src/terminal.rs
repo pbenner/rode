@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, FontId, Key, Rect, Sense, Stroke, Vec2};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::{
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 mod colors;
+mod framing;
 mod selection;
 #[cfg(test)]
 mod selection_tests;
@@ -292,7 +293,7 @@ impl Terminal {
             .context("Could not start terminal")?;
         drop(pair.slave);
         let killer = child.clone_killer();
-        let mut reader = pair.master.try_clone_reader()?;
+        let mut reader = BufReader::new(pair.master.try_clone_reader()?);
         let mut writer = pair.master.take_writer()?;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(24, 100, 4000)));
         let alive = Arc::new(AtomicBool::new(true));
@@ -305,12 +306,37 @@ impl Terminal {
         let (drained_tx, drained_rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
+            let mut native_started = false;
             loop {
                 if native {
-                    let (kind, bytes) = match rode_session::read_stream(&mut reader) {
-                        Ok(frame) => frame,
-                        Err(_) => break,
+                    let result = if native_started {
+                        rode_session::read_stream(&mut reader)
+                    } else {
+                        framing::begin(&mut reader, |bytes| {
+                            if !bytes.is_empty() {
+                                if let Ok(mut parser) = read_parser.lock() {
+                                    parser.process(bytes);
+                                }
+                                // Release the parser before taking egui's context lock.
+                                if read_visible.load(Ordering::Acquire) {
+                                    read_ctx.request_repaint_after(Duration::from_millis(16));
+                                }
+                            }
+                        })
                     };
+                    let (kind, bytes) = match result {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            if !native_started && let Ok(mut parser) = read_parser.lock() {
+                                parser.process(
+                                    format!("\r\n[terminal attachment failed: {error:#}]\r\n")
+                                        .as_bytes(),
+                                );
+                            }
+                            break;
+                        }
+                    };
+                    native_started = true;
                     if let Ok(mut parser) = read_parser.lock() {
                         match kind {
                             b'S' if bytes.len() == 4 => {

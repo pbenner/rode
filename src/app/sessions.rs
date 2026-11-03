@@ -117,7 +117,6 @@ pub(super) struct Sessions {
     backend: Option<service::Reply>,
     busy: bool,
     starting: bool,
-    helper_ready: bool,
     error: String,
     next: usize,
     view_next: usize,
@@ -437,20 +436,18 @@ impl EditorApp {
         let generation = self.generation;
         let tx = self.tx.clone();
         let ctx = ctx.clone();
-        let upload = !self.sessions.helper_ready;
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
             let result = (|| -> anyhow::Result<project::Response> {
                 if let Some(remote) = remote {
-                    let helper = service::remote_helper(&remote, upload)?;
                     remote
                         .request_in(
                             &Request::Tool {
                                 request: project::Request::Sessions {
                                     root,
                                     operation,
-                                    helper,
+                                    helper: None,
                                     directory: std::env::var("RODE_SESSION_DIR").ok(),
                                 },
                             },
@@ -722,7 +719,6 @@ impl EditorApp {
                     self.sessions.slurm_error = error;
                 } else {
                     self.sessions.error = error.clone();
-                    self.sessions.helper_ready = false;
                     self.sessions.queued.clear();
                     self.notify(error, true);
                 }
@@ -739,7 +735,6 @@ impl EditorApp {
         match response {
             project::Response::Sessions(reply) => {
                 self.sessions.error.clear();
-                self.sessions.helper_ready = true;
                 self.sessions.backend = Some(reply.clone());
                 match reply.response {
                     rode_session::Response::Sessions(mut infos) => {
