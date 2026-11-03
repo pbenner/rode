@@ -85,7 +85,7 @@ def bright_pixels(filename):
             "convert",
             str(ARTIFACTS / filename),
             "-crop",
-            "150x43+315+690",
+            "150x43+315+143",
             "-depth",
             "8",
             "rgb:-",
@@ -157,7 +157,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     assert bright_pixels("contrast-default.png") < 10
                     colors()
                     screenshot(window, "settings.png")
-                    number(470, 260, "4.5")
+                    number(470, 309, "4.5")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.minimum_contrast")
@@ -165,9 +165,13 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                         ),
                         "Optional contrast protection was not saved",
                     )
+                    # The terminal now fills the workspace. Close the dialog
+                    # before measuring its first three lines, which it covers.
+                    click(731, 137)
                     screenshot(window, "contrast-enabled.png")
                     assert bright_pixels("contrast-enabled.png") > 100
-                    number(470, 260, "1")
+                    colors()
+                    number(470, 309, "1")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.minimum_contrast")
@@ -175,11 +179,14 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                         ),
                         "Exact-color mode was not saved immediately",
                     )
+                    click(731, 137)
                     screenshot(window, "contrast-off.png")
                     assert bright_pixels("contrast-off.png") < 10
-                    click(440, 347)
-                    number(507, 373, "240")
-                    click(700, 232)
+                    colors()
+                    click(440, 396)
+                    screenshot(window, "foreground-picker.png")
+                    number(507, 422, "240")
+                    click(700, 281)
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.foreground")
@@ -187,10 +194,11 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                         ),
                         "Foreground edit was not saved",
                     )
-                    click(375, 401)
-                    click(440, 449)
-                    number(507, 475, "240")
-                    click(700, 232)
+                    click(375, 450)
+                    click(440, 498)
+                    screenshot(window, "ansi-picker.png")
+                    number(507, 524, "240")
+                    click(700, 281)
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.ansi.0") == "#f02224"
@@ -198,17 +206,17 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                         "ANSI swatch edit was not saved",
                     )
                     screenshot(window, "ansi-edited.png")
-                    click(735, 100)
+                    click(731, 137)
                     theme("Carbon")
                     colors()
-                    number(470, 260, "7")
+                    number(470, 309, "7")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.carbon.minimum_contrast") == "7"
                         ),
                         "Second theme did not save independently",
                     )
-                    click(735, 100)
+                    click(731, 137)
                     theme("Phosphor")
                     assert preferences(saved)["terminal_color.phosphor.minimum_contrast"] == "1"
                     click(600, 755)
@@ -223,8 +231,8 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     colors()
                     screenshot(window, "restored.png")
                     # Collapse the restored ANSI section to reveal Reset.
-                    click(375, 401)
-                    click(415, 449)
+                    click(375, 450)
+                    click(415, 498)
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.minimum_contrast")
@@ -234,8 +242,10 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     )
                     assert preferences(saved)["terminal_color.phosphor.ansi.0"] == "theme"
                     assert preferences(saved)["terminal_color.carbon.minimum_contrast"] == "7"
+                    click(731, 137)
                     screenshot(window, "reset.png")
                     assert bright_pixels("reset.png") < 10
+                    colors()
                     x11.XResizeWindow.argtypes = [
                         ctypes.c_void_p,
                         ctypes.c_ulong,
@@ -245,7 +255,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     x11.XResizeWindow(display, window, 850, 560)
                     x11.XFlush(display)
                     time.sleep(0.4)
-                    click(375, 401)
+                    click(375, 450)
                     screenshot(window, "minimum-window.png")
                     xtest.XTestFakeMotionEvent(display, -1, 700, 430, 0)
                     for _ in range(8):
@@ -254,6 +264,10 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     x11.XFlush(display)
                     screenshot(window, "minimum-window-scrolled.png")
                 close_window(window, process)
+            except Exception:
+                if window is not None and process.poll() is None:
+                    screenshot(window, f"{run}-failure.png")
+                raise
             finally:
                 if process.poll() is None:
                     process.terminate()
