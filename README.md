@@ -12,7 +12,7 @@ A lightweight native Rust code editor for local and SSH projects, with persisten
 
 Also included:
 
-- [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md), including Afterglow’s magenta frames and cyan accents, and Knight Rider’s black-and-red cockpit palette.
+- [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md), including Carbon Edge’s charcoal and amber cut-corner frames, Afterglow’s magenta and cyan accents, and Knight Rider’s black-and-red cockpit palette.
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 

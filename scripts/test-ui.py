@@ -135,14 +135,15 @@ fn run_step(step: usize) {
         key("space", ("Control_L",))
         key("e")  # Theme samples use the editor while the shell keeps running.
         background(window, "carbon.png", (16, 16, 16))
-        # The status-bar menu has nine built-ins plus the custom fixture.
+        # The status-bar menu has ten built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
         click(1310, 887)
         screenshot(window, "status-theme-selector.png")
-        click(1290, 599)  # Phosphor, first menu row
+        click(1290, 574)  # Phosphor, first menu row
         saved_theme(directory, "phosphor")
         background(window, "phosphor.png", (13, 18, 20))
         for preset, color in [
+            ("carbon-edge", (16, 16, 16)),
             ("matrix", (6, 12, 8)),
             ("amber", (16, 12, 7)),
             ("ice", (8, 15, 26)),
@@ -160,10 +161,10 @@ fn run_step(step: usize) {
         saved_theme(directory, "custom:smoke")
         background(window, "custom.png", (21, 18, 26))
         click(1310, 887)
-        click(1290, 649)  # Code Dark, third menu row
+        click(1290, 649)  # Code Dark, fourth menu row
         saved_theme(directory, "code-dark")
-        theme("Knight Rider")
-        saved_theme(directory, "knight-rider")
+        theme("Carbon Edge")
+        saved_theme(directory, "carbon-edge")
         key("s", ("Control_L",))
         time.sleep(0.3)
         assert path.read_text() == saved, "Changing themes must preserve document contents"
@@ -206,7 +207,7 @@ fn run_step(step: usize) {
             time.sleep(0.05)
         assert window
         time.sleep(0.7)
-        background(window, "theme-restored.png", (9, 10, 12))
+        background(window, "theme-restored.png", (16, 16, 16))
         close_window(window, process)
         print(
             "Built-in/custom theme switching, immediate config writes, terminal preservation, and native restart persistence passed."

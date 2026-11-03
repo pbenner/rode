@@ -30,6 +30,7 @@ pub const STORAGE_KEY: &str = "color_theme";
 
 const EMBEDDED_THEMES: &[(&str, &str)] = &[
     ("carbon", include_str!("../themes/carbon.json")),
+    ("carbon-edge", include_str!("../themes/carbon-edge.json")),
     ("code-dark", include_str!("../themes/code-dark.json")),
     ("matrix", include_str!("../themes/matrix.json")),
     ("amber", include_str!("../themes/amber.json")),

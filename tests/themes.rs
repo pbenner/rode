@@ -294,8 +294,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
         assert!(identities.insert(builtin.id.clone()), "Duplicate theme ID");
         let p = builtin.palette;
         assert!(
-            signatures.insert((p.background, p.accent)),
-            "Duplicate palette"
+            signatures.insert((p.background, p.accent, std::mem::discriminant(&p.chrome))),
+            "Duplicate palette and frame style"
         );
         assert!(contrast(p.text, p.background) >= 7., "{} text", builtin.id);
         assert!(
@@ -338,7 +338,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
         );
         let path = p.ansi[12];
         match builtin.id.as_str() {
-            "carbon" | "amber" => assert!(
+            "carbon" | "carbon-edge" | "amber" => assert!(
                 path.r() > path.g() && path.g() > path.b(),
                 "{} warm path",
                 builtin.id
@@ -381,6 +381,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
     assert!(
         identities.is_superset(
             &[
+                "carbon-edge",
                 "code-dark",
                 "matrix",
                 "amber",
@@ -415,6 +416,7 @@ fn syntax_palettes_are_independent_and_follow_ui_remains_available() {
     assert_eq!(ctx.style().visuals, visuals);
     for ui in [
         "phosphor",
+        "carbon-edge",
         "code-dark",
         "matrix",
         "amber",
