@@ -1,0 +1,44 @@
+{
+  "name": "Knight Rider",
+  "base": "phosphor",
+  "chrome": "chamfered",
+  "colors": {
+    "background": "#090a0c",
+    "panel": "#141113",
+    "raised": "#211a1d",
+    "border": "#463136",
+    "text": "#e6e8eb",
+    "muted": "#a39a9b",
+    "accent": "#ff4b4b",
+    "frame_accent": "#e52e36",
+    "heading": "#f3f4f6",
+    "success": "#8cd9a0",
+    "error": "#ff817b",
+    "selection": "#4b2028",
+    "hover": "#2c1b20",
+    "active": "#3a1e25",
+    "gutter": "#877c81",
+    "terminal_background": "#08090a",
+    "terminal_foreground": "#e6e8eb"
+  },
+  "syntax": {
+    "comment": "#9b9197",
+    "keyword": "#ff6961",
+    "type": "#ffd166",
+    "function": "#f4e9ce",
+    "string": "#8cd9b0",
+    "number": "#ffb36b",
+    "constant": "#ff9a70",
+    "variable": "#e6e8eb",
+    "operator": "#ff928c",
+    "punctuation": "#afb4bf",
+    "builtin": "#83c9dd",
+    "attribute": "#f2bd73"
+  },
+  "ansi": [
+    "#242126", "#e85b63", "#72bf8b", "#dfb764",
+    "#8dbce6", "#c991b2", "#72c5cd", "#e6e8eb",
+    "#9a8f94", "#ff817b", "#a1e3ad", "#ffe09a",
+    "#afcff5", "#e8b8d1", "#ace9ed", "#ffffff"
+  ]
+}

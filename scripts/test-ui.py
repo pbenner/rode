@@ -135,11 +135,11 @@ fn run_step(step: usize) {
         key("space", ("Control_L",))
         key("e")  # Theme samples use the editor while the shell keeps running.
         background(window, "carbon.png", (16, 16, 16))
-        # The status-bar menu has eight built-ins plus the custom fixture.
+        # The status-bar menu has nine built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
         click(1310, 887)
         screenshot(window, "status-theme-selector.png")
-        click(1290, 624)  # Phosphor, first menu row
+        click(1290, 599)  # Phosphor, first menu row
         saved_theme(directory, "phosphor")
         background(window, "phosphor.png", (13, 18, 20))
         for preset, color in [
@@ -148,8 +148,9 @@ fn run_step(step: usize) {
             ("ice", (8, 15, 26)),
             ("neon", (17, 11, 27)),
             ("afterglow", (19, 18, 25)),
+            ("knight-rider", (9, 10, 12)),
         ]:
-            theme(preset)
+            theme(preset.replace("-", " "))
             saved_theme(directory, preset)
             background(window, preset + ".png", color)
         theme("Code Dark")
@@ -159,8 +160,10 @@ fn run_step(step: usize) {
         saved_theme(directory, "custom:smoke")
         background(window, "custom.png", (21, 18, 26))
         click(1310, 887)
-        click(1290, 674)  # Code Dark, third menu row
+        click(1290, 649)  # Code Dark, third menu row
         saved_theme(directory, "code-dark")
+        theme("Knight Rider")
+        saved_theme(directory, "knight-rider")
         key("s", ("Control_L",))
         time.sleep(0.3)
         assert path.read_text() == saved, "Changing themes must preserve document contents"
@@ -203,7 +206,7 @@ fn run_step(step: usize) {
             time.sleep(0.05)
         assert window
         time.sleep(0.7)
-        background(window, "theme-restored.png", (30, 30, 30))
+        background(window, "theme-restored.png", (9, 10, 12))
         close_window(window, process)
         print(
             "Built-in/custom theme switching, immediate config writes, terminal preservation, and native restart persistence passed."

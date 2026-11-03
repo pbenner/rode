@@ -59,6 +59,7 @@ SUITES = {
         ([sys.executable, "scripts/test-ui.py"], {}, 180),
         ui("workspace"),
         ui("navigation"),
+        ui("shortcut-styles"),
         ui("terminal-keys"),
         ui("multiprocess"),
     ],

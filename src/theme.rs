@@ -36,6 +36,7 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
     ("ice", include_str!("../themes/ice.json")),
     ("neon", include_str!("../themes/neon.json")),
     ("afterglow", include_str!("../themes/afterglow.json")),
+    ("knight-rider", include_str!("../themes/knight-rider.json")),
 ];
 
 /// Copyable interface/terminal colors; syntax themes may be selected independently.

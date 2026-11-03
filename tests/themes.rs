@@ -348,7 +348,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} green path",
                 builtin.id
             ),
-            "ice" | "code-dark" | "afterglow" => {
+            "ice" | "code-dark" | "afterglow" | "knight-rider" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
@@ -380,9 +380,17 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
     }
     assert!(
         identities.is_superset(
-            &["code-dark", "matrix", "amber", "ice", "neon", "afterglow"]
-                .map(str::to_owned)
-                .into()
+            &[
+                "code-dark",
+                "matrix",
+                "amber",
+                "ice",
+                "neon",
+                "afterglow",
+                "knight-rider"
+            ]
+            .map(str::to_owned)
+            .into()
         )
     );
 }
@@ -405,7 +413,15 @@ fn syntax_palettes_are_independent_and_follow_ui_remains_available() {
     assert_ne!(dracula, linked);
     assert_eq!(themes.active().palette, palette);
     assert_eq!(ctx.style().visuals, visuals);
-    for ui in ["phosphor", "code-dark", "matrix", "amber", "ice", "neon"] {
+    for ui in [
+        "phosphor",
+        "code-dark",
+        "matrix",
+        "amber",
+        "ice",
+        "neon",
+        "knight-rider",
+    ] {
         themes.select(ui, &ctx).unwrap();
         assert_eq!(themes.active_syntax().id, "dracula");
         assert_eq!(

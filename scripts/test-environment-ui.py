@@ -42,7 +42,10 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
         "#!/usr/bin/env python3\nimport json,os,sys\n"
         "from pathlib import Path\n"
         "if '--version' in sys.argv: print('fixture Node.js 1.0')\n"
-        "else: Path('task.json').write_text(json.dumps(dict(mode=os.getenv('PROJECT_MODE'),argv=sys.argv[1:])))\n"
+        "else:\n"
+        "    result = Path('task.json.tmp')\n"
+        "    result.write_text(json.dumps(dict(mode=os.getenv('PROJECT_MODE'),argv=sys.argv[1:])))\n"
+        "    result.replace('task.json')\n"
     )
     runtime.chmod(0o755)
     environment = dict(
@@ -82,7 +85,11 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 )
 
             def shell_record(filename):
-                text(f"printf '%s' \"$PROJECT_MODE\" > {filename}\n")
+                # Existence is the readiness signal, so publish only complete records.
+                text(
+                    f"printf '%s' \"$PROJECT_MODE\" > {filename}.tmp "
+                    f"&& mv {filename}.tmp {filename}\n"
+                )
                 wait(lambda: (project / filename).exists(), "New terminal did not execute input")
                 return (project / filename).read_text()
 

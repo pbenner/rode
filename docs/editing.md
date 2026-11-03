@@ -47,6 +47,23 @@ Open File, Open as hex, and Save As share the project-folder browser's directory
 | Ctrl+Plus / Minus | Editor/terminal font size, or image zoom when the image canvas has focus |
 | Ctrl+0 | Reset interface scale to 100% (outside the terminal) |
 
+The **Standard** preset also provides these shortcuts in focused source tabs:
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+] / Ctrl+[ | Indent / outdent the current line or selected lines |
+| Tab / Shift+Tab | Indent selected lines / outdent; Tab without a selection inserts indentation to the next stop |
+| Ctrl+/ | Toggle line comments for the current line or selected lines |
+| Ctrl+L | Select the whole line; repeat to extend to following lines |
+| Ctrl+Shift+D | Duplicate the current line or selected lines |
+| Ctrl+Shift+K | Delete the current line or selected lines |
+| Ctrl+Enter / Ctrl+Shift+Enter | Insert an indented line below / above without splitting the current line |
+| Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y | Undo / redo |
+
+Indentation follows existing tabs or spaces and stays consistent within the open tab, with a four-space fallback (tabs for new Go files and Makefiles). A selection ending at the start of a line excludes that line. Block edits preserve Unicode text, selection direction and line endings, and each operation is one undo step. Standard copy/paste, word movement and Shift-selection remain available.
+
+Line commenting uses the detected language's `//`, `#`, `--`, `!` or `%` prefix and preserves leading indentation. Languages without a supported line-comment form, including JSON, HTML/XML and CSS, show a notice without changing the buffer. Terminal input, form fields and structured document views keep their existing keys. Emacs retains Ctrl+/ for undo, and Vim retains Ctrl+[ for Normal mode.
+
 Use Command for editor shortcuts on macOS; tab cycling with Control+Tab remains available. When the terminal has focus, Tab/Shift+Tab, arrows, Escape, and normal control keys go to the shell; the command palette, project/tools shortcuts, tab switching, and sidebar/terminal toggles remain editor shortcuts. Escape closes find and returns to the editor; Escape in the terminal belongs to the shell.
 
 Choose a percentage in **View → Interface scale** to resize the entire GUI, including menu text, icons, buttons, side panels and editor/terminal text. **Smaller (5%)** and **Larger (5%)** provide fine adjustments. Each action applies after a completed click and closes the menu; there is no slider to chase as the interface resizes. The 50–200% scale is relative to the operating system's monitor scaling: **100%** follows the system, **75%** makes the interface smaller, and **50%** compensates for a 2x display scale when you want a more compact layout. Changes apply immediately and are saved on the desktop computer, independently of the project or SSH host.

@@ -1,6 +1,7 @@
-//! Regressions for native source edit/undo behavior under Emacs and Vim input translation.
+//! Native source edit/undo regressions for Standard, Emacs and Vim input translation.
 
 use super::*;
+mod standard;
 #[test]
 fn motions_use_character_indices_and_word_classes() {
     let text = Text::new("héllo 世界\nsecond line\n");
@@ -15,6 +16,7 @@ struct Editor {
     editing: State,
     text: String,
     style: Style,
+    path: &'static str,
 }
 impl Editor {
     fn new(style: Style, text: &str) -> Self {
@@ -23,6 +25,7 @@ impl Editor {
             editing: Default::default(),
             text: text.into(),
             style,
+            path: "main.rs",
         };
         editor.frame(vec![]);
         editor.frame(vec![]);
@@ -38,14 +41,18 @@ impl Editor {
             },
             |ctx| {
                 self.editing.replay(ctx, Some(1), self.style, true);
-                effects = self.editing.route(ctx, 1, &self.text, self.style);
+                effects = self
+                    .editing
+                    .route(ctx, 1, &self.text, self.style, Some(self.path));
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let mut output = egui::TextEdit::multiline(&mut self.text)
                         .id(egui::Id::new(("document", 1u64)))
                         .code_editor()
                         .cursor_at_end(false)
                         .show(ui);
-                    output.response.request_focus();
+                    if !output.response.has_focus() {
+                        output.response.request_focus();
+                    }
                     self.editing.after_source(
                         ui,
                         1,
@@ -89,6 +96,21 @@ impl Editor {
             .unwrap()
             .primary
             .index
+    }
+    fn selection(&self) -> CCursorRange {
+        egui::TextEdit::load_state(&self.ctx, egui::Id::new(("document", 1u64)))
+            .unwrap()
+            .cursor
+            .char_range()
+            .unwrap()
+    }
+    fn select(&mut self, anchor: usize, point: usize) {
+        let id = egui::Id::new(("document", 1u64));
+        let mut state = egui::TextEdit::load_state(&self.ctx, id).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(Text::range(anchor, point)));
+        state.store(&self.ctx, id);
     }
 }
 #[test]
@@ -172,7 +194,7 @@ fn command_palette_and_modified_editor_shortcuts_remain_available_in_vim() {
             ..Default::default()
         },
         |ctx| {
-            assert!(editing.route(ctx, 1, "source", Style::Vim).is_empty());
+            assert!(editing.route(ctx, 1, "source", Style::Vim, None).is_empty());
             assert!(ctx.input(|i| i.events.iter().any(|event| matches!(
                 event,
                 egui::Event::Key {

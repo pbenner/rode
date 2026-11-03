@@ -17,6 +17,7 @@ use super::*;
 use bindings::Style;
 use egui::text::{CCursor, CCursorRange};
 use std::collections::VecDeque;
+mod standard;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -51,6 +52,8 @@ pub(in crate::app) struct State {
     deferred: VecDeque<egui::Event>,
     deferred_bytes: usize,
     after: Option<usize>,
+    after_range: Option<CCursorRange>,
+    composing: bool,
     normalize: bool,
     scroll: bool,
     checkpoint: bool,
@@ -202,6 +205,7 @@ impl State {
         id: u64,
         source: &str,
         style: Style,
+        path: Option<&str>,
     ) -> Vec<NavAction> {
         self.bind(id, style);
         let target = egui::Id::new(("document", id));
@@ -221,7 +225,12 @@ impl State {
                 self.defer(event);
                 continue;
             }
+            let standard_action = (style == Style::Standard)
+                .then(|| standard::action(&event))
+                .flatten()
+                .filter(|_| !self.composing);
             let handled = match (&event, style) {
+                (_, Style::Standard) => standard_action.is_some(),
                 (
                     egui::Event::Key {
                         key,
@@ -298,7 +307,16 @@ impl State {
                 continue;
             }
             if handled {
-                if style == Style::Emacs {
+                if let Some(action) = standard_action {
+                    // Keep the inferred unit with this source widget: indenting
+                    // every line must not change the next command's tab width.
+                    let indent = ctx.data_mut(|data| {
+                        *data.get_temp_mut_or_insert_with(target.with("indentation"), || {
+                            standard::indentation(source, path)
+                        })
+                    });
+                    halt = self.standard(&text, &mut range, action, path, indent, &mut native);
+                } else if style == Style::Emacs {
                     if let egui::Event::Key { key, .. } = event {
                         halt = self.emacs(ctx, &text, &mut range, key, &mut native, &mut effects);
                     }
@@ -358,6 +376,18 @@ impl State {
                     }
                 }
             } else {
+                match &event {
+                    egui::Event::Ime(egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_)) => {
+                        self.composing = true;
+                    }
+                    egui::Event::Ime(egui::ImeEvent::Disabled) => self.composing = false,
+                    egui::Event::Ime(egui::ImeEvent::Commit(value))
+                        if value != "\n" && value != "\r" =>
+                    {
+                        self.composing = false;
+                    }
+                    _ => {}
+                }
                 if style == Style::Vim && matches!(event, egui::Event::Key { pressed: true, .. }) {
                     self.cancel_sequence();
                 }
@@ -365,6 +395,7 @@ impl State {
                     event,
                     egui::Event::Text(_)
                         | egui::Event::Paste(_)
+                        | egui::Event::Ime(_)
                         | egui::Event::Cut
                         | egui::Event::Key {
                             pressed: true,
@@ -378,6 +409,7 @@ impl State {
                                 | Key::Delete
                                 | Key::Enter
                                 | Key::Tab
+                                | Key::A
                                 | Key::Z,
                             ..
                         }
@@ -392,9 +424,9 @@ impl State {
             edit.set_undoer(undo);
         }
         if native.iter().any(
-            |event| matches!(event,egui::Event::Key{key:Key::Z,modifiers,..} if modifiers.command),
+            |event| matches!(event,egui::Event::Key{key:Key::Z,pressed:true,modifiers,..} if modifiers.command),
         ) {
-            let redo=native.iter().any(|event|matches!(event,egui::Event::Key{key:Key::Z,modifiers,..} if modifiers.shift));
+            let redo=native.iter().any(|event|matches!(event,egui::Event::Key{key:Key::Z,pressed:true,modifiers,..} if modifiers.shift));
             let mut undo = edit.undoer();
             let mut current = (range, source.to_owned());
             undo.feed_state(ctx.input(|i| i.time), &current);
@@ -414,7 +446,7 @@ impl State {
                 }
                 current.0 = *next_range;
             }
-            native.retain(|event|!matches!(event,egui::Event::Key{key:Key::Z,modifiers,..} if modifiers.command));
+            native.retain(|event|!matches!(event,egui::Event::Key{key:Key::Z,pressed:true,modifiers,..} if modifiers.command));
             native.extend((0..steps).map(|_| key_event_undo(redo)));
         }
         if range != original || self.checkpoint_after {
@@ -526,8 +558,11 @@ impl State {
         text: &str,
         palette: theme::Palette,
     ) {
-        if self.doc != Some(id) || self.style == Style::Standard {
+        if self.doc != Some(id) {
             return;
+        }
+        if output.response.gained_focus() || output.response.lost_focus() {
+            self.composing = false;
         }
         if self.style == Style::Vim && output.response.has_focus() {
             ui.memory_mut(|m| {
@@ -545,6 +580,9 @@ impl State {
 
         if let Some(mut range) = output.cursor_range {
             let original_range = range;
+            if let Some(selection) = self.after_range.take() {
+                range = selection;
+            }
             if let Some(point) = self.after.take() {
                 range = Text::range(point, point);
             }
@@ -689,15 +727,17 @@ impl EditorApp {
             .editing
             .replay(ctx, id, self.navigation.bindings.style(), allowed);
     }
-    /// Translate supported Emacs/Vim input into the existing source edit/undo path;
+    /// Translate supported Standard/Emacs/Vim input into the existing source edit/undo path;
     /// modal barriers, terminal focus and unsupported document modes keep their normal input.
     pub(in crate::app) fn editing_shortcuts(&mut self, ctx: &egui::Context) {
         let style = self.navigation.bindings.style();
-        if style == Style::Standard || !self.editing_allowed(ctx) {
+        if !self.editing_allowed(ctx) {
+            self.navigation.editing.composing = false;
             self.navigation.editing.cancel_sequence();
             return;
         }
         let Some((id, _)) = self.styled_source() else {
+            self.navigation.editing.composing = false;
             return;
         };
         let target = egui::Id::new(("document", id));
@@ -721,6 +761,7 @@ impl EditorApp {
             })
         });
         if !ctx.memory(|m| m.has_focus(target)) {
+            self.navigation.editing.composing = false;
             self.navigation.editing.cancel_sequence();
             return;
         }
@@ -728,7 +769,13 @@ impl EditorApp {
             return;
         }
         let text = &self.documents[self.active].text;
-        for action in self.navigation.editing.route(ctx, id, text, style) {
+        for action in self.navigation.editing.route(
+            ctx,
+            id,
+            text,
+            style,
+            self.documents[self.active].display_path(),
+        ) {
             self.navigate(action, ctx);
         }
         if let Some(message) = self.navigation.editing.notice.take() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native Emacs/Vim editing, safe saves, shell keys, and preset persistence."""
+"""Native Standard/Emacs/Vim editing, safe saves, shell keys, and preset persistence."""
 
 import os
 import re
@@ -48,6 +48,8 @@ def run():
         source.write_text("alpha beta\ngamma delta\n")
         other = root / "other.txt"
         other.write_text("second\n")
+        comments = root / "settings.toml"
+        comments.write_text("first = 1\nsecond = 2\n")
         env = dict(
             os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
         )
@@ -101,6 +103,62 @@ def run():
                 text("main.txt")
                 key("Return")
                 time.sleep(0.4)
+
+                def saved(expected, message):
+                    key("s", ("Control_L",))
+                    wait_for(lambda: source.read_text() == expected, message)
+
+                original = "alpha beta\ngamma delta\n"
+                key("a", ("Control_L",))
+                key("bracketright", ("Control_L",))
+                saved("    alpha beta\n    gamma delta\n", "Ctrl+] did not indent the selection")
+                key("Tab")
+                saved("        alpha beta\n        gamma delta\n", "Tab replaced selected source")
+                key("Tab", ("Shift_L",))
+                key("bracketleft", ("Control_L",))
+                saved(original, "Shift+Tab / Ctrl+[ did not restore indentation")
+                key("z", ("Control_L",))
+                saved("    alpha beta\n    gamma delta\n", "Indentation was not one undo step")
+                key("y", ("Control_L",))
+                saved(original, "Ctrl+Y did not redo indentation")
+                key("Home", ("Control_L",))
+                key("l", ("Control_L",))
+                key("d", ("Control_L", "Shift_L"))
+                saved(
+                    "alpha beta\nalpha beta\ngamma delta\n", "Line selection / duplication failed"
+                )
+                key("k", ("Control_L", "Shift_L"))
+                saved(original, "Delete selected lines failed")
+                key("Home", ("Control_L",))
+                key("Return", ("Control_L",))
+                saved("alpha beta\n\ngamma delta\n", "Insert line below split the current line")
+                key("k", ("Control_L", "Shift_L"))
+                key("Home", ("Control_L",))
+                key("Return", ("Control_L", "Shift_L"))
+                saved("\nalpha beta\ngamma delta\n", "Insert line above failed")
+                key("k", ("Control_L", "Shift_L"))
+                saved(original, "Deleting an inserted line changed other source")
+                screenshot(window, "standard-source.png")
+
+                command("Open file by path")
+                text("settings.toml")
+                key("Return")
+                time.sleep(0.3)
+                key("a", ("Control_L",))
+                key("slash", ("Control_L",))
+                key("s", ("Control_L",))
+                wait_for(
+                    lambda: comments.read_text() == "# first = 1\n# second = 2\n",
+                    "Ctrl+/ did not comment the selection",
+                )
+                key("slash", ("Control_L",))
+                key("s", ("Control_L",))
+                wait_for(
+                    lambda: comments.read_text() == "first = 1\nsecond = 2\n",
+                    "Ctrl+/ did not uncomment the selection",
+                )
+                key("w", ("Control_L",))
+
                 command("Keyboard style: Emacs")
                 key("a", ("Control_L",))
                 key("space", ("Control_L",))
@@ -208,7 +266,7 @@ def run():
                 assert other.read_text() == "secondX\n"
                 close_window(window, process)
                 print(
-                    "Native Emacs/Vim editing, clipboard prefix, operators, undo/redo, pane navigation, shell keys, safe saves, and style persistence passed."
+                    "Native Standard/Emacs/Vim editing, indentation, line actions, clipboard prefix, operators, undo/redo, pane navigation, shell keys, safe saves, and style persistence passed."
                 )
         except Exception:
             if window and process and process.poll() is None:
