@@ -1,4 +1,4 @@
-# Fixed rootless bootstrap; only validated digest/size are positional arguments.
+# Fixed rootless bootstrap; validated digest/size and optional installed source.
 set -eu
 umask 077
 for program in id stat sha256sum wc head mktemp ln chmod cut mkdir rm rmdir; do
@@ -33,9 +33,20 @@ else
     temporary=$(mktemp -d "$directory/.upload.XXXXXXXX")
     trap 'rm -f -- "$temporary/helper"; rmdir -- "$temporary"' EXIT
     trap 'exit 1' HUP INT TERM
-    head -c "$2" > "$temporary/helper"
-    [ "$(wc -c < "$temporary/helper")" -eq "$2" ] || { echo 'Incomplete native helper upload' >&2; exit 1; }
-    [ "$(sha256sum < "$temporary/helper" | cut -d ' ' -f 1)" = "$1" ] || { echo 'Native helper upload failed verification' >&2; exit 1; }
+    if [ -n "${3:-}" ]; then
+        # Snapshot a preinstalled helper on this host, never overwrite its package.
+        [ ! -L "$3" ] && [ -f "$3" ] || { echo 'Installed native helper changed before publication' >&2; exit 1; }
+        owner=$(stat -c %u -- "$3")
+        [ "$owner" = "$uid" ] || [ "$owner" = 0 ] || { echo 'Installed native helper has an unsafe owner' >&2; exit 1; }
+        mode=$(stat -c %a -- "$3")
+        [ $((0$mode & 022)) -eq 0 ] || { echo 'Installed native helper is writable by another user' >&2; exit 1; }
+        [ "$(wc -c < "$3")" -eq "$2" ] || { echo 'Installed native helper size changed; reconnect to discover it again' >&2; exit 1; }
+        head -c "$2" -- "$3" > "$temporary/helper"
+    else
+        head -c "$2" > "$temporary/helper"
+    fi
+    [ "$(wc -c < "$temporary/helper")" -eq "$2" ] || { echo 'Incomplete native helper payload' >&2; exit 1; }
+    [ "$(sha256sum < "$temporary/helper" | cut -d ' ' -f 1)" = "$1" ] || { echo 'Native helper payload failed verification' >&2; exit 1; }
     chmod 500 -- "$temporary/helper"
     # Publication never replaces another generation or a concurrent install.
     ln -- "$temporary/helper" "$destination" 2>/dev/null || verify "$1" "$2"

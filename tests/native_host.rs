@@ -18,6 +18,151 @@ fn executable(path: &Path, source: &str) {
 }
 
 #[test]
+fn installed_helper_discovery_checks_paths_before_execution() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let bin = root.path().join("installed ' helpers");
+    fs::create_dir(&bin).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    let helper = bin.join("rode-sessiond");
+    let marker = root.path().join("executed");
+    executable(
+        &helper,
+        &format!(
+            "#!/bin/sh\ntest \"$1\" = --host-info || exit 2\nprintf '{{\"probe\":true}}'\ntouch {}\n",
+            rode::ssh::quote(marker.to_str().unwrap())
+        ),
+    );
+    let probe = |path: &str| {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                include_str!("../src/host/installed.sh"),
+                "installed",
+                path,
+            ])
+            .env("HOME", root.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()));
+        project::run(command, vec![], Duration::from_secs(5))
+            .unwrap()
+            .checked()
+    };
+    let candidates = probe("--list").unwrap();
+    assert!(candidates.starts_with("RODE-HELPERS\0"));
+    assert!(
+        candidates
+            .split('\0')
+            .any(|s| s == helper.to_str().unwrap())
+    );
+    assert!(!marker.exists(), "Listing helpers must not execute them");
+    assert_eq!(probe(helper.to_str().unwrap()).unwrap(), "{\"probe\":true}");
+    assert!(marker.exists());
+    fs::remove_file(&marker).unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(
+        probe(helper.to_str().unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("writable")
+    );
+    assert!(
+        !marker.exists(),
+        "Unsafe helper was executed before its permissions were checked"
+    );
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o4700)).unwrap();
+    assert!(
+        probe(helper.to_str().unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("setuid")
+    );
+    assert!(!marker.exists());
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(probe(helper.to_str().unwrap()).is_err());
+    assert!(!marker.exists());
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o700)).unwrap();
+    let alias = root.path().join("alias");
+    std::os::unix::fs::symlink(&helper, &alias).unwrap();
+    assert!(probe("~/alias").is_ok());
+    assert!(probe("relative-helper").is_err());
+}
+
+#[test]
+fn installed_helper_snapshot_preserves_packages_and_pins_live_generations() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let helper = root.path().join("installed helper ' source");
+    let original = b"original executable fixture bytes";
+    fs::write(&helper, original).unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    let digest = files::digest(original);
+    let publish = |digest: &str, size: usize| {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                include_str!("../src/host/bootstrap.sh"),
+                "bootstrap",
+                digest,
+                &size.to_string(),
+                helper.to_str().unwrap(),
+            ])
+            .env("HOME", root.path());
+        // No executable bytes arrive from the desktop in installed mode.
+        project::run(command, vec![], Duration::from_secs(5))
+            .unwrap()
+            .checked()
+    };
+    assert!(publish(&"0".repeat(64), original.len()).is_err());
+    assert!(publish(&digest, original.len() + 1).is_err());
+    let published = publish(&digest, original.len()).unwrap();
+    let cached = PathBuf::from(published.trim());
+    assert_eq!(fs::read(&helper).unwrap(), original);
+    assert_eq!(fs::read(&cached).unwrap(), original);
+    assert_eq!(
+        fs::metadata(&helper).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(&cached).unwrap().permissions().mode() & 0o777,
+        0o500
+    );
+    fs::write(&helper, b"upgraded package").unwrap();
+    assert_eq!(publish(&digest, original.len()).unwrap(), published);
+    assert_eq!(fs::read(&cached).unwrap(), original);
+    assert_eq!(fs::read(&helper).unwrap(), b"upgraded package");
+    fs::remove_file(&cached).unwrap();
+    assert!(
+        publish(&digest, original.len()).is_err(),
+        "Changed installation was silently accepted"
+    );
+}
+
+#[test]
+fn installed_helper_reports_the_same_contract_as_its_rpc_handshake() {
+    let Some(helper) = helper() else { return };
+    let output = Command::new(&helper).arg("--host-info").output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let info: wire::helper::Installed = serde_json::from_slice(&output.stdout).unwrap();
+    info.validate("linux", std::env::consts::ARCH, rode_session::PROTOCOL)
+        .unwrap();
+    assert_eq!(info.digest, files::digest(&fs::read(&helper).unwrap()));
+    assert_eq!(
+        PathBuf::from(info.executable),
+        helper.canonicalize().unwrap()
+    );
+    let _gateway = Gateway::start(&helper);
+}
+
+#[test]
 fn native_handshake_rejects_wrong_version_identity_and_oversized_frames() {
     let Some(helper) = helper() else { return };
     let digest = files::digest(&fs::read(&helper).unwrap());
@@ -46,6 +191,7 @@ fn native_handshake_rejects_wrong_version_identity_and_oversized_frames() {
                     }
                     .into(),
                     capabilities: vec![],
+                    info: None,
                 },
             )
             .unwrap();
@@ -399,12 +545,18 @@ impl Gateway {
                 architecture: std::env::consts::ARCH.into(),
                 digest: digest.clone(),
                 capabilities: vec![],
+                info: None,
             },
         )
         .unwrap();
         let hello = handshake.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(hello.version, framing::VERSION);
         assert_eq!(hello.digest, digest);
+        hello
+            .info
+            .unwrap()
+            .validate("linux", std::env::consts::ARCH, rode_session::PROTOCOL)
+            .unwrap();
         Self {
             child,
             input: Some(input),

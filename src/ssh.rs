@@ -49,6 +49,8 @@ pub struct Profile {
     pub jump: String,
     /// Optional alternative SSH config file on the desktop.
     pub config: String,
+    /// Optional preinstalled helper on the remote host; empty enables discovery/deployment.
+    pub remote_helper: String,
     /// Initial project directory on the remote host.
     pub root: String,
     /// Requested sandbox defaults for this profile.
@@ -65,6 +67,7 @@ impl Default for Profile {
             identity: String::new(),
             jump: String::new(),
             config: String::new(),
+            remote_helper: String::new(),
             root: "~".into(),
             sandbox: Default::default(),
         }
@@ -93,6 +96,15 @@ impl Profile {
         }
         if self.root.is_empty() || self.root.contains('\0') {
             bail!("Enter a valid remote folder.");
+        }
+        if !self.remote_helper.is_empty()
+            && (!(self.remote_helper.starts_with('/') || self.remote_helper.starts_with("~/"))
+                || self.remote_helper.len() > 4096
+                || self.remote_helper.chars().any(char::is_control))
+        {
+            bail!(
+                "Remote helper must be an absolute path or start with ~/, with no control characters (maximum 4096 bytes)."
+            );
         }
         Ok(())
     }
@@ -516,12 +528,44 @@ mod tests {
         assert_eq!(profile.host, "cluster");
         assert_eq!(profile.jump, "login");
         assert_eq!(profile.root, "/work/project");
+        assert!(profile.remote_helper.is_empty());
         assert!(
             serde_json::to_value(profile)
                 .unwrap()
                 .get("backend")
                 .is_none()
         );
+    }
+    #[test]
+    fn remote_helper_paths_are_literal_bounded_and_saved() {
+        let root = tempfile::tempdir().unwrap();
+        let mut profile = Profile {
+            host: "cluster".into(),
+            ..Default::default()
+        };
+        for path in [
+            "",
+            "/opt/rode ' build/rode-sessiond",
+            "~/.cargo/bin/rode-sessiond",
+        ] {
+            profile.remote_helper = path.into();
+            assert!(profile.validate().is_ok());
+            let saved =
+                save_profile_at(&root.path().join("profiles.json"), &profile, None).unwrap();
+            assert_eq!(saved[0].remote_helper, path);
+        }
+        for path in [
+            "rode-sessiond",
+            "../helper",
+            "~someone/helper",
+            "/tmp/helper\nother",
+            "/tmp/\0helper",
+        ] {
+            profile.remote_helper = path.into();
+            assert!(profile.validate().is_err(), "Accepted {path:?}");
+        }
+        profile.remote_helper = format!("/{}", "x".repeat(4096));
+        assert!(profile.validate().is_err());
     }
     #[test]
     fn parallel_connections_own_distinct_private_directories() {

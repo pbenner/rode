@@ -13,7 +13,18 @@ pub fn quote(value: &str) -> String {
 }
 
 /// Concurrently drain both pipes and stdin so large saves cannot deadlock SSH.
-pub fn run_bounded(mut command: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+pub fn run_bounded(command: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+    run_bounded_limited(command, input, timeout, 64 * 1024 * 1024)
+}
+
+/// Run an SSH command with a caller-specific stdout cap, enforced while reading.
+/// Stderr retains its separate 64 KiB diagnostic limit.
+pub fn run_bounded_limited(
+    mut command: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+    output_limit: usize,
+) -> Result<Vec<u8>> {
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -30,7 +41,9 @@ pub fn run_bounded(mut command: Command, input: Vec<u8>, timeout: Duration) -> R
     let out_tx = tx.clone();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        let result = stdout.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes);
+        let result = stdout
+            .take(output_limit.saturating_add(1) as u64)
+            .read_to_end(&mut bytes);
         let _ = out_tx.send((true, bytes, result));
     });
     std::thread::spawn(move || {
@@ -65,11 +78,11 @@ pub fn run_bounded(mut command: Command, input: Vec<u8>, timeout: Duration) -> R
             error = bytes;
         }
     }
+    if output.len() > output_limit {
+        bail!("SSH response exceeded its size limit.");
+    }
     if !status.success() {
         bail!("{}", String::from_utf8_lossy(&error).trim());
-    }
-    if output.len() > 64 * 1024 * 1024 {
-        bail!("SSH response exceeded its size limit.");
     }
     Ok(output)
 }
@@ -130,3 +143,24 @@ pub fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
 
 /// Set only by a transient helper when its owning input channel closes.
 pub static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_ssh_output_limits_preserve_binary_data_and_reject_overflow() {
+        let data = vec![0, 255, 10, 42];
+        let output = run_bounded_limited(
+            Command::new("/bin/cat"),
+            data.clone(),
+            Duration::from_secs(5),
+            data.len(),
+        )
+        .unwrap();
+        assert_eq!(output, data);
+        let error = run_bounded_limited(Command::new("/bin/cat"), data, Duration::from_secs(5), 3)
+            .unwrap_err();
+        assert!(error.to_string().contains("size limit"), "{error:#}");
+    }
+}

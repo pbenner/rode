@@ -1,6 +1,8 @@
 //! Run through scripts/test-ssh.sh, which creates an isolated localhost SSH server.
 #[path = "support/process.rs"]
 mod fixture_process;
+#[path = "ssh_roundtrip/installed_helpers.rs"]
+mod installed_helpers;
 
 use rode::{
     files::Request,

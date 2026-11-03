@@ -1209,12 +1209,18 @@ fn concurrent_rode_clients_start_one_service_and_keep_independent_sessions() {
     let plan = fixture.plan();
     let policy = sessions::fingerprint(&plan);
     let ids: Vec<_> = (0..8).map(|_| rode_session::new_id().unwrap()).collect();
+    // Register cleanup before starting workers, including when one panics after
+    // other clients have already created persistent shells.
+    fixture.ids = ids.iter().map(|id| (id.clone(), policy.clone())).collect();
+    let start = std::sync::Barrier::new(ids.len());
     std::thread::scope(|scope| {
         for id in &ids {
             let fixture = &fixture;
             let plan = &plan;
             let policy = &policy;
+            let start = &start;
             scope.spawn(move || {
+                start.wait();
                 let response = fixture
                     .rpc(&Request::Create {
                         allocation: None,
@@ -1233,7 +1239,6 @@ fn concurrent_rode_clients_start_one_service_and_keep_independent_sessions() {
             });
         }
     });
-    fixture.ids = ids.into_iter().map(|id| (id, policy.clone())).collect();
     let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
         panic!()
     };

@@ -6,7 +6,6 @@ use rode_session::host::{Operation, Response};
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    path::PathBuf,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Condvar, Mutex,
@@ -15,6 +14,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+mod helper;
 
 type PendingReply = Result<Response, String>;
 struct Pending {
@@ -105,56 +106,6 @@ impl State {
     }
 }
 
-fn artifact(architecture: &str) -> Result<Vec<u8>> {
-    ensure!(
-        matches!(architecture, "x86_64" | "aarch64"),
-        "Native remote helper supports Linux x86_64 and aarch64"
-    );
-    let executable = std::env::current_exe()?;
-    let bin = executable
-        .parent()
-        .context("Missing executable directory")?;
-    let override_path = std::env::var_os("RODE_HOST_HELPER")
-        .or_else(|| std::env::var_os("RODE_SESSION_HELPER"))
-        .map(PathBuf::from);
-    let mut candidates = vec![];
-    if let Some(path) = override_path {
-        candidates.push(if path.is_dir() {
-            path.join(architecture).join("rode-sessiond")
-        } else {
-            path
-        });
-    } else {
-        candidates.push(
-            bin.join("host-helpers")
-                .join(architecture)
-                .join("rode-sessiond"),
-        );
-        if let Some(target) = bin.parent() {
-            candidates.push(target.join(format!(
-                "{architecture}-unknown-linux-musl/release/rode-sessiond-standalone"
-            )));
-        }
-        if architecture == std::env::consts::ARCH {
-            candidates.extend([bin.join("rode-sessiond-static"), bin.join("rode-sessiond")]);
-        }
-    }
-    let path = candidates.into_iter().find(|p| p.is_file()).with_context(|| format!("No packaged native helper for the remote architecture. Run cargo xtask build-helper {architecture} or set RODE_HOST_HELPER to a matching release helper; no download or compiler is started automatically."))?;
-    let bytes = rode_host_core::persistence::read(&path, 24 * 1024 * 1024)?
-        .context("Missing native helper")?;
-    ensure!(
-        bytes.len() >= 20 && bytes.starts_with(b"\x7fELF\x02\x01"),
-        "Native helper must be a little-endian 64-bit Linux ELF executable"
-    );
-    let machine = u16::from_le_bytes([bytes[18], bytes[19]]);
-    ensure!(
-        (architecture == "x86_64" && machine == 62)
-            || (architecture == "aarch64" && machine == 183),
-        "Selected helper does not match the remote architecture"
-    );
-    Ok(bytes)
-}
-
 impl Client {
     fn connect(remote: &ssh::Remote) -> Result<Self> {
         ensure!(
@@ -172,23 +123,11 @@ impl Client {
             "Native host needs Linux and silent non-interactive shell startup"
         );
         let architecture = probe[1];
-        let bytes = artifact(architecture)?;
-        let digest = files::digest(&bytes);
-        let mut install = Command::new("ssh");
-        install.args(remote.channel_args(false)).arg(format!(
-            "sh -c {} sh {} {}",
-            ssh::quote(include_str!("bootstrap.sh")),
-            ssh::quote(&digest),
-            bytes.len()
-        ));
-        let output = ssh::run_bounded(install, bytes, Duration::from_secs(60))?;
-        let executable = std::str::from_utf8(&output)?
-            .trim_end_matches('\n')
-            .to_owned();
-        ensure!(
-            executable.starts_with('/') && !executable.contains(['\n', '\r', '\0']),
-            "Invalid native helper deployment response"
-        );
+        let helper::Selected {
+            executable,
+            digest,
+            info: expected_info,
+        } = helper::select(remote, architecture)?;
         ensure!(
             !remote.native.closed.load(Ordering::Acquire),
             "SSH disconnected during native helper deployment"
@@ -232,6 +171,21 @@ impl Client {
                         && hello.digest == expected_digest
                         && hello.architecture == expected_arch,
                     "Native host version, digest or architecture mismatch"
+                );
+                let info = hello.info.context("Native helper lacks compatibility metadata; rebuild/install rode-sessiond with this editor")?;
+                info.validate("linux", &expected_arch, rode_session::PROTOCOL)
+                    .map_err(anyhow::Error::msg)?;
+                ensure!(
+                    expected_info
+                        .as_ref()
+                        .is_none_or(|expected| *expected == info),
+                    "Installed helper metadata changed between discovery and startup; reconnect"
+                );
+                ensure!(
+                    wire::helper::CAPABILITIES
+                        .iter()
+                        .all(|cap| hello.capabilities.iter().any(|value| value == cap)),
+                    "Native host handshake is missing required capabilities"
                 );
                 Ok(())
             })();
@@ -279,7 +233,11 @@ impl Client {
                     version: framing::VERSION,
                     architecture: architecture.into(),
                     digest,
-                    capabilities: vec![],
+                    capabilities: wire::helper::CAPABILITIES
+                        .iter()
+                        .map(|s| (*s).into())
+                        .collect(),
+                    info: None,
                 },
             )?;
             hello_rx

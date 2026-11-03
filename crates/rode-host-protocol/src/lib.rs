@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 pub mod files;
 pub mod framing;
+pub mod helper;
 
 /// Handshake is exchanged before any operation, including preparation.
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -14,6 +15,9 @@ pub struct Hello {
     pub digest: String,
     /// Operations implemented by this helper build.
     pub capabilities: Vec<String>,
+    /// Complete helper contract. Absent in helpers predating installed discovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<helper::Info>,
 }
 
 /// Correlation identity is echoed on success and failure.

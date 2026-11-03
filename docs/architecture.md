@@ -279,7 +279,7 @@ Separate multiplexed channels -> bounded process/build/debugger streams
 | `rode-session::host` | Gateway, request composition, opaque project contexts and fresh scoped worker processes |
 | `rode-session::workspace` | Session administration DTOs and launch conversion, shared with the desktop |
 | Existing session controllers | Persistent PTYs, agents, notebook/debugger state, leases, protected IPC and service generations |
-| Desktop `src/host/native.rs` | Remote-architecture selection, verified bootstrap, bounded request scheduling and connection failure reporting |
+| Desktop `src/host/native.rs` | Installed-helper discovery and compatibility, remote-architecture selection, verified bootstrap, bounded requests and connection failure reporting |
 | Desktop facades | `files`, `project`, `sandbox`, `sessions` compose host services with UI attachments and local helper discovery |
 
 The dependency direction is `protocol <- host-core <- session`. Agent/runtime controllers remain headless. Image/PDF decoding, notebook documents, textures, source buffers and preference merging remain in the desktop. Wire file results contain only encoded data, entries, paths and revisions.
@@ -298,7 +298,9 @@ Session service IPC remains protected independently of RPC: same-UID and namespa
 
 ### Protocol and channel contract
 
-Host wire version 1 is separate from session protocol 10. A fixed preamble and handshake verify the selected helper digest, architecture and wire version before operations. The helper advertises implemented capabilities. Stdout is exclusively protocol data; stderr supplies bounded diagnostics. Startup banners, wrong versions or wrong executable identity fail explicitly.
+Host wire version 1 is separate from session protocol 11 and helper API revision 1. A fixed preamble and handshake verify the selected helper digest, OS/architecture, metadata format, API revision, host/session protocols and required capabilities before operations. Package versions are diagnostic; matching release labels alone are insufficient. Installed discovery and the live handshake must report identical helper metadata. Stdout is exclusively protocol data; stderr supplies bounded diagnostics. Startup banners, wrong versions or wrong executable identity fail explicitly.
+
+Maintain `rode_host_protocol::helper::API` for incompatible changes to helper CLI arguments, shared request/response DTOs, or auxiliary streams not already versioned by the host/session protocols. Additive capabilities may be advertised without breaking old clients; update the required set when the desktop depends on them. Bump the metadata format for incompatible discovery-schema changes. Keep metadata side-effect-free and repeat it in the handshake; do not substitute package-version comparisons for these contracts.
 
 - Each physical frame is a big-endian 32-bit length plus at most 64 KiB of data. A zero length ends the message. Lengths are checked before allocation.
 - JSON envelopes are capped at 64 MiB to retain existing base64 file/image/PDF payload contracts. Existing text/decoded-image limits still apply. Version 1 does not introduce a separate binary payload protocol or structured error taxonomy.
@@ -311,9 +313,9 @@ The implementation uses existing threads and bounded channels, with no new async
 
 ### Deployment and lifetime
 
-`src/host/bootstrap.sh` is a fixed POSIX bootstrap. It checks required utilities, directory ownership/modes, exact size and SHA-256 before publishing an executable. The desktop selects a Linux x86_64/aarch64 ELF matching the remote architecture. It neither downloads nor builds a helper implicitly. See [host prerequisites and overrides](remote.md#host-service-backends).
+`src/host/installed.sh` performs bounded discovery and checks canonical path ownership/modes before executing `--host-info`. `src/host/native/helper.rs` validates the installed contract, honours explicit remote paths without fallback, and otherwise falls back to a matching desktop Linux x86_64/aarch64 ELF. `src/host/bootstrap.sh` checks ownership/modes, size and SHA-256 before publishing either uploaded bytes or an on-host copy of the selected installation. No helper is downloaded or built implicitly. See [host prerequisites and overrides](remote.md#host-service-backends).
 
-The private cache is `~/.rode-host/host-<digest>`. A unique temporary directory and non-replacing hardlink publication make simultaneous installs safe; interrupted uploads clean only their own staging directory. Existing generations are reverified and preserved on verification failure. There is no automatic garbage collection. Keep referenced helpers while persistent jobs run. This cache is separate from the older session-helper cache, whose live service generations remain untouched.
+The private cache is `~/.rode-host/host-<digest>`. A unique temporary directory and non-replacing hardlink publication make simultaneous installs safe; interrupted uploads clean only their own staging directory. Existing generations are reverified and preserved on verification failure. Installed packages remain untouched; the private copy prevents package upgrades from changing live launch paths. Discovery runs only during connection setup. There is no automatic garbage collection. Keep referenced helpers while persistent jobs run. This cache is separate from the older session-helper cache, whose live service generations remain untouched.
 
 The gateway lasts for one SSH connection and owns transient work only. The existing service owns persistent jobs, retains their original policy/environment and can coexist with older live service generations. Session control from the gateway runs through a short-lived administration process with its captured runtime directory; it does not mutate the gateway's shared environment. Generic supervisors remain alive for their child lifetime, including bubblewrap's parent-death relationship.
 

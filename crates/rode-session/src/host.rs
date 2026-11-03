@@ -56,6 +56,25 @@ pub enum Response {
     },
 }
 
+/// Read-only metadata for selecting a preinstalled helper, without starting a service.
+pub fn info() -> Result<()> {
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let bytes =
+        rode_host_core::persistence::read(&executable, wire::helper::MAX_EXECUTABLE as usize)?
+            .context("Missing running host helper")?;
+    let installed = wire::helper::Installed {
+        executable: executable
+            .to_str()
+            .context("Helper path must be UTF-8")?
+            .into(),
+        digest: files::digest(&bytes),
+        size: bytes.len() as u64,
+        info: wire::helper::Info::current(env!("CARGO_PKG_VERSION"), crate::PROTOCOL),
+    };
+    serde_json::to_writer(std::io::stdout().lock(), &installed)?;
+    Ok(())
+}
+
 fn local(request: &FileRequest, cancelled: &AtomicBool) -> Result<FileResponse> {
     match request {
         FileRequest::Prepare { .. } => bail!("Prepare is a host administration operation"),
@@ -326,8 +345,9 @@ pub fn serve() -> Result<()> {
         "Incompatible host architecture"
     );
     let executable = std::env::current_exe()?;
-    let bytes = rode_host_core::persistence::read(&executable, 24 * 1024 * 1024)?
-        .context("Missing running host helper")?;
+    let bytes =
+        rode_host_core::persistence::read(&executable, wire::helper::MAX_EXECUTABLE as usize)?
+            .context("Missing running host helper")?;
     let digest = files::digest(&bytes);
     ensure!(
         hello.digest == digest,
@@ -356,15 +376,14 @@ pub fn serve() -> Result<()> {
                 version: framing::VERSION,
                 architecture: std::env::consts::ARCH.into(),
                 digest,
-                capabilities: vec![
-                    "files".into(),
-                    "project_tools".into(),
-                    "contexts".into(),
-                    "sessions".into(),
-                    "native_landlock".into(),
-                    "native_mise".into(),
-                    "shared_compute_helper".into(),
-                ],
+                capabilities: wire::helper::CAPABILITIES
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect(),
+                info: Some(wire::helper::Info::current(
+                    env!("CARGO_PKG_VERSION"),
+                    crate::PROTOCOL,
+                )),
             },
         )?;
     }

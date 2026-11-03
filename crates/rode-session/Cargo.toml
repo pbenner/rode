@@ -26,6 +26,9 @@ rode-agent-core = { path = "../rode-agent-core" }
 rode-runtime-core = { path = "../rode-runtime-core" }
 vt100 = "0.16"
 
+[dev-dependencies]
+tempfile = "3"
+
 [[bin]]
 name = "rode-sessiond-standalone"
 path = "src/main.rs"

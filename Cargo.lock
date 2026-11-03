@@ -2346,6 +2346,7 @@ dependencies = [
  "rode-runtime-core",
  "serde",
  "serde_json",
+ "tempfile",
  "vt100",
 ]
 

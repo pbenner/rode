@@ -234,6 +234,11 @@ impl EditorApp {
                             "~/.ssh/config (default)",
                         ),
                         (
+                            "Remote helper",
+                            &mut self.profile.remote_helper,
+                            "Auto, or /path/to/rode-sessiond",
+                        ),
+                        (
                             "Profile name",
                             &mut self.profile.name,
                             "Optional friendly name",
@@ -269,7 +274,7 @@ impl EditorApp {
                     });
             });
         }
-        ui.label(RichText::new("Authentication and host-key prompts open in the terminal. Remote file access uses Python 3's standard library.").small().color(palette.muted));
+        ui.label(RichText::new("Authentication and host-key prompts open in the terminal. RODE uses a compatible installed helper or deploys a matching native helper.").small().color(palette.muted));
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if palette.primary(ui, "Connect").clicked() {

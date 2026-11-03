@@ -676,10 +676,10 @@ mod tests {
             0
         );
         drop(first);
-        assert_eq!(
-            unsafe { libc::flock(second.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-            0
-        );
+        // Other tests can fork while this descriptor is open. CLOEXEC releases
+        // their inherited reference at exec, not at this thread's close.
+        // Keep a deadline so a leaked lease still fails the test.
+        crate::locking::lock(&second).unwrap();
         drop(second);
         fs::remove_file(mount.runtime.join("views.lock")).unwrap();
         fs::remove_dir(&mount.info.mountpoint).unwrap();

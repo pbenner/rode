@@ -358,6 +358,23 @@ fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::S
     ))
 }
 
+#[cfg(target_os = "linux")]
+fn connect_control_fallback(
+    dir: &Path,
+    address: &std::os::unix::net::SocketAddr,
+) -> std::io::Result<UnixStream> {
+    let legacy = UnixStream::connect(dir.join("socket"))?;
+    // The service can start between the refused abstract connection and this
+    // filesystem connection. It binds its protected listener before publishing
+    // discovery, so check again before treating this socket as a legacy service.
+    // Permission denials on either attempt must never fall back to a pathname.
+    match UnixStream::connect_addr(address) {
+        Ok(stream) => Ok(stream),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(legacy),
+        Err(error) => Err(error),
+    }
+}
+
 /// Connect to the protected control transport in a private runtime directory.
 /// Legacy filesystem sockets remain supported, but permission denials never fall back.
 pub fn connect_control(dir: &Path) -> Result<UnixStream> {
@@ -368,12 +385,13 @@ pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     );
     #[cfg(target_os = "linux")]
     let stream = {
-        match UnixStream::connect_addr(&control_address(&meta)?) {
+        let address = control_address(&meta)?;
+        match UnixStream::connect_addr(&address) {
             Ok(stream) => stream,
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
                 // Older services have no abstract listener. New services reject
                 // all requests on this discovery socket, including raw clients.
-                UnixStream::connect(dir.join("socket"))?
+                connect_control_fallback(dir, &address)?
             }
             Err(error) => return Err(error.into()),
         }
@@ -384,6 +402,10 @@ pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     Ok(stream)
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod control_tests;
+
 /// Perform a blocking control request, starting a matching service when needed. Service
 /// creation is serialized; existing legacy sessions remain separately discoverable.
 pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
@@ -1677,6 +1699,7 @@ pub fn cli(args: &[String]) -> Result<()> {
         match args[0].as_str() {
             "--agent-file-tool" => return rode_host_core::agent_files::serve(),
             "host-rpc" => return host::serve(),
+            "--host-info" => return host::info(),
             "--runtime-cache" => return rode_host_core::runtime_cache::serve(),
             "--process" => return rode_host_core::supervisor::serve(),
             "--workspace-request" => return host::workspace_request(),
