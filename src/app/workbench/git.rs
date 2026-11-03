@@ -402,7 +402,12 @@ impl EditorApp {
             .files
             .iter()
             .any(project::GitFile::conflict);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            // Reserve the button's full height before laying out the checkbox.
+            let height = (ui.text_style_height(&egui::TextStyle::Button)
+                + 2. * ui.spacing().button_padding.y)
+                .max(ui.spacing().interact_size.y);
+            ui.spacing_mut().interact_size.y = height;
             ui.checkbox(&mut self.workbench.git.amend, "Amend last commit");
             let hint = if !ready {
                 "Wait for the current Git operation to finish."
