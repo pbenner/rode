@@ -12,6 +12,56 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Policy probes use the system runtime covered by the built-in /usr grant.
+/// PATH-managed interpreters can depend on standard libraries outside that grant;
+/// isolated mode also excludes Python environment variables and user packages.
+fn policy_python(code: &str) -> [String; 4] {
+    [
+        "/usr/bin/python3".into(),
+        "-I".into(),
+        "-c".into(),
+        code.into(),
+    ]
+}
+
+#[test]
+fn policy_python_ignores_path_managers_and_python_environment() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let shadow = root.path().join("python3");
+    std::fs::write(
+        &shadow,
+        "#!/bin/sh\nprintf 'unexpected PATH Python\\n' >&2\nexit 99\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&shadow, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        root.path().join("encodings.py"),
+        "raise RuntimeError('project Python module loaded')\n",
+    )
+    .unwrap();
+    let args = policy_python(
+        "import encodings, sys; assert sys.flags.isolated; print('SYSTEM_PYTHON_OK')",
+    );
+    let output = Command::new(&args[0])
+        .args(&args[1..])
+        .current_dir(root.path())
+        .env("PATH", root.path())
+        .env("PYTHONHOME", root.path().join("missing-runtime"))
+        .env("PYTHONPATH", root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "SYSTEM_PYTHON_OK"
+    );
+}
+
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
@@ -260,7 +310,7 @@ fn landlock_file_and_command_policy_on_direct_and_proxyjump_hosts() {
         );
         // Run an actual remote child under the captured prefix, including UDP denial.
         let mut args = plan.prefix.clone();
-        args.extend(["python3".into(), "-c".into(), "import os,socket; assert os.getcwd()==os.environ['EXPECTED_ROOT'];\ntry: socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\nexcept PermissionError: print('LANDLOCK_SSH_OK')\nelse: raise AssertionError('UDP allowed')".into()]);
+        args.extend(policy_python("import os,socket; assert os.getcwd()==os.environ['EXPECTED_ROOT'];\ntry: socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\nexcept PermissionError: print('LANDLOCK_SSH_OK')\nelse: raise AssertionError('UDP allowed')"));
         let mut command = Command::new("ssh");
         command.args(remote.channel_args(false)).arg(format!(
             "EXPECTED_ROOT={} {}",
