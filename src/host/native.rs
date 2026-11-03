@@ -139,7 +139,7 @@ fn artifact(architecture: &str) -> Result<Vec<u8>> {
             candidates.extend([bin.join("rode-sessiond-static"), bin.join("rode-sessiond")]);
         }
     }
-    let path = candidates.into_iter().find(|p| p.is_file()).context("No packaged native helper for the remote architecture. Build scripts/build-sessiond.sh TARGET or set RODE_HOST_HELPER to a matching release helper; no download or compiler is started automatically.")?;
+    let path = candidates.into_iter().find(|p| p.is_file()).with_context(|| format!("No packaged native helper for the remote architecture. Run cargo xtask build-helper {architecture} or set RODE_HOST_HELPER to a matching release helper; no download or compiler is started automatically."))?;
     let bytes = rode_host_core::persistence::read(&path, 24 * 1024 * 1024)?
         .context("Missing native helper")?;
     ensure!(

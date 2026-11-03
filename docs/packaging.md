@@ -82,7 +82,7 @@ Build on the oldest Debian/Ubuntu release you intend to support. Building on a n
 After building release binaries, CI can package without compiling again. `--skip-build` skips Rust compilation and still packages only the editor:
 
 ```sh
-scripts/build-sessiond.sh
+cargo xtask build-helper
 cargo build --locked --release
 scripts/build-deb.sh --skip-build
 python3 scripts/test-deb.py target/debian/rode_0.1.0-1_amd64.deb

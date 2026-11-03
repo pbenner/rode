@@ -30,10 +30,10 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             4096,
             std::time::Duration::ZERO,
         )
-        .context("Cannot check RODE_SESSION_HELPER; rebuild it with scripts/build-sessiond.sh")?;
+        .context("Cannot check RODE_SESSION_HELPER; rebuild it with cargo xtask build-helper")?;
         ensure!(
             output.success() && output.stdout.trim() == rode_session::PROTOCOL.to_string(),
-            "RODE_SESSION_HELPER uses an older terminal protocol. Rebuild it with scripts/build-sessiond.sh or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
+            "RODE_SESSION_HELPER uses an older terminal protocol. Rebuild it with cargo xtask build-helper or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
         );
     }
     let launcher = match standalone {

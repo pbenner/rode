@@ -1726,7 +1726,7 @@ fn native_test_helper(data: bool) -> rode::sessions::Helper {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("target/release/rode-sessiond-static")
         });
-    let bytes = std::fs::read(path).expect("Run scripts/build-sessiond.sh before the SSH test");
+    let bytes = std::fs::read(path).expect("Run cargo xtask build-helper before the SSH test");
     rode::sessions::Helper {
         digest: rode::files::digest(&bytes),
         architecture: std::env::consts::ARCH.into(),

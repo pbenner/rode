@@ -147,7 +147,9 @@ def extended_suites(paths, full=False):
         return EXTENDED
     selected = set()
     for path in paths:
-        if path.startswith(("src/", "crates/", "tests/", ".github/")) or path in {
+        if path.startswith(
+            ("src/", "crates/", "tests/", ".github/", "xtask/", ".cargo/")
+        ) or path in {
             "Cargo.toml",
             "Cargo.lock",
             "rust-toolchain.toml",

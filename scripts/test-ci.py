@@ -62,10 +62,11 @@ class SelectionTests(unittest.TestCase):
             "mise.toml",
             "mise.lock",
             "rust-toolchain.toml",
+            "xtask/src/helper.rs",
+            ".cargo/config.toml",
         ]:
             self.assertEqual(ci.extended_suites([path]), ci.EXTENDED)
         self.assertEqual(ci.extended_suites([], full=True), ci.EXTENDED)
-        self.assertEqual(ci.extended_suites(["scripts/build-sessiond.sh"]), ci.EXTENDED)
         self.assertEqual(ci.extended_suites(["scripts/test-new-ui.py"]), ci.EXTENDED)
 
     def test_viewer_harness_changes_select_both_local_and_remote_cases(self):

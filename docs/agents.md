@@ -132,7 +132,7 @@ The optional runtime has its own version and protected checksum manifest, allowi
 Install RODE from the source checkout:
 
 ```sh
-cargo install --locked --path .
+cargo xtask install
 rode /path/to/project
 ```
 

@@ -121,7 +121,7 @@ jobs:
           python3 scripts/ci.py time --timeout 1200 test-build -- bash -c 'cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json'
       - run: mise run test
       - run: mise run build
-      - run: python3 scripts/ci.py time --timeout 600 static-helper -- bash scripts/build-sessiond.sh
+      - run: python3 scripts/ci.py time --timeout 600 static-helper -- cargo xtask build-helper
       - run: python3 scripts/ci.py bundle
       - uses: actions/upload-artifact@v7
         with:

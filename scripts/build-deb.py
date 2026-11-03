@@ -340,11 +340,13 @@ def main():
         helper = (args.helper or (standalone if standalone.is_file() else legacy)).resolve()
     else:
         binary = build("rode", "rode")
-        subprocess.run(
-            [os.environ.get("RUSTUP", "rustup"), "target", "add", helper_target], check=True
-        )
-        helper = build(
-            "rode-session", "rode-sessiond-standalone", helper_target, features="standalone"
+        helper = Path(
+            output(
+                CARGO,
+                "xtask",
+                "build-helper",
+                {"amd64": "x86_64", "arm64": "aarch64"}[architecture],
+            )
         )
     check_elf(binary, architecture)
     check_elf(helper, architecture, static=True)

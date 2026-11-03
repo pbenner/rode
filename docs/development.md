@@ -32,7 +32,7 @@ bash scripts/test-ssh.sh
 RODE_SSH_TEST_NO_PYTHON=1 RODE_SSH_TEST_FILTER=native_generic_operations bash scripts/test-ssh.sh
 ```
 
-Use the static helper from `scripts/build-sessiond.sh` for the release/platform matrix. Set the real-tool fixture variables documented below for Jupyter/debugger integration; an optional-tool skip is not coverage of that feature. The no-Python fixture removes Python from its remote command path and exercises files, Git, native Landlock, mise process launches and persistent terminal creation through direct SSH and ProxyJump. `native_host` additionally checks protocol rejection, concurrent replies, revisions, connection identity, sandbox denial, EOF cancellation, runtime-cache integrity and the compute-launch boundary with a fake scheduler. CI supplies the native helper for all remote suites.
+Use the static helper from `cargo xtask build-helper` for the release/platform matrix. Set the real-tool fixture variables documented below for Jupyter/debugger integration; an optional-tool skip is not coverage of that feature. The no-Python fixture removes Python from its remote command path and exercises files, Git, native Landlock, mise process launches and persistent terminal creation through direct SSH and ProxyJump. `native_host` additionally checks protocol rejection, concurrent replies, revisions, connection identity, sandbox denial, EOF cancellation, runtime-cache integrity and the compute-launch boundary with a fake scheduler. CI supplies the native helper for all remote suites.
 
 Shared embedded Python feature adapters and JSON policy/catalogue data live in `crates/rode-host-core/src/`. Ruff checks the whole repository, including these files. Keep a single canonical source for assets shared by desktop and helper.
 
@@ -67,7 +67,7 @@ scripts/uvx.sh --from ruff==0.17.3 python -c 'import shutil; shutil.copy2(shutil
 cargo test --locked --profile ci --workspace --all-targets --no-run --message-format=json > target/ci-test-binaries.json
 RODE_TEST_RUFF="$PWD/target/test-tools/bin/ruff" cargo test --locked --profile ci --workspace --all-targets
 cargo build --locked --profile ci --bins
-bash scripts/build-sessiond.sh
+cargo xtask build-helper
 python3 scripts/ci.py bundle
 LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1100x24' python3 scripts/ci.py run workspace
 ```
@@ -80,12 +80,14 @@ Process fixtures must publish readiness markers only after their contents are co
 
 Install each suite's prerequisites first (listed in `scripts/ci-deps.sh`); that script uses sudo and is intended for disposable CI runners. The failed-login clipboard regression also requires `xclip`. `RODE_TEST_BINARY`, `RODE_TEST_SESSION_HELPER` and `RODE_SESSION_HELPER` can override the binaries for local runs. The CI runner defaults `RODE_SESSION_HELPER` to the selected test helper as well: transferred test executables live in a separate directory, so service-backed history/agents cannot rely on sibling discovery. Explicit overrides remain respected. `RODE_SSH_TEST_BINARY` selects a prebuilt transport-test executable; standalone `scripts/test-ssh.sh` still builds/runs its Rust tests by default. To batch UI-only commands under one SSH fixture, use `RODE_SSH_RUN_TRANSPORT=0 bash scripts/test-ssh.sh <command> [arguments...]`; omitting the command in this mode is an error. `python3 scripts/test-ci.py` checks suite selection, helper discovery, artifact permissions, bounded failure output, timeout cleanup and both SSH-wrapper execution modes without contacting an SSH host.
 
-The root package declares both `rode` and `rode-sessiond`, so plain `cargo install --locked --path .` installs both. `tests/sessions.rs` exercises the headless binary through `CARGO_BIN_EXE_rode-sessiond`, including protocol negotiation without a display and reattachment through the ordinary editor after the helper's clients exit. The library package's opt-in `standalone` feature exposes a separate `rode-sessiond-standalone` target for the static builder; distinct names avoid workspace output collisions even with all features enabled. `scripts/build-sessiond.sh` and Debian packaging build that target without desktop dependencies; the published helper names remain unchanged.
+The root package declares both `rode` and `rode-sessiond`, so plain `cargo install --locked --path .` installs both. For source installations intended for SSH, use `cargo xtask install`: it builds/verifies a static helper before installing the editor, then atomically publishes `rode-sessiond-static` beside it. Add `--root PREFIX` to test without updating a real installation. `cargo test -p xtask` covers failed installations, static-helper ELF checks, atomic replacement and custom Cargo target directories. The static builder reads Cargo's reported executable path, validates the ELF architecture and absence of a dynamic loader/shared libraries, and prints the absolute artifact path on stdout. It honors Cargo's configured target directory; build diagnostics remain on stderr.
+
+`tests/sessions.rs` exercises the headless binary through `CARGO_BIN_EXE_rode-sessiond`, including protocol negotiation without a display and reattachment through the ordinary editor after the helper's clients exit. The library package's opt-in `standalone` feature exposes a separate `rode-sessiond-standalone` target for the static builder; distinct names avoid workspace output collisions even with all features enabled. `cargo xtask build-helper` builds that target without desktop dependencies, and Debian packaging calls the same task; the published helper names remain unchanged.
 
 An additional test starts a temporary localhost-only SSH daemon using fresh keys, a private known-hosts file, an isolated config and a temporary remote `HOME` for helper deployment. It never edits `~/.ssh`:
 
 ```sh
-scripts/build-sessiond.sh
+cargo xtask build-helper
 bash scripts/test-ssh.sh
 ```
 
@@ -283,7 +285,7 @@ A legacy-protocol fixture owns a real shell and rejects newer requests. Local an
 
 Idle-lifetime checks start a service without a terminal and naturally exit its last shell, then verify socket cleanup and automatic restart. They keep a detached persistent shell alive beyond the five-second idle timeout, inspect the raw service protocol to verify completed records are released while that shell runs, preserve final output in open views, and check that polling or finished views cannot keep an otherwise empty service alive. The native UI check also leaves the session manager open while a terminal exits to check automatic list refresh.
 
-Build the remote helper with `scripts/build-sessiond.sh` before running `scripts/test-ssh.sh`. For a compatible local fixture host, `RODE_TEST_SESSION_HELPER=/absolute/path/to/rode-sessiond` can select an already built helper instead. Both direct and ProxyJump tests deploy a private checksum-verified helper, start a sandboxed native terminal with a real project venv, disconnect its view/master, establish a fresh independent connection, and reattach to the same running shell. Fixtures use isolated runtime/helper paths and end only their own sessions.
+Build the remote helper with `cargo xtask build-helper` before running `scripts/test-ssh.sh`. For a compatible local fixture host, `RODE_TEST_SESSION_HELPER=/absolute/path/to/rode-sessiond` can select an already built helper instead. Both direct and ProxyJump tests deploy a private checksum-verified helper, start a sandboxed native terminal with a real project venv, disconnect its view/master, establish a fresh independent connection, and reattach to the same running shell. Fixtures use isolated runtime/helper paths and end only their own sessions.
 
 Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-sessions-ui.py` for multiple terminals, the rightmost Persist button with theme-colored fill, on/off changes preserving the shell, compact layout, prompt-free mixed-session exit, reattachment, shared last-view lifetime across two native windows, temporary shells, and confirmed Slurm release against deterministic mocks. Screenshots/logs go to `target/sessions-ui/`. Test harnesses use private `RODE_SESSION_DIR` directories and explicitly end their own sessions on cleanup. A failed test may leave its native fixture service running: use that directory's service API to list/end its sessions; do not kill other users' services or unrelated jobs.
 

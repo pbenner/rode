@@ -21,7 +21,7 @@ Also included:
 30-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Native UI captures with demo data; agent and Slurm scenes show setup controls.
 
 ```sh
-cargo install --locked --path .
+cargo xtask install
 rode /path/to/project
 # Or open a file directly:
 rode /path/to/project/main.py
@@ -31,7 +31,7 @@ rode --ssh user@host --remote-path '~/project'
 
 Files normally use their containing folder as the workspace. With sandbox defaults enabled, a file directly in your home directory opens in **File mode · Normal mode** instead: no project or project tools are started, and your sandbox preferences stay unchanged. Explicit `--sandbox` requests and saved folder policies still apply. See [file startup](docs/getting-started.md#run).
 
-Linux is the validated platform. Build with Rust 1.88+; Cargo installs both the editor and its headless host/session helper. Remote access uses OpenSSH and a POSIX shell. RODE uses a verified native Rust helper for SSH host operations; Python is not required for ordinary editing, terminals or sandbox enforcement. Python/Jupyter features retain their own dependencies. See [remote prerequisites](docs/remote.md#host-service-backends) and [static helper setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).
+Linux is the validated platform. Build with Rust 1.88+ and the native build prerequisites; the source installer builds the editor and installs a static host/session helper beside it. RODE discovers that helper automatically, including on remote hosts with older glibc. Remote access uses OpenSSH and a POSIX shell. RODE uses a verified native Rust helper for SSH host operations; Python is not required for ordinary editing, terminals or sandbox enforcement. Python/Jupyter features retain their own dependencies. See [remote prerequisites](docs/remote.md#host-service-backends) and [static helper setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).
 
 Debian/Ubuntu packages are built for release version tags or manually through **Actions → Package Debian → Run workflow**. Build locally with `scripts/build-deb.sh`; see [packaging and installation](docs/packaging.md).
 

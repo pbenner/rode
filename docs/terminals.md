@@ -47,23 +47,25 @@ Ending a terminal interrupts its shell/programs. A managed allocation's `salloc`
 
 ## Remote helper and packaging
 
-The easy Cargo installation includes the standalone headless helper:
+The source installer includes a static headless helper automatically:
 
 ```sh
-cargo install --locked --path .
-rode-sessiond protocol
+cargo xtask install
+rode-sessiond-static protocol
 ```
 
-Both `rode` and `rode-sessiond` are installed beside each other, normally in `~/.cargo/bin`. A normal `cargo build --release` also builds both binaries under `target/release/`. No separate crate installation is needed. Local terminals continue to use the editor's matching embedded service, and SSH deployment discovers the sibling helper automatically. The Cargo-installed helper targets the build machine's architecture and libc; it is usable on compatible Linux hosts.
+The installer builds and verifies the matching musl helper, installs `rode` and `rode-sessiond` through Cargo, and atomically publishes `rode-sessiond-static` beside them, normally in `~/.cargo/bin`. SSH discovery prefers the static sibling, so older remote glibc versions need no manual setup. Repeat `cargo xtask install` to update the editor and helper together, or add `--root /path/to/prefix` for another installation. This native Linux installer uses Rust and the native build prerequisites; Python, Bash and binutils are not required for installation. Existing jobs keep their original helper inode; no running service is stopped.
+
+Plain `cargo install --locked --path .` and `cargo build --release` still build the ordinary `rode` and `rode-sessiond` pair. That helper targets the build machine's architecture and libc and requires compatible Linux hosts. Local terminals continue to use the editor's matching embedded service.
 
 For hosts with a different/older libc, build a static Linux helper:
 
 ```sh
-scripts/build-sessiond.sh
+cargo xtask build-helper
 # Produces target/release/rode-sessiond-static on the matching architecture.
 ```
 
-Package `rode-sessiond-static` beside `rode`, or set desktop `RODE_SESSION_HELPER` to the helper file. Static helpers take precedence over the ordinary sibling. The script supports `x86_64` and `aarch64`; cross compilation requires a suitable linker/toolchain. It builds the opt-in `rode-sessiond-standalone` target in the `rode-session` library package, keeping desktop dependencies out of the musl build, then copies it to the discovery name `rode-sessiond-static`. The helper must match the **remote** architecture and current terminal protocol. A stale explicit or packaged helper produces a rebuild instruction before starting new work. The static build needs no remote Rust installation, GUI libraries, or compatible glibc. Linux x86_64 is the tested combination.
+Package `rode-sessiond-static` beside `rode`, or set desktop `RODE_SESSION_HELPER` to the helper file. Static helpers take precedence over the ordinary sibling. The `build-helper` task accepts `x86_64` or `aarch64` as an optional argument; cross compilation requires a suitable linker/toolchain. It builds the opt-in `rode-sessiond-standalone` target in the `rode-session` library package, keeping desktop dependencies out of the musl build, then copies it to the discovery name `rode-sessiond-static`. The helper must match the **remote** architecture and current terminal protocol. A stale explicit or packaged helper produces a rebuild instruction before starting new work. The static build needs no remote Rust installation, GUI libraries, or compatible glibc. Linux x86_64 is the tested combination.
 
 The [native SSH helper](remote.md#host-service-backends) is verified and published at `~/.rode-host/host-<sha256>` for both ordinary host work and session control. The cache is private to the user. No separate TCP listener or application port forwarding is used. Helper generations referenced by live jobs are retained; existing session protocol generations and service ownership remain independent of the connection gateway.
 

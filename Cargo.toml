@@ -58,5 +58,5 @@ debug = 0
 incremental = false
 
 [workspace]
-members = ["crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
+members = ["crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core", "xtask"]
 default-members = ["crates/rode-host-protocol", "crates/rode-host-core", ".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
