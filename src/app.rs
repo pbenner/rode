@@ -1518,9 +1518,10 @@ impl EditorApp {
     fn titlebar(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         egui::TopBottomPanel::top("titlebar").exact_height(48.0).frame(theme::frame(palette.panel)).show(ctx, |ui| {
+            palette.paint_panel(ui);
             ui.horizontal_centered(|ui| {
                 ui.label(RichText::new("[r]").monospace().size(22.0).strong().color(palette.accent));
-                ui.label(RichText::new("RODE").strong().size(16.0));
+                ui.label(RichText::new("RODE").strong().size(16.0).color(palette.heading_color()));
                 ui.add_space(14.0);
                 let file_menu = ui.menu_button("File", |ui| {
                     if ui.add(IconButton::new(Icon::NewFile, "New file").shortcut(self.editing_hint("Ctrl+N"))).clicked() { self.new_file(); ui.close(); }
@@ -1888,9 +1889,16 @@ impl EditorApp {
             panel
         };
         panel.show(ctx, |ui| {
+            palette.paint_panel(ui);
             self.pane_ui(ui, navigation::Pane::Explorer);
             ui.horizontal(|ui| {
-                ui.label(palette.tag("EXPLORER"));
+                ui.label(palette.tag("EXPLORER").color(
+                    if palette.chrome == theme::Chrome::Chamfered {
+                        palette.heading
+                    } else {
+                        palette.muted
+                    },
+                ));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if icons::small(ui, Icon::Refresh, "Refresh expanded folders").clicked() {
                         let paths: Vec<_> = self.expanded.iter().cloned().collect();
@@ -2241,8 +2249,9 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         let mut breakpoint_toggle = None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(palette.background))
+            .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome == theme::Chrome::Chamfered { 8 } else { 0 }))
             .show(ctx, |ui| {
+                palette.paint_panel(ui);
                 if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.is_some() { ui.disable(); }
                 self.pane_ui(ui,navigation::Pane::Editor);
                 if ui.available_height() <= 1.0 {

@@ -12,6 +12,7 @@
 use anyhow::{Context, Result, bail};
 use eframe::egui::{self, Color32, FontFamily, FontId, Stroke, TextStyle};
 use egui_extras::syntax_highlighting::SyntectSettings;
+mod surfaces;
 pub mod syntax;
 use serde::Deserialize;
 use std::{
@@ -19,6 +20,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+pub use surfaces::Chrome;
 use syntect::highlighting::{Color, FontStyle, StyleModifier, Theme as SyntaxTheme, ThemeItem};
 
 const MAX_THEME_BYTES: u64 = 64 * 1024;
@@ -33,11 +35,18 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
     ("amber", include_str!("../themes/amber.json")),
     ("ice", include_str!("../themes/ice.json")),
     ("neon", include_str!("../themes/neon.json")),
+    ("afterglow", include_str!("../themes/afterglow.json")),
 ];
 
 /// Copyable interface/terminal colors; syntax themes may be selected independently.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
+    /// Static native surface treatment; existing themes use plain frames.
+    pub chrome: Chrome,
+    /// Decorative frame color, independent of interactive/focus emphasis.
+    pub frame_accent: Color32,
+    /// Section heading color in decorated themes.
+    pub heading: Color32,
     /// Main editor/background surface.
     pub background: Color32,
     /// Sidebar and panel surface.
@@ -77,6 +86,9 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
+            chrome: Chrome::Plain,
+            frame_accent: Color32::from_rgb(125, 235, 164),
+            heading: Color32::from_rgb(205, 218, 216),
             background: Color32::from_rgb(13, 18, 20),
             panel: Color32::from_rgb(18, 25, 27),
             raised: Color32::from_rgb(25, 34, 36),
@@ -142,6 +154,8 @@ impl Palette {
             "text" => &mut self.text,
             "muted" => &mut self.muted,
             "accent" => &mut self.accent,
+            "frame_accent" => &mut self.frame_accent,
+            "heading" => &mut self.heading,
             "success" => &mut self.success,
             "error" => &mut self.error,
             "selection" => &mut self.selection,
@@ -181,6 +195,7 @@ struct ThemeFile {
     syntax: BTreeMap<String, String>,
     ansi: Option<[String; 16]>,
     terminal: Option<TerminalSettings>,
+    chrome: Option<Chrome>,
 }
 
 #[derive(Deserialize)]
@@ -245,6 +260,9 @@ impl Theme {
         let mut theme = base.clone();
         theme.id = id.into();
         theme.name = name.into();
+        if let Some(chrome) = file.chrome {
+            theme.palette.chrome = chrome;
+        }
         if let Some(terminal) = file.terminal {
             if !terminal.minimum_contrast.is_finite()
                 || !(1.0..=21.0).contains(&terminal.minimum_contrast)
@@ -640,6 +658,29 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style.visuals.error_fg_color = palette.error;
     style.visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
     style.visuals.window_highlight_topmost = false;
+    if palette.chrome == Chrome::Chamfered {
+        style.visuals.window_corner_radius = egui::CornerRadius::same(2);
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(2);
+        style.visuals.window_stroke =
+            Stroke::new(1.0_f32, palette.frame_accent.gamma_multiply(0.65));
+        style.visuals.window_shadow = egui::epaint::Shadow {
+            offset: [0, 0],
+            blur: 18,
+            spread: 2,
+            color: palette.frame_accent.gamma_multiply(0.12),
+        };
+        for widget in [
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            widget.corner_radius = egui::CornerRadius::same(2);
+            widget.expansion = 0.0;
+        }
+        style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+        style.visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+    }
     style.spacing.item_spacing = egui::vec2(8.0, 7.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     style.spacing.window_margin = egui::Margin::same(20);

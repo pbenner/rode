@@ -12,7 +12,7 @@ A lightweight native Rust code editor for local and SSH projects, with persisten
 
 Also included:
 
-- [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md).
+- [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md), including Afterglow’s magenta cut-corner frames and cyan accents.
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 

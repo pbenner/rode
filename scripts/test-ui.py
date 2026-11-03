@@ -135,11 +135,11 @@ fn run_step(step: usize) {
         key("space", ("Control_L",))
         key("e")  # Theme samples use the editor while the shell keeps running.
         background(window, "carbon.png", (16, 16, 16))
-        # The status-bar menu has seven built-ins plus the custom fixture.
+        # The status-bar menu has eight built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
         click(1310, 887)
         screenshot(window, "status-theme-selector.png")
-        click(1290, 649)  # Phosphor, first menu row
+        click(1290, 624)  # Phosphor, first menu row
         saved_theme(directory, "phosphor")
         background(window, "phosphor.png", (13, 18, 20))
         for preset, color in [
@@ -147,6 +147,7 @@ fn run_step(step: usize) {
             ("amber", (16, 12, 7)),
             ("ice", (8, 15, 26)),
             ("neon", (17, 11, 27)),
+            ("afterglow", (19, 18, 25)),
         ]:
             theme(preset)
             saved_theme(directory, preset)
@@ -158,7 +159,7 @@ fn run_step(step: usize) {
         saved_theme(directory, "custom:smoke")
         background(window, "custom.png", (21, 18, 26))
         click(1310, 887)
-        click(1290, 699)  # Code Dark, third menu row
+        click(1290, 674)  # Code Dark, third menu row
         saved_theme(directory, "code-dark")
         key("s", ("Control_L",))
         time.sleep(0.3)

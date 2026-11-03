@@ -1149,7 +1149,14 @@ mod tests {
     #[test]
     fn tool_pages_fit_compact_and_detached_widths() {
         let root = tempfile::tempdir().unwrap();
-        for width in [360., 680., 1440.] {
+        for (theme, width) in [
+            ("phosphor", 360.),
+            ("phosphor", 680.),
+            ("phosphor", 1440.),
+            ("afterglow", 360.),
+            ("afterglow", 680.),
+            ("afterglow", 1440.),
+        ] {
             for panel in [
                 Panel::Git,
                 Panel::Monitor,
@@ -1160,6 +1167,7 @@ mod tests {
                 Panel::Debug,
             ] {
                 let (mut app, ctx) = app(root.path());
+                app.themes.select(theme, &ctx).unwrap();
                 app.workbench.git.git_root = root.path().to_string_lossy().into();
                 app.workbench.git.branch = "main".into();
                 app.workbench.draft.sandbox.read_only = vec![format!(

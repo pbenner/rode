@@ -1,0 +1,44 @@
+{
+  "name": "Afterglow",
+  "base": "phosphor",
+  "chrome": "chamfered",
+  "colors": {
+    "background": "#131219",
+    "panel": "#1b1923",
+    "raised": "#27212e",
+    "border": "#483046",
+    "text": "#eeedf4",
+    "muted": "#bda3b8",
+    "accent": "#19d9f5",
+    "frame_accent": "#ff4aa2",
+    "heading": "#fff0c7",
+    "success": "#18e6b0",
+    "error": "#ff7d9b",
+    "selection": "#174255",
+    "hover": "#30263b",
+    "active": "#20394a",
+    "gutter": "#85758f",
+    "terminal_background": "#111116",
+    "terminal_foreground": "#eeedf4"
+  },
+  "syntax": {
+    "comment": "#aa8fa9",
+    "keyword": "#ff80bf",
+    "type": "#ffe3a1",
+    "function": "#4fe1ef",
+    "string": "#8ce3be",
+    "number": "#d7adff",
+    "constant": "#ffd08a",
+    "variable": "#eeedf4",
+    "operator": "#f2a7ce",
+    "punctuation": "#c4b5cf",
+    "builtin": "#a7c7ff",
+    "attribute": "#d7adff"
+  },
+  "ansi": [
+    "#27212e", "#f46e92", "#18d9a8", "#efd18a",
+    "#91a6f7", "#ef72ba", "#19cde8", "#eeedf4",
+    "#b29bb8", "#ff95ad", "#6bf3c8", "#ffe7a8",
+    "#b4baff", "#ffa0d1", "#76eaff", "#ffffff"
+  ]
+}

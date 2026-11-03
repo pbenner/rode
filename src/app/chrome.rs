@@ -445,26 +445,7 @@ impl EditorApp {
                                 };
                                 let painter =
                                     ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
-                                painter.rect_filled(rect, 0, fill);
-                                painter.line_segment(
-                                    [rect.right_top(), rect.right_bottom()],
-                                    Stroke::new(1.0_f32, palette.border),
-                                );
-                                if is_active {
-                                    painter.rect_filled(
-                                        egui::Rect::from_min_size(
-                                            rect.min,
-                                            egui::vec2(rect.width(), 2.),
-                                        ),
-                                        0,
-                                        palette.accent,
-                                    );
-                                } else {
-                                    painter.line_segment(
-                                        [rect.left_bottom(), rect.right_bottom()],
-                                        Stroke::new(1.0_f32, palette.border),
-                                    );
-                                }
+                                palette.paint_tab(&painter, rect, fill, is_active);
                                 painter.text(
                                     egui::pos2(rect.left() + 12., rect.center().y),
                                     egui::Align2::LEFT_CENTER,

@@ -95,17 +95,33 @@ pub struct Reply {
     /// Literal arguments inserted before the attachment subcommand.
     pub prefix: Vec<String>,
 }
-/// Hash the root and actual sandbox launch policy to prevent attachment under a mismatched
-/// workspace policy.
+/// Hash the root and actual sandbox launch policy. The captured native helper's
+/// implementation-only path is stable in this identity across project reopenings;
+/// user grants, their order, isolation flags and read-only state remain significant.
 pub fn fingerprint(plan: &sandbox::Plan) -> String {
+    let mut prefix: Vec<&str> = plan.prefix.iter().map(String::as_str).collect();
+    if plan.active
+        && let Some(helper) = plan.native_helper.as_deref()
+        && let [.., "--ro-bind", source, destination, "--"] = prefix.as_slice()
+        && *source == helper
+        && *destination == helper
+        && (plan.backend == sandbox::Backend::Bwrap
+            || (prefix.first() == Some(&helper) && prefix.get(1) == Some(&"--landlock-launch")))
+    {
+        // prepare_with_helper appends exactly this self-mount, after the user
+        // policy. Do not strip arbitrary grants or match temporary name patterns.
+        // The marker cannot be a real absolute grant/launcher path.
+        const HELPER: &str = "<rode-native-helper>";
+        let end = prefix.len();
+        prefix[end - 3] = HELPER;
+        prefix[end - 2] = HELPER;
+        if plan.backend == sandbox::Backend::Landlock {
+            prefix[0] = HELPER;
+        }
+    }
     rode_host_core::files::digest(
-        &serde_json::to_vec(&(
-            &plan.root,
-            plan.active,
-            plan.project_read_only,
-            &plan.prefix,
-        ))
-        .expect("serializable terminal policy"),
+        &serde_json::to_vec(&(&plan.root, plan.active, plan.project_read_only, prefix))
+            .expect("serializable terminal policy"),
     )
 }
 /// Perform a blocking local control operation through the matching native service; never
@@ -314,6 +330,153 @@ fn terminal_request(operation: &Operation) -> Result<crate::Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sandbox_plan(helper: &str, backend: sandbox::Backend) -> sandbox::Plan {
+        let mut prefix: Vec<String> = match backend {
+            sandbox::Backend::Bwrap => vec!["/usr/bin/bwrap".into()],
+            sandbox::Backend::Landlock => vec![helper.into(), "--landlock-launch".into()],
+        };
+        prefix.extend(
+            [
+                "--unshare-all",
+                "--die-with-parent",
+                "--share-net",
+                "--ro-bind",
+                "/usr",
+                "/usr",
+                "--bind",
+                "/project",
+                "/project",
+                "--setenv",
+                "HOME",
+                "/home/user",
+                "--chdir",
+                "/project",
+                // prepare_with_helper appends this implementation-only grant.
+                "--ro-bind",
+                helper,
+                helper,
+                "--",
+            ]
+            .map(str::to_owned),
+        );
+        sandbox::Plan {
+            root: "/project".into(),
+            active: true,
+            requested: true,
+            backend,
+            native_helper: Some(helper.into()),
+            prefix,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn policy_identity_survives_project_reopen_and_helper_cache_changes() {
+        for backend in [sandbox::Backend::Bwrap, sandbox::Backend::Landlock] {
+            let original = sandbox_plan("/tmp/rode-helper-123-1-0/rode", backend);
+            for helper in [
+                "/tmp/rode-helper-456-2-0/rode",
+                "/home/user/.cache/rode/helpers/new-build/rode-sessiond",
+            ] {
+                let reopened = sandbox_plan(helper, backend);
+                assert_ne!(original.prefix, reopened.prefix);
+                assert_eq!(
+                    fingerprint(&original),
+                    fingerprint(&reopened),
+                    "{backend:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn policy_identity_still_checks_real_grants_and_isolation() {
+        for backend in [sandbox::Backend::Bwrap, sandbox::Backend::Landlock] {
+            let plan = sandbox_plan("/tmp/rode-helper-123-1-0/rode", backend);
+            let original = fingerprint(&plan);
+            let different = |changed: sandbox::Plan| assert_ne!(original, fingerprint(&changed));
+            let mut changed = plan.clone();
+            changed.prefix.retain(|arg| arg != "--share-net");
+            different(changed);
+            let mut changed = plan.clone();
+            changed.root = "/other-project".into();
+            different(changed);
+            let mut changed = plan.clone();
+            changed.project_read_only = true;
+            different(changed);
+            let mut changed = plan.clone();
+            changed.active = false;
+            different(changed);
+            let mut changed = plan.clone();
+            *changed
+                .prefix
+                .iter_mut()
+                .find(|arg| *arg == "--bind")
+                .unwrap() = "--ro-bind".into();
+            different(changed);
+            let mut changed = plan.clone();
+            let end = changed.prefix.len();
+            changed.prefix[end - 4] = "--bind".into();
+            different(changed); // A writable helper is not the implementation grant.
+            let mut changed = plan.clone();
+            let end = changed.prefix.len();
+            changed.prefix[end - 2] = "/different-destination".into();
+            different(changed);
+            let mut changed = plan.clone();
+            changed.native_helper = None;
+            different(changed); // Never infer a helper from a filename pattern.
+            let mut changed = plan.clone();
+            changed.prefix[0] = "/different-launcher".into();
+            different(changed);
+
+            // A user grant that happens to resemble a temporary helper stays significant.
+            let mut grant = plan.clone();
+            let at = grant.prefix.len() - 4;
+            grant.prefix.splice(
+                at..at,
+                [
+                    "--ro-bind".into(),
+                    "/tmp/rode-helper-user/data".into(),
+                    "/tmp/rode-helper-user/data".into(),
+                ],
+            );
+            different(grant.clone());
+            let mut another = grant.clone();
+            another.prefix[at + 1] = "/tmp/rode-helper-other/data".into();
+            assert_ne!(fingerprint(&grant), fingerprint(&another));
+        }
+        assert_ne!(
+            fingerprint(&sandbox_plan("/helper", sandbox::Backend::Bwrap)),
+            fingerprint(&sandbox_plan("/helper", sandbox::Backend::Landlock)),
+        );
+    }
+
+    #[test]
+    fn ordinary_and_legacy_plans_keep_their_existing_policy_identity() {
+        for plan in [
+            sandbox::Plan {
+                root: "/project".into(),
+                ..Default::default()
+            },
+            sandbox::Plan {
+                native_helper: None,
+                ..sandbox_plan("/helper", sandbox::Backend::Bwrap)
+            },
+        ] {
+            let legacy = rode_host_core::files::digest(
+                &serde_json::to_vec(&(
+                    &plan.root,
+                    plan.active,
+                    plan.project_read_only,
+                    &plan.prefix,
+                ))
+                .unwrap(),
+            );
+            assert_eq!(fingerprint(&plan), legacy);
+        }
+    }
+
     #[test]
     fn malformed_runtime_commands_are_rejected_before_host_resolution() {
         use rode_runtime_core::service::{Spec, Start};

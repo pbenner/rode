@@ -3,7 +3,7 @@
 //! Keep layout separate from controllers: these helpers own only spacing, reading
 //! widths and themed surfaces. Callers retain scroll IDs, state and actions, so
 //! docking a page never changes its identity or starts background work.
-use crate::theme::Palette;
+use crate::theme::{Chrome, Palette};
 use eframe::egui::{self, Align, Layout, RichText, Stroke};
 
 /// Maximum outer width for lists and forms, including the page's inner margin.
@@ -49,11 +49,21 @@ pub(super) fn header(
 ) {
     if ui.available_width() >= 500. {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(title).size(18.).strong());
+            ui.label(
+                RichText::new(title)
+                    .size(18.)
+                    .strong()
+                    .color(palette.heading_color()),
+            );
             ui.with_layout(Layout::right_to_left(Align::Center), actions);
         });
     } else {
-        ui.label(RichText::new(title).size(18.).strong());
+        ui.label(
+            RichText::new(title)
+                .size(18.)
+                .strong()
+                .color(palette.heading_color()),
+        );
         ui.horizontal(|ui| {
             ui.with_layout(
                 Layout::right_to_left(Align::Center).with_main_wrap(true),
@@ -69,7 +79,12 @@ pub(super) fn header(
 
 /// Heading for pages without toolbar actions.
 pub(super) fn heading(ui: &mut egui::Ui, title: &str, description: &str, palette: Palette) {
-    ui.label(RichText::new(title).size(18.).strong());
+    ui.label(
+        RichText::new(title)
+            .size(18.)
+            .strong()
+            .color(palette.heading_color()),
+    );
     subtitle(ui, description, palette);
     ui.add_space(8.);
 }
@@ -101,8 +116,19 @@ pub(super) fn field_label(ui: &mut egui::Ui, text: &str, stacked: bool) {
 pub(super) fn card_frame(palette: Palette) -> egui::Frame {
     egui::Frame::new()
         .fill(palette.panel)
-        .stroke(Stroke::new(1_f32, palette.border))
-        .corner_radius(6)
+        .stroke(Stroke::new(
+            1_f32,
+            if palette.chrome == Chrome::Chamfered {
+                palette.frame_accent.gamma_multiply(0.55)
+            } else {
+                palette.border
+            },
+        ))
+        .corner_radius(if palette.chrome == Chrome::Chamfered {
+            2
+        } else {
+            6
+        })
         .inner_margin(12)
 }
 
@@ -112,10 +138,25 @@ pub(super) fn card<R>(
     palette: Palette,
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
-    card_frame(palette).show(ui, |ui| {
+    let mut frame = card_frame(palette);
+    let background = (palette.chrome == Chrome::Chamfered).then(|| {
+        frame.fill = egui::Color32::TRANSPARENT;
+        frame.stroke.color = egui::Color32::TRANSPARENT;
+        ui.painter().add(egui::Shape::Noop)
+    });
+    let result = frame.show(ui, |ui| {
         ui.set_width(ui.available_width().max(1.));
         contents(ui)
-    })
+    });
+    if let Some(background) = background {
+        ui.painter().set(
+            background,
+            egui::Shape::Vec(
+                palette.surface_shapes(result.response.rect.shrink(1.), Some(palette.panel)),
+            ),
+        );
+    }
+    result
 }
 
 /// Group related controls with a section title and a consistent gap afterward.
@@ -126,7 +167,12 @@ pub(super) fn section<R>(
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let result = card(ui, palette, |ui| {
-        ui.label(RichText::new(title).size(15.).strong());
+        ui.label(
+            RichText::new(title)
+                .size(15.)
+                .strong()
+                .color(palette.heading_color()),
+        );
         ui.add_space(4.);
         contents(ui)
     })
@@ -140,7 +186,7 @@ pub(super) fn empty(ui: &mut egui::Ui, title: &str, description: &str, palette: 
     card(ui, palette, |ui| {
         ui.add_space(12.);
         ui.vertical_centered(|ui| {
-            ui.strong(title);
+            ui.label(RichText::new(title).strong().color(palette.heading_color()));
             subtitle(ui, description, palette);
         });
         ui.add_space(12.);
@@ -151,7 +197,18 @@ pub(super) fn empty(ui: &mut egui::Ui, title: &str, description: &str, palette: 
 pub(super) fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame {
     egui::Frame::popup(style)
         .fill(palette.panel)
-        .stroke(Stroke::new(1_f32, palette.border))
-        .corner_radius(8)
+        .stroke(Stroke::new(
+            1_f32,
+            if palette.chrome == Chrome::Chamfered {
+                palette.frame_accent.gamma_multiply(0.65)
+            } else {
+                palette.border
+            },
+        ))
+        .corner_radius(if palette.chrome == Chrome::Chamfered {
+            2
+        } else {
+            8
+        })
         .inner_margin(16)
 }

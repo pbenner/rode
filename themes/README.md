@@ -1,10 +1,10 @@
 # Theme configuration
 
-Select a theme from the **Theme: …** control at the bottom right, under **View → Color theme**, or use **Ctrl+Shift+P** and search for **Theme:**. Phosphor is the original green theme; Carbon is inspired by the supplied near-black reference screenshot. Code Dark adds neutral charcoal surfaces, light text and blue accents inspired by VS Code's classic dark theme. Matrix adds vivid green, Amber warm retro colors, Ice cold blue/cyan, and Neon magenta/cyan. These are native RODE palettes, rather than imports of third-party editor themes.
+Select a theme from the **Theme: …** control at the bottom right, under **View → Color theme**, or use **Ctrl+Shift+P** and search for **Theme:**. Phosphor is the original green theme; Carbon is inspired by the supplied near-black reference screenshot. Code Dark adds neutral charcoal surfaces, light text and blue accents inspired by VS Code's classic dark theme. Matrix adds vivid green, Amber warm retro colors, Ice cold blue/cyan, and Neon magenta/cyan. Afterglow combines charcoal-violet surfaces, magenta cut-corner frames, static edge glow, cyan selections, cream headings and rose secondary text, inspired by the supplied dashboard screenshots. These are native RODE palettes, rather than imports of third-party editor themes.
 
 Independent code palettes are selected under **View → Syntax highlighting** or **Syntax theme: …** in the command palette. Dracula, Catppuccin Mocha, Nord, Monokai, and One Half Dark retain their full scope rules. See [independent syntax themes and custom rules](../docs/syntax-themes.md). The existing `syntax` category overrides below apply when **Follow UI theme** is selected.
 
-UI theme changes are saved immediately with local app preferences and restored on startup. On Linux these live in `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`, under the `color_theme` key. The optional `--theme ID` argument overrides the stored choice for startup; that choice is saved on normal exit or when another theme is selected. Built-in IDs are `phosphor`, `carbon`, `code-dark`, `matrix`, `amber`, `ice`, and `neon`. A custom theme in `violet.json` has ID `custom:violet`, independent of its display name.
+UI theme changes are saved immediately with local app preferences and restored on startup. On Linux these live in `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`, under the `color_theme` key. The optional `--theme ID` argument overrides the stored choice for startup; that choice is saved on normal exit or when another theme is selected. Built-in IDs are `phosphor`, `carbon`, `code-dark`, `matrix`, `amber`, `ice`, `neon`, and `afterglow`. A custom theme in `violet.json` has ID `custom:violet`, independent of its display name.
 
 ## Custom themes
 
@@ -34,7 +34,9 @@ Choose **Theme: Violet Carbon** in the command palette, or launch:
 ./target/release/rode --theme custom:violet
 ```
 
-`name` is required and must have 1–64 printable characters. `base` is any built-in ID listed above (`phosphor` by default). All other sections are optional; omitted values inherit the base, including its syntax colors. Bases refer to the built-in palettes, not other custom files. Themes currently use dark UI styling.
+`name` is required and must have 1–64 printable characters. `base` is any built-in ID listed above (`phosphor` by default). All other sections are optional; omitted values inherit the base, including its syntax colors and frame treatment. Bases refer to the built-in palettes, not other custom files. Themes currently use dark UI styling.
+
+The optional `chrome` field selects `"plain"` (standard frames) or `"chamfered"` (cut corners, accent rails, subtle card gradients and static edge glow). It inherits the base: `"base": "afterglow"` includes the decorated frames; add `"chrome": "plain"` to keep only its colors. Decorations use native geometry with no animation, image assets or additional runtime dependencies. Editor and terminal canvases retain solid backgrounds.
 
 Colors must be opaque `#RRGGBB` strings. Invalid colors, unknown keys, invalid bases, or malformed files are reported and skipped. Theme loading is bounded to 32 JSON files of at most 64 KiB each and a scan of at most 1,025 directory entries. Built-in palettes remain available if custom configuration is invalid.
 
@@ -51,6 +53,8 @@ The `colors` object accepts:
 | `text` | Main UI and default custom-syntax text |
 | `muted` | Secondary UI text |
 | `accent` | Highlights, active controls, cursor, and links |
+| `frame_accent` | Decorative frames and edge glow with chamfered chrome |
+| `heading` | Section headings with chamfered chrome |
 | `success` | Positive connection and notification status |
 | `error` | Errors and disconnected status |
 | `selection` | Selection background |
@@ -64,7 +68,7 @@ The `syntax` object accepts `comment`, `keyword`, `type`, `function`, `string`, 
 
 Bold basic foreground colors (SGR 1 plus 30–37) use bright entries 8–15, matching [xterm's default boldColors setting](https://www.invisible-island.net/xterm/manpage/xterm.html). This does not brighten backgrounds, RGB colors or already-bright/extended indices. SGR 22/0 restores normal intensity.
 
-Built-in palettes set `terminal_foreground` and ANSI entry 7 (White) to the UI text colour, with a lighter matching entry 15 (Bright white). Prompt/path slots follow the theme: warm gold in Carbon/Amber, green in Phosphor/Matrix, cool blue in Ice/Code Dark and violet in Neon. ANSI colour names identify slots; a themed Blue slot need not be literal blue. Bright foreground entries meet at least 4.5:1 contrast against the default terminal background. Red and green remain distinct for error/success indicators. Custom definitions and saved swatch overrides may explicitly choose other values.
+Built-in palettes set `terminal_foreground` and ANSI entry 7 (White) to the UI text colour, with a lighter matching entry 15 (Bright white). Prompt/path slots follow the theme: warm gold in Carbon/Amber, green in Phosphor/Matrix, cool blue in Ice/Code Dark/Afterglow and violet in Neon. ANSI colour names identify slots; a themed Blue slot need not be literal blue. Bright foreground entries meet at least 4.5:1 contrast against the default terminal background. Red and green remain distinct for error/success indicators. Custom definitions and saved swatch overrides may explicitly choose other values.
 
 The optional `ansi` array overrides the terminal's first 16 indexed colors in standard order: black, red, green, yellow, blue, magenta, cyan, white, followed by their bright variants. All 16 entries are required if the array is supplied. Extended 256-color indices and explicit RGB colors use their standard values before contrast correction.
 
@@ -74,6 +78,6 @@ The optional `terminal.minimum_contrast` is a number from **1** to **21**, inher
 
 ## Built-in definitions
 
-[carbon.json](carbon.json), [code-dark.json](code-dark.json), [matrix.json](matrix.json), [amber.json](amber.json), [ice.json](ice.json), and [neon.json](neon.json) contain the complete palettes embedded in the binary. Phosphor remains defined in Rust. Editing a source palette requires rebuilding. To customize without rebuilding, create a user theme with, for example, `"base": "matrix"` in the configuration directory.
+[carbon.json](carbon.json), [code-dark.json](code-dark.json), [matrix.json](matrix.json), [amber.json](amber.json), [ice.json](ice.json), [neon.json](neon.json), and [afterglow.json](afterglow.json) contain the complete palettes embedded in the binary. Phosphor remains defined in Rust. Editing a source palette requires rebuilding. To customize without rebuilding, create a user theme with, for example, `"base": "matrix"` in the configuration directory.
 
 Themes are local data. Loading or switching one never executes theme code, fetches resources, reconnects SSH, or restarts a terminal. Theme switches invalidate cached highlighting so already-open documents immediately use the new palette.

@@ -1,7 +1,7 @@
 //! Palette/syntax parsing, cached layouts, independent preferences and concurrent theme edits.
 
 use eframe::egui::{self, Color32};
-use rode::theme::{Palette, Theme, Themes, parse_color};
+use rode::theme::{Chrome, Palette, Theme, Themes, parse_color};
 use std::fs;
 
 fn color_for(layout: &egui::text::LayoutJob, token: &str) -> Color32 {
@@ -56,6 +56,56 @@ fn switching_recolors_cached_source_and_restores_original() {
         original
     );
     assert_eq!(themes.active().palette, Palette::default());
+}
+
+#[test]
+fn decorated_chrome_inherits_can_be_disabled_and_resets_when_switching() {
+    let inherited = Theme::from_json(
+        "custom:trim",
+        r##"{"name":"Trim","base":"afterglow","colors":{"frame_accent":"#e0aaee","heading":"#ffddaa"}}"##,
+    )
+    .unwrap();
+    assert_eq!(inherited.palette.chrome, Chrome::Chamfered);
+    assert_eq!(
+        inherited.palette.frame_accent,
+        parse_color("#e0aaee").unwrap()
+    );
+    assert_eq!(
+        inherited.palette.heading_color(),
+        parse_color("#ffddaa").unwrap()
+    );
+    let plain = Theme::from_json(
+        "custom:plain",
+        r#"{"name":"Plain","base":"afterglow","chrome":"plain"}"#,
+    )
+    .unwrap();
+    assert_eq!(plain.palette.chrome, Chrome::Plain);
+    assert_eq!(plain.palette.heading_color(), plain.palette.text);
+    assert!(
+        Theme::from_json(
+            "custom:invalid",
+            r#"{"name":"Invalid","chrome":"animated"}"#
+        )
+        .is_err()
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let (mut themes, _) = Themes::load(directory.path(), "phosphor");
+    let ctx = egui::Context::default();
+    themes.select("phosphor", &ctx).unwrap();
+    let original = ctx.style().visuals.clone();
+    themes.select_syntax("nord", &ctx).unwrap();
+    themes.select("afterglow", &ctx).unwrap();
+    assert_eq!(themes.active_syntax().id, "nord");
+    assert_ne!(ctx.style().visuals, original);
+    assert_eq!(ctx.style().visuals.widgets.hovered.expansion, 0.);
+    themes.select("phosphor", &ctx).unwrap();
+    assert_eq!(
+        ctx.style().visuals,
+        original,
+        "Decorative style leaked into a plain theme"
+    );
+    assert_eq!(themes.active_syntax().id, "nord");
 }
 
 #[test]
@@ -298,7 +348,9 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} green path",
                 builtin.id
             ),
-            "ice" | "code-dark" => assert!(path.b() > path.r(), "{} cool path", builtin.id),
+            "ice" | "code-dark" | "afterglow" => {
+                assert!(path.b() > path.r(), "{} cool path", builtin.id)
+            }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
             _ => unreachable!(),
         }
@@ -328,7 +380,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
     }
     assert!(
         identities.is_superset(
-            &["code-dark", "matrix", "amber", "ice", "neon"]
+            &["code-dark", "matrix", "amber", "ice", "neon", "afterglow"]
                 .map(str::to_owned)
                 .into()
         )

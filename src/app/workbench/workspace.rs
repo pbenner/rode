@@ -384,6 +384,7 @@ impl EditorApp {
     }
 
     fn surface_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.themes.active().palette.paint_panel(ui);
         if self.foreign_modal(ctx) {
             ui.disable();
         }
@@ -557,6 +558,7 @@ impl EditorApp {
     }
 
     fn tab_content(&mut self, tab: ToolTab, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.themes.active().palette.paint_panel(ui);
         if self.foreign_modal(ctx) {
             ui.disable();
         }

@@ -1,7 +1,7 @@
 # Themes
 
 
-Click **Theme: …** at the bottom right, or choose **View → Color theme**. Seven built-in dark palettes cover the interface and terminal, with matching syntax colors when **Follow UI theme** is selected:
+Click **Theme: …** at the bottom right, or choose **View → Color theme**. Eight built-in dark palettes cover the interface and terminal, with matching syntax colors when **Follow UI theme** is selected:
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
@@ -12,10 +12,11 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Se
 | Amber | `amber` | Retro amber terminal, warm black surfaces, gold syntax, sage strings |
 | Ice | `ice` | Midnight navy, cyan controls, blue types and mint functions |
 | Neon | `neon` | Dark plum, magenta controls and keywords, cyan types, violet functions |
+| Afterglow | `afterglow` | Charcoal-violet panels, magenta cut-corner frames and static glow, cyan selections, cream headings and rose labels |
 
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, or One Half Dark code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
-Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a lighter matching **Bright white**. Carbon uses warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix green, Ice/Code Dark cool blue, and Neon violet. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
+Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a lighter matching **Bright white**. Carbon uses warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix green, Ice/Code Dark/Afterglow cool blue, and Neon violet. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
 Bash prompt colors come from `PS1` in the shell's own configuration. RODE honors bold ANSI foreground colors using the theme's bright variants: `\e[1;30m` uses bright black and `\e[1;34m` uses bright blue. Existing prompts therefore follow the selected terminal palette without editing `.bashrc`; see [prompt rendering](terminals.md#bash-prompts-and-colors).
 
@@ -30,10 +31,10 @@ The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber*
 ```sh
 ./target/release/rode . --theme carbon
 ./target/release/rode . --theme code-dark
-./target/release/rode . --theme matrix
+./target/release/rode . --theme afterglow
 ```
 
-Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, loaded at startup. They can inherit any built-in palette and override UI, syntax, and ANSI terminal colors. See the [theme format and examples](../themes/README.md). An invalid or missing theme produces a visible warning and falls back to Phosphor if the selected theme is unavailable. Presets are embedded in the binary, with no extra downloads, dependencies, or background effects.
+Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, loaded at startup. They can inherit any built-in palette and override UI, syntax, ANSI terminal colors and the optional native frame treatment. Afterglow’s decoration is static: code and terminal backgrounds stay solid, and switching themes preserves buffers, independent syntax choices and running shells. See the [theme format and examples](../themes/README.md). An invalid or missing theme produces a visible warning and falls back to Phosphor if the selected theme is unavailable. Presets are embedded in the binary, with no extra downloads, dependencies, or background effects.
 
 **View → Interface scale** offers percentage presets and 5% Smaller/Larger actions for the whole interface, separately from **Editor font size**. Try 75% or 50% if the GUI looks too large on another display; [interface sizing](editing.md) explains monitor scaling, reset and keyboard access.
 

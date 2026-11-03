@@ -45,7 +45,7 @@ impl Context<'_> {
         } else if info.root != self.root {
             "Different project"
         } else if info.policy != self.policy {
-            "Different sandbox settings"
+            "Sandbox policy mismatch"
         } else if info.attached {
             "Controlled by another window"
         } else {
@@ -64,7 +64,7 @@ impl Context<'_> {
                     };
                     reasons.push(format!("Different sandbox mode: this agent uses {}, but this window uses {}. {action} A running agent cannot move into or out of a sandbox.", info.mode, self.mode));
                 } else {
-                    reasons.push("Different sandbox settings: the mode matches, but the original access policy does not. Restore the original folder access, read-only and network settings in View → Project settings / sandbox access.".to_owned());
+                    reasons.push("The sandbox mode matches, but the session's policy identifier does not. Check folder access, read-only and network settings in View → Project settings / sandbox access. Sessions started by older RODE builds may retain an incompatible policy identifier even with identical settings; this window cannot safely reattach them. They remain running under their original policy.".to_owned());
                 }
             }
             if info.attached {

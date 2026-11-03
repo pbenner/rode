@@ -219,4 +219,14 @@ fn blocked_attachments_keep_their_full_explanations() {
     );
     assert!(blocked.explanation.contains("Persist off"));
     assert!(!context.attachment(&items[2]).enabled);
+
+    let mut old = items[3].clone();
+    old.mode = context.mode.into();
+    old.attached = false;
+    context.can_leave = true;
+    let mismatch = context.attachment(&old);
+    assert!(!mismatch.enabled);
+    assert_eq!(mismatch.summary, "Sandbox policy mismatch");
+    assert!(mismatch.explanation.contains("older RODE builds"));
+    assert!(mismatch.explanation.contains("remain running"));
 }
