@@ -14,6 +14,173 @@ use std::{
 
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
+    use rode_agent_core::{
+        Access, Config, Plan,
+        service::{Spec, State, Update},
+    };
+    use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, sync::Arc};
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let program = root.join("agent.py");
+        std::fs::write(&program, include_str!("fixtures/file_only_agent.py")).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(root.join("file-tool-steps.json"),serde_json::json!([
+            {"params":{"tool":"rode_write_file","arguments":{"path":"remote-source","text":"remote native edit","revision":null}}},
+            {"params":{"tool":"exec_command","arguments":{"cmd":"touch forbidden"}}},
+            {"params":{"tool":"rode_read_file","arguments":{"path":"../private"}}}
+        ]).to_string()).unwrap();
+        std::fs::write(base.path().join("private"), "private").unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(15);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let plan = remote
+            .request(&Request::Prepare {
+                path: root.to_string_lossy().into(),
+                sandbox: Default::default(),
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        let policy = rode::sessions::fingerprint(&plan);
+        let rpc = |request| {
+            let response = remote
+                .request(&Request::Tool {
+                    request: rode::project::Request::Sessions {
+                        root: plan.root.clone(),
+                        operation: rode::sessions::Operation::Agents {
+                            mise: false,
+                            request: Box::new(request),
+                        },
+                        helper: Some(native_test_helper(false)),
+                        directory: Some(base.path().join("runtime").to_string_lossy().into()),
+                    },
+                })
+                .unwrap();
+            let Some(rode::project::Response::Sessions(reply)) = response.tool else {
+                panic!()
+            };
+            reply
+        };
+        let spec = Spec {
+            id: rode_session::new_id().unwrap(),
+            name: "SSH file-only fixture".into(),
+            policy: policy.clone(),
+            mode: plan.label().into(),
+            config: Config {
+                codex: program.to_string_lossy().into(),
+                access: Access::FilesOnly,
+                ..Default::default()
+            },
+            plan: Plan {
+                root: plan.root.clone(),
+                active: plan.active,
+                project_read_only: plan.project_read_only,
+                prefix: plan.prefix.clone(),
+            },
+            file_tool_plan: Some(serde_json::to_value(&plan).unwrap()),
+            executable: program.to_string_lossy().into(),
+            env: BTreeMap::new(),
+            python: "off".into(),
+            persistent: false,
+            text: Some("remote edit".into()),
+            attachments: vec![],
+        };
+        let reply = rpc(rode_session::Request::CreateAgent {
+            spec: Box::new(spec),
+        });
+        let rode_session::Response::Agent(info) = &reply.response else {
+            panic!()
+        };
+        let mut argv = vec![reply.executable.clone()];
+        argv.extend(reply.prefix.clone());
+        argv.extend(["attach-agent".into(), info.id.clone(), policy.clone()]);
+        let pipe = rode::process::Session::start(
+            rode::process::Launch {
+                argv,
+                remote: Some(remote.clone()),
+                plan: rode::sandbox::Plan {
+                    root: plan.root.clone(),
+                    ..Default::default()
+                },
+                python: "off".into(),
+                python_program: false,
+                line_limit: 4 * 1024 * 1024,
+                native_debug: false,
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let until = Instant::now() + Duration::from_secs(15);
+        let mut state: Option<State> = None;
+        loop {
+            if let Some(event) = pipe.poll() {
+                match event {
+                    rode::process::Event::Message(value) => {
+                        state = Some(
+                            serde_json::from_value::<Update>(value)
+                                .unwrap()
+                                .apply(state.as_ref())
+                                .unwrap(),
+                        )
+                    }
+                    rode::process::Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            if state.as_ref().is_some_and(|s| s.chat.completed == 1) {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "SSH file-only controller did not finish: {state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let state = state.unwrap();
+        assert!(state.chat.last_turn_succeeded, "{:?}", state.chat.messages);
+        assert_eq!(
+            std::fs::read_to_string(root.join("remote-source")).unwrap(),
+            "remote native edit"
+        );
+        assert!(!root.join("forbidden").exists());
+        let calls = std::fs::read_to_string(root.join("file-agent-rpc.jsonl")).unwrap();
+        for id in [101, 102] {
+            let result = calls
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|v| v["id"] == id && v.get("method").is_none())
+                .unwrap();
+            assert_eq!(result["result"]["success"], false);
+        }
+        rpc(rode_session::Request::EndAgent {
+            id: info.id.clone(),
+            policy,
+        });
+        drop(pipe);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn landlock_file_and_command_policy_on_direct_and_proxyjump_hosts() {
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
     for jump in ["", "rode-jump"] {
@@ -822,6 +989,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                     prefix: plan.prefix.clone(),
                 },
                 executable: executable.to_string_lossy().into(),
+                file_tool_plan: Some(serde_json::to_value(&plan).unwrap()),
                 env: BTreeMap::new(),
                 python: "off".into(),
                 persistent: true,

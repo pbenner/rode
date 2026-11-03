@@ -211,6 +211,7 @@ fn native_agent_controllers_honor_environment_prefixes_in_normal_mode() {
                 .unwrap(),
         },
         executable: "mise-agent".into(),
+        file_tool_plan: None,
         env: Default::default(),
         python: "auto".into(),
         persistent: false,

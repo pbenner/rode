@@ -12,6 +12,7 @@ fn main() -> eframe::Result {
         matches!(
             arg.as_str(),
             "--landlock-launch"
+                | "--agent-file-tool"
                 | "--mise-launch"
                 | "--slurm-step"
                 | "--compute-step"

@@ -64,6 +64,7 @@ SUITES = {
     ],
     "agents": [
         ui("agent"),
+        ui("agent-file-only"),
         ui("agent-history"),
         ui("agent-queue"),
         ui("agent-attachments"),

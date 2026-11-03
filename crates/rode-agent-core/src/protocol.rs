@@ -76,6 +76,7 @@ pub struct Prompt {
 #[derive(Clone)]
 enum Call {
     Initialize,
+    FilePolicy,
     Conversation,
     Turn,
     Interrupt,
@@ -129,6 +130,10 @@ pub struct Chat {
     settings_attempts: usize,
     /// A restored/styled context needs an explicit normal-tone hint when Default is selected.
     response_style_context: bool,
+    file_factory: Option<Arc<dyn super::Factory>>,
+    file_wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    file_jobs: super::file_only::Jobs,
+    file_calls: usize,
 }
 
 impl Chat {
@@ -220,12 +225,17 @@ impl Chat {
     }
     /// Return whether cancellation is awaiting completion or escalation.
     pub fn stopping(&self) -> bool {
-        self.cancelling
+        self.cancelling || self.file_jobs.stopping()
     }
 
-    /// Whether startup, setting acknowledgement or cancellation needs a timed repaint.
+    /// Native operations retain their controller until cancelled helper cleanup ends.
+    pub fn file_work_pending(&self) -> bool {
+        self.file_jobs.pending()
+    }
+
+    /// Whether startup, settings, cancellation or native I/O needs a timed repaint.
     pub fn has_deadline(&self) -> bool {
-        self.deadline.is_some()
+        self.deadline.is_some() || self.file_jobs.pending()
     }
 
     /// Whether cached capabilities belong to the currently selected executable/provider.
@@ -273,7 +283,7 @@ impl Chat {
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<()> {
         ensure!(
-            !self.busy,
+            !self.busy && !self.file_jobs.pending(),
             "The agent is still working. Stop it or wait for its reply."
         );
         attachment::validate(&text, &attachments)?;
@@ -288,11 +298,13 @@ impl Chat {
         }
         self.read_only = launch.plan.project_read_only
             || (launch.config.provider != Provider::Acp
-                && launch.config.access() == Access::ReadOnly);
+                && matches!(launch.config.access(), Access::ReadOnly | Access::FilesOnly));
         self.external = launch.plan.active && !self.read_only;
         self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
         self.config = launch.config.clone();
         if self.session.is_none() {
+            self.file_factory = self.config.files_only().then(|| launch.factory.clone());
+            self.file_wake = self.config.files_only().then(|| wake.clone());
             self.root = launch.plan.root.clone();
             // A first SSH start may stream a large native runtime. Keep this
             // bounded separately from the ordinary protocol handshake; Stop
@@ -334,6 +346,19 @@ impl Chat {
     /// Process a bounded batch of available transport events and deadlines without blocking the
     /// UI.
     pub fn poll(&mut self) {
+        for (target, result) in self.file_jobs.poll() {
+            let result = match target {
+                super::file_only::Target::Verify(config) => result
+                    .map_err(anyhow::Error::msg)
+                    .context("Cannot start confined project file tools")
+                    .and_then(|_| self.start_file_thread(config)),
+                super::file_only::Target::Tool { id, name } => self.file_reply(id, &name, result),
+            };
+            if let Err(error) = result {
+                self.fail(&format!("{error:#}"));
+                break;
+            }
+        }
         for _ in 0..64 {
             let Some(event) = self.session.as_ref().and_then(Session::poll) else {
                 break;
@@ -412,6 +437,7 @@ impl Chat {
             return;
         }
         self.cancelling = true;
+        self.cancel_file_work();
         self.status = "Stopping…".into();
         self.deadline = Some(Instant::now() + Duration::from_secs(3));
         let prompts = std::mem::take(&mut self.prompts);
@@ -437,6 +463,7 @@ impl Chat {
     /// Stop the owned agent process and reset protocol state while retaining the bounded
     /// transcript.
     pub fn disconnect(&mut self) {
+        self.file_jobs.cancel();
         self.session = None;
         self.busy = false;
         self.last_turn_succeeded = false;
@@ -452,16 +479,22 @@ impl Chat {
         self.controls.clear();
         self.model_pages.clear();
         self.response_style_context = false;
+        self.file_factory = None;
+        self.file_wake = None;
+        self.file_calls = 0;
     }
 
     fn initialize(&mut self) -> Result<()> {
         self.deadline = Some(Instant::now() + Duration::from_secs(60));
-        let params = if self.config.provider == Provider::Acp {
+        let mut params = if self.config.provider == Provider::Acp {
             json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},
                 "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"configOptions":{"boolean":true}}}})
         } else {
             json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}})
         };
+        if self.config.files_only() {
+            params["capabilities"] = json!({"experimentalApi":true});
+        }
         self.call("initialize", params, Call::Initialize)
     }
     fn begin_turn(&mut self) -> Result<()> {
@@ -543,6 +576,7 @@ impl Chat {
         self.status = "Working…".into();
         self.deadline = None;
         self.turn.clear();
+        self.file_calls = 0;
         let mut input = vec![
             json!({"type":"text","text":if text.trim().is_empty() { "Attached files.".into() } else { text }}),
         ];
@@ -681,6 +715,14 @@ impl Chat {
                             Call::Models,
                         )?;
                     }
+                    if self.config.files_only() {
+                        self.call(
+                            "config/read",
+                            json!({"includeLayers":false}),
+                            Call::FilePolicy,
+                        )?;
+                        return Ok(());
+                    }
                     let access = if self.read_only {
                         Access::ReadOnly
                     } else {
@@ -695,6 +737,14 @@ impl Chat {
                     }
                     self.call("thread/start", params, Call::Conversation)?;
                 }
+            }
+            Call::FilePolicy => {
+                let config = super::file_only::thread_config(&result["config"])?;
+                self.start_file_job(
+                    "rode_list_files",
+                    json!({"path":"."}),
+                    super::file_only::Target::Verify(config),
+                )?;
             }
             Call::Conversation => {
                 let id = if self.config.provider == Provider::Acp {
@@ -870,6 +920,9 @@ impl Chat {
     }
 
     fn request(&mut self, method: &str, id: Value, params: &Value) -> Result<()> {
+        if method == "item/tool/call" {
+            return self.file_request(id, params);
+        }
         if let Some(scope) = params
             .get(if self.config.provider == Provider::Acp {
                 "sessionId"
@@ -1007,6 +1060,7 @@ impl Chat {
         }
         if permission
             && (self.config.approval == Approval::Never
+                || self.config.files_only()
                 || self.read_only
                 || self.cancelling
                 || !self.busy)
@@ -1037,10 +1091,113 @@ impl Chat {
         Ok(())
     }
 
+    fn file_request(&mut self, id: Value, params: &Value) -> Result<()> {
+        let tool = params["tool"].as_str().unwrap_or_default();
+        let allowed = self.config.files_only()
+            && self.busy
+            && !self.cancelling
+            && !self.turn.is_empty()
+            && params["threadId"] == self.conversation
+            && params["turnId"] == self.turn
+            && params.get("namespace").is_none_or(Value::is_null)
+            && super::file_only::supported(tool)
+            && self.file_calls < 128;
+        let result = if allowed {
+            self.file_calls += 1;
+            self.start_file_job(
+                tool,
+                params["arguments"].clone(),
+                super::file_only::Target::Tool {
+                    id: id.clone(),
+                    name: tool.into(),
+                },
+            )
+        } else {
+            Err(anyhow::anyhow!(
+                "File tool denied: only supported tools in the current active file-only turn may run"
+            ))
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => self.file_reply(id, tool, Err(format!("{error:#}"))),
+        }
+    }
+
+    fn start_file_job(
+        &mut self,
+        tool: &str,
+        arguments: Value,
+        target: super::file_only::Target,
+    ) -> Result<()> {
+        self.file_jobs.start(
+            self.file_factory
+                .clone()
+                .context("File tool host is unavailable")?,
+            tool,
+            arguments,
+            self.file_wake
+                .clone()
+                .context("File tool wake is unavailable")?,
+            target,
+        )
+    }
+
+    fn start_file_thread(&mut self, config: Value) -> Result<()> {
+        let mut params = json!({
+            "cwd":self.root,"approvalPolicy":"never","sandbox":"read-only",
+            "config":config,"dynamicTools":super::file_only::tools(),
+            "developerInstructions":super::file_only::INSTRUCTIONS,
+        });
+        if !self.config.model().is_empty() {
+            params["model"] = self.config.model().into();
+        }
+        if self.config.provider == Provider::Local {
+            params["modelProvider"] = "rode_local".into();
+        }
+        self.call("thread/start", params, Call::Conversation)?;
+        Ok(())
+    }
+
+    fn cancel_file_work(&mut self) {
+        for target in self.file_jobs.cancel() {
+            if let super::file_only::Target::Tool { id, name } = target {
+                let _ = self.file_reply(id, &name, Err("File operation cancelled".into()));
+            }
+        }
+    }
+
+    fn file_reply(
+        &mut self,
+        id: Value,
+        tool: &str,
+        result: std::result::Result<Value, String>,
+    ) -> Result<()> {
+        let (mut success, mut text) = match result {
+            Ok(value) => (true, serde_json::to_string(&value)?),
+            Err(error) => (false, format!("{error:#}")),
+        };
+        // JSON-in-JSON escaping can make even a 1 MiB file exceed the transport
+        // limit. Reject the response as a tool error, keeping the chat connected.
+        if serde_json::to_vec(&text)?.len() > super::LINE_LIMIT - 8192 {
+            success = false;
+            text = "File tool response exceeds the protocol limit; use a smaller file or narrower search".into();
+        }
+        self.send(json!({"jsonrpc":"2.0","id":id,"result":{"success":success,"contentItems":[{"type":"inputText","text":text}]}}))?;
+        self.serial += 1;
+        self.push(
+            format!("file-tool-{}", self.serial),
+            Role::Tool,
+            clip(tool, 256),
+            clip(&text, 4096),
+        );
+        Ok(())
+    }
+
     fn finish(&mut self, success: bool, error: Option<&str>) {
         if !self.busy {
             return;
         }
+        self.cancel_file_work();
         self.busy = false;
         self.last_turn_succeeded = success && !self.cancelling;
         self.pending = None;
@@ -1178,6 +1335,110 @@ fn append_bounded(target: &mut String, text: &str, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopping_a_slow_file_tool_does_not_block_or_publish_a_late_result() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        struct Slow {
+            started: mpsc::Sender<()>,
+            cancelled: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl crate::Factory for Slow {
+            fn start(
+                &self,
+                _: &Launch,
+                _: bool,
+                _: Arc<dyn Fn() + Send + Sync>,
+            ) -> Result<Session> {
+                unreachable!()
+            }
+            fn file_tool(&self, _: &str, _: &Value, cancel: &AtomicBool) -> Result<Value> {
+                self.started.send(())?;
+                let until = Instant::now() + Duration::from_secs(5);
+                while !cancel.load(Ordering::Acquire) {
+                    ensure!(Instant::now() < until, "Cancellation was not delivered");
+                    std::thread::yield_now();
+                }
+                self.cancelled.send(())?;
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))?;
+                Ok(json!({"late":true}))
+            }
+        }
+        struct Capture(mpsc::Sender<Value>);
+        impl crate::Transport for Capture {
+            fn send(&self, message: &Value) -> Result<()> {
+                self.0.send(message.clone())?;
+                Ok(())
+            }
+            fn poll(&self) -> Option<Event> {
+                None
+            }
+            fn stop(&self) {}
+        }
+        let (started, ready) = mpsc::channel();
+        let (cancelled, stopped) = mpsc::channel();
+        let (release, cleanup) = mpsc::channel();
+        let (sent, received) = mpsc::channel();
+        let mut chat = Chat {
+            busy: true,
+            conversation: "thread".into(),
+            turn: "turn".into(),
+            config: Config {
+                access: Access::FilesOnly,
+                ..Default::default()
+            },
+            session: Some(Session::new(Capture(sent))),
+            file_factory: Some(Arc::new(Slow {
+                started,
+                cancelled,
+                release: Mutex::new(cleanup),
+            })),
+            file_wake: Some(Arc::new(|| {})),
+            ..Default::default()
+        };
+        for id in 10..15 {
+            chat.file_request(json!(id), &json!({"tool":"rode_read_file","threadId":"thread","turnId":"turn","arguments":{"path":"slow"}})).unwrap();
+        }
+        for _ in 0..4 {
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        chat.cancel();
+        for _ in 0..4 {
+            stopped.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        assert!(chat.file_work_pending());
+        assert!(chat.stopping());
+        chat.disconnect();
+        for _ in 0..4 {
+            release.send(()).unwrap();
+        }
+        let until = Instant::now() + Duration::from_secs(5);
+        while chat.file_work_pending() {
+            chat.poll();
+            assert!(Instant::now() < until);
+            std::thread::yield_now();
+        }
+        chat.poll();
+        let replies: Vec<_> = received
+            .try_iter()
+            .filter(|v| (10..15).any(|id| v["id"] == id))
+            .collect();
+        assert_eq!(replies.len(), 5);
+        assert!(
+            replies
+                .iter()
+                .all(|reply| reply["result"]["success"] == false)
+        );
+        assert!(!chat.messages.iter().any(|m| m.text.contains("late")));
+    }
 
     #[test]
     fn only_successful_uninterrupted_turns_allow_follow_ups() {

@@ -408,7 +408,7 @@ fn run(
             }
             changed = true;
         }
-        let finished = stopping && active.load(Ordering::Acquire) == 0;
+        let finished = stopping && active.load(Ordering::Acquire) == 0 && !chat.file_work_pending();
         shared.state.info.busy = chat.busy || browser.as_ref().is_some_and(|b: &Browser| b.busy);
         shared.state.info.status = browser
             .as_ref()

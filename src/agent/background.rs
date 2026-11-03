@@ -21,7 +21,7 @@ pub fn request(
     upload: bool,
 ) -> Result<service::Reply> {
     let operation = service::Operation::Agents {
-        mise: launch.plan.environment.mise,
+        mise: launch.plan.environment.mise && !launch.config.files_only(),
         request: Box::new(request),
     };
     if let Some(remote) = &launch.remote {
@@ -92,6 +92,10 @@ impl Client {
             let result = (|| -> Result<_> {
                 let argv = launch.config.arguments(text.is_some())?;
                 let mut plan = launch.plan.clone();
+                if launch.config.files_only() {
+                    // Project environment providers may evaluate code from editable files.
+                    plan.environment.mise = false;
+                }
                 let executable = if argv[0] == crate::bundled::AUTO_CODEX {
                     let (program, prefix) = crate::bundled::prepare(
                         &plan,
@@ -125,6 +129,7 @@ impl Client {
                         prefix: plan.execution_prefix(&launch.python)?,
                     },
                     executable,
+                    file_tool_plan: Some(serde_json::to_value(&plan)?),
                     env: BTreeMap::new(),
                     python: launch.python.clone(),
                     persistent,

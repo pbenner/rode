@@ -81,36 +81,45 @@ fn fixture_snapshots_remain_complete_while_a_replacement_is_being_written() {
     // Exercise the exact read-after-truncate interleaving without timing sleeps.
     // Extract only the fixture helper, so this check never starts an agent/model.
     let source = r#"
-import ast, contextlib, json, os, sys, tempfile
+import ast, contextlib, json, os, sys, tempfile, threading
 from pathlib import Path
-with tempfile.TemporaryDirectory() as directory:
-    root = Path(directory)
-    fixture = ast.parse(Path(sys.argv[1]).read_text())
-    node = next(node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == 'metadata')
-    namespace = dict(root=root, os=os)
-    exec(compile(ast.Module(body=[node], type_ignores=[]), '<fixture-metadata>', 'exec'), namespace)
-    path = root / 'history-deleted.json'
-    path.write_text('["saved-0"]')
-    original_open = Path.open
-    @contextlib.contextmanager
-    def observed_open(target, mode='r', *args, **kwargs):
-        with original_open(target, mode, *args, **kwargs) as stream:
-            if 'w' in mode:
-                assert json.loads(path.read_text()) == ['saved-0'], 'snapshot was truncated before publication'
-            yield stream
-    Path.open = observed_open
-    namespace['metadata'](path.name, '["saved-0", "saved-1"]')
-    assert json.loads(path.read_text()) == ['saved-0', 'saved-1']
-    assert not list(root.glob('*.tmp'))
-    namespace['metadata']('agent-rpc.jsonl', '{"method":"thread/list"}\n', append=True)
-    namespace['metadata']('agent-rpc.jsonl', '{"method":"thread/read"}\n', append=True)
-    assert len((root / 'agent-rpc.jsonl').read_text().splitlines()) == 2
+original_open = Path.open
+for filename, helper in zip(sys.argv[1:], ['metadata', 'snapshot']):
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        fixture = ast.parse(Path(filename).read_text())
+        node = next(node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == helper)
+        namespace = dict(root=root, os=os, threading=threading)
+        exec(compile(ast.Module(body=[node], type_ignores=[]), '<fixture-snapshot>', 'exec'), namespace)
+        path = root / 'snapshot.json'
+        path.write_text('["saved-0"]')
+        @contextlib.contextmanager
+        def observed_open(target, mode='r', *args, **kwargs):
+            with original_open(target, mode, *args, **kwargs) as stream:
+                if 'w' in mode:
+                    assert json.loads(path.read_text()) == ['saved-0'], 'snapshot was truncated before publication'
+                yield stream
+        Path.open = observed_open
+        try:
+            namespace[helper](path.name, '["saved-0", "saved-1"]')
+            assert json.loads(path.read_text()) == ['saved-0', 'saved-1']
+            assert not list(root.glob('*.tmp'))
+            if helper == 'metadata':
+                namespace[helper]('agent-rpc.jsonl', '{"method":"thread/list"}\n', append=True)
+                namespace[helper]('agent-rpc.jsonl', '{"method":"thread/read"}\n', append=True)
+                assert len((root / 'agent-rpc.jsonl').read_text().splitlines()) == 2
+        finally:
+            Path.open = original_open
 "#;
     let output = std::process::Command::new("python3")
         .args(["-c", source])
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/agent.py"
+        ))
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/persistent_agent.py"
         ))
         .output()
         .unwrap();

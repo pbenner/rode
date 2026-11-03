@@ -328,6 +328,51 @@ mod linux {
         parent_fd: i32,
     }
 
+    /// Narrow filesystem-only policy for an already loaded, one-shot native
+    /// helper. Unlike the project launcher, this needs only Landlock ABI 1.
+    pub fn confine_agent_files(root: &File, read_only: bool) -> Result<()> {
+        let abi = checked(
+            unsafe { libc::syscall(444, std::ptr::null::<u8>(), 0usize, 1u32) },
+            "File-only mode requires Linux Landlock filesystem support",
+        )?;
+        ensure!(abi >= 1, "File-only mode requires Landlock ABI 1 or newer");
+        let mut handled = (1u64 << 13) - 1;
+        if abi >= 2 {
+            handled |= 1 << 13;
+        }
+        if abi >= 3 {
+            handled |= 1 << 14;
+        }
+        if abi >= 5 {
+            handled |= 1 << 15;
+        }
+        // Passing just the original filesystem field supports older kernels.
+        let raw = checked(
+            unsafe { libc::syscall(444, &handled as *const u64, 8usize, 0u32) },
+            "File-only Landlock ruleset",
+        )?;
+        let rules = fd(raw as _, "File-only Landlock descriptor")?;
+        let read = (1 << 2) | (1 << 3);
+        let write = (1 << 1) | (1 << 5) | (1 << 7) | (1 << 8) | (handled & (1 << 14));
+        let rule = PathRule {
+            access: if read_only { read } else { read | write },
+            parent_fd: root.as_raw_fd(),
+        };
+        checked(
+            unsafe { libc::syscall(445, rules.as_raw_fd(), 1u32, &rule as *const _, 0u32) },
+            "File-only Landlock project grant",
+        )?;
+        checked(
+            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } as _,
+            "File-only no_new_privs",
+        )?;
+        checked(
+            unsafe { libc::syscall(446, rules.as_raw_fd(), 0u32) },
+            "File-only Landlock enforcement",
+        )?;
+        Ok(())
+    }
+
     pub fn launch(arguments: &[String]) -> Result<()> {
         ensure!(
             cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) && usize::BITS == 64,
@@ -431,6 +476,20 @@ mod linux {
             .envs(p.environment)
             .exec();
         Err(error).context("Cannot execute Landlock command")
+    }
+}
+
+/// Restrict a fresh file-tool helper to its captured directory, without allowing
+/// execution or special-file creation. This stacks with the project sandbox.
+pub fn confine_agent_files(root: &std::fs::File, read_only: bool) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::confine_agent_files(root, read_only)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (root, read_only);
+        bail!("File-only tools require Linux Landlock")
     }
 }
 

@@ -495,7 +495,7 @@ impl EditorApp {
                 egui::ComboBox::from_id_salt("agent-provider").width(width)
                     .truncate().selected_text(agents.config.provider.label()).show_ui(ui,|ui| {
                         for provider in [Provider::Codex,Provider::Local,Provider::Acp] {
-                            ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label()));
+                            ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending() && !(provider == Provider::Acp && agents.config.files_only()),|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label())).response.on_disabled_hover_text("Choose another access mode before switching to ACP; ACP cannot enforce file-only tools.");
                         }
                     }).response.on_hover_text(agents.config.provider.label());
                 if old != agents.config.provider { agents.settings = true; }
@@ -927,6 +927,10 @@ impl EditorApp {
         files: Vec<rode_agent_core::attachment::Attachment>,
         ctx: &egui::Context,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.agents.config.files_only() || self.workspace.is_some(),
+            "Open a project folder before using Edit project files only."
+        );
         let launch = self.agent_launch();
         self.agents.chat.use_service();
         let context = ctx.clone();

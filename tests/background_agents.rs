@@ -112,6 +112,7 @@ impl Fixture {
                 ..Default::default()
             },
             executable,
+            file_tool_plan: None,
             env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
             python: "off".into(),
             persistent,
@@ -178,6 +179,76 @@ struct View {
     input: ChildStdin,
     events: mpsc::Receiver<State>,
     last: std::cell::RefCell<Option<State>>,
+}
+
+#[test]
+fn native_file_only_controller_edits_through_its_captured_host_policy() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("agent.py"),
+        include_str!("fixtures/file_only_agent.py"),
+    )
+    .unwrap();
+    fs::write(fixture.root.join("file-tool-steps.json"), serde_json::json!([
+        {"params":{"tool":"rode_write_file","arguments":{"path":"native-source.py","text":"native controller\n","revision":null}}},
+        {"params":{"tool":"exec_command","arguments":{"cmd":"touch forbidden"}}}
+    ]).to_string()).unwrap();
+    let plan = rode::sandbox::Plan {
+        root: fixture.root.to_string_lossy().into(),
+        native_helper: Some(env!("CARGO_BIN_EXE_rode-sessiond").into()),
+        ..Default::default()
+    };
+    let spec = Spec {
+        id: rode_session::new_id().unwrap(),
+        name: "File-only native fixture".into(),
+        policy: "a".repeat(64),
+        mode: "NORMAL MODE".into(),
+        config: Config {
+            codex: fixture.root.join("agent.py").to_string_lossy().into(),
+            access: rode_agent_core::Access::FilesOnly,
+            ..Default::default()
+        },
+        plan: Plan {
+            root: plan.root.clone(),
+            ..Default::default()
+        },
+        file_tool_plan: Some(serde_json::to_value(&plan).unwrap()),
+        executable: fixture.root.join("agent.py").to_string_lossy().into(),
+        env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+        python: "off".into(),
+        persistent: true,
+        text: Some("edit files".into()),
+        attachments: vec![],
+    };
+    let Response::Agent(info) = fixture
+        .rpc(&Request::CreateAgent {
+            spec: Box::new(spec),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let view = fixture.attach(&info);
+    let state = view.until(|state| state.chat.completed == 1);
+    assert!(state.chat.last_turn_succeeded, "{:?}", state.chat.messages);
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("native-source.py")).unwrap(),
+        "native controller\n"
+    );
+    assert!(!fixture.root.join("forbidden").exists());
+    drop(view);
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|i| i.id == info.id && !i.attached)
+    });
+    let view = fixture.attach(&info);
+    let state = view.until(|state| state.chat.connected);
+    assert_eq!(
+        state.chat.config.access(),
+        rode_agent_core::Access::FilesOnly
+    );
 }
 impl View {
     fn send(&mut self, action: Action) {

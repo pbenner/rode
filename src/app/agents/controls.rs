@@ -189,7 +189,7 @@ pub(super) fn buttons(
         ui.small("Changes apply before the next message.");
     });
 
-    let access = if read_only {
+    let access = if read_only && !config.files_only() {
         Access::ReadOnly
     } else {
         config.access()
@@ -206,30 +206,49 @@ pub(super) fn buttons(
         if config.provider == Provider::Acp {
             acp(ui, config, chat, true);
         } else {
-            ui.add_enabled_ui(!read_only, |ui| {
-                for choice in [Access::ReadOnly, Access::Project, Access::Full] {
-                    if ui
-                        .selectable_label(config.access() == choice, choice.label())
-                        .clicked()
-                    {
-                        config.access = choice;
-                        config.read_only = false;
-                    }
+            for choice in [
+                Access::ReadOnly,
+                Access::FilesOnly,
+                Access::Project,
+                Access::Full,
+            ] {
+                if ui
+                    .add_enabled(
+                        !read_only || matches!(choice, Access::ReadOnly | Access::FilesOnly),
+                        egui::Button::selectable(access == choice, choice.label()),
+                    )
+                    .clicked()
+                {
+                    config.access = choice;
+                    config.read_only = false;
                 }
-            });
+            }
+            if read_only {
+                ui.small("The project's read-only policy still prevents all file edits.");
+            }
             if access == Access::Full {
                 ui.label("Full access uses the permissions available to the agent on this host.");
             }
             if access == Access::ReadOnly {
                 ui.small("Read-only mode rejects requests for additional tool permissions.");
             }
+            if access == Access::FilesOnly {
+                ui.small("Read, search and edit project files without running commands. Builds, tests and Git commands are left to you. Symlinks and Git/Codex metadata are protected.");
+                ui.small("Changing this mode starts a new Codex conversation. Live file-only chats can be reattached through Running.");
+            }
         }
         ui.separator();
         ui.label("Permission requests");
-        for choice in [Approval::Ask, Approval::Never] {
-            ui.selectable_value(&mut config.approval, choice, choice.label());
+        if config.files_only() {
+            ui.small(
+                "File-only mode automatically declines all requests for additional permissions.",
+            );
+        } else {
+            for choice in [Approval::Ask, Approval::Never] {
+                ui.selectable_value(&mut config.approval, choice, choice.label());
+            }
+            ui.small("Ask when needed shows the agent's approval requests. Never ask declines requests; tools already permitted by the agent's mode can run automatically.");
         }
-        ui.small("Ask when needed shows the agent's approval requests. Never ask declines requests; tools already permitted by the agent's mode can run automatically.");
         ui.separator();
         ui.label(if isolated {
             "The project sandbox still limits files and networking."
@@ -341,12 +360,46 @@ mod tests {
     use super::*;
     use crate::agent::controls::{Model, OptionValue};
 
+    #[test]
+    fn file_only_access_is_selectable_without_starting_an_agent() {
+        for size in [egui::vec2(1380., 900.), egui::vec2(620., 560.)] {
+            let ctx = egui::Context::default();
+            let mut config = Config::default();
+            let before = config.clone();
+            let chat = Chat::default();
+            frame(&ctx, &mut config, &chat, size, vec![]);
+            let output = frame(&ctx, &mut config, &chat, size, vec![]);
+            let pos = position(&output, "Access: Project access");
+            let output = click(&ctx, &mut config, &chat, size, pos);
+            let pos = position(&output, "Edit project files only");
+            click(&ctx, &mut config, &chat, size, pos);
+            assert_eq!(config.access(), Access::FilesOnly);
+            assert!(!config.same_process(&before));
+            let saved: Config =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert!(saved.files_only());
+            assert!(!chat.connected());
+            assert!(chat.messages.is_empty());
+        }
+    }
+
     fn frame(
         ctx: &egui::Context,
         config: &mut Config,
         chat: &Chat,
         size: egui::Vec2,
         events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        frame_policy(ctx, config, chat, size, events, false)
+    }
+
+    fn frame_policy(
+        ctx: &egui::Context,
+        config: &mut Config,
+        chat: &Chat,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        read_only: bool,
     ) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {
@@ -357,7 +410,7 @@ mod tests {
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.add_space(size.y - 160.);
-                    ui.horizontal(|ui| buttons(ui, config, chat, None, false, false));
+                    ui.horizontal(|ui| buttons(ui, config, chat, None, read_only, false));
                 });
             },
         )
@@ -383,8 +436,19 @@ mod tests {
         size: egui::Vec2,
         pos: egui::Pos2,
     ) -> egui::FullOutput {
+        click_policy(ctx, config, chat, size, pos, false)
+    }
+
+    fn click_policy(
+        ctx: &egui::Context,
+        config: &mut Config,
+        chat: &Chat,
+        size: egui::Vec2,
+        pos: egui::Pos2,
+        read_only: bool,
+    ) -> egui::FullOutput {
         for pressed in [true, false] {
-            frame(
+            frame_policy(
                 ctx,
                 config,
                 chat,
@@ -398,9 +462,32 @@ mod tests {
                         modifiers: egui::Modifiers::NONE,
                     },
                 ],
+                read_only,
             );
         }
-        frame(ctx, config, chat, size, vec![])
+        frame_policy(ctx, config, chat, size, vec![], read_only)
+    }
+
+    #[test]
+    fn read_only_projects_allow_file_only_controls_without_enabling_writes() {
+        let ctx = egui::Context::default();
+        let mut config = Config::default();
+        let chat = Chat::default();
+        let size = egui::vec2(1100., 900.);
+        frame_policy(&ctx, &mut config, &chat, size, vec![], true);
+        let output = frame_policy(&ctx, &mut config, &chat, size, vec![], true);
+        let pos = position(&output, "Access: Read only");
+        let output = click_policy(&ctx, &mut config, &chat, size, pos, true);
+        let pos = position(&output, "Edit project files only");
+        click_policy(&ctx, &mut config, &chat, size, pos, true);
+        assert!(config.files_only());
+        let output = frame_policy(&ctx, &mut config, &chat, size, vec![], true);
+        let pos = position(&output, "Access: Edit project files only");
+        let output = click_policy(&ctx, &mut config, &chat, size, pos, true);
+        let pos = position(&output, "Full access");
+        click_policy(&ctx, &mut config, &chat, size, pos, true);
+        assert!(config.files_only());
+        assert!(!chat.connected());
     }
 
     #[test]

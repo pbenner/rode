@@ -42,6 +42,32 @@ class Handler(BaseHTTPRequestHandler):
                 call_id="call_fixture",
                 input='const r = await tools.exec_command({cmd: "printf RODE_TOOL_OK > rode-tool-result.txt; cat rode-tool-result.txt", max_output_tokens: 1000}); text(r);',
             )
+        file_tool = (root / "file-mode").exists() and not (root / "file-replied").exists()
+        if file_tool:
+            (root / "file-replied").touch()
+            item = dict(
+                id="file_fixture",
+                type="function_call",
+                name="rode_write_file",
+                call_id="file_fixture",
+                arguments=json.dumps(
+                    {
+                        "path": "native-file.txt",
+                        "text": "Native file-only edit.\n",
+                        "revision": None,
+                    }
+                ),
+            )
+        elif (root / "file-attack").exists() and not (root / "patch-replied").exists():
+            (root / "patch-replied").touch()
+            file_tool = True
+            item = dict(
+                id="patch_fixture",
+                type="custom_tool_call",
+                name="apply_patch",
+                call_id="patch_fixture",
+                input="*** Begin Patch\n*** Add File: ../outside-patch.txt\n+must be blocked\n*** Add File: builtin-patch.txt\n+must also be blocked\n*** End Patch",
+            )
         response = {
             "id": f"resp_fixture_{Handler.sequence}",
             "object": "response",
@@ -67,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
             {"type": "response.output_item.done", "output_index": 0, "item": item},
             {"type": "response.completed", "response": response},
         ]
-        if tool:
+        if tool or file_tool:
             events = [event for event in events if event["type"] != "response.output_text.delta"]
         for event in events:
             self.wfile.write(
@@ -78,5 +104,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = HTTPServer(("127.0.0.1", 0), Handler)
-(root / "port").write_text(str(server.server_port))
+(root / ".port.tmp").write_text(str(server.server_port))
+(root / ".port.tmp").replace(root / "port")
 server.serve_forever()

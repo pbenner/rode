@@ -382,8 +382,8 @@ impl Browser {
                         return Ok(());
                     }
                 } else {
-                    self.can_resume = true;
-                    self.can_delete = true;
+                    self.can_resume = !self.launch.config.files_only();
+                    self.can_delete = !self.launch.config.files_only();
                     self.send(json!({"method":"initialized","params":{}}))?;
                 }
                 self.list()?;
@@ -451,7 +451,9 @@ impl Browser {
                 }
                 self.cursor = next;
                 self.busy = false;
-                self.status = if !self.can_resume {
+                self.status = if self.launch.config.files_only() {
+                    "File-only mode can browse saved chats. Start a new chat for its confined tools, or reattach a live file-only chat through Running.".into()
+                } else if !self.can_resume {
                     "This agent lists history but does not support replay/resume.".into()
                 } else if self.entries.is_empty() {
                     "No saved conversations for this project.".into()

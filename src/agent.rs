@@ -43,6 +43,38 @@ impl Launch {
 /// Desktop local/SSH transport factory that preserves the captured project-host policy.
 struct HostFactory(Launch);
 impl rode_agent_core::Factory for HostFactory {
+    fn file_tool(
+        &self,
+        tool: &str,
+        arguments: &Value,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Value> {
+        anyhow::ensure!(
+            self.0.remote.is_none(),
+            "File-only remote editing requires the native RODE host service"
+        );
+        let mut plan = self.0.plan.clone();
+        plan.environment.mise = false;
+        let (command, _lease) = plan.coordinator_command("--agent-file-tool")?;
+        let request = rode_host_core::agent_files::Request {
+            root: self.0.plan.root.clone(),
+            tool: tool.into(),
+            arguments: arguments.clone(),
+            read_only: self.0.plan.project_read_only,
+            protected_paths: std::iter::once(self.0.config.codex.clone())
+                .chain(std::env::var("CODEX_HOME").ok())
+                .collect(),
+        };
+        let output = crate::project::run_controlled(
+            command,
+            serde_json::to_vec(&request)?,
+            std::time::Duration::from_secs(10),
+            cancel,
+            false,
+        )?
+        .checked()?;
+        rode_host_core::agent_files::response(&output)
+    }
     fn start(
         &self,
         launch: &rode_agent_core::Launch,
@@ -94,11 +126,14 @@ impl Session {
     }
     /// Start the shared supervised process transport using captured arguments and protocol line bound.
     fn with_arguments(
-        launch: Launch,
+        mut launch: Launch,
         argv: Vec<String>,
         limit: usize,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
+        if launch.config.files_only() {
+            launch.plan.environment.mise = false;
+        }
         crate::process::Session::start(
             crate::process::Launch {
                 native_debug: false,

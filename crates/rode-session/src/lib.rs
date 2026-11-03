@@ -61,8 +61,8 @@ mod runtimes;
 pub const VERSION: u32 = 1;
 /// Feature level that supports explicit persistence toggles.
 pub const PERSISTENCE_PROTOCOL: u32 = 2;
-/// Current feature level, including Landlock-scoped control transport on Linux.
-pub const PROTOCOL: u32 = 10;
+/// Current feature level, including confined native agent file tools.
+pub const PROTOCOL: u32 = 11;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -134,6 +134,8 @@ pub enum Request {
     SupportsAutomaticQueue,
     /// Probe control transport that cannot be reached from a Landlock domain.
     SupportsScopedControl,
+    /// Probe confined native file tools and command-free Codex launch policy.
+    SupportsFileOnly,
     /// Discover retained notebook and debugger runtimes.
     Runtimes,
     /// Create a captured host-owned runtime.
@@ -425,7 +427,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 8] {
+fn service_directories() -> [PathBuf; 9] {
     let primary = directory();
     [
         primary.clone(),
@@ -435,6 +437,7 @@ fn service_directories() -> [PathBuf; 8] {
         primary.join("protocol-7"),
         primary.join("protocol-8"),
         primary.join("protocol-9"),
+        primary.join("protocol-10"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -475,6 +478,7 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
             Request::SupportsRuntimes,
             Request::SupportsAutomaticQueue,
             Request::SupportsScopedControl,
+            Request::SupportsFileOnly,
         ] {
             match request_once(&probe, launcher, &primary) {
                 Ok(Response::Ok) => {}
@@ -488,7 +492,10 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
                             .contains("unknown variant `supports_automatic_queue`")
                         || error
                             .to_string()
-                            .contains("unknown variant `supports_scoped_control`") =>
+                            .contains("unknown variant `supports_scoped_control`")
+                        || error
+                            .to_string()
+                            .contains("unknown variant `supports_file_only`") =>
                 {
                     return Ok(compatible);
                 }
@@ -649,7 +656,8 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         | Request::SupportsHistoryDeletion
         | Request::SupportsRuntimes
         | Request::SupportsAutomaticQueue
-        | Request::SupportsScopedControl => request_once(request, launcher, &directory()),
+        | Request::SupportsScopedControl
+        | Request::SupportsFileOnly => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -1338,7 +1346,8 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
             | Request::SupportsHistoryDeletion
             | Request::SupportsRuntimes
             | Request::SupportsAutomaticQueue
-            | Request::SupportsScopedControl => Response::Ok,
+            | Request::SupportsScopedControl
+            | Request::SupportsFileOnly => Response::Ok,
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();
@@ -1668,6 +1677,7 @@ pub fn cli(args: &[String]) -> Result<()> {
     }
     if args.len() == 1 {
         match args[0].as_str() {
+            "--agent-file-tool" => return rode_host_core::agent_files::serve(),
             "host-rpc" => return host::serve(),
             "--runtime-cache" => return rode_host_core::runtime_cache::serve(),
             "--process" => return rode_host_core::supervisor::serve(),

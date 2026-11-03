@@ -15,6 +15,45 @@ pub(super) struct Factory {
     pub active: Arc<AtomicUsize>,
 }
 impl rode_agent_core::Factory for Factory {
+    fn file_tool(&self, tool: &str, arguments: &Value, cancel: &AtomicBool) -> Result<Value> {
+        let mut plan: rode_host_core::sandbox::Plan = serde_json::from_value(
+            self.spec
+                .file_tool_plan
+                .clone()
+                .context("This controller lacks file-only support; start a new chat")?,
+        )?;
+        ensure!(
+            plan.root == self.spec.plan.root
+                && plan.active == self.spec.plan.active
+                && plan.project_read_only == self.spec.plan.project_read_only,
+            "Native file tools do not match the agent's captured project policy"
+        );
+        plan.native_helper = Some(crate::current_executable()?.to_string_lossy().into_owned());
+        plan.environment.mise = false;
+        let (mut command, _lease) = plan.coordinator_command("--agent-file-tool")?;
+        command
+            .env_clear()
+            .envs(&self.spec.env)
+            .current_dir(&plan.root);
+        let request = rode_host_core::agent_files::Request {
+            root: plan.root.clone(),
+            tool: tool.into(),
+            arguments: arguments.clone(),
+            read_only: plan.project_read_only,
+            protected_paths: std::iter::once(self.spec.executable.clone())
+                .chain(self.spec.env.get("CODEX_HOME").cloned())
+                .collect(),
+        };
+        let output = rode_host_core::project::run_controlled(
+            command,
+            serde_json::to_vec(&request)?,
+            Duration::from_secs(10),
+            cancel,
+            false,
+        )?
+        .checked()?;
+        rode_host_core::agent_files::response(&output)
+    }
     fn start(
         &self,
         launch: &rode_agent_core::Launch,

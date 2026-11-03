@@ -24,6 +24,9 @@ pub struct Spec {
     pub config: Config,
     /// Actual host-side sandbox prefix and root.
     pub plan: Plan,
+    /// Full host policy for native file-only helpers; absent in older clients.
+    #[serde(default)]
+    pub file_tool_plan: Option<serde_json::Value>,
     /// Fully resolved installed executable, including a verified optional runtime.
     pub executable: String,
     /// Complete caller environment; each agent is independent of the first service client.

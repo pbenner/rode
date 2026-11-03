@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 pub mod attachment;
 pub mod controls;
+pub mod file_only;
 pub mod history;
 pub mod personality;
 pub mod protocol;
@@ -73,6 +74,8 @@ pub enum Access {
     /// Permit workspace writes and request approval for additional access.
     #[default]
     Project,
+    /// Edit through bounded project file tools, with Codex execution tools disabled.
+    FilesOnly,
     /// Use the host permissions remaining inside the active outer sandbox.
     Full,
 }
@@ -82,13 +85,14 @@ impl Access {
         match self {
             Self::ReadOnly => "Read only",
             Self::Project => "Project access",
+            Self::FilesOnly => "Edit project files only",
             Self::Full => "Full access",
         }
     }
     /// Translate tool access to Codex's inner sandbox mode; the captured host policy still applies.
     pub(crate) fn codex(self) -> &'static str {
         match self {
-            Self::ReadOnly => "read-only",
+            Self::ReadOnly | Self::FilesOnly => "read-only",
             Self::Project => "workspace-write",
             Self::Full => "danger-full-access",
         }
@@ -156,6 +160,10 @@ impl Default for Config {
     }
 }
 impl Config {
+    /// Whether only the host's confined file tools may change the project.
+    pub fn files_only(&self) -> bool {
+        self.access() == Access::FilesOnly
+    }
     /// Preserve old read-only preferences while applying a new access selector.
     pub fn access(&self) -> Access {
         if self.read_only {
@@ -172,6 +180,7 @@ impl Config {
             && self.local_url == next.local_url
             && self.acp_program == next.acp_program
             && self.acp_arguments == next.acp_arguments
+            && self.files_only() == next.files_only()
     }
     /// Return the model setting appropriate to the selected provider.
     pub fn model(&self) -> &str {
@@ -188,6 +197,10 @@ impl Config {
     }
     /// Construct arguments with optional model validation for history browsing.
     pub fn arguments(&self, require_model: bool) -> Result<Vec<String>> {
+        ensure!(
+            !self.files_only() || self.provider != Provider::Acp,
+            "Edit project files only requires Codex. Select another access mode before using an ACP agent."
+        );
         let mut args = if self.provider == Provider::Acp {
             let mut args = vec![self.acp_program.trim().to_owned()];
             args.extend(self.acp_arguments.clone());
@@ -203,6 +216,11 @@ impl Config {
                 "stdio://".into(),
             ]
         };
+        if self.files_only() {
+            for setting in file_only::LAUNCH_OVERRIDES {
+                args.extend(["-c".into(), (*setting).into()]);
+            }
+        }
         ensure!(
             !args[0].is_empty(),
             "Choose an installed agent executable in Agent settings."
@@ -334,6 +352,20 @@ pub trait Transport: Send {
 }
 /// Launch adapter for local, SSH and service-owned conversation processes.
 pub trait Factory: Send + Sync {
+    /// Run one bounded native file operation on the captured project host, inside
+    /// its existing policy. Implementations must never accept an executable here.
+    /// Observe cancellation before starting work and terminate an interrupted
+    /// helper; controllers retain the worker until cleanup has finished.
+    fn file_tool(
+        &self,
+        _tool: &str,
+        _arguments: &Value,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Value> {
+        anyhow::bail!(
+            "This host does not support confined agent file tools. Start a new chat with an updated RODE helper."
+        )
+    }
     /// Start only after Send or explicit History. History does not require a model.
     fn start(
         &self,

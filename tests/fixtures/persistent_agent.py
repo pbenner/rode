@@ -13,9 +13,22 @@ lock = threading.Lock()
 cancelled = threading.Event()
 approved = threading.Event()
 turn = 0
-(root / "agent.pid").write_text(str(os.getpid()))
-(root / "agent-scope.json").write_text(
-    json.dumps(dict(cwd=str(root), private_visible=(root.parent / "private.txt").exists()))
+
+
+def snapshot(name, text):
+    """Publish marker contents before a polling reader can observe the new file."""
+    pending = root / f".{name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        pending.write_text(text)
+        pending.replace(root / name)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+snapshot("agent.pid", str(os.getpid()))
+snapshot(
+    "agent-scope.json",
+    json.dumps(dict(cwd=str(root), private_visible=(root.parent / "private.txt").exists())),
 )
 
 
@@ -57,13 +70,13 @@ def work(message, number, prompt):
         while not approved.wait(0.05):
             if cancelled.is_set():
                 return
-    (root / "work-started").write_text(str(number))
+    snapshot("work-started", str(number))
     while not (root / "continue").exists():
         if cancelled.wait(0.05):
             return
     if cancelled.is_set():
         return
-    (root / "work-done").write_text(str(number))
+    snapshot("work-done", str(number))
     failed = number == 1 and (root / "fail-first").exists()
     text = f"background {'failed' if failed else 'complete'} {number}"
     if acp:
@@ -104,7 +117,7 @@ for line in sys.stdin:
         ):
             approved.set()
         else:
-            (root / "denied").write_text("denied")
+            snapshot("denied", "denied")
             cancelled.set()
     elif method == "initialize":
         reply(message, dict(protocolVersion=1, agentCapabilities={}) if acp else {})
@@ -133,7 +146,7 @@ for line in sys.stdin:
         threading.Thread(target=work, args=(message, turn, prompt), daemon=True).start()
     elif method in ("turn/interrupt", "session/cancel"):
         cancelled.set()
-        (root / "cancelled").write_text("cancelled")
+        snapshot("cancelled", "cancelled")
         if "id" in message:
             reply(message, {})
         if not acp:
