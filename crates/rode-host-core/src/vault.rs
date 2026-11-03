@@ -595,8 +595,10 @@ pub fn scratch_parent(root: &Path) -> Result<PathBuf> {
     for candidate in [temporary, PathBuf::from("/dev/shm")] {
         if let Ok(path) = std::ffi::CString::new(candidate.as_os_str().as_encoded_bytes()) {
             let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+            // Widen both values because f_type is unsigned on musl and signed on glibc.
             if unsafe { libc::statfs(path.as_ptr(), stats.as_mut_ptr()) } == 0
-                && unsafe { stats.assume_init() }.f_type == libc::TMPFS_MAGIC
+                && i128::from(unsafe { stats.assume_init() }.f_type)
+                    == i128::from(libc::TMPFS_MAGIC)
             {
                 return Ok(candidate);
             }
