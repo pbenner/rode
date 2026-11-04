@@ -1,0 +1,44 @@
+{
+  "name": "Telemetry",
+  "base": "phosphor",
+  "chrome": "bracketed",
+  "colors": {
+    "background": "#050f12",
+    "panel": "#08191b",
+    "raised": "#0e2728",
+    "border": "#1f4645",
+    "text": "#b9efe4",
+    "muted": "#80aba5",
+    "accent": "#13dfc4",
+    "frame_accent": "#0dbba7",
+    "heading": "#26ebd0",
+    "success": "#5fddb2",
+    "error": "#ff8996",
+    "selection": "#10463f",
+    "hover": "#10352f",
+    "active": "#154b40",
+    "gutter": "#588b83",
+    "terminal_background": "#040d10",
+    "terminal_foreground": "#b9efe4"
+  },
+  "syntax": {
+    "comment": "#75a69c",
+    "keyword": "#36e8c9",
+    "type": "#83dcc7",
+    "function": "#a3f4de",
+    "string": "#9bc9b4",
+    "number": "#d7e3b0",
+    "constant": "#a6ddcf",
+    "variable": "#b9efe4",
+    "operator": "#75d1bf",
+    "punctuation": "#88b8af",
+    "builtin": "#6fe0cf",
+    "attribute": "#9bd9ce"
+  },
+  "ansi": [
+    "#0e2728", "#e0828b", "#69cfa8", "#d9ce97",
+    "#69bcb7", "#c3b3cf", "#23cab9", "#b9efe4",
+    "#7aa59d", "#ffacb5", "#8ce4bd", "#efe0ac",
+    "#82e0d2", "#dfcee8", "#65f2da", "#e0fff5"
+  ]
+}

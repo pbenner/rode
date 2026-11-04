@@ -1892,13 +1892,15 @@ impl EditorApp {
             palette.paint_panel(ui);
             self.pane_ui(ui, navigation::Pane::Explorer);
             ui.horizontal(|ui| {
-                ui.label(palette.tag("EXPLORER").color(
-                    if palette.chrome == theme::Chrome::Chamfered {
-                        palette.heading
-                    } else {
-                        palette.muted
-                    },
-                ));
+                ui.label(
+                    palette
+                        .tag("EXPLORER")
+                        .color(if palette.chrome.is_decorated() {
+                            palette.heading
+                        } else {
+                            palette.muted
+                        }),
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if icons::small(ui, Icon::Refresh, "Refresh expanded folders").clicked() {
                         let paths: Vec<_> = self.expanded.iter().cloned().collect();
@@ -2249,7 +2251,7 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         let mut breakpoint_toggle = None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome == theme::Chrome::Chamfered { 8 } else { 0 }))
+            .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome.is_decorated() { 8 } else { 0 }))
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
                 if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.is_some() { ui.disable(); }

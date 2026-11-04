@@ -1,7 +1,7 @@
 # Themes
 
 
-Click **Theme: …** at the bottom right, or choose **View → Color theme**. Ten built-in dark themes cover the interface and terminal, with matching syntax colors when **Follow UI theme** is selected:
+Click **Theme: …** at the bottom right, or choose **View → Color theme**. Twelve built-in dark themes cover the interface and terminal, with matching syntax colors when **Follow UI theme** is selected:
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
@@ -15,10 +15,12 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Te
 | Neon | `neon` | Dark plum, magenta controls and keywords, cyan types, violet functions |
 | Afterglow | `afterglow` | Charcoal-violet panels, magenta cut-corner frames and static glow, cyan selections, cream headings and rose labels |
 | Knight Rider | `knight-rider` | Near-black cockpit panels, red cut-corner frames and static glow, silver text, amber types and warm-white functions |
+| Hologram | `hologram` | Midnight navy, luminous cyan double-line frames with clipped corners and segmented rails, ice-blue text and soft gold numbers |
+| Telemetry | `telemetry` | Near-black instrument panels, turquoise corner brackets and hatched edge accents, mint text and green-cyan syntax |
 
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, or One Half Dark code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
-Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a lighter matching **Bright white**. Carbon and Carbon Edge use warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix green, Ice/Code Dark/Afterglow/Knight Rider cool blue, and Neon violet. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
+Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a lighter matching **Bright white**. Carbon and Carbon Edge use warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix green, Ice/Code Dark/Afterglow/Knight Rider/Hologram cool blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
 Bash prompt colors come from `PS1` in the shell's own configuration. RODE honors bold ANSI foreground colors using the theme's bright variants: `\e[1;30m` uses bright black and `\e[1;34m` uses bright blue. Existing prompts therefore follow the selected terminal palette without editing `.bashrc`; see [prompt rendering](terminals.md#bash-prompts-and-colors).
 
@@ -36,9 +38,15 @@ The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber*
 ./target/release/rode . --theme code-dark
 ./target/release/rode . --theme afterglow
 ./target/release/rode . --theme knight-rider
+./target/release/rode . --theme hologram
+./target/release/rode . --theme telemetry
 ```
 
-Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, loaded at startup. They can inherit any built-in palette and override UI, syntax, ANSI terminal colors and the optional native frame treatment. Carbon Edge, Afterglow and Knight Rider use static decoration: code and terminal backgrounds stay solid, and switching themes preserves buffers, independent syntax choices and running shells. See the [theme format and examples](../themes/README.md). An invalid or missing theme produces a visible warning and falls back to Phosphor if the selected theme is unavailable. Presets are embedded in the binary, with no extra downloads, dependencies, or background effects.
+Hologram is inspired by a cyan holographic loading panel over navy code. Double outlines, short illuminated corners and segmented frame rails give panels a glass-like edge. Its code and terminal text stay sharp, and the glow is static. Select **Follow UI theme** for its matching cyan, mint and soft gold syntax colors.
+
+Telemetry takes its cues from turquoise sci-fi instrument screens: open corner brackets, subdued vertical rails and small hatched edge accents on near-black panels. Matching mint text and green-cyan syntax keep the appearance cohesive. All frame details are static and stay within the panel margins.
+
+Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, loaded at startup. They can inherit any built-in palette and override UI, syntax, ANSI terminal colors and the optional native frame treatment. Carbon Edge, Afterglow, Knight Rider, Hologram and Telemetry use static decoration: code and terminal backgrounds stay solid, and switching themes preserves buffers, independent syntax choices and running shells. See the [theme format and examples](../themes/README.md). An invalid or missing theme produces a visible warning and falls back to Phosphor if the selected theme is unavailable. Presets are embedded in the binary, with no extra downloads, dependencies, or background effects.
 
 **View → Interface scale** offers percentage presets and 5% Smaller/Larger actions for the whole interface, separately from **Editor font size**. Try 75% or 50% if the GUI looks too large on another display; [interface sizing](editing.md) explains monitor scaling, reset and keyboard access.
 

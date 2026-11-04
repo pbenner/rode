@@ -1,0 +1,44 @@
+{
+  "name": "Hologram",
+  "base": "phosphor",
+  "chrome": "holographic",
+  "colors": {
+    "background": "#07121f",
+    "panel": "#0b1b2b",
+    "raised": "#112b3d",
+    "border": "#25495c",
+    "text": "#d3f4fa",
+    "muted": "#8babbd",
+    "accent": "#78e6f6",
+    "frame_accent": "#60d4ec",
+    "heading": "#bbf5ff",
+    "success": "#8cdfb5",
+    "error": "#ff929f",
+    "selection": "#17475b",
+    "hover": "#15384b",
+    "active": "#1c4b5e",
+    "gutter": "#658596",
+    "terminal_background": "#060f1b",
+    "terminal_foreground": "#d3f4fa"
+  },
+  "syntax": {
+    "comment": "#7fa5bc",
+    "keyword": "#88deef",
+    "type": "#a6d8f2",
+    "function": "#cbf6fc",
+    "string": "#a6ded1",
+    "number": "#f1d7a6",
+    "constant": "#d7def6",
+    "variable": "#d3f4fa",
+    "operator": "#9ccbd8",
+    "punctuation": "#8fb3c7",
+    "builtin": "#b2eaf2",
+    "attribute": "#b5cfed"
+  },
+  "ansi": [
+    "#112b3d", "#eb8796", "#86cfa9", "#d8c697",
+    "#92ceef", "#bfb2dd", "#77dbe9", "#d3f4fa",
+    "#88a6b8", "#ffabb7", "#a4e8c7", "#f4dfb7",
+    "#b7e7ff", "#d6cff3", "#a0f2ff", "#effcff"
+  ]
+}

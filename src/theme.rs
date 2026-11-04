@@ -38,12 +38,14 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
     ("neon", include_str!("../themes/neon.json")),
     ("afterglow", include_str!("../themes/afterglow.json")),
     ("knight-rider", include_str!("../themes/knight-rider.json")),
+    ("hologram", include_str!("../themes/hologram.json")),
+    ("telemetry", include_str!("../themes/telemetry.json")),
 ];
 
 /// Copyable interface/terminal colors; syntax themes may be selected independently.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
-    /// Static native surface treatment; existing themes use plain frames.
+    /// Static native surface treatment, independent of interface colors.
     pub chrome: Chrome,
     /// Decorative frame color, independent of interactive/focus emphasis.
     pub frame_accent: Color32,
@@ -660,9 +662,14 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style.visuals.error_fg_color = palette.error;
     style.visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
     style.visuals.window_highlight_topmost = false;
-    if palette.chrome == Chrome::Chamfered {
-        style.visuals.window_corner_radius = egui::CornerRadius::same(2);
-        style.visuals.menu_corner_radius = egui::CornerRadius::same(2);
+    if palette.chrome.is_decorated() {
+        let corner_radius = if palette.chrome == Chrome::Bracketed {
+            0
+        } else {
+            2
+        };
+        style.visuals.window_corner_radius = egui::CornerRadius::same(corner_radius);
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(corner_radius);
         style.visuals.window_stroke =
             Stroke::new(1.0_f32, palette.frame_accent.gamma_multiply(0.65));
         style.visuals.window_shadow = egui::epaint::Shadow {
@@ -677,7 +684,7 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            widget.corner_radius = egui::CornerRadius::same(2);
+            widget.corner_radius = egui::CornerRadius::same(corner_radius);
             widget.expansion = 0.0;
         }
         style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);

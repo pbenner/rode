@@ -135,11 +135,11 @@ fn run_step(step: usize) {
         key("space", ("Control_L",))
         key("e")  # Theme samples use the editor while the shell keeps running.
         background(window, "carbon.png", (16, 16, 16))
-        # The status-bar menu has ten built-ins plus the custom fixture.
+        # The status-bar menu contains built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
         click(1310, 887)
         screenshot(window, "status-theme-selector.png")
-        click(1290, 574)  # Phosphor, first menu row
+        click(1290, 560)  # Phosphor, first menu row
         saved_theme(directory, "phosphor")
         background(window, "phosphor.png", (13, 18, 20))
         for preset, color in [
@@ -150,6 +150,8 @@ fn run_step(step: usize) {
             ("neon", (17, 11, 27)),
             ("afterglow", (19, 18, 25)),
             ("knight-rider", (9, 10, 12)),
+            ("hologram", (7, 18, 31)),
+            ("telemetry", (5, 15, 18)),
         ]:
             theme(preset.replace("-", " "))
             saved_theme(directory, preset)
@@ -161,10 +163,10 @@ fn run_step(step: usize) {
         saved_theme(directory, "custom:smoke")
         background(window, "custom.png", (21, 18, 26))
         click(1310, 887)
-        click(1290, 649)  # Code Dark, fourth menu row
+        click(1290, 635)  # Code Dark, fourth menu row
         saved_theme(directory, "code-dark")
-        theme("Carbon Edge")
-        saved_theme(directory, "carbon-edge")
+        theme("Telemetry")
+        saved_theme(directory, "telemetry")
         key("s", ("Control_L",))
         time.sleep(0.3)
         assert path.read_text() == saved, "Changing themes must preserve document contents"
@@ -207,7 +209,7 @@ fn run_step(step: usize) {
             time.sleep(0.05)
         assert window
         time.sleep(0.7)
-        background(window, "theme-restored.png", (16, 16, 16))
+        background(window, "theme-restored.png", (5, 15, 18))
         close_window(window, process)
         print(
             "Built-in/custom theme switching, immediate config writes, terminal preservation, and native restart persistence passed."

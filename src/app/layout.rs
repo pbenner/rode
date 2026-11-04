@@ -3,7 +3,7 @@
 //! Keep layout separate from controllers: these helpers own only spacing, reading
 //! widths and themed surfaces. Callers retain scroll IDs, state and actions, so
 //! docking a page never changes its identity or starts background work.
-use crate::theme::{Chrome, Palette};
+use crate::theme::Palette;
 use eframe::egui::{self, Align, Layout, RichText, Stroke};
 
 /// Maximum outer width for lists and forms, including the page's inner margin.
@@ -118,17 +118,13 @@ pub(super) fn card_frame(palette: Palette) -> egui::Frame {
         .fill(palette.panel)
         .stroke(Stroke::new(
             1_f32,
-            if palette.chrome == Chrome::Chamfered {
+            if palette.chrome.is_decorated() {
                 palette.frame_accent.gamma_multiply(0.55)
             } else {
                 palette.border
             },
         ))
-        .corner_radius(if palette.chrome == Chrome::Chamfered {
-            2
-        } else {
-            6
-        })
+        .corner_radius(if palette.chrome.is_decorated() { 2 } else { 6 })
         .inner_margin(12)
 }
 
@@ -139,7 +135,7 @@ pub(super) fn card<R>(
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     let mut frame = card_frame(palette);
-    let background = (palette.chrome == Chrome::Chamfered).then(|| {
+    let background = palette.chrome.is_decorated().then(|| {
         frame.fill = egui::Color32::TRANSPARENT;
         frame.stroke.color = egui::Color32::TRANSPARENT;
         ui.painter().add(egui::Shape::Noop)
@@ -199,16 +195,12 @@ pub(super) fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame
         .fill(palette.panel)
         .stroke(Stroke::new(
             1_f32,
-            if palette.chrome == Chrome::Chamfered {
+            if palette.chrome.is_decorated() {
                 palette.frame_accent.gamma_multiply(0.65)
             } else {
                 palette.border
             },
         ))
-        .corner_radius(if palette.chrome == Chrome::Chamfered {
-            2
-        } else {
-            8
-        })
+        .corner_radius(if palette.chrome.is_decorated() { 2 } else { 8 })
         .inner_margin(16)
 }

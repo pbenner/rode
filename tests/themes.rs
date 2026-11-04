@@ -60,52 +60,59 @@ fn switching_recolors_cached_source_and_restores_original() {
 
 #[test]
 fn decorated_chrome_inherits_can_be_disabled_and_resets_when_switching() {
-    let inherited = Theme::from_json(
-        "custom:trim",
-        r##"{"name":"Trim","base":"afterglow","colors":{"frame_accent":"#e0aaee","heading":"#ffddaa"}}"##,
-    )
-    .unwrap();
-    assert_eq!(inherited.palette.chrome, Chrome::Chamfered);
-    assert_eq!(
-        inherited.palette.frame_accent,
-        parse_color("#e0aaee").unwrap()
-    );
-    assert_eq!(
-        inherited.palette.heading_color(),
-        parse_color("#ffddaa").unwrap()
-    );
-    let plain = Theme::from_json(
-        "custom:plain",
-        r#"{"name":"Plain","base":"afterglow","chrome":"plain"}"#,
-    )
-    .unwrap();
-    assert_eq!(plain.palette.chrome, Chrome::Plain);
-    assert_eq!(plain.palette.heading_color(), plain.palette.text);
-    assert!(
-        Theme::from_json(
-            "custom:invalid",
-            r#"{"name":"Invalid","chrome":"animated"}"#
+    for (base, chrome) in [
+        ("afterglow", Chrome::Chamfered),
+        ("hologram", Chrome::Holographic),
+        ("telemetry", Chrome::Bracketed),
+    ] {
+        let definition = serde_json::json!({
+            "name": "Trim",
+            "base": base,
+            "colors": {"frame_accent": "#e0aaee", "heading": "#ffddaa"}
+        });
+        let inherited = Theme::from_json("custom:trim", &definition.to_string()).unwrap();
+        assert_eq!(inherited.palette.chrome, chrome);
+        assert_eq!(
+            inherited.palette.frame_accent,
+            parse_color("#e0aaee").unwrap()
+        );
+        assert_eq!(
+            inherited.palette.heading_color(),
+            parse_color("#ffddaa").unwrap()
+        );
+        let plain = Theme::from_json(
+            "custom:plain",
+            &format!(r#"{{"name":"Plain","base":"{base}","chrome":"plain"}}"#),
         )
-        .is_err()
-    );
+        .unwrap();
+        assert_eq!(plain.palette.chrome, Chrome::Plain);
+        assert_eq!(plain.palette.heading_color(), plain.palette.text);
+        assert!(
+            Theme::from_json(
+                "custom:invalid",
+                r#"{"name":"Invalid","chrome":"animated"}"#
+            )
+            .is_err()
+        );
 
-    let directory = tempfile::tempdir().unwrap();
-    let (mut themes, _) = Themes::load(directory.path(), "phosphor");
-    let ctx = egui::Context::default();
-    themes.select("phosphor", &ctx).unwrap();
-    let original = ctx.style().visuals.clone();
-    themes.select_syntax("nord", &ctx).unwrap();
-    themes.select("afterglow", &ctx).unwrap();
-    assert_eq!(themes.active_syntax().id, "nord");
-    assert_ne!(ctx.style().visuals, original);
-    assert_eq!(ctx.style().visuals.widgets.hovered.expansion, 0.);
-    themes.select("phosphor", &ctx).unwrap();
-    assert_eq!(
-        ctx.style().visuals,
-        original,
-        "Decorative style leaked into a plain theme"
-    );
-    assert_eq!(themes.active_syntax().id, "nord");
+        let directory = tempfile::tempdir().unwrap();
+        let (mut themes, _) = Themes::load(directory.path(), "phosphor");
+        let ctx = egui::Context::default();
+        themes.select("phosphor", &ctx).unwrap();
+        let original = ctx.style().visuals.clone();
+        themes.select_syntax("nord", &ctx).unwrap();
+        themes.select(base, &ctx).unwrap();
+        assert_eq!(themes.active_syntax().id, "nord");
+        assert_ne!(ctx.style().visuals, original);
+        assert_eq!(ctx.style().visuals.widgets.hovered.expansion, 0.);
+        themes.select("phosphor", &ctx).unwrap();
+        assert_eq!(
+            ctx.style().visuals,
+            original,
+            "Decorative style leaked into a plain theme"
+        );
+        assert_eq!(themes.active_syntax().id, "nord");
+    }
 }
 
 #[test]
@@ -348,10 +355,11 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} green path",
                 builtin.id
             ),
-            "ice" | "code-dark" | "afterglow" | "knight-rider" => {
+            "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
+            "telemetry" => assert!(path.g() > path.r() && path.b() > path.r(), "turquoise path"),
             _ => unreachable!(),
         }
         let file = format!(r#"{{"name":"Derived","base":"{}"}}"#, builtin.id);
@@ -388,7 +396,9 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "ice",
                 "neon",
                 "afterglow",
-                "knight-rider"
+                "knight-rider",
+                "hologram",
+                "telemetry"
             ]
             .map(str::to_owned)
             .into()
@@ -423,6 +433,8 @@ fn syntax_palettes_are_independent_and_follow_ui_remains_available() {
         "ice",
         "neon",
         "knight-rider",
+        "hologram",
+        "telemetry",
     ] {
         themes.select(ui, &ctx).unwrap();
         assert_eq!(themes.active_syntax().id, "dracula");
