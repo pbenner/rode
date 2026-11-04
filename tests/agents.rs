@@ -616,7 +616,19 @@ fn actual_landlock_encloses_the_agent_and_tools_without_fallback() {
 
 fn agent_sandbox(backend: sandbox::Backend) {
     let (_temp, root, program) = fixture();
+    // The policy grants /usr, independently of the developer's active venv or
+    // PATH-managed interpreter. Its children must use that same covered runtime.
+    fs::write(
+        &program,
+        include_str!("fixtures/agent.py").replacen(
+            "#!/usr/bin/env python3",
+            "#!/usr/bin/python3 -I",
+            1,
+        ),
+    )
+    .unwrap();
     let mut launch = launch(&root, &program, Provider::Codex, true);
+    launch.python = "/usr/bin/python3".into();
     launch.config.access = Access::Full;
     launch.config.approval = Approval::Never;
     launch.plan = native_peer::prepare(
@@ -630,9 +642,22 @@ fn agent_sandbox(backend: sandbox::Backend) {
     )
     .unwrap();
     let active = launch.plan.active;
+    if backend == sandbox::Backend::Landlock && !active {
+        assert_ne!(
+            std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "{}",
+            launch.plan.reason
+        );
+    }
     let mut chat = Chat::default();
     submit(&mut chat, launch, "sandbox");
     wait(&mut chat, |c| c.completed == 1);
+    assert!(
+        chat.last_turn_succeeded,
+        "{}: {:?}",
+        chat.status, chat.messages
+    );
     let scope: Value =
         serde_json::from_str(&fs::read_to_string(root.join("agent-scope.json")).unwrap()).unwrap();
     assert_eq!(scope["cwd"], root.to_string_lossy().as_ref());

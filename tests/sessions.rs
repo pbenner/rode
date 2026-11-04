@@ -1145,43 +1145,40 @@ fn landlock_cannot_use_the_host_service_as_an_unsandboxed_process_broker() {
     fixture.create(&fixture.plan());
     let project = fixture.root.path().join("landlock-project");
     fs::create_dir(&project).unwrap();
-    let plan = native_peer::prepare(
-        project.to_str().unwrap(),
-        &sandbox::Options {
-            enabled: true,
-            backend: sandbox::Backend::Landlock,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    if !plan.active {
-        assert_ne!(
-            std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
-            Ok("1"),
-            "{}",
-            plan.reason
-        );
-        return;
-    }
-    let mut command = Command::new(&plan.prefix[0]);
-    command
-        .args(&plan.prefix[1..])
-        .args([
-            "python3",
-            "-c",
-            r#"
+    for expose_runtime in [false, true] {
+        let plan = native_peer::prepare(
+            project.to_str().unwrap(),
+            &sandbox::Options {
+                enabled: true,
+                backend: sandbox::Backend::Landlock,
+                read_write: if expose_runtime {
+                    vec![fixture.runtime.to_string_lossy().into()]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if !plan.active {
+            assert_ne!(
+                std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                Ok("1"),
+                "{}",
+                plan.reason
+            );
+            return;
+        }
+        let mut command = Command::new(&plan.prefix[0]);
+        command
+            .args(&plan.prefix[1..])
+            .args([
+                "/usr/bin/python3",
+                "-I",
+                "-c",
+                r#"
 import os, socket, struct, sys
-metadata = os.stat(os.path.dirname(sys.argv[1]))
-address = '\0rode-session-%s-%s-%s' % (metadata.st_uid, metadata.st_dev, metadata.st_ino)
-with socket.socket(socket.AF_UNIX) as client:
-    try: client.connect(address)
-    except PermissionError: pass
-    else: raise AssertionError('Landlock reached host abstract control socket')
-with socket.socket(socket.AF_UNIX) as client:
-    client.settimeout(5)
-    client.connect(sys.argv[1])
-    data = b'J{"action":"list"}'
-    client.sendall(struct.pack('>I', len(data)) + data)
+def read_frame(client):
     def read_exact(size):
         result = b''
         while len(result) < size:
@@ -1189,17 +1186,86 @@ with socket.socket(socket.AF_UNIX) as client:
             assert chunk
             result += chunk
         return result
-    reply = read_exact(struct.unpack('>I', read_exact(4))[0])
+    return read_exact(struct.unpack('>I', read_exact(4))[0])
+reference = os.path.join(os.path.dirname(sys.argv[1]), 'control.capability')
+if sys.argv[2] == 'true':
+    # The named file contains only a reference; the host's ptrace-protected
+    # descriptor must remain inaccessible even with an explicit path grant.
+    reference = open(reference).read()
+try: open(reference, 'rb').read()
+except PermissionError: pass
+else: raise AssertionError('Landlock read host control capability')
+metadata = os.stat(os.path.dirname(sys.argv[1]))
+address = '\0rode-session-auth-%s-%s-%s' % (metadata.st_uid, metadata.st_dev, metadata.st_ino)
+with socket.socket(socket.AF_UNIX) as client:
+    client.settimeout(5)
+    try: client.connect(address)
+    except PermissionError: pass # ABI 6 blocks the connection itself.
+    else: # ABI 4/5 rely on the ptrace-protected capability.
+        data = b'A' + b'0' * 32
+        client.sendall(struct.pack('>I', len(data)) + data)
+        reply = read_frame(client)
+        assert b'authentication failed' in reply, reply
+with socket.socket(socket.AF_UNIX) as client:
+    client.settimeout(5)
+    client.connect(sys.argv[1])
+    data = b'J{"action":"list"}'
+    client.sendall(struct.pack('>I', len(data)) + data)
+    reply = read_frame(client)
     assert b'outside the project sandbox' in reply, reply
 "#,
-        ])
-        .arg(fixture.runtime.join("socket"));
-    let result = command.output().unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+            ])
+            .arg(fixture.runtime.join("socket"))
+            .arg(if expose_runtime { "true" } else { "false" });
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(fixture.direct_list().len(), 1);
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn host_control_rejects_missing_and_incorrect_authentication_before_requests() {
+    use std::os::{
+        linux::net::SocketAddrExt,
+        unix::{
+            fs::MetadataExt,
+            net::{SocketAddr, UnixStream},
+        },
+    };
+    let mut fixture = Fixture::new();
+    fixture.create(&fixture.plan());
+    let metadata = fs::metadata(&fixture.runtime).unwrap();
+    let address = SocketAddr::from_abstract_name(format!(
+        "rode-session-auth-{}-{}-{}",
+        metadata.uid(),
+        metadata.dev(),
+        metadata.ino()
+    ))
+    .unwrap();
+    for bytes in [
+        b"J{\"action\":\"list\"}".to_vec(),
+        [vec![b'A'], vec![0; 32]].concat(),
+    ] {
+        let mut stream = UnixStream::connect_addr(&address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&bytes).unwrap();
+        let (kind, bytes) = rode_session::read_stream(&mut stream).unwrap();
+        assert_eq!(kind, b'J');
+        let response = serde_json::from_slice::<Response>(&bytes)
+            .unwrap()
+            .checked();
+        assert!(response.unwrap_err().to_string().contains("authentication"));
+    }
     assert_eq!(fixture.direct_list().len(), 1);
 }
 

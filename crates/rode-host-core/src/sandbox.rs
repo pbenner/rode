@@ -340,6 +340,9 @@ pub fn prepare_with_helper(root: &str, options: &Options, executable: &Path) -> 
         match crate::command::run_bounded(command, vec![], Duration::from_secs(10)) {
             Ok(_) => {
                 plan.active = true;
+                if options.backend == Backend::Landlock {
+                    plan.reason = crate::landlock::compatibility_notice()?;
+                }
             }
             Err(error) => {
                 plan.prefix.clear();

@@ -97,7 +97,7 @@ pub(in crate::app) fn rules_ui(
         ui.add_space(8.);
         layout::subtitle(ui, match options.backend {
             sandbox::Backend::Bwrap => "Private /tmp and hidden home. Unavailable bwrap is visibly normal mode. Shared writable caches retain their contents and access.",
-            sandbox::Backend::Landlock => "Requires Python 3 and Linux Landlock ABI 6. Restricts file access, not host process visibility or file metadata. Uses private project scratch via TMPDIR; cannot hide names or subtract child grants. Unavailable enforcement is visibly normal mode.",
+            sandbox::Backend::Landlock => "Requires Linux Landlock ABI 4+. ABI 5 adds device-ioctl restrictions; ABI 6 adds signal and abstract Unix socket isolation. Restricts file access, not host process visibility or file metadata. Uses private project scratch via TMPDIR; cannot hide names or subtract child grants. Unavailable enforcement is visibly normal mode.",
         }, palette);
     });
 }

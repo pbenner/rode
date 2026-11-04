@@ -97,6 +97,13 @@ fn active(root: &Path, options: &sandbox::Options) -> Option<sandbox::Plan> {
         return None;
     }
     assert!(local.label().contains("Landlock"));
+    assert_eq!(local.reason, remote.reason);
+    let abi = unsafe { libc::syscall(444, std::ptr::null::<u8>(), 0usize, 1u32) };
+    assert!(
+        local.reason.contains(&format!("Landlock ABI {abi}:")),
+        "{}",
+        local.reason
+    );
     Some(local)
 }
 

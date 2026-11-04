@@ -1,6 +1,7 @@
 //! A headless, per-user PTY and coding-agent service. GUI clients may disconnect
 //! without ending explicitly persistent jobs. Control uses same-user Unix sockets;
-//! Linux abstract sockets also enforce Landlock's IPC-domain boundary.
+//! A host-owned capability protects control on Landlock ABI 4/5;
+//! Linux abstract sockets additionally enforce ABI 6's IPC-domain boundary.
 //!
 //! Control requests use tagged JSON. Attachments use a separate framed stream
 //! for terminal bytes, resize and lifetime updates. A session owns the PTY and
@@ -55,12 +56,14 @@ use std::{
 };
 
 mod agents;
+#[cfg(target_os = "linux")]
+mod control_auth;
 mod runtimes;
 
 /// Runtime-directory generation; distinct from optional protocol feature levels.
 pub const VERSION: u32 = 1;
-/// Current feature level, including confined native agent file tools.
-pub const PROTOCOL: u32 = 11;
+/// Current feature level, including authenticated host control on older Landlock ABIs.
+pub const PROTOCOL: u32 = 12;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -130,8 +133,10 @@ pub enum Request {
     SupportsRuntimes,
     /// Probe prompt dispatch that continues without a controlling desktop view.
     SupportsAutomaticQueue,
-    /// Probe control transport that cannot be reached from a Landlock domain.
+    /// Probe host control that rejects requests from a Landlock domain.
     SupportsScopedControl,
+    /// Probe host-owned control authentication, including on Landlock ABI 4/5.
+    SupportsAuthenticatedControl,
     /// Probe confined native file tools and command-free Codex launch policy.
     SupportsFileOnly,
     /// Discover retained notebook and debugger runtimes.
@@ -351,6 +356,17 @@ fn recv_json<R: Read, T: serde::de::DeserializeOwned>(input: &mut R) -> Result<T
 fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::SocketAddr> {
     use std::os::linux::net::SocketAddrExt;
     std::os::unix::net::SocketAddr::from_abstract_name(format!(
+        "rode-session-auth-{}-{}-{}",
+        meta.uid(),
+        meta.dev(),
+        meta.ino()
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn legacy_control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::SocketAddr> {
+    use std::os::linux::net::SocketAddrExt;
+    std::os::unix::net::SocketAddr::from_abstract_name(format!(
         "rode-session-{}-{}-{}",
         meta.uid(),
         meta.dev(),
@@ -359,23 +375,41 @@ fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::S
 }
 
 #[cfg(target_os = "linux")]
+fn connect_authenticated(
+    dir: &Path,
+    address: &std::os::unix::net::SocketAddr,
+) -> std::io::Result<UnixStream> {
+    let mut stream = UnixStream::connect_addr(address)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    control_auth::authenticate(&mut stream, dir).map_err(std::io::Error::other)?;
+    Ok(stream)
+}
+
+#[cfg(target_os = "linux")]
 fn connect_control_fallback(
     dir: &Path,
     address: &std::os::unix::net::SocketAddr,
 ) -> std::io::Result<UnixStream> {
-    let legacy = UnixStream::connect(dir.join("socket"))?;
+    let legacy = match UnixStream::connect_addr(&legacy_control_address(&fs::metadata(dir)?)?) {
+        Ok(stream) => stream,
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            UnixStream::connect(dir.join("socket"))?
+        }
+        Err(error) => return Err(error),
+    };
     // The service can start between the refused abstract connection and this
     // filesystem connection. It binds its protected listener before publishing
     // discovery, so check again before treating this socket as a legacy service.
     // Permission denials on either attempt must never fall back to a pathname.
-    match UnixStream::connect_addr(address) {
+    match connect_authenticated(dir, address) {
         Ok(stream) => Ok(stream),
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(legacy),
         Err(error) => Err(error),
     }
 }
 
-/// Connect to the protected control transport in a private runtime directory.
+/// Authenticate the protected control transport in a private runtime directory.
 /// Legacy filesystem sockets remain supported, but permission denials never fall back.
 pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     let meta = fs::symlink_metadata(dir)?;
@@ -386,7 +420,7 @@ pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     #[cfg(target_os = "linux")]
     let stream = {
         let address = control_address(&meta)?;
-        match UnixStream::connect_addr(&address) {
+        match connect_authenticated(dir, &address) {
             Ok(stream) => stream,
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
                 // Older services have no abstract listener. New services reject
@@ -447,7 +481,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 9] {
+fn service_directories() -> [PathBuf; 10] {
     let primary = directory();
     [
         primary.clone(),
@@ -458,6 +492,7 @@ fn service_directories() -> [PathBuf; 9] {
         primary.join("protocol-8"),
         primary.join("protocol-9"),
         primary.join("protocol-10"),
+        primary.join("protocol-11"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -499,6 +534,7 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
             Request::SupportsAutomaticQueue,
             Request::SupportsScopedControl,
             Request::SupportsFileOnly,
+            Request::SupportsAuthenticatedControl,
         ] {
             match request_once(&probe, launcher, &primary) {
                 Ok(Response::Ok) => {}
@@ -515,7 +551,10 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
                             .contains("unknown variant `supports_scoped_control`")
                         || error
                             .to_string()
-                            .contains("unknown variant `supports_file_only`") =>
+                            .contains("unknown variant `supports_file_only`")
+                        || error
+                            .to_string()
+                            .contains("unknown variant `supports_authenticated_control`") =>
                 {
                     return Ok(compatible);
                 }
@@ -677,6 +716,7 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         | Request::SupportsRuntimes
         | Request::SupportsAutomaticQueue
         | Request::SupportsScopedControl
+        | Request::SupportsAuthenticatedControl
         | Request::SupportsFileOnly => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
@@ -880,6 +920,8 @@ impl Session {
     }
 }
 struct Server {
+    #[cfg(target_os = "linux")]
+    control_auth: control_auth::Token,
     runtimes: runtimes::Store,
     agents: agents::Store,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
@@ -1274,6 +1316,11 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     }
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    #[cfg(target_os = "linux")]
+    {
+        server.control_auth.verify(&mut stream)?;
+        send_json(&mut stream, &Response::Ok)?;
+    }
     let request: Request = recv_json(&mut stream)?;
     if let Request::AttachRuntime { id, policy } = &request {
         return server.runtimes.attach(stream, id, policy);
@@ -1367,6 +1414,7 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
             | Request::SupportsRuntimes
             | Request::SupportsAutomaticQueue
             | Request::SupportsScopedControl
+            | Request::SupportsAuthenticatedControl
             | Request::SupportsFileOnly => Response::Ok,
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
@@ -1506,7 +1554,9 @@ pub fn serve() -> Result<()> {
         );
         fs::remove_file(socket())?;
     }
-    // Publish discovery only after the protected endpoint is listening. A
+    #[cfg(target_os = "linux")]
+    let control_auth = control_auth::Token::publish(&dir)?;
+    // Publish discovery only after the authenticated endpoint is listening. A
     // filesystem socket alone would be reachable through Landlock's pathname
     // Unix-socket limitation, even without a grant for the runtime directory.
     #[cfg(target_os = "linux")]
@@ -1516,6 +1566,8 @@ pub fn serve() -> Result<()> {
     #[cfg(not(target_os = "linux"))]
     let listener = discovery.try_clone()?;
     let server = Arc::new(Server {
+        #[cfg(target_os = "linux")]
+        control_auth,
         agents: agents::Store::default(),
         runtimes: runtimes::Store::default(),
         sessions: Mutex::new(HashMap::new()),

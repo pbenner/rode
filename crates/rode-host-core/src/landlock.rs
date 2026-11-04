@@ -1,6 +1,6 @@
 //! Native Linux Landlock launcher. Enforce in a fresh, single-threaded process before exec.
-//! ABI 6 is the baseline: filesystem restrictions, TCP restrictions and signal/abstract
-//! socket scoping. A seccomp filter additionally denies non-TCP networking and io_uring.
+//! ABI 4 supplies filesystem/TCP restrictions; ABI 5 adds device-ioctl mediation,
+//! and ABI 6 adds signal/abstract-socket scoping. Network-off also uses seccomp.
 use anyhow::{Context, Result, bail, ensure};
 
 #[cfg(target_os = "linux")]
@@ -322,6 +322,59 @@ mod linux {
         network: u64,
         scoped: u64,
     }
+    impl Ruleset {
+        fn for_abi(abi: libc::c_long, network: bool) -> Result<Self> {
+            ensure!(
+                abi >= 4,
+                "Landlock ABI 4 or newer is required; host provides ABI {abi}"
+            );
+            Ok(Self {
+                filesystem: filesystem_access(abi),
+                network: if network { 0 } else { 3 },
+                scoped: if abi >= 6 { 3 } else { 0 },
+            })
+        }
+
+        fn size(&self) -> usize {
+            // ABI 4/5 know only the filesystem and network fields.
+            if self.scoped == 0 {
+                16
+            } else {
+                std::mem::size_of::<Self>()
+            }
+        }
+    }
+
+    fn filesystem_access(abi: libc::c_long) -> u64 {
+        let mut access = (1u64 << 13) - 1;
+        if abi >= 2 {
+            access |= 1 << 13;
+        }
+        if abi >= 3 {
+            access |= 1 << 14;
+        }
+        if abi >= 5 {
+            access |= 1 << 15;
+        }
+        access
+    }
+
+    fn abi() -> Result<libc::c_long> {
+        checked(
+            unsafe { libc::syscall(444, std::ptr::null::<u8>(), 0usize, 1u32) },
+            "Landlock ABI probe",
+        )
+    }
+
+    pub(super) fn compatibility_notice() -> Result<String> {
+        let abi = abi()?;
+        Ruleset::for_abi(abi, true)?;
+        Ok(match abi {
+            4 => "Landlock ABI 4: file and network rules are active; device ioctls, host signals and abstract Unix sockets are not isolated.".into(),
+            5 => "Landlock ABI 5: file, device-ioctl and network rules are active; host signals and abstract Unix sockets are not isolated.".into(),
+            _ => format!("Landlock ABI {abi}: file, device-ioctl, network and signal/abstract-socket rules are active."),
+        })
+    }
     #[repr(C, packed)]
     struct PathRule {
         access: u64,
@@ -336,16 +389,7 @@ mod linux {
             "File-only mode requires Linux Landlock filesystem support",
         )?;
         ensure!(abi >= 1, "File-only mode requires Landlock ABI 1 or newer");
-        let mut handled = (1u64 << 13) - 1;
-        if abi >= 2 {
-            handled |= 1 << 13;
-        }
-        if abi >= 3 {
-            handled |= 1 << 14;
-        }
-        if abi >= 5 {
-            handled |= 1 << 15;
-        }
+        let handled = filesystem_access(abi);
         // Passing just the original filesystem field supports older kernels.
         let raw = checked(
             unsafe { libc::syscall(444, &handled as *const u64, 8usize, 0u32) },
@@ -383,15 +427,9 @@ mod linux {
             "Landlock must be applied before starting helper threads"
         );
         let parent = unsafe { libc::getppid() };
-        let abi = checked(
-            unsafe { libc::syscall(444, std::ptr::null::<u8>(), 0usize, 1u32) },
-            "Landlock ABI probe",
-        )?;
-        ensure!(
-            abi >= 6,
-            "Landlock ABI 6 or newer is required; host provides ABI {abi}"
-        );
+        let abi = abi()?;
         let mut p = policy(arguments)?;
+        let ruleset = Ruleset::for_abi(abi, p.network)?;
         validate(&p)?;
         {
             let (scratch_path, scratch_fd) = scratch(&p.home, &p.root)?;
@@ -401,20 +439,8 @@ mod linux {
                 p.environment
                     .insert(name.into(), scratch_path.to_string_lossy().into_owned());
             }
-            let ruleset = Ruleset {
-                filesystem: (1 << 16) - 1,
-                network: if p.network { 0 } else { 3 },
-                scoped: 3,
-            };
             let raw = checked(
-                unsafe {
-                    libc::syscall(
-                        444,
-                        &ruleset as *const _,
-                        std::mem::size_of::<Ruleset>(),
-                        0u32,
-                    )
-                },
+                unsafe { libc::syscall(444, &ruleset as *const _, ruleset.size(), 0u32) },
                 "Landlock ruleset",
             )?;
             let rules = fd(raw as _, "Landlock ruleset descriptor")?;
@@ -425,13 +451,14 @@ mod linux {
                     root = Some(descriptor.try_clone()?);
                 }
                 let mut access = if *writable {
-                    (1u64 << 16) - 1
+                    ruleset.filesystem
                 } else {
                     (1 << 0) | (1 << 2) | (1 << 3)
                 };
                 if !descriptor.metadata()?.is_dir() {
                     access &= (1 << 0) | (1 << 1) | (1 << 2) | (1 << 14) | (1 << 15);
                 }
+                access &= ruleset.filesystem;
                 let rule = PathRule {
                     access,
                     parent_fd: descriptor.as_raw_fd(),
@@ -476,6 +503,40 @@ mod linux {
             .envs(p.environment)
             .exec();
         Err(error).context("Cannot execute Landlock command")
+    }
+
+    #[test]
+    fn rulesets_only_request_features_supported_by_the_kernel_abi() {
+        for (abi, filesystem, scoped, size) in [
+            (4, (1 << 15) - 1, 0, 16),
+            (5, (1 << 16) - 1, 0, 16),
+            (6, (1 << 16) - 1, 3, 24),
+            (12, (1 << 16) - 1, 3, 24),
+        ] {
+            for network in [false, true] {
+                let rules = Ruleset::for_abi(abi, network).unwrap();
+                assert_eq!(rules.filesystem, filesystem);
+                assert_eq!(rules.network, if network { 0 } else { 3 });
+                assert_eq!(rules.scoped, scoped);
+                assert_eq!(rules.size(), size);
+            }
+        }
+        for abi in 0..4 {
+            let error = Ruleset::for_abi(abi, true).err().unwrap();
+            assert!(error.to_string().contains("ABI 4 or newer"));
+        }
+    }
+}
+
+/// Describe the project host's actual Landlock support after a successful probe.
+pub(crate) fn compatibility_notice() -> Result<String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::compatibility_notice()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        bail!("Landlock requires Linux")
     }
 }
 
