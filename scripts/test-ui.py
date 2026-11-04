@@ -154,6 +154,7 @@ fn run_step(step: usize) {
             ("telemetry", (5, 15, 18)),
             ("studio", (23, 26, 33)),
             ("studio-neutral", (26, 27, 30)),
+            ("studio-hacker", (16, 21, 18)),
         ]:
             theme(preset.replace("-", " "))
             saved_theme(directory, preset)

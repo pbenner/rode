@@ -19,7 +19,13 @@ fn workspace_banners_paint_the_full_background_and_pad_themed_controls() {
             }
             // Reuse panel state while changing themes, including the first
             // frame after switching from a compact theme to larger controls.
-            for theme in ["phosphor", "studio", "studio-neutral", "phosphor"] {
+            for theme in [
+                "phosphor",
+                "studio",
+                "studio-neutral",
+                "studio-hacker",
+                "phosphor",
+            ] {
                 app.select_theme(theme, &ctx);
                 let palette = app.themes.active().palette;
                 let output = ctx.run(

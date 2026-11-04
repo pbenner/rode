@@ -292,7 +292,7 @@ fn component_controls_have_consistent_height_at_multiple_scales() {
 
 #[test]
 fn studio_controls_and_secondary_labels_stay_readable_in_every_interaction_state() {
-    for theme in ["studio", "studio-neutral"] {
+    for theme in ["studio", "studio-neutral", "studio-hacker"] {
         let palette = Theme::builtin(theme).unwrap().palette;
         let ctx = egui::Context::default();
         rode::theme::install(&ctx, palette);
@@ -328,7 +328,7 @@ fn studio_controls_and_secondary_labels_stay_readable_in_every_interaction_state
 
 #[test]
 fn studio_text_fields_and_filled_primary_actions_draw_visible_keyboard_focus() {
-    for theme in ["studio", "studio-neutral"] {
+    for theme in ["studio", "studio-neutral", "studio-hacker"] {
         let palette = Theme::builtin(theme).unwrap().palette;
         let ctx = egui::Context::default();
         rode::theme::install(&ctx, palette);
@@ -604,7 +604,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} warm path",
                 builtin.id
             ),
-            "phosphor" | "matrix" => assert!(
+            "phosphor" | "matrix" | "studio-hacker" => assert!(
                 path.g() > path.r() && path.g() > path.b(),
                 "{} green path",
                 builtin.id
@@ -655,7 +655,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "hologram",
                 "telemetry",
                 "studio",
-                "studio-neutral"
+                "studio-neutral",
+                "studio-hacker"
             ]
             .map(str::to_owned)
             .into()
@@ -694,6 +695,7 @@ fn syntax_palettes_are_independent_and_follow_ui_remains_available() {
         "telemetry",
         "studio",
         "studio-neutral",
+        "studio-hacker",
     ] {
         themes.select(ui, &ctx).unwrap();
         assert_eq!(themes.active_syntax().id, "dracula");

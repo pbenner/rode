@@ -4,6 +4,7 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -262,6 +263,131 @@ class RunnerTests(unittest.TestCase):
                     env["RODE_SESSION_HELPER"],
                     settings.get("RODE_SESSION_HELPER", env["RODE_TEST_SESSION_HELPER"]),
                 )
+
+
+class DependencySetupTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="rode-ci-deps-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.tools = self.root / "bin"
+        self.tools.mkdir()
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ("ci-deps.sh", "uvx.sh"):
+            shutil.copy2(ci.ROOT / "scripts" / name, scripts / name)
+        # A private PATH prevents the fixture from finding real sudo/APT or
+        # developer tools. Only harmless command plumbing reaches the host.
+        for name in ("dirname", "env"):
+            (self.tools / name).symlink_to(shutil.which(name))
+        self.bash = shutil.which("bash")
+        for name in ("sudo", "apt-get", "npm", "uv", "uvx"):
+            self.tool(name)
+
+    def tool(self, name):
+        path = self.tools / name
+        path.write_text(
+            f"#!{sys.executable}\n"
+            "import json,os,sys\nfrom pathlib import Path\n"
+            "name=Path(sys.argv[0]).name\n"
+            "if name=='sudo': os.execvp(sys.argv[1],sys.argv[1:])\n"
+            "with Path('calls.jsonl').open('a') as log:\n"
+            " log.write(json.dumps(dict(name=name,args=sys.argv[1:],frontend=os.environ.get('DEBIAN_FRONTEND')))+'\\n')\n"
+            "if name=='uvx': sys.stdin.read()\n"
+            "if name=='apt-get' and os.environ.get('FAIL_APT_PHASE') in sys.argv[1:]: sys.exit(100)\n"
+        )
+        path.chmod(0o755)
+
+    def run_setup(self, suite="runtimes", fail=""):
+        calls_path = self.root / "calls.jsonl"
+        calls_path.write_text("")
+        result = subprocess.run(
+            [self.bash, str(self.root / "scripts/ci-deps.sh"), suite],
+            env=dict(
+                os.environ,
+                PATH=str(self.tools),
+                GITHUB_ENV=str(self.root / "exports"),
+                FAIL_APT_PHASE=fail,
+            ),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+        return result, calls
+
+    def test_downloads_are_bounded_and_runtime_tools_still_get_installed(self):
+        self.tool("go")
+        self.tool("gofmt")
+        result, calls = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        apt = [call for call in calls if call["name"] == "apt-get"]
+        self.assertEqual(len(apt), 2)
+        for call in apt:
+            for option in (
+                "Acquire::Retries=3",
+                "Acquire::http::Timeout=30",
+                "Acquire::https::Timeout=30",
+                "DPkg::Lock::Timeout=60",
+                "APT::Update::Error-Mode=any",
+            ):
+                self.assertIn(option, call["args"])
+            self.assertEqual(call["frontend"], "noninteractive")
+        self.assertIn("update", apt[0]["args"])
+        self.assertIn("install", apt[1]["args"])
+        self.assertIn("--no-install-recommends", apt[1]["args"])
+        self.assertFalse(any(arg.startswith("golang-") for call in apt for arg in call["args"]))
+        for package in ("lldb-19", "openssh-server", "gocryptfs", "clang-format", "shfmt"):
+            self.assertIn(package, apt[1]["args"])
+        self.assertEqual((calls[0]["name"], calls[0]["args"]), ("go", ["version"]))
+        self.assertTrue({"npm", "uvx", "uv"}.issubset(call["name"] for call in calls))
+        exports = (self.root / "exports").read_text()
+        for name in ("RODE_TEST_PRETTIER", "RODE_TEST_RUFF", "RODE_TEST_LLDB", "RODE_TEST_JUPYTER"):
+            self.assertIn(name, exports)
+
+    def test_missing_go_or_gofmt_fails_before_any_package_download(self):
+        for suite in ("tools", "runtimes"):
+            for present in (None, "go", "gofmt"):
+                with self.subTest(suite=suite, present=present):
+                    for name in ("go", "gofmt"):
+                        (self.tools / name).unlink(missing_ok=True)
+                    if present:
+                        self.tool(present)
+                    result, calls = self.run_setup(suite)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("mise install --locked go", result.stderr)
+                    self.assertEqual(calls, [])
+
+    def test_suites_without_language_tests_do_not_need_go(self):
+        for suite in (
+            "build",
+            "lint",
+            "workspace",
+            "agents",
+            "terminals",
+            "ssh",
+            "documents",
+            "remote",
+            "sandbox",
+        ):
+            with self.subTest(suite=suite):
+                result, calls = self.run_setup(suite)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual([call["name"] for call in calls], ["apt-get", "apt-get"])
+                self.assertFalse(
+                    any(arg.startswith("golang-") for call in calls for arg in call["args"])
+                )
+
+    def test_apt_failure_stops_setup_without_retrying_install_or_starting_other_downloads(self):
+        self.tool("go")
+        self.tool("gofmt")
+        for phase in ("update", "install"):
+            with self.subTest(phase=phase):
+                result, calls = self.run_setup(fail=phase)
+                self.assertEqual(result.returncode, 100, result.stdout + result.stderr)
+                self.assertEqual(calls[0]["name"], "go")
+                self.assertTrue(all(c["name"] == "apt-get" for c in calls[1:]))
+                self.assertEqual(len(calls[1:]), 1 if phase == "update" else 2)
 
 
 class SshFixtureTests(unittest.TestCase):

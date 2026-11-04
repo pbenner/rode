@@ -17,14 +17,33 @@ case "$suite" in
     ssh|remote|runtimes) packages+=(openssh-server) ;;
 esac
 case "$suite" in
-    tools|runtimes) packages+=(golang-go clang-format shfmt) ;;
+    tools|runtimes)
+        packages+=(clang-format shfmt)
+        # mise-action provisions Go before this script. Do not fall back to
+        # Ubuntu's large SDK/source packages when a runner's PATH is incomplete.
+        if ! command -v go >/dev/null 2>&1 || ! command -v gofmt >/dev/null 2>&1; then
+            echo 'Missing Go or gofmt. Run mise install --locked go, then run this script through mise exec.' >&2
+            exit 1
+        fi
+        go version
+        ;;
 esac
 case "$suite" in
     documents|remote|runtimes) packages+=(gocryptfs) ;;
 esac
 if [[ "$suite" == runtimes ]]; then packages+=(lldb-19); fi
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends "${packages[@]}"
+# Bound stalled connections/reads inside the existing 600-second CI deadline.
+# APT retries individual downloads, retaining completed archives; do not retry
+# dpkg installation or silently continue with incomplete package indexes.
+apt_options=(
+    -o Acquire::Retries=3
+    -o Acquire::http::Timeout=30
+    -o Acquire::https::Timeout=30
+    -o DPkg::Lock::Timeout=60
+    -o APT::Update::Error-Mode=any
+)
+sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
+sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends "${packages[@]}"
 if [[ "$suite" == tools || "$suite" == runtimes ]]; then
     npm install --prefix target/language-tools --ignore-scripts --no-audit --no-fund prettier@3.6.2
 fi

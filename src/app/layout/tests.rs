@@ -94,7 +94,7 @@ pub(in crate::app) fn assert_button_alignment(
 fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
     use crate::app::{Dialog, EditorApp, Startup};
 
-    for theme in ["studio", "studio-neutral"] {
+    for theme in ["studio", "studio-neutral", "studio-hacker"] {
         for width in [650., 1280.] {
             for scale in [0.75, 1., 1.25, 1.5] {
                 let ctx = egui::Context::default();

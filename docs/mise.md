@@ -28,7 +28,7 @@ For Slurm work, the existing allocation lifecycle and compute-node sandbox check
 
 ## Developing RODE with mise
 
-The repository's `mise.toml` and `mise.lock` pin Python, Node.js, uv and Ruff. `rust-toolchain.toml` is the Rust version authority and mise reads it directly. The lockfile includes Linux x86-64 and ARM64 artifacts. Keep `Cargo.lock` for application dependencies and `scripts/ci-deps.sh` for OS packages such as Poppler, Mesa, bubblewrap and Xvfb.
+The repository's `mise.toml` and `mise.lock` pin Go, Python, Node.js, uv and Ruff. `rust-toolchain.toml` is the Rust version authority and mise reads it directly. The lockfile includes Linux x86-64 and ARM64 artifacts. Keep `Cargo.lock` for application dependencies and `scripts/ci-deps.sh` for OS packages such as Poppler, Mesa, bubblewrap and Xvfb. CI installs the pinned Go toolchain only for the tools/runtime jobs; it never downloads Go through APT. For a local run of either suite's dependency setup, use `mise exec -- bash scripts/ci-deps.sh tools` (or `runtimes`) after installing the tools.
 
 ```sh
 mise trust

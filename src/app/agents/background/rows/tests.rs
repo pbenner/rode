@@ -206,7 +206,7 @@ fn cards_and_actions_align_with_short_long_and_incompatible_metadata() {
 #[test]
 fn themed_agent_action_buttons_share_the_same_height_and_center() {
     let items = fixture();
-    for theme in ["phosphor", "studio", "studio-neutral"] {
+    for theme in ["phosphor", "studio", "studio-neutral", "studio-hacker"] {
         let palette = theme::Theme::builtin(theme).unwrap().palette;
         for scale in [0.75, 1., 1.25, 1.5] {
             for width in [320., 680., 1000.] {

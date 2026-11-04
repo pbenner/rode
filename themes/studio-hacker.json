@@ -1,0 +1,44 @@
+{
+  "name": "Studio Hacker",
+  "base": "studio",
+  "colors": {
+    "background": "#101512",
+    "panel": "#171e19",
+    "raised": "#222c25",
+    "border": "#36453b",
+    "control_border": "#839d8b",
+    "text": "#deeadf",
+    "muted": "#b0c2b4",
+    "accent": "#80ed99",
+    "frame_accent": "#80ed99",
+    "heading": "#ecf7ee",
+    "success": "#98d5a4",
+    "error": "#ef9c9c",
+    "selection": "#2d4936",
+    "hover": "#2b3930",
+    "active": "#354b3c",
+    "gutter": "#8b9e91",
+    "terminal_background": "#0c110e",
+    "terminal_foreground": "#deeadf"
+  },
+  "syntax": {
+    "comment": "#8da596",
+    "keyword": "#86e6a3",
+    "type": "#a8d7ca",
+    "function": "#c0e9b4",
+    "string": "#d3dda1",
+    "number": "#e6cc99",
+    "constant": "#d8c3a3",
+    "variable": "#deeadf",
+    "operator": "#b7cbbb",
+    "punctuation": "#9db1a4",
+    "builtin": "#8fd9bd",
+    "attribute": "#c8d3a9"
+  },
+  "ansi": [
+    "#222c25", "#d79196", "#96ca9f", "#cfc38e",
+    "#91bda7", "#b8b4c3", "#8ecbbb", "#deeadf",
+    "#9bab9f", "#f1b1b3", "#96f2ae", "#e7dbad",
+    "#9ee4b6", "#d3ccdb", "#b2e8d5", "#f1fbf3"
+  ]
+}

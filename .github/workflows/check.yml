@@ -66,6 +66,7 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           version: '2026.10.25'
+          install_args: python uv node ruff rust
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-lint
@@ -99,6 +100,7 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           version: '2026.10.25'
+          install_args: python uv node ruff rust
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-build
@@ -194,7 +196,7 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           version: '2026.10.25'
-          install_args: python uv node rust
+          install_args: python uv node rust ${{ (matrix.suite == 'tools' || matrix.suite == 'runtimes') && 'go' || '' }}
       - run: tar -xzf target/ci-bundle.tar.gz
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
       - name: Enable unprivileged namespaces on the disposable sandbox runner

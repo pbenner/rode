@@ -1162,6 +1162,9 @@ mod tests {
             ("studio-neutral", 360.),
             ("studio-neutral", 680.),
             ("studio-neutral", 1440.),
+            ("studio-hacker", 360.),
+            ("studio-hacker", 680.),
+            ("studio-hacker", 1440.),
         ] {
             for scale in [0.75, 1., 1.25, 1.5] {
                 for panel in [

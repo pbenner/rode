@@ -34,6 +34,10 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
         "studio-neutral",
         include_str!("../../themes/studio-neutral.json"),
     ),
+    (
+        "studio-hacker",
+        include_str!("../../themes/studio-hacker.json"),
+    ),
 ];
 
 #[derive(Deserialize)]

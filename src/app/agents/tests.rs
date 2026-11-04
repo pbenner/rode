@@ -59,7 +59,7 @@ fn recovery_actions_fit_the_panel_and_preserve_unsent_work() {
 #[test]
 fn chat_header_actions_fit_inside_the_visible_panel() {
     for scale in [0.75, 1., 1.25, 1.5] {
-        for theme in ["phosphor", "studio", "studio-neutral"] {
+        for theme in ["phosphor", "studio", "studio-neutral", "studio-hacker"] {
             for (width, oversized) in [
                 (1100., false),
                 (650., false),

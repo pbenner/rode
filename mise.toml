@@ -6,6 +6,7 @@ auto_install = false
 lockfile = true
 
 [tools]
+go = "1.26.1"
 python = "3.12.16"
 node = "24.22.2"
 uv = "0.13.6"
