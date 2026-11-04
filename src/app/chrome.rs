@@ -520,7 +520,11 @@ impl EditorApp {
                                     [center + egui::vec2(-3., 3.), center + egui::vec2(3., -3.)],
                                     Stroke::new(1.0_f32, color),
                                 );
-                                if response.clicked() {
+                                // A busy window can batch an earlier release with a
+                                // new press. egui hit-tests that click at the latest
+                                // pointer position; don't select a tab while the new
+                                // press is still held and may become a drag.
+                                if response.clicked() && !ui.input(|i| i.pointer.primary_down()) {
                                     selected = Some(index);
                                 }
                                 if response.clicked_by(egui::PointerButton::Middle)
@@ -807,6 +811,113 @@ mod tests {
         app.guarded(Action::CloseTab(ids[0]), &ctx);
         assert!(matches!(app.pending,Some(Action::CloseTab(id)) if id == ids[0]));
         assert_eq!(app.documents.len(), 3);
+    }
+
+    #[test]
+    fn tab_drag_preserves_selection_when_previous_click_and_press_share_a_frame() {
+        let (mut app, ctx) = editor();
+        for path in ["README.md", "api.toml", "worker.toml"] {
+            app.new_file();
+            app.documents.last_mut().unwrap().path = Some(path.into());
+        }
+        let ids: Vec<_> = app.documents.iter().map(|doc| doc.id).collect();
+        fn frame(
+            app: &mut EditorApp,
+            ctx: &egui::Context,
+            time: f64,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(850., 560.),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.tab_strip(ui, ctx));
+                },
+            )
+        }
+        let output = frame(&mut app, &ctx, 0., vec![]);
+        let label = |name: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text() == name
+                    {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+        };
+        let source = label("README.md").center();
+        let target = label("api.toml").right_center() + egui::vec2(8., 0.);
+        let previous = egui::pos2(820., source.y);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &mut app,
+            &ctx,
+            0.1,
+            vec![egui::Event::PointerMoved(previous)],
+        );
+        // A busy native window may receive the previous toolbar click and the
+        // new tab press together. Hit testing uses the final pointer position.
+        frame(
+            &mut app,
+            &ctx,
+            0.2,
+            vec![
+                button(previous, true),
+                button(previous, false),
+                egui::Event::PointerMoved(source),
+                button(source, true),
+            ],
+        );
+        assert_eq!(
+            app.documents[app.active].id, ids[2],
+            "An ongoing press must not select the drag source"
+        );
+        frame(
+            &mut app,
+            &ctx,
+            0.3,
+            vec![egui::Event::PointerMoved(source + egui::vec2(20., 0.))],
+        );
+        frame(&mut app, &ctx, 0.4, vec![egui::Event::PointerMoved(target)]);
+        frame(&mut app, &ctx, 0.5, vec![button(target, false)]);
+        assert_eq!(
+            app.documents.iter().map(|doc| doc.id).collect::<Vec<_>>(),
+            [ids[1], ids[0], ids[2]]
+        );
+        assert_eq!(app.documents[app.active].id, ids[2]);
+        app.cycle_tab(-1, &ctx);
+        assert_eq!(app.documents[app.active].id, ids[0]);
+        // A completed click still selects the first tab in its new position.
+        // Render the reordered geometry before starting an unrelated gesture.
+        frame(&mut app, &ctx, 0.55, vec![]);
+        let first = egui::pos2(60., source.y);
+        frame(
+            &mut app,
+            &ctx,
+            0.6,
+            vec![egui::Event::PointerMoved(first), button(first, true)],
+        );
+        assert_eq!(app.documents[app.active].id, ids[0]);
+        frame(&mut app, &ctx, 0.7, vec![button(first, false)]);
+        assert_eq!(app.documents[app.active].id, ids[1]);
     }
     #[test]
     fn tab_navigation_wraps_and_strip_height_stays_fixed_with_long_names() {
