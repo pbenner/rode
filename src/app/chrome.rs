@@ -369,7 +369,7 @@ impl EditorApp {
             }
         }
         let labels = tab_labels(&self.documents);
-        let font = FontId::proportional(13.0);
+        let font = egui::TextStyle::Button.resolve(ui.style());
         let mut widths: Vec<f32> = labels
             .iter()
             .map(|label| {

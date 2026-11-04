@@ -30,6 +30,9 @@ impl Chrome {
 impl Palette {
     /// Section title colour; plain themes keep their original foreground.
     pub fn heading_color(self) -> Color32 {
+        if self.ui.is_some() {
+            return self.heading;
+        }
         match self.chrome {
             Chrome::Plain => self.text,
             Chrome::Chamfered | Chrome::Holographic | Chrome::Bracketed => self.heading,
@@ -140,7 +143,28 @@ impl Palette {
     /// Existing tab hit regions and text remain unchanged.
     pub fn paint_tab(self, painter: &egui::Painter, rect: Rect, fill: Color32, active: bool) {
         painter.rect_filled(rect, 0, fill);
-        if self.chrome == Chrome::Bracketed {
+        if let Some(ui) = self.ui.filter(|_| self.chrome == Chrome::Plain) {
+            painter.rect_filled(rect, 0, self.panel);
+            let pill = rect.shrink2(egui::vec2(4., 4.));
+            if active {
+                painter.rect(
+                    pill,
+                    ui.control_radius,
+                    self.raised,
+                    Stroke::new(ui.border_width, self.border),
+                    egui::StrokeKind::Inside,
+                );
+                painter.line_segment(
+                    [
+                        pos2(pill.left() + 10., pill.bottom()),
+                        pos2(pill.right() - 10., pill.bottom()),
+                    ],
+                    Stroke::new(2_f32, self.accent),
+                );
+            } else if fill == self.hover {
+                painter.rect_filled(pill, ui.control_radius, fill);
+            }
+        } else if self.chrome == Chrome::Bracketed {
             if active {
                 let frame = rect.shrink(2.);
                 painter.rect_filled(frame, 0, self.active);

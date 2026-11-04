@@ -1,0 +1,61 @@
+{
+  "name": "Studio",
+  "base": "phosphor",
+  "chrome": "plain",
+  "ui": {
+    "control_radius": 6,
+    "surface_radius": 10,
+    "popup_radius": 10,
+    "control_height": 30,
+    "button_padding": [12, 6],
+    "item_spacing": [8, 6],
+    "surface_padding": 14,
+    "popup_padding": 18,
+    "body_size": 14,
+    "button_size": 13,
+    "heading_size": 22,
+    "small_size": 11,
+    "border_width": 1,
+    "focus_width": 2,
+    "disabled_alpha": 0.5
+  },
+  "colors": {
+    "background": "#171a21",
+    "panel": "#1e222b",
+    "raised": "#272d39",
+    "border": "#394252",
+    "control_border": "#6e7b91",
+    "text": "#e3e8f2",
+    "muted": "#adb8c9",
+    "accent": "#9baaff",
+    "heading": "#f0f3fa",
+    "success": "#89d8b0",
+    "error": "#f18f9a",
+    "selection": "#364263",
+    "hover": "#30384a",
+    "active": "#3a4664",
+    "gutter": "#78869d",
+    "terminal_background": "#14171e",
+    "terminal_foreground": "#e3e8f2"
+  },
+  "syntax": {
+    "comment": "#91a0b5",
+    "keyword": "#b9acff",
+    "type": "#91cfda",
+    "function": "#aac7ff",
+    "string": "#afd8b8",
+    "number": "#e3c48d",
+    "constant": "#dfaecb",
+    "variable": "#e3e8f2",
+    "operator": "#b9c4d8",
+    "punctuation": "#a0aec4",
+    "builtin": "#99d5ce",
+    "attribute": "#d2c0ed"
+  },
+  "ansi": [
+    "#242a35", "#e3929c", "#8bcfa9", "#ddc58a",
+    "#99b9f2", "#c5a5e8", "#8bd5d4", "#e3e8f2",
+    "#99a5b8", "#ffadb5", "#a3e4bd", "#f2dba4",
+    "#bdcfff", "#ddc1ff", "#b0eeea", "#f5f7ff"
+  ]
+}

@@ -2,8 +2,8 @@
 //!
 //! # Design decisions
 //!
-//! Palette packages are bounded color data, allowing customization without
-//! executing theme code or adding another runtime. Startup loading and explicit
+//! Palette packages are bounded color and component data, allowing customization
+//! without executing theme code or adding another runtime. Startup loading and explicit
 //! selection keep idle rendering free of filesystem polling; changes to a file
 //! consequently take effect on the next load rather than through a watcher.
 //! Independent syntax selection allows detailed token styling while retaining
@@ -12,8 +12,10 @@
 use anyhow::{Context, Result, bail};
 use eframe::egui::{self, Color32, FontFamily, FontId, Stroke, TextStyle};
 use egui_extras::syntax_highlighting::SyntectSettings;
+mod interface;
 mod surfaces;
 pub mod syntax;
+pub use interface::InterfaceStyle;
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -40,11 +42,14 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
     ("knight-rider", include_str!("../themes/knight-rider.json")),
     ("hologram", include_str!("../themes/hologram.json")),
     ("telemetry", include_str!("../themes/telemetry.json")),
+    ("studio", include_str!("../themes/studio.json")),
 ];
 
 /// Copyable interface/terminal colors; syntax themes may be selected independently.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
+    /// Optional component dimensions, typography and state styling.
+    pub ui: Option<InterfaceStyle>,
     /// Static native surface treatment, independent of interface colors.
     pub chrome: Chrome,
     /// Decorative frame color, independent of interactive/focus emphasis.
@@ -59,6 +64,8 @@ pub struct Palette {
     pub raised: Color32,
     /// Borders and separators.
     pub border: Color32,
+    /// Optional control outline, separate from quiet surface borders; falls back to `border`.
+    pub control_border: Option<Color32>,
     /// Primary readable interface foreground.
     pub text: Color32,
     /// Secondary labels and subdued foreground.
@@ -90,6 +97,7 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
+            ui: None,
             chrome: Chrome::Plain,
             frame_accent: Color32::from_rgb(125, 235, 164),
             heading: Color32::from_rgb(205, 218, 216),
@@ -97,6 +105,7 @@ impl Default for Palette {
             panel: Color32::from_rgb(18, 25, 27),
             raised: Color32::from_rgb(25, 34, 36),
             border: Color32::from_rgb(38, 51, 53),
+            control_border: None,
             text: Color32::from_rgb(205, 218, 216),
             muted: Color32::from_rgb(117, 139, 141),
             accent: Color32::from_rgb(125, 235, 164),
@@ -132,24 +141,43 @@ impl Default for Palette {
 }
 
 impl Palette {
-    /// Create a compact muted monospace status label.
+    /// Create a compact secondary label using the theme's interface typography.
     pub fn tag(self, text: impl Into<String>) -> egui::RichText {
-        egui::RichText::new(text)
-            .monospace()
-            .size(11.0)
-            .color(self.muted)
+        let text = egui::RichText::new(text).color(self.muted);
+        if let Some(ui) = self.ui {
+            text.font(FontId::proportional(ui.small_size))
+        } else {
+            text.monospace().size(11.)
+        }
     }
 
     /// Draw the shared accent-filled primary action button.
     pub fn primary(self, ui: &mut egui::Ui, text: &str) -> egui::Response {
-        ui.add(
+        let response = ui.add(
             egui::Button::new(egui::RichText::new(text).color(self.background).strong())
                 .fill(self.accent)
-                .min_size(egui::vec2(0.0, 32.0)),
-        )
+                .min_size(egui::vec2(0.0, self.ui.map_or(32., |ui| ui.control_height))),
+        );
+        if let Some(style) = self.ui.filter(|_| {
+            response.enabled() && (response.has_focus() || response.is_pointer_button_down_on())
+        }) {
+            // An accent outline disappears against the filled accent button.
+            // Use its high-contrast foreground for an inset focus/pressed ring.
+            ui.painter().rect_stroke(
+                response.rect,
+                style.control_radius,
+                Stroke::new(style.focus_width, self.background),
+                egui::StrokeKind::Inside,
+            );
+        }
+        response
     }
 
     fn override_color(&mut self, key: &str, color: Color32) -> Result<()> {
+        if key == "control_border" {
+            self.control_border = Some(color);
+            return Ok(());
+        }
         let field = match key {
             "background" => &mut self.background,
             "panel" => &mut self.panel,
@@ -200,6 +228,7 @@ struct ThemeFile {
     ansi: Option<[String; 16]>,
     terminal: Option<TerminalSettings>,
     chrome: Option<Chrome>,
+    ui: Option<interface::Overrides>,
 }
 
 #[derive(Deserialize)]
@@ -266,6 +295,9 @@ impl Theme {
         theme.name = name.into();
         if let Some(chrome) = file.chrome {
             theme.palette.chrome = chrome;
+        }
+        if let Some(ui) = file.ui {
+            theme.palette.ui = Some(theme.palette.ui.unwrap_or_default().merge(ui)?);
         }
         if let Some(terminal) = file.terminal {
             if !terminal.minimum_contrast.is_finite()
@@ -627,6 +659,13 @@ pub fn directory() -> PathBuf {
 /// Install palette colors, spacing and typography into the native egui context.
 pub fn install(ctx: &egui::Context, palette: Palette) {
     let mut style = (*ctx.style()).clone();
+    // Reset all spacing and the secondary text role before applying a palette,
+    // so optional component styles cannot leak into a subsequent legacy theme.
+    style.spacing = Default::default();
+    style.text_styles.insert(
+        TextStyle::Small,
+        egui::Style::default().text_styles[&TextStyle::Small].clone(),
+    );
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = palette.background;
     style.visuals.window_fill = palette.panel;
@@ -706,6 +745,9 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style
         .text_styles
         .insert(TextStyle::Heading, FontId::proportional(24.0));
+    if let Some(ui) = palette.ui {
+        ui.install(&mut style, palette);
+    }
     ctx.set_style(style);
 }
 

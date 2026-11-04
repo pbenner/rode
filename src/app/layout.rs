@@ -51,7 +51,7 @@ pub(super) fn header(
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(title)
-                    .size(18.)
+                    .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
                     .strong()
                     .color(palette.heading_color()),
             );
@@ -60,7 +60,7 @@ pub(super) fn header(
     } else {
         ui.label(
             RichText::new(title)
-                .size(18.)
+                .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
                 .strong()
                 .color(palette.heading_color()),
         );
@@ -81,7 +81,7 @@ pub(super) fn header(
 pub(super) fn heading(ui: &mut egui::Ui, title: &str, description: &str, palette: Palette) {
     ui.label(
         RichText::new(title)
-            .size(18.)
+            .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
             .strong()
             .color(palette.heading_color()),
     );
@@ -91,7 +91,14 @@ pub(super) fn heading(ui: &mut egui::Ui, title: &str, description: &str, palette
 
 /// Muted, wrapping secondary copy shared by pages, sections and empty states.
 pub(super) fn subtitle(ui: &mut egui::Ui, text: &str, palette: Palette) {
-    ui.add(egui::Label::new(RichText::new(text).size(12.).color(palette.muted)).wrap());
+    ui.add(
+        egui::Label::new(
+            RichText::new(text)
+                .size(palette.ui.map_or(12., |style| style.body_size - 1.))
+                .color(palette.muted),
+        )
+        .wrap(),
+    );
 }
 
 /// Reserve a readable label column in a form grid. Compact forms put the field
@@ -114,7 +121,7 @@ pub(super) fn field_label(ui: &mut egui::Ui, text: &str, stacked: bool) {
 /// The common bordered surface, also used by monitor cards. Width follows its
 /// column; callers may customize the frame for selected or destructive states.
 pub(super) fn card_frame(palette: Palette) -> egui::Frame {
-    egui::Frame::new()
+    let mut frame = egui::Frame::new()
         .fill(palette.panel)
         .stroke(Stroke::new(
             1_f32,
@@ -125,7 +132,15 @@ pub(super) fn card_frame(palette: Palette) -> egui::Frame {
             },
         ))
         .corner_radius(if palette.chrome.is_decorated() { 2 } else { 6 })
-        .inner_margin(12)
+        .inner_margin(12);
+    if let Some(style) = palette.ui {
+        frame = frame
+            .fill(palette.raised)
+            .stroke(Stroke::new(style.border_width, palette.border))
+            .corner_radius(style.surface_radius)
+            .inner_margin(style.surface_padding as i8);
+    }
+    frame
 }
 
 /// Fill the available column with a themed card; the caller owns inter-card spacing.
@@ -135,6 +150,7 @@ pub(super) fn card<R>(
     contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     let mut frame = card_frame(palette);
+    let fill = frame.fill;
     let background = palette.chrome.is_decorated().then(|| {
         frame.fill = egui::Color32::TRANSPARENT;
         frame.stroke.color = egui::Color32::TRANSPARENT;
@@ -147,9 +163,7 @@ pub(super) fn card<R>(
     if let Some(background) = background {
         ui.painter().set(
             background,
-            egui::Shape::Vec(
-                palette.surface_shapes(result.response.rect.shrink(1.), Some(palette.panel)),
-            ),
+            egui::Shape::Vec(palette.surface_shapes(result.response.rect.shrink(1.), Some(fill))),
         );
     }
     result
@@ -165,7 +179,7 @@ pub(super) fn section<R>(
     let result = card(ui, palette, |ui| {
         ui.label(
             RichText::new(title)
-                .size(15.)
+                .size(palette.ui.map_or(15., |style| style.body_size + 1.))
                 .strong()
                 .color(palette.heading_color()),
         );
@@ -191,7 +205,7 @@ pub(super) fn empty(ui: &mut egui::Ui, title: &str, description: &str, palette: 
 
 /// Common modal surface; size and scrolling remain owned by each dialog.
 pub(super) fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame {
-    egui::Frame::popup(style)
+    let mut frame = egui::Frame::popup(style)
         .fill(palette.panel)
         .stroke(Stroke::new(
             1_f32,
@@ -202,5 +216,12 @@ pub(super) fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame
             },
         ))
         .corner_radius(if palette.chrome.is_decorated() { 2 } else { 8 })
-        .inner_margin(16)
+        .inner_margin(16);
+    if let Some(style) = palette.ui {
+        frame = frame
+            .stroke(Stroke::new(style.border_width, palette.border))
+            .corner_radius(style.popup_radius)
+            .inner_margin(style.popup_padding as i8);
+    }
+    frame
 }

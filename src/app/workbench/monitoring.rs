@@ -533,6 +533,15 @@ mod tests {
 
     #[test]
     fn dashboard_reflows_without_stretching_plots_or_misaligning_cards() {
+        for palette in [
+            theme::Palette::default(),
+            theme::Theme::builtin("studio").unwrap().palette,
+        ] {
+            assert_dashboard_layout(palette);
+        }
+    }
+
+    fn assert_dashboard_layout(palette: theme::Palette) {
         for gpu_count in [0, 4] {
             let mut state = State::default();
             let mut reading = sample(100);
@@ -551,7 +560,6 @@ mod tests {
             let mut next = state.monitor.clone().unwrap();
             next.cpus = sample(if gpu_count == 0 { 100 } else { 200 }).cpus;
             state.record(next, now + interval, interval);
-            let palette = theme::Palette::default();
             for (width, columns) in [(320., 1), (780., 2), (1200., 3), (2200., 3)] {
                 let ctx = egui::Context::default();
                 theme::install(&ctx, palette);
@@ -623,7 +631,12 @@ mod tests {
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Rect(rect) if rect.fill == palette.panel => Some(rect.rect),
+                        egui::Shape::Rect(rect)
+                            if rect.fill
+                                == palette.ui.map_or(palette.panel, |_| palette.raised) =>
+                        {
+                            Some(rect.rect)
+                        }
                         _ => None,
                     })
                     .collect();

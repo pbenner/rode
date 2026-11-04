@@ -152,6 +152,7 @@ fn run_step(step: usize) {
             ("knight-rider", (9, 10, 12)),
             ("hologram", (7, 18, 31)),
             ("telemetry", (5, 15, 18)),
+            ("studio", (23, 26, 33)),
         ]:
             theme(preset.replace("-", " "))
             saved_theme(directory, preset)
@@ -165,8 +166,8 @@ fn run_step(step: usize) {
         click(1310, 887)
         click(1290, 635)  # Code Dark, fourth menu row
         saved_theme(directory, "code-dark")
-        theme("Telemetry")
-        saved_theme(directory, "telemetry")
+        theme("Studio")
+        saved_theme(directory, "studio")
         key("s", ("Control_L",))
         time.sleep(0.3)
         assert path.read_text() == saved, "Changing themes must preserve document contents"
@@ -209,7 +210,7 @@ fn run_step(step: usize) {
             time.sleep(0.05)
         assert window
         time.sleep(0.7)
-        background(window, "theme-restored.png", (5, 15, 18))
+        background(window, "theme-restored.png", (23, 26, 33))
         close_window(window, process)
         print(
             "Built-in/custom theme switching, immediate config writes, terminal preservation, and native restart persistence passed."

@@ -333,7 +333,7 @@ pub(super) fn editor(
         ui.painter().rect_stroke(
             area.response.rect,
             visual.corner_radius,
-            Stroke::new(1.0_f32, ui.visuals().selection.stroke.color),
+            ui.visuals().selection.stroke,
             egui::StrokeKind::Inside,
         );
     }
@@ -343,6 +343,33 @@ pub(super) fn editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composer_draws_the_shared_interface_focus_outline() {
+        let palette = crate::theme::Theme::builtin("studio").unwrap().palette;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, palette);
+        let id = egui::Id::new("composer-focus");
+        let mut text = String::from("Review the changes");
+        let mut render = || {
+            ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.memory_mut(|memory| memory.request_focus(id));
+                    let output = editor(ui, &mut text, id, 0.);
+                    assert!(output.inner.response.has_focus());
+                });
+            })
+        };
+        render();
+        let output = render();
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.stroke.color == palette.accent
+                    && rect.stroke.width >= palette.ui.unwrap().focus_width
+            )),
+            "Chat composer did not draw the full keyboard focus outline"
+        );
+    }
 
     struct RecallView {
         ctx: egui::Context,

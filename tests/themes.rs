@@ -4,6 +4,22 @@ use eframe::egui::{self, Color32};
 use rode::theme::{Chrome, Palette, Theme, Themes, parse_color};
 use std::fs;
 
+fn contrast(a: Color32, b: Color32) -> f64 {
+    let luminance = |c: Color32| {
+        let linear = |v: u8| {
+            let s = f64::from(v) / 255.;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+    };
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
 fn color_for(layout: &egui::text::LayoutJob, token: &str) -> Color32 {
     let index = layout.text.find(token).unwrap() + token.len() / 2;
     layout
@@ -112,6 +128,172 @@ fn decorated_chrome_inherits_can_be_disabled_and_resets_when_switching() {
             "Decorative style leaked into a plain theme"
         );
         assert_eq!(themes.active_syntax().id, "nord");
+    }
+}
+
+#[test]
+fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
+    let studio = Theme::builtin("studio").unwrap();
+    let original = studio.palette.ui.unwrap();
+    let derived = Theme::from_json(
+        "custom:studio",
+        r#"{
+        "name":"Studio Compact", "base":"studio",
+        "ui":{"control_radius":4,"item_spacing":[6,5]}
+    }"#,
+    )
+    .unwrap();
+    let inherited = derived.palette.ui.unwrap();
+    assert_eq!(inherited.control_radius, 4);
+    assert_eq!(inherited.item_spacing, [6., 5.]);
+    assert_eq!(inherited.popup_radius, original.popup_radius);
+    assert_eq!(inherited.body_size, original.body_size);
+    assert_eq!(inherited.control_height, original.control_height);
+    assert_eq!(
+        derived.palette.control_border,
+        studio.palette.control_border
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let (mut themes, _) = Themes::load(directory.path(), "phosphor");
+    let ctx = egui::Context::default();
+    themes.select("phosphor", &ctx).unwrap();
+    let before = ctx.style();
+    themes.select_syntax("nord", &ctx).unwrap();
+    themes.select("studio", &ctx).unwrap();
+    let styled = ctx.style();
+    assert_ne!(styled.spacing, before.spacing);
+    assert_ne!(styled.text_styles, before.text_styles);
+    assert!(
+        !styled.spacing.scroll.floating,
+        "Scrollbars must reserve their own gutter"
+    );
+    assert!(
+        styled.visuals.widgets.active.bg_stroke.width
+            > styled.visuals.widgets.hovered.bg_stroke.width
+    );
+    assert_ne!(
+        styled.visuals.widgets.active.bg_fill,
+        styled.visuals.widgets.hovered.bg_fill
+    );
+    assert!(styled.visuals.disabled_alpha < 1.);
+    assert_eq!(themes.active_syntax().id, "nord");
+    themes.select("phosphor", &ctx).unwrap();
+    assert_eq!(
+        *ctx.style(),
+        *before,
+        "Component styles leaked into a legacy theme"
+    );
+}
+
+#[test]
+fn component_controls_have_consistent_height_at_multiple_scales() {
+    let studio = Theme::builtin("studio").unwrap();
+    let ctx = egui::Context::default();
+    rode::theme::install(&ctx, studio.palette);
+    for scale in [0.75, 1., 1.25, 1.5] {
+        ctx.set_zoom_factor(scale);
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let normal = ui.button("Run");
+                let primary = studio.palette.primary(ui, "Commit staged");
+                let disabled = ui.add_enabled(false, egui::Button::new("Unavailable"));
+                assert!(!disabled.enabled());
+                assert!((normal.rect.height() - primary.rect.height()).abs() < 0.1);
+                assert!((normal.rect.height() - disabled.rect.height()).abs() < 0.1);
+                assert!(normal.rect.height() >= studio.palette.ui.unwrap().control_height);
+            });
+        });
+    }
+}
+
+#[test]
+fn studio_controls_and_secondary_labels_stay_readable_in_every_interaction_state() {
+    let palette = Theme::builtin("studio").unwrap().palette;
+    let ctx = egui::Context::default();
+    rode::theme::install(&ctx, palette);
+    let style = ctx.style();
+    assert_eq!(
+        style.visuals.widgets.noninteractive.bg_stroke.color, palette.border,
+        "Decorative separators must keep their quiet surface border"
+    );
+    for (name, widget) in [
+        ("normal", style.visuals.widgets.inactive),
+        ("hovered", style.visuals.widgets.hovered),
+        ("focused/pressed", style.visuals.widgets.active),
+        ("open", style.visuals.widgets.open),
+    ] {
+        assert!(contrast(palette.text, widget.bg_fill) >= 7., "{name} text");
+        assert!(
+            contrast(palette.muted, widget.bg_fill) >= 4.5,
+            "{name} secondary text"
+        );
+        for background in [widget.bg_fill, palette.panel, palette.raised] {
+            assert!(
+                contrast(widget.bg_stroke.color, background) >= 3.,
+                "{name} control boundary"
+            );
+        }
+    }
+    assert!(
+        contrast(palette.background, palette.accent) >= 7.,
+        "Primary action text"
+    );
+}
+
+#[test]
+fn studio_text_fields_and_filled_primary_actions_draw_visible_keyboard_focus() {
+    let palette = Theme::builtin("studio").unwrap().palette;
+    let ctx = egui::Context::default();
+    rode::theme::install(&ctx, palette);
+    let mut text = String::from("Editable value");
+    let primary_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
+    let field_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
+    let mut frame = |target: usize| {
+        ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let primary = palette.primary(ui, "Run");
+                let field = ui.text_edit_singleline(&mut text);
+                primary_bounds.set(primary.rect);
+                field_bounds.set(field.rect);
+                if target == 0 {
+                    primary.request_focus();
+                } else {
+                    field.request_focus();
+                }
+            });
+        })
+    };
+    for (target, bounds, color) in [
+        (0, &primary_bounds, palette.background),
+        (1, &field_bounds, palette.accent),
+    ] {
+        frame(target);
+        let output = frame(target);
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.rect == bounds.get()
+                    && rect.stroke.color == color
+                    && rect.stroke.width >= palette.ui.unwrap().focus_width
+            )),
+            "Missing visible keyboard focus for control {target}"
+        );
+    }
+}
+
+#[test]
+fn malformed_component_settings_are_rejected() {
+    for ui in [
+        serde_json::json!({"control_height": 0}),
+        serde_json::json!({"control_radius": 255}),
+        serde_json::json!({"button_padding": [5]}),
+        serde_json::json!({"item_spacing": [-1, 8]}),
+        serde_json::json!({"body_size": 80}),
+        serde_json::json!({"disabled_alpha": 0}),
+        serde_json::json!({"border_width": 2, "focus_width": 1}),
+        serde_json::json!({"unknown_property": true}),
+    ] {
+        let definition = serde_json::json!({"name":"Invalid", "base":"studio", "ui":ui});
+        assert!(Theme::from_json("custom:invalid", &definition.to_string()).is_err());
     }
 }
 
@@ -276,22 +458,6 @@ fn unknown_extensions_use_custom_default_text_color() {
 
 #[test]
 fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
-    fn contrast(a: Color32, b: Color32) -> f64 {
-        let luminance = |c: Color32| {
-            let linear = |v: u8| {
-                let s = f64::from(v) / 255.;
-                if s <= 0.04045 {
-                    s / 12.92
-                } else {
-                    ((s + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
-        };
-        let a = luminance(a);
-        let b = luminance(b);
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
     let directory = tempfile::tempdir().unwrap();
     let source = "// comment\npub fn run(value: String) { let n = 42; println!(\"hello\"); }";
     let mut identities = std::collections::HashSet::new();
@@ -355,7 +521,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} green path",
                 builtin.id
             ),
-            "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" => {
+            "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" | "studio" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
@@ -398,7 +564,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "afterglow",
                 "knight-rider",
                 "hologram",
-                "telemetry"
+                "telemetry",
+                "studio"
             ]
             .map(str::to_owned)
             .into()
@@ -435,6 +602,7 @@ fn syntax_palettes_are_independent_and_follow_ui_remains_available() {
         "knight-rider",
         "hologram",
         "telemetry",
+        "studio",
     ] {
         themes.select(ui, &ctx).unwrap();
         assert_eq!(themes.active_syntax().id, "dracula");

@@ -496,7 +496,7 @@ fn conversation(
         resume = body.clicked();
         hovered |= body.hovered() || body.has_focus();
         if body.has_focus() {
-            frame.frame.stroke = Stroke::new(1_f32, palette.accent);
+            frame.frame.stroke = interaction.visuals().selection.stroke;
         }
         let button = ui
             .add_enabled_ui(deletable, |ui| {
