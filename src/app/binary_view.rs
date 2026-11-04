@@ -296,7 +296,7 @@ impl EditorApp {
                     .desired_width(90.)
                     .char_limit(16),
             );
-            if ui.small_button("Go").clicked()
+            if ui.button("Go").clicked()
                 || (jump.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
             {
                 match usize::from_str_radix(view.offset_text.trim().trim_start_matches("0x"), 16) {

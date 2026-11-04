@@ -98,22 +98,22 @@ impl ImageView {
                 self.reset_scroll = Some(ScrollOrigin::Start);
             }
             if ui
-                .small_button("100%")
+                .button("100%")
                 .on_hover_text("Actual size in image pixels")
                 .clicked()
             {
                 self.zoom = Some(1.);
                 self.reset_scroll = Some(ScrollOrigin::Start);
             }
-            if ui.small_button("−").on_hover_text("Zoom out").clicked() {
+            if ui.button("−").on_hover_text("Zoom out").clicked() {
                 self.zoom_by(1. / 1.25);
             }
-            if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+            if ui.button("+").on_hover_text("Zoom in").clicked() {
                 self.zoom_by(1.25);
             }
             ui.label(palette.tag(format!("{:.0}%", self.displayed_zoom * 100.)));
             if ui
-                .add_enabled(!self.loading, egui::Button::new("Reload").small())
+                .add_enabled(!self.loading, egui::Button::new("Reload"))
                 .clicked()
             {
                 reload = true;

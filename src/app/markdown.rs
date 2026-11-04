@@ -592,7 +592,7 @@ impl EditorApp {
                 slides = false;
             }
             if preview.showing {
-                reload = ui.small_button("Reload images").clicked();
+                reload = ui.button("Reload images").clicked();
                 ui.label(self.themes.active().palette.tag(if dirty {
                     "UNSAVED BUFFER"
                 } else {

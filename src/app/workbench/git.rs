@@ -404,9 +404,7 @@ impl EditorApp {
             .any(project::GitFile::conflict);
         ui.horizontal_wrapped(|ui| {
             // Reserve the button's full height before laying out the checkbox.
-            let height = (ui.text_style_height(&egui::TextStyle::Button)
-                + 2. * ui.spacing().button_padding.y)
-                .max(ui.spacing().interact_size.y);
+            let height = layout::control_height(ui);
             ui.spacing_mut().interact_size.y = height;
             ui.checkbox(&mut self.workbench.git.amend, "Amend last commit");
             let hint = if !ready {

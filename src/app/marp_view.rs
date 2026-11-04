@@ -144,12 +144,12 @@ impl EditorApp {
             let view = self.documents[self.active].marp.as_mut().unwrap();
             ui.horizontal_wrapped(|ui| {
                 refresh = ui
-                    .add_enabled(!view.busy, egui::Button::new("Refresh slides").small())
+                    .add_enabled(!view.busy, egui::Button::new("Refresh slides"))
                     .clicked();
                 if view.busy {
                     ui.spinner();
                     ui.label("Rendering Marp…");
-                    if ui.small_button("Cancel").clicked() {
+                    if ui.button("Cancel").clicked() {
                         let attempted = view.attempted.clone();
                         view.stop_render();
                         view.attempted = attempted;
@@ -173,13 +173,13 @@ impl EditorApp {
                 if view.exporting {
                     ui.spinner();
                     ui.label("Exporting snapshot…");
-                    if ui.small_button("Cancel export").clicked() {
+                    if ui.button("Cancel export").clicked() {
                         view.export_cancel.store(true, Ordering::Release);
                         view.export_token = view.export_token.wrapping_add(1);
                         view.exporting = false;
                     }
                 }
-                settings = ui.small_button("Marp settings").clicked();
+                settings = ui.button("Marp settings").clicked();
                 ui.label(palette.tag("PROJECT-HOST RENDERER"));
             });
             if !view.error.is_empty() {

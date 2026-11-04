@@ -1156,42 +1156,50 @@ mod tests {
             ("afterglow", 360.),
             ("afterglow", 680.),
             ("afterglow", 1440.),
+            ("studio", 360.),
+            ("studio", 680.),
+            ("studio", 1440.),
+            ("studio-neutral", 360.),
+            ("studio-neutral", 680.),
+            ("studio-neutral", 1440.),
         ] {
-            for panel in [
-                Panel::Git,
-                Panel::Monitor,
-                Panel::Problems,
-                Panel::Environment,
-                Panel::Tasks,
-                Panel::Settings,
-                Panel::Debug,
-            ] {
-                let (mut app, ctx) = app(root.path());
-                app.themes.select(theme, &ctx).unwrap();
-                app.workbench.git.git_root = root.path().to_string_lossy().into();
-                app.workbench.git.branch = "main".into();
-                app.workbench.draft.sandbox.read_only = vec![format!(
-                    "/data/ユニコード/{}measurements.csv",
-                    "long-directory/".repeat(20)
-                )];
-                app.workbench.draft.sandbox.read_write = vec!["~/results".into()];
-                for tab in if panel == Panel::Git {
-                    vec![
-                        GitTab::Changes,
-                        GitTab::History,
-                        GitTab::Branches,
-                        GitTab::Stash,
-                        GitTab::Remotes,
-                        GitTab::Tags,
-                        GitTab::Worktrees,
-                        GitTab::Submodules,
-                    ]
-                } else {
-                    vec![GitTab::Changes]
-                } {
-                    app.workbench.git.git_tab = tab;
-                    for _ in 0..3 {
-                        let _ = ctx.run(egui::RawInput {
+            for scale in [0.75, 1., 1.25, 1.5] {
+                for panel in [
+                    Panel::Git,
+                    Panel::Monitor,
+                    Panel::Problems,
+                    Panel::Environment,
+                    Panel::Tasks,
+                    Panel::Settings,
+                    Panel::Debug,
+                ] {
+                    let (mut app, ctx) = app(root.path());
+                    app.themes.select(theme, &ctx).unwrap();
+                    ctx.set_zoom_factor(scale);
+                    app.workbench.git.git_root = root.path().to_string_lossy().into();
+                    app.workbench.git.branch = "main".into();
+                    app.workbench.draft.sandbox.read_only = vec![format!(
+                        "/data/ユニコード/{}measurements.csv",
+                        "long-directory/".repeat(20)
+                    )];
+                    app.workbench.draft.sandbox.read_write = vec!["~/results".into()];
+                    for tab in if panel == Panel::Git {
+                        vec![
+                            GitTab::Changes,
+                            GitTab::History,
+                            GitTab::Branches,
+                            GitTab::Stash,
+                            GitTab::Remotes,
+                            GitTab::Tags,
+                            GitTab::Worktrees,
+                            GitTab::Submodules,
+                        ]
+                    } else {
+                        vec![GitTab::Changes]
+                    } {
+                        app.workbench.git.git_tab = tab;
+                        for _ in 0..3 {
+                            let output = ctx.run(egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 700.))),
                             ..Default::default()
                         }, |ctx| {
@@ -1199,9 +1207,16 @@ mod tests {
                                 let available = ui.available_rect_before_wrap();
                                 let content = ui.scope(|ui| app.panel_content(panel, ui, ctx)).response.rect;
                                 assert!(content.right() <= available.right() + 1.,
-                                    "{panel:?}/{tab:?} overflows at {width}: {content:?} vs {available:?}");
+                                    "{theme}: {panel:?}/{tab:?} overflows at {width}, scale {scale}: {content:?} vs {available:?}");
                             });
                         });
+                            layout::tests::assert_button_alignment(
+                                &output,
+                                app.themes.active().palette,
+                                ctx.pixels_per_point(),
+                                &format!("{theme}/{panel:?}/{tab:?} at {width}, scale {scale}"),
+                            );
+                        }
                     }
                 }
             }

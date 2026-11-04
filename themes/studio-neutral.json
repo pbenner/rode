@@ -1,0 +1,44 @@
+{
+  "name": "Studio Neutral",
+  "base": "studio",
+  "colors": {
+    "background": "#1a1b1e",
+    "panel": "#202125",
+    "raised": "#2a2c31",
+    "border": "#3e4047",
+    "control_border": "#7b7e87",
+    "text": "#e5e5e7",
+    "muted": "#bfc0c6",
+    "accent": "#c5ccd6",
+    "frame_accent": "#c5ccd6",
+    "heading": "#f2f2f4",
+    "success": "#9ac9a3",
+    "error": "#e9a1a1",
+    "selection": "#41464f",
+    "hover": "#35383f",
+    "active": "#454a54",
+    "gutter": "#8a8c96",
+    "terminal_background": "#17181b",
+    "terminal_foreground": "#e5e5e7"
+  },
+  "syntax": {
+    "comment": "#969ba6",
+    "keyword": "#dbc9a3",
+    "type": "#a9c9c4",
+    "function": "#d5dbe5",
+    "string": "#b7cfb2",
+    "number": "#d8bf9a",
+    "constant": "#cbbca7",
+    "variable": "#e5e5e7",
+    "operator": "#c0c5cf",
+    "punctuation": "#a6abb5",
+    "builtin": "#b1c7c2",
+    "attribute": "#c9c5b8"
+  },
+  "ansi": [
+    "#2a2c31", "#d59696", "#9ac39c", "#cdbc94",
+    "#a8bace", "#c8bab0", "#a6c6c4", "#e5e5e7",
+    "#a8aab1", "#edb2b2", "#b7d5b6", "#ddd1b1",
+    "#c5cedb", "#ded0c5", "#c0dcd6", "#f4f4f6"
+  ]
+}

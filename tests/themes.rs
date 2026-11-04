@@ -132,6 +132,34 @@ fn decorated_chrome_inherits_can_be_disabled_and_resets_when_switching() {
 }
 
 #[test]
+fn studio_neutral_inherits_round_component_styling_without_lilac_accents() {
+    let studio = Theme::builtin("studio").unwrap();
+    let neutral = Theme::builtin("studio-neutral").unwrap();
+    assert_eq!(neutral.palette.ui, studio.palette.ui);
+    assert_eq!(neutral.palette.chrome, studio.palette.chrome);
+    for color in [
+        neutral.palette.background,
+        neutral.palette.panel,
+        neutral.palette.raised,
+        neutral.palette.accent,
+        neutral.palette.active,
+        neutral.palette.selection,
+    ] {
+        let channels = [color.r(), color.g(), color.b()];
+        assert!(
+            channels.iter().max().unwrap() - channels.iter().min().unwrap() <= 22,
+            "Neutral surfaces and accent should have low saturation"
+        );
+    }
+    let inherited = Theme::from_json(
+        "custom:neutral",
+        r#"{"name":"Neutral copy","base":"studio-neutral"}"#,
+    )
+    .unwrap();
+    assert_eq!(inherited.palette, neutral.palette);
+}
+
+#[test]
 fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
     let studio = Theme::builtin("studio").unwrap();
     let original = studio.palette.ui.unwrap();
@@ -208,75 +236,79 @@ fn component_controls_have_consistent_height_at_multiple_scales() {
 
 #[test]
 fn studio_controls_and_secondary_labels_stay_readable_in_every_interaction_state() {
-    let palette = Theme::builtin("studio").unwrap().palette;
-    let ctx = egui::Context::default();
-    rode::theme::install(&ctx, palette);
-    let style = ctx.style();
-    assert_eq!(
-        style.visuals.widgets.noninteractive.bg_stroke.color, palette.border,
-        "Decorative separators must keep their quiet surface border"
-    );
-    for (name, widget) in [
-        ("normal", style.visuals.widgets.inactive),
-        ("hovered", style.visuals.widgets.hovered),
-        ("focused/pressed", style.visuals.widgets.active),
-        ("open", style.visuals.widgets.open),
-    ] {
-        assert!(contrast(palette.text, widget.bg_fill) >= 7., "{name} text");
-        assert!(
-            contrast(palette.muted, widget.bg_fill) >= 4.5,
-            "{name} secondary text"
+    for theme in ["studio", "studio-neutral"] {
+        let palette = Theme::builtin(theme).unwrap().palette;
+        let ctx = egui::Context::default();
+        rode::theme::install(&ctx, palette);
+        let style = ctx.style();
+        assert_eq!(
+            style.visuals.widgets.noninteractive.bg_stroke.color, palette.border,
+            "Decorative separators must keep their quiet surface border"
         );
-        for background in [widget.bg_fill, palette.panel, palette.raised] {
+        for (name, widget) in [
+            ("normal", style.visuals.widgets.inactive),
+            ("hovered", style.visuals.widgets.hovered),
+            ("focused/pressed", style.visuals.widgets.active),
+            ("open", style.visuals.widgets.open),
+        ] {
+            assert!(contrast(palette.text, widget.bg_fill) >= 7., "{name} text");
             assert!(
-                contrast(widget.bg_stroke.color, background) >= 3.,
-                "{name} control boundary"
+                contrast(palette.muted, widget.bg_fill) >= 4.5,
+                "{name} secondary text"
             );
+            for background in [widget.bg_fill, palette.panel, palette.raised] {
+                assert!(
+                    contrast(widget.bg_stroke.color, background) >= 3.,
+                    "{name} control boundary"
+                );
+            }
         }
+        assert!(
+            contrast(palette.background, palette.accent) >= 7.,
+            "Primary action text"
+        );
     }
-    assert!(
-        contrast(palette.background, palette.accent) >= 7.,
-        "Primary action text"
-    );
 }
 
 #[test]
 fn studio_text_fields_and_filled_primary_actions_draw_visible_keyboard_focus() {
-    let palette = Theme::builtin("studio").unwrap().palette;
-    let ctx = egui::Context::default();
-    rode::theme::install(&ctx, palette);
-    let mut text = String::from("Editable value");
-    let primary_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
-    let field_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
-    let mut frame = |target: usize| {
-        ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let primary = palette.primary(ui, "Run");
-                let field = ui.text_edit_singleline(&mut text);
-                primary_bounds.set(primary.rect);
-                field_bounds.set(field.rect);
-                if target == 0 {
-                    primary.request_focus();
-                } else {
-                    field.request_focus();
-                }
-            });
-        })
-    };
-    for (target, bounds, color) in [
-        (0, &primary_bounds, palette.background),
-        (1, &field_bounds, palette.accent),
-    ] {
-        frame(target);
-        let output = frame(target);
-        assert!(
-            output.shapes.iter().any(|shape| matches!(&shape.shape,
-                egui::Shape::Rect(rect) if rect.rect == bounds.get()
-                    && rect.stroke.color == color
-                    && rect.stroke.width >= palette.ui.unwrap().focus_width
-            )),
-            "Missing visible keyboard focus for control {target}"
-        );
+    for theme in ["studio", "studio-neutral"] {
+        let palette = Theme::builtin(theme).unwrap().palette;
+        let ctx = egui::Context::default();
+        rode::theme::install(&ctx, palette);
+        let mut text = String::from("Editable value");
+        let primary_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
+        let field_bounds = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut frame = |target: usize| {
+            ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let primary = palette.primary(ui, "Run");
+                    let field = ui.text_edit_singleline(&mut text);
+                    primary_bounds.set(primary.rect);
+                    field_bounds.set(field.rect);
+                    if target == 0 {
+                        primary.request_focus();
+                    } else {
+                        field.request_focus();
+                    }
+                });
+            })
+        };
+        for (target, bounds, color) in [
+            (0, &primary_bounds, palette.background),
+            (1, &field_bounds, palette.accent),
+        ] {
+            frame(target);
+            let output = frame(target);
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.rect == bounds.get()
+                        && rect.stroke.color == color
+                        && rect.stroke.width >= palette.ui.unwrap().focus_width
+                )),
+                "Missing visible keyboard focus for control {target}"
+            );
+        }
     }
 }
 
@@ -521,7 +553,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} green path",
                 builtin.id
             ),
-            "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" | "studio" => {
+            "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" | "studio"
+            | "studio-neutral" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
@@ -565,7 +598,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "knight-rider",
                 "hologram",
                 "telemetry",
-                "studio"
+                "studio",
+                "studio-neutral"
             ]
             .map(str::to_owned)
             .into()
@@ -603,6 +637,7 @@ fn syntax_palettes_are_independent_and_follow_ui_remains_available() {
         "hologram",
         "telemetry",
         "studio",
+        "studio-neutral",
     ] {
         themes.select(ui, &ctx).unwrap();
         assert_eq!(themes.active_syntax().id, "dracula");

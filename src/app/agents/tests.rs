@@ -4,6 +4,76 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn chat_header_actions_fit_inside_the_visible_panel() {
+    for scale in [0.75, 1., 1.25, 1.5] {
+        for theme in ["phosphor", "studio", "studio-neutral"] {
+            for (width, oversized) in [
+                (1100., false),
+                (650., false),
+                (320., false),
+                (260., false),
+                (650., true),
+            ] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(
+                    &cc,
+                    Startup {
+                        theme: Some(theme.into()),
+                        ..Default::default()
+                    },
+                );
+                ctx.set_zoom_factor(scale);
+                app.agents.config.provider = Provider::Acp;
+                let mut render = || {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                if oversized {
+                                    ui.set_min_width(width * 2.);
+                                }
+                                app.agent_ui(ui, ctx);
+                            });
+                        },
+                    )
+                };
+                render();
+                let output = render();
+                let button_bounds = |label| layout::tests::button_frame(&output, label).0;
+                let model = button_bounds("Model: agent");
+                let access = button_bounds("Permissions");
+                assert!(
+                    (model.top() - access.top()).abs() <= 0.5
+                        && (model.bottom() - access.bottom()).abs() <= 0.5,
+                    "Model/Access misaligned in {theme} at {width}, scale={scale}: {model:?} vs {access:?}"
+                );
+                for label in [
+                    "Tone",
+                    "New chat",
+                    "History",
+                    "Running",
+                    "Attach…",
+                    "Persist: off",
+                ] {
+                    let (rect, clip) = layout::tests::button_frame(&output, label);
+                    assert!(
+                        clip.shrink(1.).contains_rect(rect),
+                        "{label} clipped in {theme} at {width}, scale={scale}, oversized={oversized}: button={rect:?}, clip={clip:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn long_responses_wrap_to_the_visible_chat_width_after_resizing() {
     for (body, code) in [
         (

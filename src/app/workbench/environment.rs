@@ -183,72 +183,82 @@ impl EditorApp {
                 (ui.available_width() * 0.4).clamp(80., 240.)
             };
             let version_width = (ui.available_width() - executable_width - 168.).max(60.);
-            egui::Grid::new("runtime-executables")
-                .num_columns(if compact { 1 } else { 3 })
-                .spacing([12., 8.])
-                .striped(!compact)
-                .show(ui, |ui| {
-                    if !compact {
-                        ui.strong("Tool");
-                        ui.strong("Executable override");
-                        ui.strong("Version");
+            let fields_id = ui.make_persistent_id("runtime-executables");
+            let mut fields = |ui: &mut egui::Ui| {
+                if !compact {
+                    ui.strong("Tool");
+                    ui.strong("Executable override");
+                    ui.strong("Version");
+                    ui.end_row();
+                }
+                for (program, label) in environment::TOOLS {
+                    layout::field_label(ui, label, compact);
+                    ui.add(
+                        egui::TextEdit::singleline(
+                            state.draft.runtimes.entry((*program).into()).or_default(),
+                        )
+                        .id(fields_id.with(program))
+                        .desired_width(executable_width)
+                        .min_size(egui::vec2(executable_width, 20.))
+                        .char_limit(4096)
+                        .hint_text(format!("auto ({program}) or /path/to/{program}")),
+                    );
+                    if compact {
                         ui.end_row();
                     }
-                    for (program, label) in environment::TOOLS {
-                        layout::field_label(ui, label, compact);
-                        ui.add(
-                            egui::TextEdit::singleline(
-                                state.draft.runtimes.entry((*program).into()).or_default(),
-                            )
-                            .desired_width(executable_width)
-                            .min_size(egui::vec2(executable_width, 20.))
-                            .char_limit(4096)
-                            .hint_text(format!("auto ({program}) or /path/to/{program}")),
-                        );
-                        if compact {
-                            ui.end_row();
-                        }
-                        let info = state.runtimes.iter().find(|info| info.name == *program);
-                        let status = info
-                            .map(|info| {
+                    let info = state.runtimes.iter().find(|info| info.name == *program);
+                    let status = info
+                        .map(|info| {
+                            if info.error.is_empty() {
+                                info.version.as_str()
+                            } else {
+                                "Unavailable"
+                            }
+                        })
+                        .unwrap_or("Not checked");
+                    let detail = info
+                        .map(|info| {
+                            format!(
+                                "{}\n{}",
+                                info.executable,
                                 if info.error.is_empty() {
-                                    info.version.as_str()
+                                    &info.version
                                 } else {
-                                    "Unavailable"
+                                    &info.error
                                 }
-                            })
-                            .unwrap_or("Not checked");
-                        let detail = info
-                            .map(|info| {
-                                format!(
-                                    "{}\n{}",
-                                    info.executable,
-                                    if info.error.is_empty() {
-                                        &info.version
-                                    } else {
-                                        &info.error
-                                    }
-                                )
-                            })
-                            .unwrap_or_default();
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(
-                                if compact {
-                                    ui.available_width()
-                                } else {
-                                    version_width
-                                },
-                                20.,
-                            ),
-                            Layout::left_to_right(Align::Center),
-                            |ui| {
-                                ui.add(egui::Label::new(status).truncate())
-                                    .on_hover_text(detail);
+                            )
+                        })
+                        .unwrap_or_default();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(
+                            if compact {
+                                ui.available_width()
+                            } else {
+                                version_width
                             },
-                        );
-                        ui.end_row();
-                    }
-                });
+                            20.,
+                        ),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.add(egui::Label::new(status).truncate())
+                                .on_hover_text(detail);
+                        },
+                    );
+                    ui.end_row();
+                }
+            };
+            if compact {
+                // A one-column grid can retain its previous width when the
+                // scrollbar appears or the panel shrinks. Stack fields directly
+                // so every control follows the currently visible width.
+                fields(ui);
+            } else {
+                egui::Grid::new("runtime-executables")
+                    .num_columns(3)
+                    .spacing([12., 8.])
+                    .striped(true)
+                    .show(ui, fields);
+            }
             let mut refresh = false;
             ui.horizontal_wrapped(|ui| {
                 if ui
@@ -320,12 +330,17 @@ impl EditorApp {
                     .get(self.active)
                     .and_then(|doc| crate::languages::detect(doc.path.as_deref()))
                     .is_some_and(|language| language.id == "python");
-                let section =
-                    egui::CollapsingHeader::new("Python interpreter and virtual environments")
-                        .id_salt("environment-python")
-                        .default_open(active_python)
-                        .open(open.then_some(true))
-                        .show(ui, |ui| self.python_ui(ui, ctx));
+                // CollapsingHeader does not wrap its label.
+                let title = if ui.available_width() < 520. {
+                    "Python environments"
+                } else {
+                    "Python interpreter and virtual environments"
+                };
+                let section = egui::CollapsingHeader::new(title)
+                    .id_salt("environment-python")
+                    .default_open(active_python)
+                    .open(open.then_some(true))
+                    .show(ui, |ui| self.python_ui(ui, ctx));
                 if open {
                     ui.scroll_to_rect(section.header_response.rect, Some(Align::TOP));
                 }

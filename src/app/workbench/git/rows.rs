@@ -101,8 +101,7 @@ pub(super) fn show(
 ) -> Option<(usize, Action)> {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let padding = ui.spacing().button_padding;
-    let height = (ui.text_style_height(&egui::TextStyle::Button) + 2. * padding.y)
-        .max(ui.spacing().interact_size.y);
+    let height = crate::app::layout::control_height(ui);
     // Measure every action, including conflict resolution, independently of the
     // visible files so scrolling never changes the column widths or breakpoint.
     let widths = [

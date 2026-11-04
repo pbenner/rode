@@ -331,14 +331,17 @@ fn watches_ui(
                 actions.watches_changed = true;
             }
             ui.horizontal(|ui| {
+                let height = crate::app::layout::control_height(ui);
                 ui.add(
                     egui::TextEdit::singleline(expression)
+                        .min_size(egui::vec2(0., height))
+                        .vertical_align(egui::Align::Center)
                         .hint_text("Watch expression")
                         .char_limit(4096)
                         .desired_width((ui.available_width() - 72.).max(60.)),
                 );
                 if ui
-                    .add_sized([48., 24.], egui::Button::new("Add").truncate())
+                    .add_sized([48., height], egui::Button::new("Add").truncate())
                     .clicked()
                     && !expression.trim().is_empty()
                     && settings.watches.len() < 32
@@ -441,10 +444,13 @@ fn console_ui(
             );
         });
     ui.horizontal(|ui| {
+        let height = crate::app::layout::control_height(ui);
         let paused = client.phase == Phase::Paused;
         let response = ui.add_enabled(
             paused,
             egui::TextEdit::singleline(expression)
+                .min_size(egui::vec2(0., height))
+                .vertical_align(egui::Align::Center)
                 .hint_text("Evaluate in selected frame")
                 .char_limit(4096)
                 .desired_width((ui.available_width() - 72.).max(60.)),
@@ -453,7 +459,7 @@ fn console_ui(
             .add_enabled(
                 paused,
                 egui::Button::new("Eval")
-                    .min_size(egui::vec2(48., 24.))
+                    .min_size(egui::vec2(48., height))
                     .truncate(),
             )
             .clicked()

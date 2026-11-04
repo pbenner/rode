@@ -203,6 +203,52 @@ fn cards_and_actions_align_with_short_long_and_incompatible_metadata() {
 }
 
 #[test]
+fn themed_agent_action_buttons_share_the_same_height_and_center() {
+    let items = fixture();
+    for theme in ["phosphor", "studio", "studio-neutral"] {
+        let palette = theme::Theme::builtin(theme).unwrap().palette;
+        for scale in [0.75, 1., 1.25, 1.5] {
+            for width in [320., 680., 1000.] {
+                let ctx = egui::Context::default();
+                theme::install(&ctx, palette);
+                ctx.set_zoom_factor(scale);
+                let render = || {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, 1300.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                show(ui, &items, &context(), palette);
+                            });
+                        },
+                    )
+                };
+                render();
+                let output = render();
+                let ends = crate::app::layout::tests::button_frames(&output, "End");
+                let mut attaches = crate::app::layout::tests::button_frames(&output, "Show chat");
+                attaches.extend(crate::app::layout::tests::button_frames(&output, "Attach"));
+                attaches.sort_by(|(a, _), (b, _)| a.top().total_cmp(&b.top()));
+                assert_eq!(ends.len(), items.len());
+                assert_eq!(attaches.len(), items.len());
+                for ((end, _), (attach, _)) in ends.into_iter().zip(attaches) {
+                    assert!(
+                        (end.top() - attach.top()).abs() <= 0.5
+                            && (end.bottom() - attach.bottom()).abs() <= 0.5,
+                        "{theme} at {width}, {scale}: End {end:?} vs Attach {attach:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn blocked_attachments_keep_their_full_explanations() {
     let mut context = context();
     context.can_leave = false;

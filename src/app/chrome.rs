@@ -160,6 +160,7 @@ impl EditorApp {
     pub(super) fn terminal_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let wide = ui.available_width() >= 700.;
+        let height = layout::compact_control_height(ui);
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let native = self.terminal.as_ref().is_some_and(|t| t.native && t.is_alive());
@@ -168,7 +169,7 @@ impl EditorApp {
                 let mut persist_button = egui::Button::new(
                     RichText::new(if persistent { "Persist: on" } else { "Persist: off" })
                         .color(if persistent { palette.background } else { palette.text }),
-                ).selected(persistent).small().min_size(egui::vec2(84., 0.));
+                ).selected(persistent).small().min_size(egui::vec2(84., height));
                 if persistent {
                     persist_button = persist_button.fill(palette.accent).stroke(egui::Stroke::new(1.0_f32, palette.accent));
                 }
@@ -191,28 +192,28 @@ impl EditorApp {
                     self.focus_editor(ctx);
                 }
                 if wide && ui
-                    .small_button("Copy")
+                    .add(egui::Button::new("Copy").small().min_size(egui::vec2(0., height)))
                     .on_hover_text("Copy selected text, or visible terminal contents when nothing is selected")
                     .clicked()
                 {
                     self.copy_terminal_output(ctx);
                 }
                 if wide && ui
-                    .small_button("Sessions")
+                    .add(egui::Button::new("Sessions").small().min_size(egui::vec2(0., height)))
                     .on_hover_text("Reattach native terminals / Slurm allocations")
                     .clicked()
                 {
                     self.open_sessions(ctx);
                 }
                 if wide && ui
-                    .add_enabled(!self.session_busy(), egui::Button::new("New").small())
+                    .add_enabled(!self.session_busy(), egui::Button::new("New").small().min_size(egui::vec2(0., height)))
                     .on_hover_text("New terminal; use Persist to keep it running after exit")
                     .clicked()
                 {
                     self.new_terminal(ctx);
                 }
                 if !wide {
-                    egui::containers::menu::MenuButton::from_button(egui::Button::new("More").small()).ui(ui, |ui| {
+                    egui::containers::menu::MenuButton::from_button(egui::Button::new("More").small().min_size(egui::vec2(0., height))).ui(ui, |ui| {
                         if ui.add_enabled(!self.session_busy(), egui::Button::new("New terminal")).clicked() {
                             self.new_terminal(ctx); ui.close();
                         }
@@ -234,7 +235,7 @@ impl EditorApp {
                     .terminal
                     .as_ref()
                     .is_some_and(|terminal| terminal.native)
-                    && ui.add_enabled(persistent, egui::Button::new("Detach session").small())
+                    && ui.add_enabled(persistent, egui::Button::new("Detach session").small().min_size(egui::vec2(0., height)))
                         .on_hover_text("Enable Persist to detach and keep this terminal running.").clicked()
                 {
                     self.detach_terminal(ctx);

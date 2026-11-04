@@ -14,6 +14,7 @@ pub(super) mod attachments;
 mod background;
 mod composer;
 mod controls;
+mod header;
 mod history;
 mod message;
 mod queue;
@@ -427,6 +428,12 @@ impl EditorApp {
         let unsaved = self.documents.iter().filter(|d| d.dirty()).count();
         let modal = self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal();
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        // A parent may retain a larger minimum width after a resize. Size all
+        // chat controls against the visible panel rather than that stale width.
+        let rect = rect.intersect(ui.clip_rect());
+        if !rect.is_positive() {
+            return;
+        }
         // Hover/focus frames extend beyond widget bounds. Keep that paint space
         // inside the panel instead of clipping it at the header or composer.
         let paint_margin = ui.visuals().clip_rect_margin;
@@ -489,20 +496,10 @@ impl EditorApp {
         let before = agents.config.clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(content.expand(paint_margin)));
-            ui.horizontal(|ui| {
-                let old = agents.config.provider;
-                let width = (ui.available_width()-176.).max(80.);
-                egui::ComboBox::from_id_salt("agent-provider").width(width)
-                    .truncate().selected_text(agents.config.provider.label()).show_ui(ui,|ui| {
-                        for provider in [Provider::Codex,Provider::Local,Provider::Acp] {
-                            ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending() && !(provider == Provider::Acp && agents.config.files_only()),|ui|ui.selectable_value(&mut agents.config.provider,provider,provider.label())).response.on_disabled_hover_text("Choose another access mode before switching to ACP; ACP cannot enforce file-only tools.");
-                        }
-                    }).response.on_hover_text(agents.config.provider.label());
-                if old != agents.config.provider { agents.settings = true; }
-                if icons::small(ui,Icon::Settings,"Agent settings").clicked() { agents.settings = !agents.settings; }
-                if ui.button("New chat").on_hover_text("Stop this agent and start a fresh conversation").clicked() { new_chat = true; }
-                controls::personality(ui, &mut agents.config, !agents.chat.busy && !offline);
-            });
+            let actions = header::show(ui, &mut agents.config, agents.chat.busy, agents.chat.queue_pending(), offline);
+            if actions.provider_changed { agents.settings = true; }
+            if actions.settings { agents.settings = !agents.settings; }
+            new_chat |= actions.new_chat;
             ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
             ui.add(egui::Label::new(palette.tag(&root)).truncate()).on_hover_text(&root);
             if agents.settings {
@@ -546,11 +543,11 @@ impl EditorApp {
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled(!offline && !installing,egui::Button::new("History").small().selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
+                if ui.add_enabled(!offline && !installing,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
                     agents.history_open = !agents.history_open;
                     if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
                 }
-                if ui.add_enabled(!offline, egui::Button::new("Running").small()).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
+                if ui.add_enabled(!offline, egui::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
             if agents.history_open {
@@ -652,10 +649,11 @@ impl EditorApp {
                     }
                 });
             }
+            let control_height = layout::control_height(ui);
             ui.add_enabled_ui(!agents.chat.busy && !offline, |ui| {
-                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 26.), Layout::right_to_left(Align::Center), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), control_height), Layout::right_to_left(Align::Center), |ui| {
                     ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width().min(380.), 26.),
+                        egui::vec2(ui.available_width().min(380.), control_height),
                         Layout::left_to_right(Align::Center),
                         |ui| discover_models = controls::buttons(ui, &mut agents.config, &agents.chat, agents.catalog.as_ref(), read_only, isolated),
                     );
@@ -679,7 +677,7 @@ impl EditorApp {
                     ctx.request_repaint();
                 }
             }
-            let action_height = composer::action_height(ui);
+            let action_height = layout::control_height(ui);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), action_height),
                 Layout::right_to_left(Align::Center), |ui| {

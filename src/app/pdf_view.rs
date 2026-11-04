@@ -125,12 +125,13 @@ impl PdfView {
         let ctx = ui.ctx().clone();
         let mut page = None;
         let mut entry = PageEntry::Start;
+        let arrow_size = egui::Vec2::splat(layout::control_height(ui));
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(!self.image.loading, |ui| {
                 if ui
                     .add_enabled(
                         self.page > 1,
-                        IconButton::icon(Icon::ChevronLeft, "Previous page"),
+                        IconButton::icon(Icon::ChevronLeft, "Previous page").min_size(arrow_size),
                     )
                     .clicked()
                 {
@@ -143,7 +144,7 @@ impl PdfView {
                         .speed(0.1),
                 );
                 ui.label(format!("of {}", self.source.pages));
-                if ui.small_button("Go").clicked()
+                if ui.button("Go").clicked()
                     || (page_response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
                 {
                     page = Some(self.requested);
@@ -151,7 +152,7 @@ impl PdfView {
                 if ui
                     .add_enabled(
                         self.page < self.source.pages,
-                        IconButton::icon(Icon::ChevronRight, "Next page"),
+                        IconButton::icon(Icon::ChevronRight, "Next page").min_size(arrow_size),
                     )
                     .clicked()
                 {

@@ -1,0 +1,259 @@
+//! Inspect painted control frames so nested rows cannot hide vertical drift.
+use super::*;
+
+/// Pair each label with its smallest enclosing painted control and clip bounds.
+pub(in crate::app) fn button_frames(
+    output: &egui::FullOutput,
+    label: &str,
+) -> Vec<(egui::Rect, egui::Rect)> {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                let bounds = egui::Rect::from_min_size(text.pos, text.galley.size());
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.rect.contains_rect(bounds) => {
+                            Some((rect.rect, shape.clip_rect))
+                        }
+                        _ => None,
+                    })
+                    .min_by(|(a, _), (b, _)| a.area().total_cmp(&b.area()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+pub(in crate::app) fn button_frame(
+    output: &egui::FullOutput,
+    label: &str,
+) -> (egui::Rect, egui::Rect) {
+    button_frames(output, label)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("Missing painted button: {label}"))
+}
+
+pub(in crate::app) fn assert_button_alignment(
+    output: &egui::FullOutput,
+    palette: Palette,
+    pixels_per_point: f32,
+    context: &str,
+) {
+    let Some(style) = palette.ui else { return };
+    let buttons: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect)
+                if rect.stroke.color == palette.control_border.unwrap_or(palette.border)
+                    && rect.fill == palette.raised
+                    && rect.rect.height() >= style.control_height - 1.
+                    && rect.rect.height() <= style.control_height + 12.
+                    && rect.rect.width() >= 30. =>
+            {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .collect();
+    let label = |rect: egui::Rect| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if rect.contains(text.pos + text.galley.size() / 2.) => {
+                    Some(text.galley.text())
+                }
+                _ => None,
+            })
+            .unwrap_or("unlabelled")
+    };
+    for (index, a) in buttons.iter().enumerate() {
+        for b in &buttons[index + 1..] {
+            let overlap = a.bottom().min(b.bottom()) - a.top().max(b.top());
+            if (a.right() <= b.left() || b.right() <= a.left())
+                && overlap >= a.height().min(b.height()) * 0.75
+            {
+                assert!(
+                    (a.center().y - b.center().y).abs() <= 1. / pixels_per_point + 0.1,
+                    "{context}: {} {a:?} and {} {b:?} are misaligned",
+                    label(*a),
+                    label(*b)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
+    use crate::app::{Dialog, EditorApp, Startup};
+
+    for theme in ["studio", "studio-neutral"] {
+        for width in [650., 1280.] {
+            for scale in [0.75, 1., 1.25, 1.5] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(
+                    &cc,
+                    Startup {
+                        theme: Some(theme.into()),
+                        ..Default::default()
+                    },
+                );
+                ctx.set_zoom_factor(scale);
+                app.folder_needs_load = false;
+                app.file_browser.needs_load = false;
+                app.new_notebook();
+                let mut image = crate::app::image_view::ImageView::new(crate::images::Decoded {
+                    pixels: std::sync::Arc::new(egui::ColorImage::filled(
+                        [2, 2],
+                        egui::Color32::WHITE,
+                    )),
+                    original: [2, 2],
+                    format: "PNG".into(),
+                    encoded_bytes: 16,
+                    lease: std::sync::Arc::new(app.image_budget.reserve(16).unwrap()),
+                });
+                for scene in [
+                    "terminal", "notebook", "image", "binary", "markdown", "slides", "dialogs",
+                ] {
+                    if scene == "binary" {
+                        app.new_file();
+                        app.documents[app.active].hex =
+                            Some(crate::app::binary_view::HexView::new(
+                                crate::binary::Loaded::decode("AAECAwQF", &app.image_budget)
+                                    .unwrap(),
+                            ));
+                    } else if scene == "markdown" {
+                        app.new_file();
+                        let doc = &mut app.documents[app.active];
+                        doc.path = Some("preview.md".into());
+                        doc.text = "# Preview".into();
+                        let mut preview =
+                            crate::app::markdown::Preview::new(app.markdown_images.clone());
+                        preview.showing = true;
+                        doc.markdown = Some(preview);
+                    } else if scene == "slides" {
+                        app.new_marp();
+                        // Paint the toolbar without starting a project-host renderer.
+                        app.workspace = Some(crate::app::tests::remote_workspace());
+                        app.workspace.as_mut().unwrap().connected = false;
+                    }
+                    let dialogs = if scene == "dialogs" {
+                        vec![
+                            Dialog::Connect,
+                            Dialog::Folder,
+                            Dialog::Open,
+                            Dialog::Slurm,
+                            Dialog::Sessions,
+                            Dialog::AgentSessions,
+                            Dialog::Extensions,
+                            Dialog::Shortcuts,
+                            Dialog::Encrypted,
+                        ]
+                    } else {
+                        vec![Dialog::None]
+                    };
+                    for (dialog_index, dialog) in dialogs.into_iter().enumerate() {
+                        app.dialog = dialog;
+                        for _ in 0..3 {
+                            let output = ctx.run(
+                                egui::RawInput {
+                                    screen_rect: Some(egui::Rect::from_min_size(
+                                        egui::Pos2::ZERO,
+                                        egui::vec2(width, 900.),
+                                    )),
+                                    ..Default::default()
+                                },
+                                |ctx| {
+                                    if scene == "dialogs" {
+                                        app.dialogs(ctx);
+                                    } else {
+                                        egui::CentralPanel::default().show(ctx, |ui| match scene {
+                                            "terminal" => app.terminal_header(ui, ctx),
+                                            "notebook" => {
+                                                app.notebook_ui(ui, ctx);
+                                            }
+                                            "image" => {
+                                                image.ui(
+                                                    ui,
+                                                    ctx,
+                                                    900,
+                                                    app.themes.active().palette,
+                                                    false,
+                                                );
+                                            }
+                                            "binary" => {
+                                                app.hex_ui(ui, ctx);
+                                            }
+                                            "markdown" => {
+                                                app.markdown_ui(ui, ctx);
+                                            }
+                                            "slides" => app.marp_ui(ui, ctx),
+                                            _ => unreachable!(),
+                                        });
+                                    }
+                                },
+                            );
+                            assert_button_alignment(
+                                &output,
+                                app.themes.active().palette,
+                                ctx.pixels_per_point(),
+                                &format!(
+                                    "{theme}/{scene}/dialog {dialog_index} at {width}, {scale}"
+                                ),
+                            );
+                            if scene == "terminal" {
+                                let persist = button_frame(&output, "Persist: off").0;
+                                let slurm = button_frame(&output, "Slurm…").0;
+                                assert!(
+                                    (persist.top() - slurm.top()).abs() <= 0.5
+                                        && (persist.bottom() - slurm.bottom()).abs() <= 0.5,
+                                    "Terminal controls: {persist:?} vs {slurm:?}"
+                                );
+                            } else if scene == "image" {
+                                let actual = button_frame(&output, "100%").0;
+                                let fit = button_frame(&output, "Fit").0;
+                                let reload = button_frame(&output, "Reload").0;
+                                assert!(
+                                    (actual.top() - reload.top()).abs() <= 0.5
+                                        && (actual.bottom() - reload.bottom()).abs() <= 0.5
+                                        && (actual.height() - fit.height()).abs() <= 0.5,
+                                    "Image controls: {actual:?} vs {reload:?}"
+                                );
+                            } else {
+                                let labels: &[&str] = match scene {
+                                    "notebook" => &["Run all", "Run", "Down"],
+                                    "binary" => &["Go", "Analyze / decode here", "Reload"],
+                                    "markdown" => &["Preview", "Reload images", "Slides"],
+                                    "slides" => &["Refresh slides", "Export", "Marp settings"],
+                                    _ => &[],
+                                };
+                                for label in labels {
+                                    let bounds = button_frame(&output, label).0;
+                                    assert!(
+                                        bounds.height()
+                                            >= app
+                                                .themes
+                                                .active()
+                                                .palette
+                                                .ui
+                                                .unwrap()
+                                                .control_height,
+                                        "{scene}: {label} has a shorter frame: {bounds:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

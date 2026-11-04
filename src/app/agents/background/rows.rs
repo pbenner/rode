@@ -132,15 +132,16 @@ fn row(
             ui.set_min_height(if narrow { 166. } else { 132. });
             ui.spacing_mut().item_spacing = egui::vec2(8., 4.);
             let top = ui.cursor().top();
+            let action_height = crate::app::layout::control_height(ui).max(28.);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), 28.),
+                egui::vec2(ui.available_width(), action_height),
                 Layout::right_to_left(Align::Center),
                 |ui| {
                     if !narrow {
-                        action = buttons(ui, &attachment, palette);
+                        action = buttons(ui, &attachment, palette, action_height);
                     }
                     ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 28.),
+                        egui::vec2(ui.available_width(), action_height),
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.add(
@@ -197,12 +198,12 @@ fn row(
                 &attachment.explanation
             });
             if narrow {
-                ui.add_space((166. - (ui.cursor().top() - top) - 28.).max(0.));
+                ui.add_space((166. - (ui.cursor().top() - top) - action_height).max(0.));
                 ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 28.),
+                    egui::vec2(ui.available_width(), action_height),
                     Layout::right_to_left(Align::Center),
                     |ui| {
-                        action = buttons(ui, &attachment, palette).or(action);
+                        action = buttons(ui, &attachment, palette, action_height).or(action);
                     },
                 );
             }
@@ -212,11 +213,16 @@ fn row(
 }
 
 /// Right-to-left ordering keeps End at the outer edge and the primary action aligned.
-fn buttons(ui: &mut egui::Ui, attachment: &Attachment, palette: Palette) -> Option<Action> {
+fn buttons(
+    ui: &mut egui::Ui,
+    attachment: &Attachment,
+    palette: Palette,
+    height: f32,
+) -> Option<Action> {
     let mut action = None;
     if ui
         .add_sized(
-            [60., 28.],
+            [60., height],
             egui::Button::new(RichText::new("End").color(palette.error)),
         )
         .on_hover_text("Stop this agent and its tools after confirmation")
@@ -227,7 +233,7 @@ fn buttons(ui: &mut egui::Ui, attachment: &Attachment, palette: Palette) -> Opti
     if ui
         .add_enabled_ui(attachment.enabled, |ui| {
             ui.add_sized(
-                [104., 28.],
+                [104., height],
                 egui::Button::new(if attachment.current {
                     "Show chat"
                 } else {

@@ -253,7 +253,7 @@ impl EditorApp {
                                 response.request_focus();
                                 self.find_focus = false;
                             }
-                            if (ui.small_button("Next").clicked()
+                            if (ui.button("Next").clicked()
                                 || (response.has_focus() || response.lost_focus())
                                     && ui.input(|i| i.key_pressed(Key::Enter)))
                                 && !self.find.is_empty()
@@ -282,7 +282,7 @@ impl EditorApp {
                                     view.cells.entry(cell.uid).or_default().previewing = false;
                                 }
                             }
-                            if ui.small_button("Close").clicked() {
+                            if ui.button("Close").clicked() {
                                 self.show_find = false;
                             }
                         });
@@ -617,7 +617,7 @@ impl EditorApp {
 fn cell_toolbar(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.scope(|ui| {
         // Set the row height before layout so selectors, labels and buttons share a centre line.
-        ui.spacing_mut().interact_size.y = 28.;
+        ui.spacing_mut().interact_size.y = ui.spacing().interact_size.y.max(28.);
         ui.spacing_mut().button_padding = egui::vec2(8., 4.);
         ui.spacing_mut().item_spacing = egui::vec2(6., 6.);
         ui.horizontal_wrapped(add_contents);

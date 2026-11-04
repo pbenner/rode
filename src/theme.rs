@@ -43,6 +43,10 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
     ("hologram", include_str!("../themes/hologram.json")),
     ("telemetry", include_str!("../themes/telemetry.json")),
     ("studio", include_str!("../themes/studio.json")),
+    (
+        "studio-neutral",
+        include_str!("../themes/studio-neutral.json"),
+    ),
 ];
 
 /// Copyable interface/terminal colors; syntax themes may be selected independently.
@@ -264,10 +268,26 @@ impl Theme {
         }
         EMBEDDED_THEMES
             .iter()
-            .find(|(name, _)| *name == id)
-            .map(|(_, json)| {
-                Self::parse(id, json, &Self::phosphor()).expect("embedded theme is valid")
-            })
+            .position(|(name, _)| *name == id)
+            .map(Self::embedded)
+    }
+
+    /// Resolve embedded inheritance through earlier menu entries only. This
+    /// bounds the chain and prevents cyclic or forward references in presets.
+    fn embedded(index: usize) -> Self {
+        let (id, json) = EMBEDDED_THEMES[index];
+        let definition: ThemeFile =
+            serde_json::from_str(json).expect("embedded theme is valid JSON");
+        let base = if definition.base == "phosphor" {
+            Self::phosphor()
+        } else {
+            let parent = EMBEDDED_THEMES[..index]
+                .iter()
+                .position(|(name, _)| *name == definition.base)
+                .expect("embedded theme base must precede its derived preset");
+            Self::embedded(parent)
+        };
+        Self::parse(id, json, &base).expect("embedded theme is valid")
     }
 
     /// Return all embedded interface themes in menu order.

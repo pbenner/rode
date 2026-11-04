@@ -264,13 +264,14 @@ pub(super) fn buttons(
 }
 
 fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let height = crate::app::layout::control_height(ui);
     ui.allocate_ui_with_layout(
-        egui::vec2(width, 24.),
+        egui::vec2(width, height),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             egui::containers::menu::MenuButton::from_button(
                 egui::Button::new(label)
-                    .min_size(egui::vec2(width, 24.))
+                    .min_size(egui::vec2(width, height))
                     .truncate(),
             )
             .ui(ui, add)

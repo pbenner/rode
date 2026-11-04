@@ -32,6 +32,7 @@ impl EditorApp {
     /// and query errors must not leave a misleading green allocation indicator.
     pub(in crate::app) fn slurm_terminal_button(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
+        let height = layout::compact_control_height(ui);
         let managed = self
             .sessions
             .active
@@ -82,7 +83,7 @@ impl EditorApp {
             palette.text
         }))
         .small()
-        .min_size(egui::vec2(100., 0.));
+        .min_size(egui::vec2(100., height));
         if active {
             button = button
                 .fill(palette.accent)
@@ -105,7 +106,7 @@ impl EditorApp {
             detail.push('\n');
             detail.extend(self.sessions.slurm_error.chars().take(320));
         }
-        if ui.add_enabled_ui(ready && !self.session_busy(), |ui| ui.add_sized([112., 18.], button.truncate())).inner
+        if ui.add_enabled_ui(ready && !self.session_busy(), |ui| ui.add_sized([112., height], button.truncate())).inner
             .on_hover_text(format!("{detail}\nAllocate resources, inspect progress or release the allocation. Persistence is controlled separately."))
             .clicked()
         {
@@ -115,7 +116,9 @@ impl EditorApp {
             && ui
                 .add_enabled(
                     ready && !self.sessions.slurm_busy,
-                    egui::Button::new("Cancel queued").small(),
+                    egui::Button::new("Cancel queued")
+                        .small()
+                        .min_size(egui::vec2(0., height)),
                 )
                 .on_hover_text("Cancel this terminal's queued Slurm allocation.")
                 .clicked()
