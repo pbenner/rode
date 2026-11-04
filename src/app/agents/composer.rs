@@ -70,11 +70,14 @@ impl State {
         self.history.clear();
     }
 
-    /// Rebuild local prompt recall from bounded accepted message texts.
+    /// Rebuild recall from accepted/replayed prompts, including explicitly clipped old input.
     pub fn restore_history(&mut self, messages: impl Iterator<Item = String>) {
         self.clear_history();
         for text in messages {
-            self.remember_prompt(text);
+            self.remember_prompt(crate::agent::protocol::clip(
+                &text,
+                crate::agent::PROMPT_LIMIT,
+            ));
         }
     }
 
@@ -469,6 +472,25 @@ mod tests {
         assert_eq!(view.draft, "another conversation");
         view.arrow(Key::ArrowDown);
         assert_eq!(view.draft, "unfinished λ\nsecond line");
+    }
+
+    #[test]
+    fn restored_long_prompts_remain_browsable_with_an_explicit_truncation_marker() {
+        let old = "🦀".repeat(crate::agent::PROMPT_LIMIT);
+        let mut view = RecallView::new("unfinished draft", &[&old, "same prompt", "same prompt"]);
+        view.state.remember_prompt("new prompt".into());
+        for expected in ["new prompt", "same prompt", "same prompt"] {
+            view.arrow(Key::ArrowUp);
+            assert_eq!(view.draft, expected);
+        }
+        view.arrow(Key::ArrowUp);
+        assert!(view.draft.starts_with("🦀"));
+        assert!(view.draft.ends_with("[… truncated]"));
+        assert!(view.draft.len() <= crate::agent::PROMPT_LIMIT);
+        for _ in 0..4 {
+            view.arrow(Key::ArrowDown);
+        }
+        assert_eq!(view.draft, "unfinished draft");
     }
 
     #[test]

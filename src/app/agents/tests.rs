@@ -4,6 +4,59 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn recovery_actions_fit_the_panel_and_preserve_unsent_work() {
+    for scale in [0.75, 1., 1.5] {
+        for width in [320., 650.] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(
+                &cc,
+                Startup {
+                    theme: Some("studio-neutral".into()),
+                    ..Default::default()
+                },
+            );
+            ctx.set_zoom_factor(scale);
+            app.agents.config.provider = Provider::Acp;
+            app.agents.draft = "unsent draft".into();
+            app.agents
+                .chat
+                .apply_view(rode_agent_core::service::ChatView {
+                    recoverable: true,
+                    conversation: "saved-thread".into(),
+                    config: app.agents.config.clone(),
+                    ..Default::default()
+                });
+            let mut render = || {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| app.agent_ui(ui, ctx));
+                    },
+                )
+            };
+            render();
+            let output = render();
+            for label in ["Recover agent", "Recovery options"] {
+                let (rect, clip) = layout::tests::button_frame(&output, label);
+                assert!(
+                    clip.contains_rect(rect),
+                    "{label} clipped at {width}, scale {scale}: {rect:?} in {clip:?}"
+                );
+            }
+            assert_eq!(app.agents.draft, "unsent draft");
+            assert!(app.agents.chat.recoverable());
+        }
+    }
+}
+
+#[test]
 fn chat_header_actions_fit_inside_the_visible_panel() {
     for scale in [0.75, 1., 1.25, 1.5] {
         for theme in ["phosphor", "studio", "studio-neutral"] {

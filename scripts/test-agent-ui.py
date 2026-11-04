@@ -573,6 +573,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             )
             time.sleep(0.3)
             screenshot(window, "history-list.png")
+            # Saved tool output evicts early display rows. Recall must retain
+            # user prompts independently of that rolling transcript.
+            (root / "history-fixture.json").write_text(json.dumps({"replay_tools": 80}))
             assert sum(m.get("method") == "turn/start" for m in rpc(root)) == prompts_before
             x11.XResizeWindow(display, window, 850, 560)
             x11.XFlush(display)
@@ -612,6 +615,17 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             send(root, "continue-saved-work")
             last = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert last["params"]["threadId"] == "saved-2"
+            click(1280, 785)
+            key("Home", ("Control_L",))
+            for _ in range(4):
+                key("Up")
+            key("End", ("Control_L",))
+            text(" after continuation")
+            key("Return")
+            wait_for(
+                lambda: sent(root, "Earlier question 1 after continuation"),
+                "New prompts hid older restored input history",
+            )
             close_window(window, process)
             print(
                 "Agent UI: long-draft scrolling/resizing, Enter/Shift+Enter, personalities, history restore, model/access selectors, saved policies, chat context, approvals, Stop, themes, and unsaved buffers passed."

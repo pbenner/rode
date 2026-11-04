@@ -42,6 +42,13 @@ pub struct View {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Action {
+    /// Explicitly reopen a failed backend without replaying the interrupted prompt.
+    Recover {
+        /// Start a new backend context instead of reconnecting the saved conversation.
+        fresh: bool,
+        /// Current settings, constrained to the captured backend and project policy.
+        config: Box<Config>,
+    },
     /// Capture the explicit settings to use for future queued turns.
     Configure {
         /// Validated by the host without changing its executable or sandbox.
@@ -250,7 +257,7 @@ impl Queue {
                 };
                 self.items.swap(index, other);
             }
-            Action::Dispatch { .. } | Action::Configure { .. } => {
+            Action::Dispatch { .. } | Action::Configure { .. } | Action::Recover { .. } => {
                 anyhow::bail!("This queue operation requires the agent controller.")
             }
         }

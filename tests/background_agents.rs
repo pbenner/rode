@@ -182,6 +182,222 @@ struct View {
 }
 
 #[test]
+fn an_idle_agent_exit_pauses_existing_and_future_queued_work() {
+    use rode_agent_core::queue::Action as Queue;
+    for provider in [Provider::Codex, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("continue"), "").unwrap();
+        let info = fixture.create(provider, true, "completed work");
+        let mut view = fixture.attach(&info);
+        view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+        let pid: i32 = fs::read_to_string(fixture.root.join("agent.pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        let failed = view.until(|s| s.chat.recoverable && !s.chat.stopping);
+        assert_eq!(
+            failed.chat.completed, 1,
+            "Idle failure completes no additional turn"
+        );
+        assert!(failed.queue.paused);
+        let held = view.queue(
+            "queue-after-idle-exit",
+            Queue::Push {
+                id: 1,
+                text: "keep this prompt".into(),
+                attachments: vec![],
+            },
+        );
+        assert!(held.queue.paused);
+        assert_eq!(held.queue.items.len(), 1);
+        view.queue(
+            "recover-idle-exit",
+            Queue::Recover {
+                fresh: false,
+                config: Box::new(failed.chat.config),
+            },
+        );
+        let recovered = view.until(|s| s.chat.connected && !s.chat.busy && !s.chat.recoverable);
+        assert_eq!(recovered.chat.completed, 1);
+        assert!(recovered.queue.paused);
+        assert_eq!(recovered.queue.items.len(), 1);
+        view.send(Action::End);
+        view.until(|s| !s.info.alive);
+    }
+}
+
+#[test]
+fn diagnostic_lines_up_to_one_mib_keep_the_native_agent_connected() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("continue"), "").unwrap();
+        let info = fixture.create(provider, true, "long-stderr");
+        let view = fixture.attach(&info);
+        let state = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+        assert!(state.chat.last_turn_succeeded, "{:?}", state.chat.messages);
+        assert!(state.chat.connected);
+        assert!(!state.chat.recoverable);
+    }
+}
+
+#[test]
+fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_prompt() {
+    use rode_agent_core::{attachment::Attachment, queue::Action as Queue};
+    for provider in [Provider::Codex, Provider::Acp] {
+        for stream in ["stdout", "stderr"] {
+            let fixture = Fixture::new();
+            fs::write(fixture.root.join("record-inputs"), "").unwrap();
+            let prompt = format!("overflow-{stream}");
+            let info = fixture.create(provider, true, &prompt);
+            assert!(info.supports_recovery);
+            let mut view = fixture.attach(&info);
+            view.until(|s| s.chat.connected && s.chat.busy);
+            view.queue(
+                "keep-follow-up",
+                Queue::Push {
+                    id: 1,
+                    text: "queued follow-up".into(),
+                    attachments: vec![Attachment::Document {
+                        name: "notes.txt".into(),
+                        text: "preserved snapshot".into(),
+                    }],
+                },
+            );
+            fs::write(fixture.root.join("continue"), "").unwrap();
+            let failed = view.until(|s| s.chat.recoverable && !s.chat.busy && !s.chat.stopping);
+            assert!(
+                failed.info.alive,
+                "The recoverable controller must retain its queue"
+            );
+            assert!(!failed.chat.connected);
+            assert!(failed.queue.paused);
+            assert_eq!(failed.queue.items.len(), 1);
+            let limit = if stream == "stdout" {
+                rode_agent_core::LINE_LIMIT
+            } else {
+                rode_agent_core::STDERR_LINE_LIMIT
+            };
+            assert!(
+                failed
+                    .chat
+                    .messages
+                    .iter()
+                    .any(|message| message.text.contains(stream)
+                        && message.text.contains(&format!("{limit} bytes"))),
+                "{:?}",
+                failed.chat.messages
+            );
+            let rejected = view.queue("cannot-resume-dead-agent", Queue::Pause { paused: false });
+            assert!(rejected.error.contains("Recover"));
+            assert!(rejected.queue.paused);
+            let fresh = stream == "stderr";
+            view.queue(
+                "recover",
+                Queue::Recover {
+                    fresh,
+                    config: Box::new(failed.chat.config.clone()),
+                },
+            );
+            let ready = view.until(|s| s.chat.connected && !s.chat.busy && !s.chat.recoverable);
+            assert_eq!(
+                ready.chat.completed, 1,
+                "Recovery must not submit inference"
+            );
+            assert!(ready.queue.paused);
+            assert!(
+                !ready
+                    .chat
+                    .messages
+                    .iter()
+                    .any(|m| m.text.contains("saved replay"))
+            );
+            assert_eq!(ready.queue.items[0].files, vec!["notes.txt"]);
+            let rpc: Vec<serde_json::Value> =
+                fs::read_to_string(fixture.root.join("backend-rpc.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+            if !fresh {
+                let method = if provider == Provider::Acp {
+                    "session/load"
+                } else {
+                    "thread/resume"
+                };
+                let resume = rpc
+                    .iter()
+                    .find(|m| m["method"] == method)
+                    .expect("Saved conversation was not resumed");
+                if provider == Provider::Codex {
+                    assert_eq!(resume["params"]["excludeTurns"], true);
+                }
+            }
+            let inputs = fixture.root.join("recorded-inputs.jsonl");
+            assert_eq!(fs::read_to_string(&inputs).unwrap().lines().count(), 1);
+            view.queue("resume-kept-work", Queue::Pause { paused: false });
+            let done =
+                view.until(|s| s.chat.completed == 2 && !s.chat.busy && s.queue.items.is_empty());
+            assert!(done.chat.last_turn_succeeded);
+            let inputs = fs::read_to_string(inputs).unwrap();
+            assert_eq!(inputs.lines().count(), 2);
+            assert_eq!(inputs.matches(&prompt).count(), 1);
+            assert!(inputs.contains("preserved snapshot"));
+        }
+    }
+}
+
+#[test]
+fn failed_saved_reconnect_can_fall_back_to_a_new_context_without_losing_work() {
+    use rode_agent_core::queue::Action as Queue;
+    for provider in [Provider::Codex, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("no-resume"), "").unwrap();
+        let info = fixture.create(provider, true, "overflow-stdout");
+        let mut view = fixture.attach(&info);
+        let working = view.until(|s| s.chat.connected && s.chat.busy);
+        view.queue(
+            "keep",
+            Queue::Push {
+                id: 1,
+                text: "kept work".into(),
+                attachments: vec![],
+            },
+        );
+        fs::write(fixture.root.join("continue"), "").unwrap();
+        view.until(|s| s.chat.recoverable && !s.chat.stopping && !s.chat.busy);
+        view.queue(
+            "try-saved",
+            Queue::Recover {
+                fresh: false,
+                config: Box::new(working.chat.config.clone()),
+            },
+        );
+        let failed = view.until(|s| {
+            s.chat.recoverable && !s.chat.stopping && !s.chat.busy && s.chat.completed == 2
+        });
+        assert!(failed.queue.paused);
+        assert_eq!(failed.queue.items[0].text, "kept work");
+        assert_eq!(
+            failed.chat.conversation, "native-thread",
+            "A mismatched reconnect must not replace the protected conversation"
+        );
+        view.queue(
+            "fresh-fallback",
+            Queue::Recover {
+                fresh: true,
+                config: Box::new(working.chat.config),
+            },
+        );
+        let ready = view.until(|s| s.chat.connected && !s.chat.busy && !s.chat.recoverable);
+        assert_eq!(ready.queue.items[0].text, "kept work");
+        assert!(ready.queue.paused);
+    }
+}
+
+#[test]
 fn native_file_only_controller_edits_through_its_captured_host_policy() {
     let fixture = Fixture::new();
     fs::write(
@@ -243,11 +459,59 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
             .iter()
             .any(|i| i.id == info.id && !i.attached)
     });
-    let view = fixture.attach(&info);
+    let mut view = fixture.attach(&info);
     let state = view.until(|state| state.chat.connected);
     assert_eq!(
         state.chat.config.access(),
         rode_agent_core::Access::FilesOnly
+    );
+    // Recovery must rebuild the verified file-only tools, never resume a thread
+    // with command tools enabled or repeat the completed edit automatically.
+    let pid: i32 = fs::read_to_string(fixture.root.join("file-agent.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let failed = view.until(|s| s.chat.recoverable && !s.chat.stopping && !s.chat.busy);
+    let denied = view.queue(
+        "file-only-cannot-resume",
+        rode_agent_core::queue::Action::Recover {
+            fresh: false,
+            config: Box::new(failed.chat.config.clone()),
+        },
+    );
+    assert!(denied.error.contains("File-only agents require"));
+    view.queue(
+        "restart-confined-tools",
+        rode_agent_core::queue::Action::Recover {
+            fresh: true,
+            config: Box::new(failed.chat.config),
+        },
+    );
+    let ready = view.until(|s| s.chat.connected && !s.chat.busy && !s.chat.recoverable);
+    assert_eq!(
+        ready.chat.config.access(),
+        rode_agent_core::Access::FilesOnly
+    );
+    assert!(!fixture.root.join("forbidden").exists());
+    let calls: Vec<serde_json::Value> =
+        fs::read_to_string(fixture.root.join("file-agent-rpc.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| c["method"] == "thread/start")
+            .count(),
+        2
+    );
+    assert_eq!(
+        calls.iter().filter(|c| c["method"] == "turn/start").count(),
+        1
     );
 }
 impl View {
@@ -289,6 +553,94 @@ impl Drop for View {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn restored_prompt_recall_survives_native_deltas_and_reattachment() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.root.join("agent.py"),
+            include_str!("fixtures/agent.py"),
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("history-fixture.json"),
+            r#"{"replay_tools":80}"#,
+        )
+        .unwrap();
+        let info = fixture.create_agent(provider, true, None, vec![]);
+        let mut view = fixture.attach(&info);
+        view.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_resume));
+        view.send(Action::HistoryResume {
+            id: "saved-1".into(),
+        });
+        let restored = view.until(|s| s.history.is_none() && s.chat.connected);
+        assert!(
+            !restored
+                .chat
+                .messages
+                .iter()
+                .any(|m| m.text == "Earlier question 1")
+        );
+        assert_eq!(
+            restored.chat.input_history.as_ref().unwrap(),
+            &["Earlier question 1", "Earlier question 2"]
+        );
+        let mut delta = restored.clone();
+        delta.chat.input_history = None;
+        delta.chat.messages.clear();
+        let order = restored
+            .chat
+            .messages
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        let assembled = rode_agent_core::service::Update {
+            state: delta,
+            order,
+        }
+        .apply(Some(&restored))
+        .unwrap();
+        assert_eq!(assembled.chat.input_history, restored.chat.input_history);
+        // Older services remain usable through the visible-message fallback.
+        let mut legacy = restored.chat.clone();
+        legacy.input_history = None;
+        let expected: Vec<_> = legacy
+            .messages
+            .iter()
+            .filter(|m| m.role == rode_agent_core::protocol::Role::User)
+            .map(|m| m.text.clone())
+            .collect();
+        let mut mirror = rode_agent_core::protocol::Chat::default();
+        mirror.apply_view(legacy);
+        assert_eq!(
+            mirror.input_history().collect::<Vec<_>>(),
+            expected.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        view.send(Action::Submit {
+            text: "new follow-up".into(),
+            attachments: vec![],
+            config: restored.chat.config,
+        });
+        let done = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+        assert_eq!(
+            done.chat.input_history.as_ref().unwrap(),
+            &["Earlier question 1", "Earlier question 2", "new follow-up"]
+        );
+        drop(view);
+        wait(|| {
+            fixture
+                .infos()
+                .iter()
+                .any(|i| i.id == info.id && !i.attached)
+        });
+        let mut reattached = fixture.attach(&info);
+        let ready = reattached.until(|s| s.chat.connected && !s.chat.busy);
+        assert_eq!(ready.chat.input_history, done.chat.input_history);
+        reattached.send(Action::End);
+        reattached.until(|s| !s.info.alive);
     }
 }
 

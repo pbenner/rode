@@ -4,6 +4,7 @@
 A loopback HTTPS proxy holds/rejects CONNECT before TLS, so the normal test cannot
 reach GitHub. RODE_TEST_CODEX_BUNDLE optionally supplies the actual pinned runtime
 to exercise verified reuse and successful publication too; no agent/model is started.
+Controls are located through opt-in layout snapshots, then clicked with native X11 input.
 """
 
 import ctypes
@@ -12,7 +13,6 @@ import http.server
 import json
 import os
 import platform
-import re
 import shutil
 import subprocess
 import tempfile
@@ -27,12 +27,15 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
-    click,
+    click_button,
     close_window,
     display,
     focus_window,
     key,
     screenshot,
+    wait_for_button,
+    wait_for_project,
+    wait_for_window,
     x11,
 )
 
@@ -54,7 +57,7 @@ class Proxy(http.server.BaseHTTPRequestHandler):
 
     def do_CONNECT(self):
         Proxy.requests += 1
-        Proxy.release.wait(10)
+        Proxy.release.wait()
         try:
             self.send_error(503, "Controlled test proxy: no external connection")
         except (BrokenPipeError, ConnectionResetError):
@@ -106,6 +109,7 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
         all_proxy=proxy,
         NO_PROXY="",
         no_proxy="",
+        RODE_UI_TEST_STATE=str(ARTIFACTS / "widgets.json"),
     )
     environment.pop("RODE_CODEX_BUNDLE", None)
     # Test first-time setup even when the developer has a separately installed
@@ -121,38 +125,32 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
     preferences_marker = base.parent / "unrelated-settings"
     preferences_marker.write_text("preserve existing settings")
     window = None
-    with (ARTIFACTS / "install.log").open("w") as log:
+    log_path = ARTIFACTS / "install.log"
+    state_path = Path(environment["RODE_UI_TEST_STATE"])
+    state_path.unlink(missing_ok=True)
+    with log_path.open("w") as log:
         process = subprocess.Popen(
             [str(binary), str(project)], env=environment, stdout=log, stderr=log
         )
         try:
-            for _ in range(150):
-                tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                match = re.search(r'(0x[0-9a-f]+) "RODE[^\n]*project', tree)
-                if match and "[Opening project]" not in match[0]:
-                    window = int(match[1], 16)
-                    break
-                assert process.poll() is None, "RODE exited before project preparation"
-                time.sleep(0.05)
-            assert window, "No prepared RODE window"
+            window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus_window(window)
-            time.sleep(0.6)
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            wait_for_button(window, process, log_path, state_path, "Install Codex")
             screenshot(window, "before-install.png")
             assert Proxy.requests == 0 and not base.exists(), "Opening chat initiated setup"
-            click(360, 211)
+            click_button(window, process, log_path, state_path, "Install Codex")
             wait_for(
                 lambda: Proxy.requests == 1, "Install Codex did not start the explicit request"
             )
             screenshot(window, "downloading.png")
-            click(440, 211)  # Cancel the held request.
+            click_button(window, process, log_path, state_path, "Cancel Codex installation")
             Proxy.release.set()
             wait_for(lambda: idle(base), "Cancelled installation did not release its lock")
-            time.sleep(0.2)
             assert not (base / "manifest.json").exists(), "Cancelled install selected a runtime"
             screenshot(window, "cancelled.png")
-            click(360, 211)
+            click_button(window, process, log_path, state_path, "Install Codex")
             wait_for(lambda: Proxy.requests == 2, "Failed/cancelled setup could not be retried")
             wait_for(lambda: idle(base), "Rejected download did not finish")
             screenshot(window, "download-error.png")
@@ -173,7 +171,7 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
                         os.link(source / name, destination / name)
                     except OSError:
                         shutil.copy2(source / name, destination / name)
-                click(360, 211)
+                click_button(window, process, log_path, state_path, "Install Codex")
                 wait_for(
                     lambda: (base / "manifest.json").exists(),
                     "Install action did not publish the verified cached runtime",
@@ -196,9 +194,8 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
             if not os.environ.get("RODE_TEST_CODEX_BUNDLE"):
                 x11.XResizeWindow(display, window, 1380, 900)
                 x11.XFlush(display)
-                time.sleep(0.2)
                 Proxy.release.clear()
-                click(360, 211)
+                click_button(window, process, log_path, state_path, "Install Codex")
                 wait_for(lambda: Proxy.requests == 3, "Close-during-install fixture did not start")
             close_window(window, process)
             window = None

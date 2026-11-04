@@ -368,7 +368,8 @@ try:
             response(request, {"thread": saved(thread_id)})
         elif method == "thread/turns/list":
             assert params["threadId"] == thread_id
-            n = 1 if params.get("cursor") else 2
+            total = history_options().get("history_turns", 2)
+            n = int(params["cursor"]) if params.get("cursor") else total
             hint = response_style()
             content = [{"type": "text", "text": f"Earlier question {n}"}]
             if hint:
@@ -376,6 +377,15 @@ try:
                     content[0]["text"] += "\n\n" + hint
                 else:
                     content.append({"type": "text", "text": hint})
+            replay_tools = [
+                dict(
+                    id=f"replayed-tool-{n}-{i}",
+                    type="commandExecution",
+                    command="fixture tool",
+                    aggregatedOutput="Saved tool output",
+                )
+                for i in range(history_options().get("replay_tools", 0))
+            ]
             response(
                 request,
                 {
@@ -399,17 +409,18 @@ try:
                                     "type": "agentMessage",
                                     "text": f"Earlier answer {n}",
                                 },
+                                *replay_tools,
                             ],
                         }
                     ],
-                    "nextCursor": None if params.get("cursor") else "older-turn",
+                    "nextCursor": str(n - 1) if n > 1 else None,
                 },
             )
         elif method == "session/load":
             session_id = params["sessionId"]
             if "--wait-history" in sys.argv:
                 continue
-            for n in (1, 2):
+            for n in range(1, history_options().get("history_turns", 2) + 1):
                 for kind, content in (
                     ("user_message_chunk", f"Earlier question {n}"),
                     ("agent_message_chunk", f"Earlier answer {n}"),
@@ -431,6 +442,18 @@ try:
                                 },
                             },
                         )
+                for i in range(history_options().get("replay_tools", 0)):
+                    notify(
+                        "session/update",
+                        dict(
+                            sessionId=session_id,
+                            update=dict(
+                                sessionUpdate="tool_call",
+                                toolCallId=f"replayed-tool-{n}-{i}",
+                                status="completed",
+                            ),
+                        ),
+                    )
             response(request, {"configOptions": controls()})
         elif method == "model/list":
             if (root / "model-catalog-error").exists():

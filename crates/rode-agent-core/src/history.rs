@@ -60,6 +60,7 @@ pub struct Restored {
     pub(crate) launch: Launch,
     pub(crate) id: String,
     pub(crate) messages: VecDeque<Message>,
+    pub(crate) input_history: super::input_history::History,
     pub(crate) controls: Vec<controls::Control>,
     pub(crate) next_id: u64,
     pub(crate) limited: bool,
@@ -101,7 +102,9 @@ pub struct Browser {
     cursors: BTreeSet<String>,
     selected: String,
     pages: Vec<Vec<Message>>,
+    turn_pages: usize,
     replay: VecDeque<Message>,
+    input_history: super::input_history::History,
     replay_controls: Vec<controls::Control>,
     replay_serial: u64,
     limited: bool,
@@ -146,7 +149,9 @@ impl Browser {
             cursors: BTreeSet::new(),
             selected: String::new(),
             pages: vec![],
+            turn_pages: 0,
             replay: VecDeque::new(),
+            input_history: Default::default(),
             replay_controls: vec![],
             replay_serial: 0,
             limited: false,
@@ -186,7 +191,9 @@ impl Browser {
         );
         self.selected = id.into();
         self.pages.clear();
+        self.turn_pages = 0;
         self.replay.clear();
+        self.input_history = Default::default();
         self.replay_controls.clear();
         self.replay_serial = 0;
         self.limited = false;
@@ -329,6 +336,11 @@ impl Browser {
                     self.replay_controls = controls::acp(update);
                 } else {
                     self.limited |= acp_message(&mut self.replay, update, &mut self.replay_serial);
+                    if update["sessionUpdate"] == "user_message_chunk"
+                        && let Some(message) = self.replay.back().filter(|m| m.role == Role::User)
+                    {
+                        self.input_history.remember(&message.id, &message.text);
+                    }
                 }
             }
             return Ok(());
@@ -506,12 +518,30 @@ impl Browser {
                 for turn in result["data"].as_array().into_iter().flatten().take(1) {
                     page.extend(codex_messages(turn));
                 }
-                self.pages.push(page);
+                self.turn_pages += 1;
+                let mut recall_full = false;
+                for message in page.iter().rev().filter(|m| m.role == Role::User) {
+                    recall_full |= !self.input_history.prepend(&message.id, &message.text);
+                }
+                // Keep only recent display rows, but continue loading older
+                // prompts under their separate budget. Large tool replay must
+                // not decide where input-history navigation stops.
+                if self.pages.iter().map(Vec::len).sum::<usize>() < 128
+                    && self
+                        .pages
+                        .iter()
+                        .flatten()
+                        .map(|m| m.text.len())
+                        .sum::<usize>()
+                        < 512 * 1024
+                {
+                    self.pages.push(page);
+                } else {
+                    self.limited = true;
+                }
                 let next = cursor(result);
-                let count: usize = self.pages.iter().map(Vec::len).sum();
-                let bytes: usize = self.pages.iter().flatten().map(|m| m.text.len()).sum();
                 if let Some(next) = next.filter(|s| !self.cursors.contains(s)) {
-                    if self.pages.len() < 32 && count < 128 && bytes < 512 * 1024 {
+                    if self.turn_pages < 128 && !recall_full {
                         self.cursors.insert(next.clone());
                         self.turns(Some(next))?;
                     } else {
@@ -539,7 +569,7 @@ impl Browser {
         Ok(())
     }
     fn turns(&mut self, cursor: Option<String>) -> Result<()> {
-        self.status = format!("Loading recent history… {} turns", self.pages.len());
+        self.status = format!("Loading recent history… {} turns", self.turn_pages);
         let mut params = json!({"threadId":self.selected,"limit":1,"sortDirection":"desc","itemsView":"summary"});
         if let Some(cursor) = cursor {
             params["cursor"] = cursor.into();
@@ -561,6 +591,7 @@ impl Browser {
             launch: self.launch.clone(),
             id: self.selected.clone(),
             messages: std::mem::take(&mut self.replay),
+            input_history: std::mem::take(&mut self.input_history),
             controls,
             next_id: self.next_id,
             limited: self.limited,

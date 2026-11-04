@@ -53,6 +53,9 @@ pub struct Info {
     /// Whether queued prompts are held by this live controller.
     #[serde(default)]
     pub supports_queue: bool,
+    /// Whether failed transports can be explicitly recovered with their queue intact.
+    #[serde(default)]
+    pub supports_recovery: bool,
     /// Whether this controller dispatches queued prompts independently of desktop views.
     #[serde(default)]
     pub automatic_queue: bool,
@@ -84,11 +87,18 @@ pub struct Info {
 /// Current chat presentation; bounded exactly as the foreground controller.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatView {
+    /// A failed backend is retained until explicit recovery or termination.
+    #[serde(default)]
+    pub recoverable: bool,
     /// Backend conversation identity, used to protect open chats from history deletion.
     #[serde(default)]
     pub conversation: String,
     /// Recent messages, never saved as RODE preferences.
     pub messages: VecDeque<Message>,
+    /// Recent accepted/replayed prompts, independent of transcript eviction.
+    /// Absent on older services, or unchanged in a delta update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_history: Option<Vec<String>>,
     /// Permission/questions waiting for explicit input.
     pub prompts: VecDeque<Prompt>,
     /// Current status.
@@ -153,8 +163,8 @@ pub struct State {
     /// Error for the most recent rejected UI action; never auto-retried.
     pub error: String,
 }
-/// Streamed view update. Only changed messages are repeated; ordering also
-/// removes trimmed items, keeping long SSH conversations bounded and efficient.
+/// Streamed view update. Only changed messages and input history are repeated;
+/// ordering also removes trimmed items, keeping SSH conversations bounded and efficient.
 #[derive(Serialize, Deserialize)]
 pub struct Update {
     /// Current metadata/controls and changed transcript items.
@@ -169,6 +179,10 @@ impl Update {
             self.order.len() <= 128 && self.state.chat.messages.len() <= 128,
             "Agent transcript update exceeds its item limit"
         );
+        if self.state.chat.input_history.is_none() {
+            self.state.chat.input_history =
+                previous.and_then(|state| state.chat.input_history.clone());
+        }
         let mut messages: BTreeMap<_, _> = previous
             .into_iter()
             .flat_map(|s| s.chat.messages.iter())

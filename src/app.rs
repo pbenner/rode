@@ -48,6 +48,7 @@ mod notebook_view;
 mod pdf_view;
 mod sessions;
 mod terminal_colors;
+mod ui_probe;
 mod vaults;
 mod workbench;
 mod workers;
@@ -473,6 +474,7 @@ impl EditorApp {
         startup: Startup,
         storage: Option<&dyn eframe::Storage>,
     ) -> Self {
+        ui_probe::install(&cc.egui_ctx);
         let requested_theme = startup
             .theme
             .clone()

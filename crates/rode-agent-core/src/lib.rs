@@ -9,6 +9,8 @@ pub mod attachment;
 pub mod controls;
 pub mod file_only;
 pub mod history;
+mod input_history;
+pub mod io;
 pub mod personality;
 pub mod protocol;
 pub mod queue;
@@ -22,6 +24,8 @@ use std::{collections::BTreeMap, sync::Arc};
 pub const AUTO_CODEX: &str = "@rode/codex";
 /// Bounded agent JSON line limit, including submitted image content.
 pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
+/// Maximum diagnostic stderr line size, including its trailing newline.
+pub const STDERR_LINE_LIMIT: usize = 1024 * 1024;
 /// Maximum submitted chat prompt size in bytes.
 pub const PROMPT_LIMIT: usize = 32 * 1024;
 

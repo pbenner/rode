@@ -7,6 +7,7 @@ Uses only Python's standard library. Keyboard events and screenshots target this
 """
 
 import ctypes as c
+import json
 import os
 import re
 import subprocess
@@ -104,6 +105,67 @@ def click(x, y):
     time.sleep(0.2)
 
 
+def window_geometry(window):
+    """Return client origin and physical size, including windows moved by a window manager."""
+    info = subprocess.check_output(
+        ["xwininfo", "-id", hex(window)],
+        text=True,
+        env=dict(os.environ, LC_ALL="C.UTF-8"),
+        timeout=3,
+    )
+    return tuple(
+        int(re.search(rf"{label}:\s*(-?\d+)", info)[1])
+        for label in ("Absolute upper-left X", "Absolute upper-left Y", "Width", "Height")
+    )
+
+
+def wait_for_button(window, process, log_path, state_path, name, timeout=20):
+    """Wait for an enabled, visible registered control and resolve its current physical centre.
+
+    RODE_UI_TEST_STATE opts the application into atomic, read-only layout snapshots.
+    Input still goes through XTest; metadata cannot activate a control or start work.
+    """
+    deadline = time.monotonic() + timeout
+    last = "No layout snapshot received"
+    while time.monotonic() < deadline:
+        assert_running(process, log_path)
+        try:
+            state = json.loads(Path(state_path).read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            time.sleep(0.05)
+            continue
+        last = repr(state)
+        if state.get("pid") == process.pid:
+            for button in state["buttons"]:
+                if button["name"] != name or not button["enabled"]:
+                    continue
+                x, y, width, height = window_geometry(window)
+                scale = state["pixels_per_point"]
+                # Wait for the resize to be rendered before using its control bounds.
+                if any(
+                    abs(actual - logical * scale) > 2
+                    for actual, logical in zip((width, height), state["size"])
+                ):
+                    break
+                left, top, right, bottom = button["rect"]
+                if right > left and bottom > top:
+                    return (
+                        round(x + (left + right) * scale / 2),
+                        round(y + (top + bottom) * scale / 2),
+                    )
+        time.sleep(0.05)
+    raise AssertionError(
+        f"No enabled {name!r} control within {timeout}s. Last layout: {last}. Log: {log_path}"
+    )
+
+
+def click_button(window, process, log_path, state_path, name, timeout=20):
+    """Click once at the real control's current bounds after asynchronous readiness."""
+    focus_window(window)
+    point = wait_for_button(window, process, log_path, state_path, name, timeout)
+    click(*point)
+
+
 def assert_running(process, log_path):
     """Report early native startup failure with bounded stderr, rather than a bare assert."""
     code = process.poll()
@@ -115,7 +177,7 @@ def assert_running(process, log_path):
         log.seek(max(0, log.tell() - 16 * 1024))
         output = log.read().decode("utf-8", errors="replace").strip()
     raise AssertionError(
-        f"RODE exited before its window appeared (exit code {code}).\n"
+        f"RODE exited while waiting for the UI (exit code {code}).\n"
         f"Startup log: {path}\n{output or '(no startup output)'}"
     )
 

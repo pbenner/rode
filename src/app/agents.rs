@@ -18,6 +18,7 @@ mod header;
 mod history;
 mod message;
 mod queue;
+mod recovery;
 mod runtime;
 
 /// Window-owned chat presentation, host-keyed configuration and disposable backend views.
@@ -271,14 +272,9 @@ impl EditorApp {
             && let Some(config) = self.agents.chat.attached_config().cloned()
         {
             self.agents.config = config;
-            self.agents.composer.restore_history(
-                self.agents
-                    .chat
-                    .messages
-                    .iter()
-                    .filter(|message| message.role == Role::User)
-                    .map(|message| message.text.clone()),
-            );
+            self.agents
+                .composer
+                .restore_history(self.agents.chat.input_history().map(str::to_owned));
             self.agents.arguments = serde_json::to_string(&self.agents.config.acp_arguments)
                 .unwrap_or_else(|_| "[]".into());
             self.agents.save_config();
@@ -295,14 +291,9 @@ impl EditorApp {
             {
                 self.agents.replace_chat();
                 self.agents.chat.restore(restored);
-                self.agents.composer.restore_history(
-                    self.agents
-                        .chat
-                        .messages
-                        .iter()
-                        .filter(|message| message.role == Role::User)
-                        .map(|message| message.text.clone()),
-                );
+                self.agents
+                    .composer
+                    .restore_history(self.agents.chat.input_history().map(str::to_owned));
                 self.agents.browser = None;
                 self.agents.history_open = false;
                 self.agents.focus = true;
@@ -473,6 +464,7 @@ impl EditorApp {
         let mut attach = false;
         let mut stop = false;
         let mut new_chat = false;
+        let mut recover = None;
         let mut running = false;
         let mut save = false;
         let mut answer = None;
@@ -550,6 +542,7 @@ impl EditorApp {
                 if ui.add_enabled(!offline, egui::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
+            recover = recovery::ui(ui, &agents.chat, !offline && !modal && !installing, &agents.config);
             if agents.history_open {
                 let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal,agents.chat.conversation_id(),&mut agents.history_delete,palette);
                 history_action.refresh |= panel.refresh;
@@ -627,6 +620,7 @@ impl EditorApp {
                 agents.queue.ui(
                     ui,
                     !offline && !modal && !agents.history_open && agents.chat.queue_capacity(),
+                    !agents.chat.recoverable(),
                 );
                 agents.flush_queue();
             });
@@ -691,6 +685,7 @@ impl EditorApp {
                                 && !modal
                                 && !installing
                                 && !agents.chat.stopping()
+                                && !agents.chat.recoverable()
                                 && agents.queue.can_push()
                                 && agents.chat.queue_capacity()
                                 && !agents.history_open
@@ -874,6 +869,19 @@ impl EditorApp {
         }
         if running || history_action.running {
             self.open_background_agents(ctx);
+        }
+        if let Some(fresh) = recover {
+            let launch = self.agent_launch();
+            let context = ctx.clone();
+            if let Err(error) =
+                self.agents
+                    .chat
+                    .recover(launch, fresh, Arc::new(move || context.request_repaint()))
+            {
+                self.agents
+                    .chat
+                    .notice(&format!("Agent recovery failed: {error:#}"));
+            }
         }
         self.agents.flush_queue();
     }

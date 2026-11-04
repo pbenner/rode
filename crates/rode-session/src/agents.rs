@@ -151,6 +151,7 @@ impl Store {
             history_browser: spec.text.is_none(),
             supports_attachments: true,
             supports_queue: true,
+            supports_recovery: true,
             automatic_queue: true,
             id: spec.id.clone(),
             name: spec.name.clone(),
@@ -236,6 +237,7 @@ impl Store {
         std::thread::spawn(move || {
             let mut revision = u64::MAX;
             let mut previous = HashMap::<String, rode_agent_core::protocol::Message>::new();
+            let mut previous_input_history = None;
             loop {
                 let shared = writing.shared.lock().unwrap();
                 let shared = writing
@@ -274,6 +276,13 @@ impl Store {
                     .map(|m| (m.id.clone(), m.clone()))
                     .collect();
                 state.chat.messages = changed;
+                // Prompts change only on submission/replay; streaming output
+                // should not retransmit the whole recall buffer each frame.
+                if state.chat.input_history == previous_input_history {
+                    state.chat.input_history = None;
+                } else {
+                    previous_input_history = state.chat.input_history.clone();
+                }
                 if send_json(
                     &mut writer,
                     &rode_agent_core::service::Update { state, order },
@@ -340,6 +349,11 @@ fn run(
     let mut last_view = Instant::now() - Duration::from_secs(1);
     loop {
         chat.poll();
+        if chat.recoverable() {
+            // An idle process can also fail, without completing another turn.
+            // Hold both existing work and prompts added after disconnection.
+            queue.set_paused(true);
+        }
         if completed != chat.completed {
             completed = chat.completed;
             changed = true;
@@ -377,12 +391,18 @@ fn run(
         {
             stopping = true;
         }
-        if !error.is_empty() && !chat.busy && !chat.connected() && browser.is_none() {
+        if !error.is_empty()
+            && !chat.busy
+            && !chat.connected()
+            && !chat.recoverable()
+            && browser.is_none()
+        {
             stopping = true;
         }
         if browser.is_none()
             && !chat.busy
             && !chat.connected()
+            && !chat.recoverable()
             && active.load(Ordering::Acquire) == 0
         {
             stopping = true;
@@ -417,6 +437,8 @@ fn run(
         shared.state.info.alive = !finished;
         if (changed && last_view.elapsed() >= Duration::from_millis(200)) || finished {
             shared.state.chat = chat.view();
+            shared.state.chat.stopping |=
+                chat.recoverable() && !chat.busy && active.load(Ordering::Acquire) != 0;
             shared.state.chat.config = queued_config.clone();
             shared.state.queue = queue.view();
             shared.state.history = browser.as_ref().map(|browser| {
@@ -461,6 +483,31 @@ fn run(
                         } else {
                             queue.acknowledge(request);
                             match operation {
+                                rode_agent_core::queue::Action::Recover { fresh, config } => {
+                                    queue.set_paused(true);
+                                    (|| -> Result<()> {
+                                        ensure!(
+                                            !stopping && browser.is_none(),
+                                            "This controller cannot recover while closing or browsing history"
+                                        );
+                                        ensure!(
+                                            active.load(Ordering::Acquire) == 0,
+                                            "The previous agent is still stopping; retry recovery shortly"
+                                        );
+                                        let mut next = launch.clone();
+                                        next.config = *config;
+                                        chat.recover(next.clone(), fresh, wake.clone())?;
+                                        queued_config = next.config;
+                                        Ok(())
+                                    })()
+                                }
+                                rode_agent_core::queue::Action::Pause { paused: false }
+                                    if chat.recoverable() =>
+                                {
+                                    Err(anyhow::anyhow!(
+                                        "Recover the agent before resuming its queue."
+                                    ))
+                                }
                                 rode_agent_core::queue::Action::Configure { config } => {
                                     let result =
                                         configure(&mut chat, &mut queued_config, &launch, *config);

@@ -742,6 +742,69 @@ fn local_history_does_not_require_a_model_and_read_only_wins_over_saved_access()
 }
 
 #[test]
+fn restored_prompts_continue_beyond_the_display_budget_and_32_turns() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        options(
+            temp.path(),
+            serde_json::json!({"history_turns": 40, "replay_tools": 8}),
+        );
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.resume("saved-1").unwrap();
+        wait(&mut browser);
+        let mut chat = Chat::default();
+        chat.restore(browser.take_restored().unwrap());
+        assert!(!chat.messages.iter().any(|m| m.text == "Earlier question 1"));
+        assert_eq!(
+            chat.input_history().collect::<Vec<_>>(),
+            (1..=40)
+                .map(|n| format!("Earlier question {n}"))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn restored_input_history_survives_tool_replay_and_later_submissions() {
+    for provider in [Provider::Codex, Provider::Acp] {
+        let (temp, launch) = fixture(provider, false);
+        options(temp.path(), serde_json::json!({"replay_tools": 80}));
+        let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.resume("saved-1").unwrap();
+        wait(&mut browser);
+        let mut chat = Chat::default();
+        chat.restore(browser.take_restored().unwrap());
+        assert!(
+            !chat.messages.iter().any(|m| m.text == "Earlier question 1"),
+            "The fixture must evict the oldest user row"
+        );
+        assert_eq!(
+            chat.input_history().collect::<Vec<_>>(),
+            ["Earlier question 1", "Earlier question 2"]
+        );
+        chat.submit(launch, "new follow-up".into(), Arc::new(|| {}))
+            .unwrap();
+        wait_chat(&mut chat);
+        assert_eq!(
+            chat.input_history().collect::<Vec<_>>(),
+            ["Earlier question 1", "Earlier question 2", "new follow-up"]
+        );
+
+        // Reattachment transfers recall even when the display has no user rows.
+        let mut view = chat.view();
+        view.messages.clear();
+        let mut mirror = Chat::default();
+        mirror.apply_view(view);
+        assert_eq!(
+            mirror.input_history().collect::<Vec<_>>(),
+            chat.input_history().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn both_protocols_hide_saved_personality_instructions_in_previews_and_recalled_prompts() {
     for provider in [Provider::Codex, Provider::Acp] {
         for hint in [

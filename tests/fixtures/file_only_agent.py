@@ -2,10 +2,12 @@
 """Scripted app-server peer: requests tools but never executes them or calls a model."""
 
 import json
+import os
 import sys
 from pathlib import Path
 
 root = Path.cwd()
+(root / "file-agent.pid").write_text(str(os.getpid()))
 steps = json.loads((root / "file-tool-steps.json").read_text())
 index = 0
 turn = 0

@@ -178,6 +178,37 @@ impl Chat {
             self.inner.status = if client.ending { "Stopped" } else { "Detached" }.into();
         }
     }
+    /// Reopen a failed connection under its captured policy, keeping the host queue.
+    pub fn recover(
+        &mut self,
+        launch: Launch,
+        fresh: bool,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<()> {
+        ensure!(
+            !self.inner.busy && !self.stopping(),
+            "The previous agent is still stopping"
+        );
+        if let Some(client) = &mut self.native {
+            ensure!(
+                client
+                    .state
+                    .as_ref()
+                    .is_some_and(|s| s.info.supports_recovery)
+                    && client.matches(&launch),
+                "This agent cannot recover with the selected backend or project policy"
+            );
+            client.queue_action(rode_agent_core::queue::Action::Recover {
+                fresh,
+                config: Box::new(launch.config),
+            })?;
+            self.inner.busy = true;
+            self.inner.status = "Recovering agent connection…".into();
+            Ok(())
+        } else {
+            self.inner.recover(launch.core(), fresh, wake)
+        }
+    }
     /// Reply only to the current host-owned permission/question card.
     pub fn answer(&mut self, result: Value) -> Result<()> {
         if let Some(client) = &self.native {

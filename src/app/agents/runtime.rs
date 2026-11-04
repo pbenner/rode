@@ -143,14 +143,14 @@ impl Runtime {
             return;
         }
         ui.horizontal(|ui| {
-            if ui.add_enabled(enabled && !working && self.retired.len() < 4, egui::Button::new("Install Codex").small())
+            let install = ui.add_enabled(enabled && !working && self.retired.len() < 4, egui::Button::new("Install Codex").small())
                 .on_hover_text(format!("Install pinned Codex {} for your user. No root, Python or npm required.\nLocation: {}\n{}",
                     install::version(), install::directory().map(|p| p.display().to_string()).unwrap_or_else(|| "Set HOME or XDG_DATA_HOME".into()),
                     if remote.is_some() {"Downloads on this computer for the SSH host's architecture. Chat deploys it over the existing SSH connection."}
                     else {"Downloads only when you click. Existing user runtime files are verified and reused."}))
-                .on_disabled_hover_text("Use executable auto without RODE_CODEX_BUNDLE, and wait for the project/current turn before installing.")
-                .clicked()
-            {
+                .on_disabled_hover_text("Use executable auto without RODE_CODEX_BUNDLE, and wait for the project/current turn before installing.");
+            super::super::ui_probe::button(ui, "Install Codex", &install);
+            if install.clicked() {
                 let ctx = ui.ctx().clone();
                 match install::Job::start(remote.cloned(), Arc::new(move || ctx.request_repaint())) {
                     Ok(job) => {
@@ -162,7 +162,9 @@ impl Runtime {
             }
             if let Some(install::State::Working { .. }) = &state {
                 let cancelling = self.job.as_ref().is_some_and(install::Job::cancelling);
-                if ui.add_enabled(!cancelling, egui::Button::new(if cancelling {"Cancelling…"} else {"Cancel"}).small()).clicked()
+                let cancel = ui.add_enabled(!cancelling, egui::Button::new(if cancelling {"Cancelling…"} else {"Cancel"}).small());
+                super::super::ui_probe::button(ui, "Cancel Codex installation", &cancel);
+                if cancel.clicked()
                     && let Some(job) = &self.job {job.cancel();}
             } else if let Some(install::State::Finished(Ok(installed))) = &state {
                 ui.add(egui::Label::new(format!("Codex ready · {}", installed.architecture)).truncate())

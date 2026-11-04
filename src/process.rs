@@ -19,7 +19,7 @@ use crate::{files, project, sandbox, ssh};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufReader, Write},
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
@@ -406,7 +406,9 @@ fn run_session(
         readers.push(std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
             loop {
-                match read_line(&mut reader, if rpc { line_limit } else { 8192 }) {
+                let (limit, stream) = if rpc { (line_limit, "Process stdout JSON-RPC") }
+                    else { (rode_agent_core::STDERR_LINE_LIMIT, "Process stderr diagnostics") };
+                match rode_agent_core::io::read_line(&mut reader, limit, stream) {
                     Ok(Some(line)) => {
                         let event = if rpc {
                             if line.iter().all(u8::is_ascii_whitespace) { continue; }
@@ -440,28 +442,6 @@ fn run_session(
 /// Resolve path-like programs relative to the captured host root, otherwise search
 /// PATH and the host's local bin before leaving the bare command for spawn diagnostics.
 pub(crate) use rode_host_core::command::resolve_program;
-
-fn read_line(reader: &mut impl BufRead, limit: usize) -> Result<Option<Vec<u8>>> {
-    let mut result = Vec::new();
-    loop {
-        let data = reader.fill_buf()?;
-        if data.is_empty() {
-            return Ok((!result.is_empty()).then_some(result));
-        }
-        let len = data
-            .iter()
-            .position(|b| *b == b'\n')
-            .map_or(data.len(), |p| p + 1);
-        if result.len() + len > limit {
-            bail!("Process output line exceeds its size limit; session stopped.");
-        }
-        result.extend_from_slice(&data[..len]);
-        reader.consume(len);
-        if result.last() == Some(&b'\n') {
-            return Ok(Some(result));
-        }
-    }
-}
 
 #[cfg(test)]
 mod writer_tests {

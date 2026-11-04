@@ -249,13 +249,13 @@ impl Queue {
 
     /// Render pending prompts and capture pause/edit/remove/reorder commands;
     /// disabling the view keeps the queue visible without accepting mutations.
-    pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool, can_resume: bool) {
         let mut action = None;
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Queued ({})", self.prompts.len())).strong())
                     .on_hover_text("Pending prompts belong to this agent. With Persist on, the host continues the queue and retains its attachments after detaching or closing Rode. Pause, Stop, failures and permission requests still hold work.");
-                if ui.small_button(if self.paused { "Resume queue" } else { "Pause queue" })
+                if ui.add_enabled(!self.paused || can_resume, egui::Button::new(if self.paused { "Resume queue" } else { "Pause queue" }).small())
                     .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.")
                     .clicked() {
                     self.set_paused(!self.paused);

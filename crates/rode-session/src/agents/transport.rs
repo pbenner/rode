@@ -2,7 +2,7 @@
 //! owned process exits, including bubblewrap's --die-with-parent lifetime.
 use super::*;
 use std::{
-    io::{BufRead, BufReader},
+    io::BufReader,
     os::unix::process::CommandExt,
     process::{Command as ProcessCommand, Stdio},
     sync::atomic::{AtomicU32, AtomicUsize},
@@ -236,14 +236,11 @@ fn run(
         readers.push(std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
             loop {
-                let mut bytes = vec![];
-                let bound = if rpc { limit } else { 8192 };
-                match (&mut reader).take((bound + 1) as u64).read_until(b'\n', &mut bytes) {
-                    Ok(0) => break,
-                    Ok(_) if bytes.len() > bound => {
-                        emit(&output, &wake, rode_agent_core::Event::Error("Agent output line exceeds its size limit".into())); control.stop(); break;
-                    }
-                    Ok(_) => {
+                let (bound, stream) = if rpc { (limit, "Agent stdout JSON-RPC") }
+                    else { (rode_agent_core::STDERR_LINE_LIMIT, "Agent stderr diagnostics") };
+                match rode_agent_core::io::read_line(&mut reader, bound, stream) {
+                    Ok(None) => break,
+                    Ok(Some(bytes)) => {
                         let event = if rpc {
                             if bytes.iter().all(u8::is_ascii_whitespace) { continue; }
                             match serde_json::from_slice(&bytes) { Ok(value) => rode_agent_core::Event::Message(value), Err(_) => { emit(&output, &wake, rode_agent_core::Event::Error("Agent stdout is not JSON-RPC. Check the selected protocol and arguments.".into())); control.stop(); break; } }

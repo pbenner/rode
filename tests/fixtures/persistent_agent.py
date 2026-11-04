@@ -76,6 +76,16 @@ def work(message, number, prompt):
             return
     if cancelled.is_set():
         return
+    if prompt.startswith("overflow-") and not (root / "overflowed").exists():
+        snapshot("overflowed", prompt)
+        output = sys.stderr if prompt == "overflow-stderr" else sys.stdout
+        limit = 1024 * 1024 if output is sys.stderr else 4 * 1024 * 1024
+        output.write("x" * (limit + 1) + "\n")
+        output.flush()
+        return
+    if prompt == "long-stderr":
+        sys.stderr.write("d" * (1024 * 1024 - 1) + "\n")
+        sys.stderr.flush()
     snapshot("work-done", str(number))
     failed = number == 1 and (root / "fail-first").exists()
     text = f"background {'failed' if failed else 'complete'} {number}"
@@ -108,6 +118,9 @@ def work(message, number, prompt):
 
 for line in sys.stdin:
     message = json.loads(line)
+    if (root / "record-inputs").exists():
+        with (root / "backend-rpc.jsonl").open("a") as recorded:
+            recorded.write(json.dumps(message) + "\n")
     method = message.get("method", "")
     if message.get("id") == "approval-one" and "result" in message:
         result = message["result"]
@@ -120,13 +133,39 @@ for line in sys.stdin:
             snapshot("denied", "denied")
             cancelled.set()
     elif method == "initialize":
-        reply(message, dict(protocolVersion=1, agentCapabilities={}) if acp else {})
-    elif method == "model/list":
-        reply(message, dict(data=[], nextCursor=None))
-    elif method in ("thread/start", "session/new"):
         reply(
             message,
-            dict(sessionId="native-thread") if acp else dict(thread=dict(id="native-thread")),
+            dict(
+                protocolVersion=1,
+                agentCapabilities={"loadSession": not (root / "no-resume").exists()},
+            )
+            if acp
+            else {},
+        )
+    elif method == "model/list":
+        reply(message, dict(data=[], nextCursor=None))
+    elif method in ("thread/start", "session/new", "thread/resume", "session/load"):
+        if method == "session/load":
+            notify(
+                "session/update",
+                dict(
+                    sessionId="native-thread",
+                    update=dict(
+                        sessionUpdate="agent_message_chunk",
+                        content=dict(
+                            type="text", text="saved replay must not duplicate the local transcript"
+                        ),
+                    ),
+                ),
+            )
+        identity = (
+            "wrong-thread"
+            if method == "thread/resume" and (root / "no-resume").exists()
+            else "native-thread"
+        )
+        reply(
+            message,
+            dict(sessionId=identity) if acp else dict(thread=dict(id=identity)),
         )
     elif method in ("turn/start", "session/prompt"):
         if (root / "record-inputs").exists():

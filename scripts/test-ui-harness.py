@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Window readiness regressions; run under the UI tests' isolated X display."""
+"""Window/control readiness regressions; run under the UI tests' isolated X display."""
 
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from ui_harness import focus_window, wait_for_project, wait_for_window
+from ui_harness import (
+    click_button,
+    focus_window,
+    wait_for_button,
+    wait_for_project,
+    wait_for_window,
+)
 
 
 class WindowReadinessTests(unittest.TestCase):
@@ -106,6 +113,61 @@ class WindowReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "0x123.*IsUnMapped"):
                 focus_window(0x123)
             focus.assert_not_called()
+
+
+class ButtonReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.process = Mock(pid=42)
+        self.process.poll.return_value = None
+        self.state = {
+            "pid": 42,
+            "pass": 10,
+            "size": [800, 600],
+            "pixels_per_point": 1.5,
+            "buttons": [{"name": "Install Codex", "enabled": True, "rect": [10, 20, 110, 40]}],
+        }
+        self.read = patch("ui_harness.Path.read_text", return_value=json.dumps(self.state)).start()
+        patch("ui_harness.time.sleep").start()
+        patch("ui_harness.window_geometry", return_value=(100, 200, 1200, 900)).start()
+        self.addCleanup(patch.stopall)
+
+    def wait(self):
+        return wait_for_button(0x123, self.process, "startup.log", "widgets.json", "Install Codex")
+
+    def test_waits_for_current_process_and_enabled_visible_control(self):
+        self.read.side_effect = [
+            FileNotFoundError(),
+            json.dumps(dict(self.state, pid=41)),
+            json.dumps(dict(self.state, buttons=[])),
+            json.dumps(dict(self.state, buttons=[dict(self.state["buttons"][0], enabled=False)])),
+            json.dumps(
+                dict(self.state, buttons=[dict(self.state["buttons"][0], rect=[0, 0, 0, 0])])
+            ),
+            json.dumps(self.state),
+        ]
+        self.assertEqual(self.wait(), (190, 245))
+        self.assertEqual(self.read.call_count, 6)
+
+    def test_waits_for_resized_layout_before_resolving_scaled_coordinates(self):
+        self.read.side_effect = [
+            json.dumps(dict(self.state, size=[600, 400])),
+            json.dumps(self.state),
+        ]
+        self.assertEqual(self.wait(), (190, 245))
+        self.assertEqual(self.read.call_count, 2)
+
+    def test_click_uses_native_input_once_after_readiness(self):
+        with patch("ui_harness.focus_window") as focus, patch("ui_harness.click") as click:
+            click_button(0x123, self.process, "startup.log", "widgets.json", "Install Codex")
+            focus.assert_called_once_with(0x123)
+            click.assert_called_once_with(190, 245)
+
+    def test_timeout_identifies_disabled_control_and_log(self):
+        self.state["buttons"][0]["enabled"] = False
+        self.read.return_value = json.dumps(self.state)
+        with patch("ui_harness.time.monotonic", side_effect=[0, 0, 21]):
+            with self.assertRaisesRegex(AssertionError, "Install Codex.*False.*startup.log"):
+                self.wait()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod recovery;
 
 /// Presentation role for one bounded in-memory chat item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,14 +135,19 @@ pub struct Chat {
     file_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     file_jobs: super::file_only::Jobs,
     file_calls: usize,
+    recovery: Option<String>,
+    fresh_recovery: bool,
+    input_history: super::input_history::History,
 }
 
 impl Chat {
     /// Copy the bounded presentation state, never process handles or credentials.
     pub fn view(&self) -> crate::service::ChatView {
         crate::service::ChatView {
-            conversation: self.conversation.clone(),
+            conversation: self.conversation_id().unwrap_or_default().into(),
+            recoverable: self.recoverable(),
             messages: self.messages.clone(),
+            input_history: Some(self.input_history.texts().map(str::to_owned).collect()),
             prompts: self.prompts.clone(),
             status: self.status.clone(),
             busy: self.busy,
@@ -158,6 +164,18 @@ impl Chat {
     /// question drafts when another streamed update arrives for the same card.
     pub fn apply_view(&mut self, mut view: crate::service::ChatView) {
         super::personality::clean_history(&mut view.messages);
+        self.input_history = super::input_history::History::from_texts(
+            view.input_history
+                .take()
+                .unwrap_or_else(|| {
+                    view.messages
+                        .iter()
+                        .filter(|message| message.role == Role::User)
+                        .map(|message| message.text.clone())
+                        .collect()
+                })
+                .into_iter(),
+        );
         for prompt in &mut view.prompts {
             if let Some(old) = self.prompts.iter().find(|old| old.id == prompt.id) {
                 for question in &mut prompt.questions {
@@ -177,11 +195,18 @@ impl Chat {
         self.controls = view.controls;
         self.config = view.config;
         self.conversation = view.conversation;
+        self.recovery = view.recoverable.then(|| self.conversation.clone());
         self.changed = true;
     }
     /// Backend identity of the displayed conversation, absent before initialization.
     pub fn conversation_id(&self) -> Option<&str> {
-        (!self.conversation.is_empty()).then_some(self.conversation.as_str())
+        (!self.conversation.is_empty())
+            .then_some(self.conversation.as_str())
+            .or_else(|| self.recovery.as_deref().filter(|id| !id.is_empty()))
+    }
+    /// Recent accepted/replayed prompts, retained separately from displayed tool output.
+    pub fn input_history(&self) -> impl Iterator<Item = &str> {
+        self.input_history.texts()
     }
     /// Adopt an acknowledged history restore, replacing only this chat's process.
     /// Current project policy was captured before the backend resumed the thread.
@@ -200,6 +225,7 @@ impl Chat {
             .any(|arg| arg == "--share-net");
         self.conversation = restored.id;
         self.messages = restored.messages;
+        self.input_history = restored.input_history;
         self.controls = restored.controls;
         self.next_id = restored.next_id;
         self.session = Some(restored.session);
@@ -286,8 +312,11 @@ impl Chat {
             !self.busy && !self.file_jobs.pending(),
             "The agent is still working. Stop it or wait for its reply."
         );
+        ensure!(
+            !self.recoverable(),
+            "Recover the agent before sending another prompt."
+        );
         attachment::validate(&text, &attachments)?;
-        let bundled = launch.config.argv()?[0] == crate::AUTO_CODEX;
         let reset_defaults = (self.config.model() != launch.config.model()
             && launch.config.model().is_empty())
             || (self.config.reasoning_effort != launch.config.reasoning_effort
@@ -303,26 +332,11 @@ impl Chat {
         self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
         self.config = launch.config.clone();
         if self.session.is_none() {
-            self.file_factory = self.config.files_only().then(|| launch.factory.clone());
-            self.file_wake = self.config.files_only().then(|| wake.clone());
-            self.root = launch.plan.root.clone();
-            // A first SSH start may stream a large native runtime. Keep this
-            // bounded separately from the ordinary protocol handshake; Stop
-            // still cancels preparation through the owned process transport.
-            let preparing_remote_bundle = bundled && launch.remote;
-            self.session = Some(Session::start(launch, wake)?);
-            self.status = if preparing_remote_bundle {
-                "Preparing Codex on SSH host…"
-            } else {
-                "Starting agent…"
-            }
-            .into();
-            self.deadline = Some(
-                Instant::now()
-                    + Duration::from_secs(if preparing_remote_bundle { 420 } else { 60 }),
-            );
+            self.start_session(launch, wake)?;
         }
         self.serial += 1;
+        self.input_history
+            .remember(&format!("user-{}", self.serial), &text);
         self.push(
             format!("user-{}", self.serial),
             Role::User,
@@ -375,22 +389,10 @@ impl Chat {
                     Ok(())
                 }
                 Event::Exited(code) => {
-                    let working = self.busy;
-                    self.completed += u64::from(working);
-                    let detail = self.last_stderr.trim().to_owned();
-                    self.disconnect();
-                    self.status = "Disconnected".into();
-                    if working || code != Some(0) {
-                        self.notice(&format!(
-                            "Agent exited{}{}",
-                            code.map(|c| format!(" ({c})")).unwrap_or_default(),
-                            if detail.is_empty() {
-                                String::new()
-                            } else {
-                                format!(": {detail}")
-                            }
-                        ));
-                    }
+                    self.fail(&format!(
+                        "Agent exited{}",
+                        code.map(|c| format!(" ({c})")).unwrap_or_default()
+                    ));
                     Ok(())
                 }
             };
@@ -482,6 +484,8 @@ impl Chat {
         self.file_factory = None;
         self.file_wake = None;
         self.file_calls = 0;
+        self.recovery = None;
+        self.fresh_recovery = false;
     }
 
     fn initialize(&mut self) -> Result<()> {
@@ -655,6 +659,9 @@ impl Chat {
                 return self.request(method, id.clone(), params);
             }
             if self.config.provider == Provider::Acp {
+                // session/load may replay saved messages before its response.
+                // Recovery retains our transcript; only accept live updates once
+                // the returned conversation ID has been validated and adopted.
                 if method == "session/update"
                     && params["sessionId"].as_str() == Some(&self.conversation)
                 {
@@ -701,11 +708,23 @@ impl Chat {
                     self.image_support = result["agentCapabilities"]["promptCapabilities"]["image"]
                         .as_bool()
                         .unwrap_or(false);
-                    self.call(
-                        "session/new",
-                        json!({"cwd":self.root,"mcpServers":[]}),
-                        Call::Conversation,
-                    )?;
+                    if let Some(id) = self.resume_id().map(str::to_owned) {
+                        ensure!(
+                            result["agentCapabilities"]["loadSession"].as_bool() == Some(true),
+                            "This ACP agent cannot reconnect saved sessions. Use Start new context to recover while keeping queued prompts."
+                        );
+                        self.call(
+                            "session/load",
+                            json!({"sessionId":id,"cwd":self.root,"mcpServers":[]}),
+                            Call::Conversation,
+                        )?;
+                    } else {
+                        self.call(
+                            "session/new",
+                            json!({"cwd":self.root,"mcpServers":[]}),
+                            Call::Conversation,
+                        )?;
+                    }
                 } else {
                     self.send(json!({"jsonrpc":"2.0","method":"initialized","params":{}}))?;
                     if self.config.provider == Provider::Codex {
@@ -735,7 +754,7 @@ impl Chat {
                     if self.config.provider == Provider::Local {
                         params["modelProvider"] = "rode_local".into();
                     }
-                    self.call("thread/start", params, Call::Conversation)?;
+                    self.start_conversation(params)?;
                 }
             }
             Call::FilePolicy => {
@@ -747,18 +766,37 @@ impl Chat {
                 )?;
             }
             Call::Conversation => {
+                let expected = self.resume_id().map(str::to_owned);
                 let id = if self.config.provider == Provider::Acp {
-                    &result["sessionId"]
+                    result["sessionId"].as_str().or(expected.as_deref())
                 } else {
-                    &result["thread"]["id"]
-                };
-                self.conversation = id
-                    .as_str()
-                    .filter(|s| !s.is_empty() && s.len() <= 256)
-                    .context("Agent returned no conversation ID")?
-                    .into();
+                    result["thread"]["id"].as_str()
+                }
+                .filter(|id| !id.is_empty() && id.len() <= 256)
+                .context("Agent returned no conversation ID")?;
+                ensure!(
+                    expected.as_deref().is_none_or(|expected| expected == id),
+                    "Agent reconnected a different conversation; no prompt was sent"
+                );
+                self.conversation = id.into();
                 if self.config.provider == Provider::Acp {
                     self.controls = controls::acp(result);
+                }
+                if self.recovery.take().is_some() {
+                    if expected.is_none() {
+                        // New processes may reuse item IDs. Retained messages
+                        // must stay separate from output in the fresh context.
+                        for (index, message) in self.messages.iter_mut().enumerate() {
+                            message.id = format!("retained-{}-{index}", self.serial);
+                        }
+                    }
+                    self.response_style_context = expected.is_some();
+                    self.notice(if expected.is_some() {
+                        "Agent reconnected to the saved conversation. The interrupted prompt was not repeated. Queued prompts remain paused."
+                    } else {
+                        "Agent restarted with a new context. Earlier messages remain visible, but are not in the new agent context. Queued prompts are kept and remain paused."
+                    });
+                    self.fresh_recovery = false;
                 }
                 self.begin_turn()?;
             }
@@ -1212,10 +1250,12 @@ impl Chat {
         }
     }
     fn fail(&mut self, error: &str) {
+        let conversation = self.conversation_id().unwrap_or_default().to_owned();
         self.completed += u64::from(self.busy);
         let detail = self.last_stderr.trim().to_owned();
         self.disconnect();
-        self.status = "Disconnected".into();
+        self.recovery = Some(conversation);
+        self.status = "Disconnected · recovery available".into();
         self.notice(&clip(
             &format!(
                 "{error}{}",
@@ -1335,6 +1375,18 @@ fn append_bounded(target: &mut String, text: &str, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escaped_prompt_history_keeps_snapshots_within_the_desktop_line_limit() {
+        let mut chat = Chat::default();
+        let text = "\0".repeat(crate::PROMPT_LIMIT);
+        for n in 0..32 {
+            let id = format!("user-{n}");
+            chat.input_history.remember(&id, &text);
+            chat.push(id, Role::User, "You".into(), text.clone());
+        }
+        assert!(serde_json::to_vec(&chat.view()).unwrap().len() < crate::LINE_LIMIT);
+    }
 
     #[test]
     fn stopping_a_slow_file_tool_does_not_block_or_publish_a_late_result() {
