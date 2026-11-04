@@ -30,6 +30,21 @@ impl Tabs {
 /// Stable document identity carried through a tab drag-and-drop operation.
 struct TabDrag(u64);
 
+/// Reserve the complete banner frame before egui clips its background. Both
+/// ordinary and icon buttons must fit with the frame's top and bottom padding.
+pub(super) fn workspace_banner_panel(
+    ctx: &egui::Context,
+    palette: theme::Palette,
+) -> egui::TopBottomPanel {
+    let frame = theme::frame(palette.raised);
+    let style = ctx.style();
+    let row_height =
+        theme::control_height_for_style(ctx, &style).max(16. + 2. * style.spacing.button_padding.y);
+    egui::TopBottomPanel::top("workspace-banner")
+        .exact_height((row_height + frame.inner_margin.sum().y).max(38.))
+        .frame(frame)
+}
+
 impl EditorApp {
     /// Render a fixed-height footer, reserving the right edge for the appearance menu
     /// and document metadata before truncating connection/status text into the remainder.

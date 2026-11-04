@@ -4,6 +4,72 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn workspace_banners_paint_the_full_background_and_pad_themed_controls() {
+    for scale in [0.75, 1., 1.5] {
+        for file_mode in [false, true] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            ctx.set_zoom_factor(scale);
+            if file_mode {
+                app.new_file();
+                app.documents[0].path = Some("/tmp/standalone.rs".into());
+            } else {
+                app.workspace = Some(remote_workspace());
+            }
+            // Reuse panel state while changing themes, including the first
+            // frame after switching from a compact theme to larger controls.
+            for theme in ["phosphor", "studio", "studio-neutral", "phosphor"] {
+                app.select_theme(theme, &ctx);
+                let palette = app.themes.active().palette;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1380., 900.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.workspace_banner(ctx);
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::new().fill(palette.background))
+                            .show(ctx, |_| {});
+                    },
+                );
+                let (banner, clip) = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect) if rect.fill == palette.raised => {
+                            Some((rect.rect, shape.clip_rect))
+                        }
+                        _ => None,
+                    })
+                    .max_by(|(a, _), (b, _)| a.area().total_cmp(&b.area()))
+                    .expect("banner background");
+                assert!(
+                    clip.expand(0.5).contains_rect(banner),
+                    "Banner background clipped in {theme}, scale {scale}, file_mode={file_mode}: {banner:?} in {clip:?}"
+                );
+                for label in if file_mode {
+                    vec!["Open project…"]
+                } else {
+                    vec!["Disconnect", "Open project…"]
+                } {
+                    let (button, _) = layout::tests::button_frame(&output, label);
+                    assert!(
+                        button.top() >= banner.top() + 7.5
+                            && button.bottom() <= banner.bottom() - 7.5,
+                        "{label} lacks vertical padding in {theme}, scale {scale}: {button:?} in {banner:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     let file = tempfile::Builder::new()
         .prefix(".rode-startup-")

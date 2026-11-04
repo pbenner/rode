@@ -41,8 +41,16 @@ impl Palette {
 /// child. Reserving only the nominal interaction height makes later controls
 /// shift down when the first button grows to fit its font and padding.
 pub fn control_height(ui: &egui::Ui) -> f32 {
-    (ui.text_style_height(&egui::TextStyle::Button) + 2. * ui.spacing().button_padding.y)
-        .max(ui.spacing().interact_size.y)
+    control_height_for_style(ui.ctx(), ui.style())
+}
+
+/// Measure controls before creating a panel, so its initial clipping rectangle
+/// already fits the current theme rather than the previous panel's cached size.
+pub(crate) fn control_height_for_style(ctx: &egui::Context, style: &egui::Style) -> f32 {
+    let text_height =
+        ctx.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Button.resolve(style)));
+    (text_height + 2. * style.spacing.button_padding.y)
+        .max(style.spacing.interact_size.y)
         .ceil()
 }
 

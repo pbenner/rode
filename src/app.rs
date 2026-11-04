@@ -1616,10 +1616,7 @@ impl EditorApp {
                 self.last_window_title = title;
             }
             if file.is_some() {
-                egui::TopBottomPanel::top("workspace-banner")
-                    .exact_height(38.0)
-                    .frame(theme::frame(palette.raised))
-                    .show(ctx, |ui| {
+                chrome::workspace_banner_panel(ctx, palette).show(ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("LOCAL FILE").strong());
                             ui.separator();
@@ -1673,10 +1670,7 @@ impl EditorApp {
         if remote.is_none() && !plan.requested && !self.preparing {
             return;
         }
-        egui::TopBottomPanel::top("workspace-banner")
-            .exact_height(38.0)
-            .frame(theme::frame(palette.raised))
-            .show(ctx, |ui| {
+        chrome::workspace_banner_panel(ctx, palette).show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(host) = &remote {
                         let state = if connected {
