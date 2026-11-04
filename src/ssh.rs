@@ -261,6 +261,9 @@ impl Remote {
             "BatchMode=yes".into(),
             "-o".into(),
             "ProxyCommand=false".into(),
+            // Each multiplexed session must request forwarding separately. The
+            // master grants it only when its own ForwardAgent policy allows it.
+            "-A".into(),
             if tty { "-tt".into() } else { "-T".into() },
             "--".into(),
             self.profile.host.clone(),

@@ -9,7 +9,9 @@ Click **Connect SSH**. Every connection can configure:
 - An optional preinstalled remote helper path
 - A friendly name for a saved connection profile
 
-Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config; it is not enabled by the editor.
+Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's forwarding policy; forwarding remains off unless you enable it for that host.
+
+To use your desktop's SSH agent for Git operations on a remote host, enable `ForwardAgent yes` for that host in your desktop SSH config, then reconnect RODE and open a new terminal. The desktop process must have access to the agent when it connects. In a normal-mode remote terminal, `ssh-add -l` should list the forwarded identities, and the Git tab uses the same agent. Existing persistent terminals retain their original environment. This is separate from the project's sandbox setting.
 
 An existing alias works directly:
 
