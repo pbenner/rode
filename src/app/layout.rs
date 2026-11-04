@@ -4,30 +4,14 @@
 //! widths and themed surfaces. Callers retain scroll IDs, state and actions, so
 //! docking a page never changes its identity or starts background work.
 use crate::theme::Palette;
-use eframe::egui::{self, Align, Layout, RichText, Stroke};
+pub(super) use crate::theme::{card_frame, compact_control_height, control_height, dialog_frame};
+use eframe::egui::{self, Align, Layout, RichText};
 
 #[cfg(test)]
 pub(super) mod tests;
 
 /// Maximum outer width for lists and forms, including the page's inner margin.
 pub(super) const PAGE_WIDTH: f32 = 1000.;
-
-/// Measure the complete button height before allocating a row or a bounded
-/// child. Reserving only the nominal interaction height makes later controls
-/// shift down when the first button grows to fit its font and padding.
-pub(super) fn control_height(ui: &egui::Ui) -> f32 {
-    (ui.text_style_height(&egui::TextStyle::Button) + 2. * ui.spacing().button_padding.y)
-        .max(ui.spacing().interact_size.y)
-        .ceil()
-}
-
-/// Compact toolbar buttons omit vertical padding, but still share a complete
-/// text-height interaction target with the neighbouring icon controls.
-pub(super) fn compact_control_height(ui: &egui::Ui) -> f32 {
-    ui.text_style_height(&egui::TextStyle::Button)
-        .ceil()
-        .max(18.)
-}
 
 /// Center a bounded, left-aligned page. The parent decides whether its content
 /// scrolls; the available height is retained for pages with their own list scroller.
@@ -138,31 +122,6 @@ pub(super) fn field_label(ui: &mut egui::Ui, text: &str, stacked: bool) {
     }
 }
 
-/// The common bordered surface, also used by monitor cards. Width follows its
-/// column; callers may customize the frame for selected or destructive states.
-pub(super) fn card_frame(palette: Palette) -> egui::Frame {
-    let mut frame = egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(
-            1_f32,
-            if palette.chrome.is_decorated() {
-                palette.frame_accent.gamma_multiply(0.55)
-            } else {
-                palette.border
-            },
-        ))
-        .corner_radius(if palette.chrome.is_decorated() { 2 } else { 6 })
-        .inner_margin(12);
-    if let Some(style) = palette.ui {
-        frame = frame
-            .fill(palette.raised)
-            .stroke(Stroke::new(style.border_width, palette.border))
-            .corner_radius(style.surface_radius)
-            .inner_margin(style.surface_padding as i8);
-    }
-    frame
-}
-
 /// Fill the available column with a themed card; the caller owns inter-card spacing.
 pub(super) fn card<R>(
     ui: &mut egui::Ui,
@@ -221,27 +180,4 @@ pub(super) fn empty(ui: &mut egui::Ui, title: &str, description: &str, palette: 
         });
         ui.add_space(12.);
     });
-}
-
-/// Common modal surface; size and scrolling remain owned by each dialog.
-pub(super) fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame {
-    let mut frame = egui::Frame::popup(style)
-        .fill(palette.panel)
-        .stroke(Stroke::new(
-            1_f32,
-            if palette.chrome.is_decorated() {
-                palette.frame_accent.gamma_multiply(0.65)
-            } else {
-                palette.border
-            },
-        ))
-        .corner_radius(if palette.chrome.is_decorated() { 2 } else { 8 })
-        .inner_margin(16);
-    if let Some(style) = palette.ui {
-        frame = frame
-            .stroke(Stroke::new(style.border_width, palette.border))
-            .corner_radius(style.popup_radius)
-            .inner_margin(style.popup_padding as i8);
-    }
-    frame
 }

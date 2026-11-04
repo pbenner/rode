@@ -1,7 +1,7 @@
 //! Bounded, inheritable component styling, independent of color and frame decoration.
-use super::Palette;
+use super::{Chrome, Palette};
 use anyhow::{Result, ensure};
-use eframe::egui::{self, FontId, Stroke, TextStyle};
+use eframe::egui::{self, FontFamily, FontId, Stroke, TextStyle};
 use serde::Deserialize;
 
 /// Shared interface dimensions in logical points; editor and terminal fonts stay independent.
@@ -39,6 +39,8 @@ pub struct InterfaceStyle {
     pub disabled_alpha: f32,
 }
 
+/// Shared rounded-component defaults, selected by `"ui": {}` on any palette.
+/// Presets override individual tokens rather than copying this baseline.
 impl Default for InterfaceStyle {
     fn default() -> Self {
         Self {
@@ -189,4 +191,99 @@ impl InterfaceStyle {
         visuals.widgets.active.bg_stroke = Stroke::new(self.focus_width, palette.accent);
         visuals.widgets.open.bg_stroke = Stroke::new(self.border_width, palette.accent);
     }
+}
+
+/// Install palette colors, spacing and typography into the native egui context.
+pub fn install(ctx: &egui::Context, palette: Palette) {
+    let mut style = (*ctx.style()).clone();
+    // Reset all spacing and the secondary text role before applying a palette,
+    // so optional component styles cannot leak into a subsequent legacy theme.
+    style.spacing = Default::default();
+    style.text_styles.insert(
+        TextStyle::Small,
+        egui::Style::default().text_styles[&TextStyle::Small].clone(),
+    );
+    style.visuals = egui::Visuals::dark();
+    style.visuals.panel_fill = palette.background;
+    style.visuals.window_fill = palette.panel;
+    style.visuals.extreme_bg_color = palette.background;
+    style.visuals.faint_bg_color = palette.raised;
+    style.visuals.override_text_color = Some(palette.text);
+    style.visuals.weak_text_color = Some(palette.muted);
+    style.visuals.selection.bg_fill = palette.selection;
+    style.visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
+    style.visuals.widgets.noninteractive.bg_fill = palette.panel;
+    style.visuals.widgets.noninteractive.weak_bg_fill = palette.panel;
+    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text);
+    style.visuals.widgets.inactive.weak_bg_fill = palette.raised;
+    style.visuals.widgets.inactive.bg_fill = palette.raised;
+    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text);
+    style.visuals.widgets.hovered.weak_bg_fill = palette.hover;
+    style.visuals.widgets.hovered.bg_fill = palette.hover;
+    style.visuals.widgets.hovered.bg_stroke =
+        Stroke::new(1.0_f32, palette.accent.gamma_multiply(0.6));
+    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.text);
+    style.visuals.widgets.active.weak_bg_fill = palette.active;
+    style.visuals.widgets.active.bg_fill = palette.active;
+    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.text);
+    style.visuals.widgets.open.weak_bg_fill = palette.active;
+    style.visuals.widgets.open.bg_fill = palette.active;
+    style.visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.border);
+    style.visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, palette.text);
+    style.visuals.text_edit_bg_color = Some(palette.background);
+    style.visuals.hyperlink_color = palette.accent;
+    style.visuals.warn_fg_color = palette.accent;
+    style.visuals.error_fg_color = palette.error;
+    style.visuals.window_stroke = Stroke::new(1.0_f32, palette.border);
+    style.visuals.window_highlight_topmost = false;
+    if palette.chrome.is_decorated() {
+        let corner_radius = if palette.chrome == Chrome::Bracketed {
+            0
+        } else {
+            2
+        };
+        style.visuals.window_corner_radius = egui::CornerRadius::same(corner_radius);
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(corner_radius);
+        style.visuals.window_stroke =
+            Stroke::new(1.0_f32, palette.frame_accent.gamma_multiply(0.65));
+        style.visuals.window_shadow = egui::epaint::Shadow {
+            offset: [0, 0],
+            blur: 18,
+            spread: 2,
+            color: palette.frame_accent.gamma_multiply(0.12),
+        };
+        for widget in [
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
+            widget.corner_radius = egui::CornerRadius::same(corner_radius);
+            widget.expansion = 0.0;
+        }
+        style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+        style.visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.accent);
+    }
+    style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+    style.spacing.button_padding = egui::vec2(10.0, 6.0);
+    style.spacing.window_margin = egui::Margin::same(20);
+    style
+        .text_styles
+        .insert(TextStyle::Body, FontId::new(14.0, FontFamily::Proportional));
+    style.text_styles.insert(
+        TextStyle::Button,
+        FontId::new(13.0, FontFamily::Proportional),
+    );
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(14.0));
+    style
+        .text_styles
+        .insert(TextStyle::Heading, FontId::proportional(24.0));
+    if let Some(ui) = palette.ui {
+        ui.install(&mut style, palette);
+    }
+    ctx.set_style(style);
 }

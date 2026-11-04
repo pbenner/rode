@@ -160,6 +160,62 @@ fn studio_neutral_inherits_round_component_styling_without_lilac_accents() {
 }
 
 #[test]
+fn shared_component_defaults_work_with_different_colors_and_frame_treatments() {
+    use rode::theme::{InterfaceStyle, card_frame, dialog_frame};
+
+    let defaults = InterfaceStyle::default();
+    for base in ["carbon", "amber", "hologram", "telemetry"] {
+        let original = Theme::builtin(base).unwrap();
+        let custom = Theme::from_json(
+            "custom:rounded",
+            &format!(r#"{{"name":"Rounded variant","base":"{base}","ui":{{}}}}"#,),
+        )
+        .unwrap();
+        assert_eq!(custom.palette.ui, Some(defaults));
+        let mut expected = original.palette;
+        expected.ui = Some(defaults);
+        assert_eq!(
+            custom.palette, expected,
+            "Component styling changed the base colors or decoration"
+        );
+        let ctx = egui::Context::default();
+        rode::theme::install(&ctx, custom.palette);
+        let card = card_frame(custom.palette);
+        let dialog = dialog_frame(&ctx.style(), custom.palette);
+        assert_eq!(card.fill, original.palette.raised);
+        assert_eq!(
+            card.corner_radius,
+            egui::CornerRadius::same(defaults.surface_radius)
+        );
+        assert_eq!(dialog.fill, original.palette.panel);
+        assert_eq!(
+            dialog.corner_radius,
+            egui::CornerRadius::same(defaults.popup_radius)
+        );
+        assert_eq!(
+            dialog.inner_margin,
+            egui::Margin::same(defaults.popup_padding as i8)
+        );
+        assert_eq!(
+            ctx.style().visuals.widgets.inactive.corner_radius,
+            egui::CornerRadius::same(defaults.control_radius)
+        );
+    }
+}
+
+#[test]
+fn direct_theme_json_parsing_enforces_the_same_size_limit_as_file_loading() {
+    let mut json = String::from(r#"{"name":"Bounded variant","base":"studio-neutral"}"#);
+    json.extend(std::iter::repeat_n(' ', 64 * 1024 - json.len()));
+    assert!(Theme::from_json("custom:bounded", &json).is_ok());
+    json.push(' ');
+    let error = Theme::from_json("custom:bounded", &json)
+        .err()
+        .expect("Oversized JSON must fail");
+    assert!(error.to_string().contains("64 KiB"));
+}
+
+#[test]
 fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
     let studio = Theme::builtin("studio").unwrap();
     let original = studio.palette.ui.unwrap();

@@ -20,7 +20,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/app.rs`, `src/app/lifecycle.rs` | Documents, selected workspace, guarded actions and native window lifecycle |
 | `src/app/workers.rs`, `src/app/dialogs.rs`, `src/app/appearance.rs` | Captured file/decode jobs and result routing, guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
-| `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections, empty states and dialog frames |
+| `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
 | `src/app/navigation/` | Pane focus, validated shortcut presets, explorer keys and native source-editing modes |
 | `src/app/workbench.rs`, `src/app/workbench/` | Captured project preferences, Git, code tools, environments, monitoring and settings panels |
 | `crates/rode-host-protocol/src/files.rs`, `crates/rode-host-core/src/files.rs`, `src/files.rs` | Wire-only file results, shared revision-checked saves and desktop decode attachments |
@@ -66,6 +66,12 @@ Runtime command validation belongs to `rode_runtime_core::service::Spec::validat
 The choices below explain the current implementation. Module-level rustdoc records ownership and local constraints; the main service modules also include **Design decisions** sections beside the code they constrain. The sections below describe consequences as well as benefits; they are not a list of proposed features.
 
 Keep the desktop coordinator focused on application state and shared lifecycle guards. File/decode dispatch belongs in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules and retain their existing Rust module/test paths.
+
+### Theme composition
+
+`src/theme.rs` owns theme selection, startup loading and highlighting invalidation. `theme/palette.rs` defines interface/terminal color roles; `theme/definition.rs` parses each JSON definition once per resolution and resolves built-in inheritance by ID, with cycle detection independent of menu order. `theme/interface.rs` validates component tokens and installs shared egui styling. `theme/components.rs` supplies control metrics, secondary labels, primary actions and card/dialog/panel frames; the app’s layout helpers reuse them. `theme/surfaces.rs` draws optional native decoration, while `theme/syntax.rs` handles independently selected code palettes and cached highlighting.
+
+A preset is data, not a separate renderer. Variants inherit a base and override the relevant roles: Carbon Edge adds decoration to Carbon; Studio opts into shared rounded-component defaults with `"ui": {}`; Studio Neutral changes its colors while inheriting the same components. Keep the default tokens in `InterfaceStyle::default` and avoid duplicating them in presets. UI, syntax, terminal colors and frame treatment remain independently composable, and views must not branch on preset IDs.
 
 ### Native UI and work on demand
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Native interface scaling at 1x/2x DPI, independent text size and safe restart."""
+"""Native interface scaling at 1x/2x DPI, independent text size and safe restart.
+
+Run with xvfb-run -a -s "-screen 0 3200x2200x24". The 2x case uses fixed
+menu targets and needs room for the doubled window without popup repositioning.
+"""
 
 import json
 import os

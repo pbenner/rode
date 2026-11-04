@@ -42,7 +42,7 @@ Colors must be opaque `#RRGGBB` strings. Invalid colors, unknown keys, invalid b
 
 ## Component styling
 
-The optional `ui` object defines shared dimensions and typography for controls, cards, dialogs and tabs. Studio supplies a complete example; Studio Neutral inherits those settings without duplicating them. Fields are optional: omitted fields inherit the base theme's settings. Adding `ui` to a base without component settings starts from the Studio component defaults. Colors and `chrome` remain independent of these settings.
+The optional `ui` object defines shared dimensions and typography for controls, cards, dialogs and tabs. An empty `"ui": {}` opts into the shared rounded-component defaults, as Studio does; Studio Neutral inherits those settings from Studio. Fields are optional: omitted fields inherit the base theme's settings. Adding `ui` to a base without component settings starts from the shared defaults in [`InterfaceStyle`](../src/theme/interface.rs). These defaults apply to any color palette or frame treatment. Colors and `chrome` remain independent of these settings.
 
 For example, keep Studio's colors and typography with tighter spacing:
 
@@ -119,6 +119,14 @@ The optional `terminal.minimum_contrast` is a number from **1** to **21**, inher
 
 ## Built-in definitions
 
-[carbon.json](carbon.json), [carbon-edge.json](carbon-edge.json), [code-dark.json](code-dark.json), [matrix.json](matrix.json), [amber.json](amber.json), [ice.json](ice.json), [neon.json](neon.json), [afterglow.json](afterglow.json), [knight-rider.json](knight-rider.json), [hologram.json](hologram.json), [telemetry.json](telemetry.json), [studio.json](studio.json), and [studio-neutral.json](studio-neutral.json) define the palettes embedded in the binary. Studio Neutral derives its component settings from Studio. Phosphor remains defined in Rust. Editing a source palette requires rebuilding. To customize without rebuilding, create a user theme with, for example, `"base": "matrix"` in the configuration directory.
+[carbon.json](carbon.json), [carbon-edge.json](carbon-edge.json), [code-dark.json](code-dark.json), [matrix.json](matrix.json), [amber.json](amber.json), [ice.json](ice.json), [neon.json](neon.json), [afterglow.json](afterglow.json), [knight-rider.json](knight-rider.json), [hologram.json](hologram.json), [telemetry.json](telemetry.json), [studio.json](studio.json), and [studio-neutral.json](studio-neutral.json) define the palettes embedded in the binary. Carbon Edge inherits Carbon’s color, syntax and terminal palette and adds its frame treatment. Studio opts into shared component defaults; Studio Neutral inherits them from Studio. Built-in bases resolve by ID independently of menu order; unknown bases and inheritance cycles are errors. Phosphor remains defined in Rust. Editing a source palette requires rebuilding. To customize without rebuilding, create a user theme with, for example, `"base": "matrix"` in the configuration directory.
 
 Themes are local data. Loading or switching one never executes theme code, fetches resources, reconnects SSH, or restarts a terminal. Theme switches invalidate cached highlighting so already-open documents immediately use the new palette.
+
+## Extending the built-in collection
+
+Add a JSON definition and register its stable ID in [`src/theme/definition.rs`](../src/theme/definition.rs). Use `base` to share a palette or component style, and include only the differences. Catalog order controls the theme menu; it does not constrain inheritance. Custom files may inherit built-ins, including variants, but do not load other custom files.
+
+All presets use the same component builders and egui installer. `colors`, `ui`, `chrome`, `syntax` and `ansi` are independent roles; views must use those roles rather than branch on a preset ID. Run `cargo test --locked -p rode --profile ci --lib --test themes` when adding a variant to check inheritance, parsing, theme switching, contrast and rendered layout.
+
+For native checks, run `scripts/test-ui.py` with the UI harness dependencies described in [development](../docs/development.md). Run the 1×/2× DPI suite with `xvfb-run -a -s "-screen 0 3200x2200x24" python3 scripts/test-scale-ui.py`; its fixed menu targets assume the doubled window fits on the virtual display.

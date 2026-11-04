@@ -1,5 +1,5 @@
 //! Independent syntax palettes and a cached native renderer.
-use super::{parse_color, syntax_color};
+use super::parse_color;
 use anyhow::{Context, Result, bail, ensure};
 use eframe::egui::{
     self, Color32, FontId, Stroke,
@@ -316,4 +316,14 @@ pub(super) fn highlight(
                 },
             ))
     })
+}
+
+/// Convert an interface token to an opaque syntax foreground.
+pub(super) fn syntax_color(color: Color32) -> syntect::highlighting::Color {
+    syntect::highlighting::Color {
+        r: color.r(),
+        g: color.g(),
+        b: color.b(),
+        a: 255,
+    }
 }
