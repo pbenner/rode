@@ -2298,6 +2298,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rode-bwrap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "rode-host-core"
 version = "0.1.0"
 dependencies = [
@@ -2305,6 +2314,7 @@ dependencies = [
  "base64 0.22.1",
  "libc",
  "portable-pty",
+ "rode-bwrap",
  "rode-host-protocol",
  "rode-runtime-core",
  "serde",

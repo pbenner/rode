@@ -3272,6 +3272,79 @@ fn native_generic_operations_need_no_remote_python() {
             "Python must be absent from the fixture PATH"
         );
         let base = tempfile::tempdir().unwrap();
+        if std::env::var("RODE_SSH_TEST_NO_BWRAP").as_deref() == Ok("1") {
+            assert!(
+                Command::new("ssh")
+                    .args(remote.channel_args(false))
+                    .arg("if command -v bwrap >/dev/null 2>&1; then exit 99; fi")
+                    .status()
+                    .unwrap()
+                    .success(),
+                "bwrap must be absent from the remote fixture PATH"
+            );
+            let root = base.path().join("bundled-bwrap");
+            std::fs::create_dir(&root).unwrap();
+            let plan = remote
+                .request(&Request::Prepare {
+                    path: root.to_string_lossy().into(),
+                    sandbox: rode::sandbox::Options {
+                        enabled: true,
+                        ..Default::default()
+                    },
+                })
+                .unwrap()
+                .project
+                .unwrap();
+            assert!(
+                plan.reason.contains("bundled bubblewrap"),
+                "{}",
+                plan.reason
+            );
+            if std::env::var("RODE_TEST_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+                assert!(
+                    plan.active,
+                    "Required remote bundled sandbox unavailable: {}",
+                    plan.reason
+                );
+            }
+            if plan.active {
+                assert_eq!(plan.prefix[1], "--bwrap-launch");
+                let path = root
+                    .join("remote-bundled.txt")
+                    .to_string_lossy()
+                    .into_owned();
+                let saved = remote
+                    .request_in(
+                        &Request::Write {
+                            path: path.clone(),
+                            text: "bundled over SSH".into(),
+                            expected: None,
+                        },
+                        Some(&plan),
+                    )
+                    .unwrap();
+                let read = remote
+                    .request_in(&Request::Read { path }, Some(&plan))
+                    .unwrap();
+                assert_eq!(read.text, "bundled over SSH");
+                assert_eq!(read.revision, saved.revision);
+                let secret = base.path().join("private");
+                std::fs::write(&secret, "private").unwrap();
+                assert!(
+                    remote
+                        .request_in(
+                            &Request::Read {
+                                path: secret.to_string_lossy().into()
+                            },
+                            Some(&plan)
+                        )
+                        .is_err()
+                );
+            } else {
+                assert!(plan.prefix.is_empty());
+                eprintln!("Remote bundled bubblewrap unavailable: {}", plan.reason);
+            }
+        }
         for sandboxed in [false, true] {
             let root = base
                 .path()

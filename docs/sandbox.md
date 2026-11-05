@@ -10,6 +10,8 @@ Enable **Sandbox project when available** and choose **bwrap** or **Landlock** i
 
 RODE probes the selected backend on the project host, using the complete policy and a harmless `/bin/true` command. This checks more than whether an executable exists: kernels or administrator policies may prohibit user namespaces or Landlock. The probe and project I/O run off the UI thread. RODE never switches backends automatically.
 
+For **bwrap**, RODE prefers the executable on the project host's `PATH`. If none is available, it uses pinned bubblewrap bundled in the native RODE helper, locally or over SSH. No runtime download, package installation or Codex installation is needed. The same policy and availability probe apply. A failed system `bwrap` is not retried with the bundled copy, and the bundled copy cannot bypass restrictions on user namespaces or AppArmor. When it is selected, the status message identifies bundled bubblewrap. Update the native helper together with the editor; older installed helpers without the `bundled_bwrap` capability are not used for new connections.
+
 The persistent workspace banner reports the actual result:
 
 - **SANDBOX · bwrap**: the probe succeeded; editor file operations and project commands use that plan.

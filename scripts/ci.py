@@ -80,6 +80,7 @@ SUITES = {
             {
                 "RODE_SSH_TEST_FILTER": "native_generic_operations",
                 "RODE_SSH_TEST_NO_PYTHON": "1",
+                "RODE_SSH_TEST_NO_BWRAP": "1",
             },
             180,
         ),

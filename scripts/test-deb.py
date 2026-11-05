@@ -164,6 +164,13 @@ def main():
         helper = extracted / "usr/bin/rode-sessiond"
         help_text = subprocess.check_output([str(binary), "--help"], text=True)
         assert "native Rust editor" in help_text
+        for program in (binary, helper):
+            version = subprocess.check_output(
+                [str(program), "--bwrap-launch", "--version"],
+                text=True,
+                env=dict(os.environ, PATH=""),
+            )
+            assert "bubblewrap 0.13.1 (bundled with RODE)" in version, version
         codex_environment = dict(os.environ)
         codex_environment.pop("RODE_CODEX_BUNDLE", None)
         codex_home = root / "codex-home"
@@ -185,6 +192,14 @@ def main():
         with gzip.open(extracted / "usr/share/doc/rode/THIRD-PARTY-NOTICES.gz", "rt") as notices:
             text = notices.read()
             assert "serde " in text and "MIT" in text and "--syntax-licenses" in text
+            for notice in [
+                "Bubblewrap 0.13.1",
+                "libcap 2.78",
+                "GNU LESSER GENERAL PUBLIC LICENSE",
+                "BSD 3-clause",
+                "Copyright (C) 2016 Alexander Larsson",
+            ]:
+                assert notice in text, f"Missing bundled sandbox notice: {notice}"
             for notice in [
                 "fonts/Hack-Regular.txt",
                 "fonts/OFL.txt",

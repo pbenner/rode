@@ -28,7 +28,7 @@ static HELPER_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Backend {
-    /// Mount/PID/network namespace isolation through installed bubblewrap.
+    /// Mount/PID/network namespace isolation through system or bundled bubblewrap.
     #[default]
     Bwrap,
     /// Unprivileged Linux access control through a native Rust launcher.
@@ -315,21 +315,18 @@ pub fn prepare_with_helper(root: &str, options: &Options, executable: &Path) -> 
     {
         let home = crate::files::expand_home("~");
         validate_project_root(&root, &home)?;
-        let binary = match options.backend {
-            Backend::Landlock => executable.clone(),
-            Backend::Bwrap => {
-                match find_program("bwrap") {
-                    Some(binary) => binary,
-                    None => {
-                        plan.reason = "bwrap is not installed on this host; this project is open in normal mode.".into();
-                        return Ok(plan);
-                    }
-                }
-            }
+        let (binary, bundled) = match options.backend {
+            Backend::Landlock => (executable.clone(), false),
+            Backend::Bwrap => match find_program("bwrap") {
+                Some(binary) => (binary, false),
+                None => (executable.clone(), true),
+            },
         };
         plan.prefix = arguments(&binary, &root, &home, options)?;
         if options.backend == Backend::Landlock {
             plan.prefix.insert(1, "--landlock-launch".into());
+        } else if bundled {
+            plan.prefix.insert(1, "--bwrap-launch".into());
         }
         let path = executable.to_string_lossy().into_owned();
         let at = plan.prefix.len() - 1;
@@ -342,14 +339,22 @@ pub fn prepare_with_helper(root: &str, options: &Options, executable: &Path) -> 
                 plan.active = true;
                 if options.backend == Backend::Landlock {
                     plan.reason = crate::landlock::compatibility_notice()?;
+                } else if bundled {
+                    plan.reason =
+                        "Using bundled bubblewrap; no system bwrap was found on this host.".into();
                 }
             }
             Err(error) => {
                 plan.prefix.clear();
                 let detail: String = format!("{error:#}").chars().take(2048).collect();
                 plan.reason = format!(
-                    "{} cannot start on this host; normal mode: {detail}",
-                    options.backend.label()
+                    "{} cannot start on this host; normal mode: {detail}{}",
+                    options.backend.label(),
+                    if bundled {
+                        " (bundled bubblewrap; system bwrap was not found)"
+                    } else {
+                        ""
+                    }
                 );
             }
         }

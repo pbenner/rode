@@ -26,7 +26,7 @@ This produces downloadable workflow artifacts. Installing packages or publishing
 Install Rust 1.88+ with rustup and the native [build prerequisites](getting-started.md). Debian packaging additionally uses `dpkg-dev`, binutils, and Python 3. Desktop validation is provided by `desktop-file-utils`:
 
 ```sh
-sudo apt install build-essential pkg-config dpkg-dev binutils python3 \
+sudo apt install build-essential pkg-config musl-tools dpkg-dev binutils python3 \
   libxkbcommon-dev libwayland-dev libgl1-mesa-dev desktop-file-utils
 scripts/build-deb.sh
 ```

@@ -26,6 +26,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `crates/rode-host-protocol/src/files.rs`, `crates/rode-host-core/src/files.rs`, `src/files.rs` | Wire-only file results, shared revision-checked saves and desktop decode attachments |
 | `src/host/`, `crates/rode-session/src/host.rs` | Verified native deployment, connection-owned RPC, captured contexts and scoped workers |
 | `crates/rode-host-core/src/` | Shared project/Git/tools, sandbox launchers, process supervision, runtime cache and compute launch |
+| `crates/rode-bwrap/` | Pinned bubblewrap/libcap sources, Cargo C builds and isolated native fallback entry point; no runtime installation |
 | `src/ssh.rs`, `src/sandbox.rs`, `crates/rode-host-core/src/landlock.rs` | Authenticated transport identity, actual host-policy preparation and sandbox execution |
 | `src/persistence.rs` | Locked preference deltas, atomic configuration writes and private framework snapshots |
 | `src/project.rs`, `src/languages.rs`, `crates/rode-host-core/src/project.rs` | Installed tools, embedded language catalogue, normalized diagnostics and host counters |

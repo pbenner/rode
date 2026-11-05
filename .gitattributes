@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.pdf binary
+# Keep pinned upstream snapshots byte-for-byte; vendor.json checks their contents.
+crates/rode-bwrap/vendor/** -whitespace

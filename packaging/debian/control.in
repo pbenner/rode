@@ -13,4 +13,4 @@ Description: native Rust editor for local projects and SSH workspaces
  RODE provides a file explorer, themed editor, read-only document previews,
  persistent terminals, source control, language tools and project agent chat.
  Its native terminal service supports reattachment on local and remote hosts.
- Optional project sandboxing uses bubblewrap when available.
+ Optional project sandboxing uses system or bundled bubblewrap, or Landlock.

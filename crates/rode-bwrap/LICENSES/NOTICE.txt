@@ -1,0 +1,295 @@
+Vendored code bundled with RODE
+
+Bubblewrap 0.13.1: LGPL-2.0-or-later (distributed under LGPL-2.1-or-later).
+libcap 2.78: BSD-3-Clause option selected.
+
+Original source-header notices follow.
+
+vendor/bubblewrap/bind-mount.c
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/bubblewrap/bind-mount.h
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/bubblewrap/bubblewrap.c
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/bubblewrap/chroot_realpath.c
+/*
+ * chroot_realpath.c -- resolve pathname as if inside chroot
+ * Based on realpath.c Copyright (C) 1993 Rick Sladkey <jrs@world.std.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; see the file COPYING.LIB.  If not,
+ * write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 02111-1307, USA.
+ *
+ * 2005/09/12: Dan Howell (modified from realpath.c to emulate chroot)
+ * 2019/04/19: Giuseppe Scrivano (on ENOENT return the part that could be resolved)
+ * 2019/09/30: Giuseppe Scrivano (follow symlinks for the last component)
+ * 2020/02/02: Giuseppe Scrivano (don't lose terminal '/' if an absolute symlink is found)
+ */
+
+vendor/bubblewrap/network.c
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/bubblewrap/network.h
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/bubblewrap/safe_openat.c
+/*
+ * This code was copied from:
+ *
+ * crun - OCI runtime written in C
+ *
+ * Copyright (C) 2017, 2018, 2019 Giuseppe Scrivano <giuseppe@scrivano.org>
+ * crun is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
+ * (at your option) any later version.
+ *
+ * crun is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with crun.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+vendor/bubblewrap/utils.c
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/bubblewrap/utils.h
+/* bubblewrap
+ * Copyright (C) 2016 Alexander Larsson
+ * SPDX-License-Identifier: LGPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+vendor/libcap/libcap/_makenames.c
+/*
+ * Copyright (c) 1997-8,2020 Andrew G. Morgan <morgan@kernel.org>
+ *
+ * This is a file to make the capability <-> string mappings for
+ * libcap.
+ */
+
+vendor/libcap/libcap/cap_alloc.c
+/*
+ * Copyright (c) 1997-8,2019,2021 Andrew G Morgan <morgan@kernel.org>
+ *
+ * This file deals with allocation and deallocation of internal
+ * capability sets as specified by POSIX.1e (formerlly, POSIX 6).
+ */
+
+vendor/libcap/libcap/cap_extint.c
+/*
+ * Copyright (c) 1997-8,2021 Andrew G. Morgan <morgan@kernel.org>
+ *
+ * This file deals with exchanging internal and external
+ * representations of capability sets.
+ */
+
+vendor/libcap/libcap/cap_file.c
+/*
+ * Copyright (c) 1997,2007,2016 Andrew G Morgan <morgan@kernel.org>
+ *
+ * This file deals with getting/setting capabilities from/on files.
+ */
+
+vendor/libcap/libcap/cap_flag.c
+/*
+ * Copyright (c) 1997-8,2008,20-21 Andrew G. Morgan <morgan@kernel.org>
+ *
+ * This file deals with flipping of capabilities on internal
+ * capability sets as specified by POSIX.1e (formerlly, POSIX 6).
+ *
+ * It also contains similar code for bit flipping cap_iab_t values.
+ */
+
+vendor/libcap/libcap/cap_names.h
+/*
+ * DO NOT EDIT: this file is generated automatically from
+ *
+ *     <uapi/linux/capability.h>
+ */
+
+vendor/libcap/libcap/cap_proc.c
+/*
+ * Copyright (c) 1997-8,2007,11,19-21 Andrew G Morgan <morgan@kernel.org>
+ *
+ * This file deals with getting and setting capabilities on processes.
+ */
+
+vendor/libcap/libcap/cap_text.c
+/*
+ * Copyright (c) 1997-8,2007-8,2019,2021 Andrew G Morgan <morgan@kernel.org>
+ * Copyright (c) 1997 Andrew Main <zefram@dcs.warwick.ac.uk>
+ *
+ * This file deals with exchanging internal and textual
+ * representations of capability sets.
+ */
+
+vendor/libcap/libcap/include/sys/capability.h
+/*
+ * <sys/capability.h>
+ *
+ * Copyright (C) 1997   Aleph One
+ * Copyright (C) 1997,8, 2008,19-22 Andrew G. Morgan <morgan@kernel.org>
+ *
+ * defunct POSIX.1e Standard: 25.2 Capabilities           <sys/capability.h>
+ */
+
+vendor/libcap/libcap/include/sys/securebits.h
+/*
+ * <sys/securebits.h>
+ * Copyright (C) 2010	Serge Hallyn <serue@us.ibm.com>
+ */
+
+vendor/libcap/libcap/include/uapi/linux/capability.h
+/*
+ * This is <linux/capability.h>
+ *
+ * Andrew G. Morgan <morgan@kernel.org>
+ * Alexander Kjeldaas <astor@guardian.no>
+ * with help from Aleph1, Roland Buresund and Andrew Main.
+ *
+ * See here for the libcap library ("POSIX draft" compliance):
+ *
+ * https://git.kernel.org/pub/scm/libs/libcap/libcap.git/refs/
+ * http://www.kernel.org/pub/linux/libs/security/linux-privs/
+ */
+
+vendor/libcap/libcap/libcap.h
+/*
+ * Copyright (c) 1997,2020 Andrew G Morgan <morgan@kernel.org>
+ *
+ * This file contains internal definitions for the various functions in
+ * this small capability library.
+ */

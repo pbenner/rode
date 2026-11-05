@@ -1,0 +1,49 @@
+{
+  "bubblewrap": {
+    "version": "0.13.1",
+    "url": "https://github.com/containers/bubblewrap/releases/download/v0.13.1/bubblewrap-0.13.1.tar.xz",
+    "sha256": "0e85c8702248b8dd64144f594147553650cdd0e4c951690345faace79c217c4d"
+  },
+  "libcap": {
+    "version": "2.78",
+    "url": "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-2.78.tar.xz",
+    "sha256": "0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11"
+  },
+  "files": {
+    "vendor/bubblewrap/COPYING": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "vendor/bubblewrap/COPYING.LIB": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "vendor/bubblewrap/LICENSE": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "vendor/bubblewrap/README.md": "0c1dc12c6d94017c45e220fc0e5b679f24c0f09494bdd4bc7157d8abcd75c001",
+    "vendor/bubblewrap/SECURITY.md": "7a9ad6fa2d449cecc21bf340800efa3c0f4052af230fb06c73b260ddcc370c1c",
+    "vendor/bubblewrap/bind-mount.c": "13a01b3d13ee14ed305c6b09debd3784b52c8470a2ecbb4a9e3568792eb9cde6",
+    "vendor/bubblewrap/bind-mount.h": "a1d649dab3c0282c1edcda9579bf45d5a82e0336f88b2c21095812e3ce219ecd",
+    "vendor/bubblewrap/bubblewrap.c": "de141c805cb88f8faff9af1b3bb49098191fc67833b51b51fea84510ea4426ce",
+    "vendor/bubblewrap/chroot_realpath.c": "71c0f7fe88bada2393b63508a8a81c9d7942266468db7edb650a0d3076fd92b6",
+    "vendor/bubblewrap/meson.build": "8d2908bb467ece0298ae518c83345f145ff922e286ec5ba2808b152734863da8",
+    "vendor/bubblewrap/meson_options.txt": "5dc0ed9c86ea3189968845009a809990537c718af63c7f26d518abee1b3bc2de",
+    "vendor/bubblewrap/network.c": "1cfe04fcc38d33d5197feb96fc503d3fd51d234fb9392699a00bf4780ed6e9f0",
+    "vendor/bubblewrap/network.h": "10a8c88c647de85f4c60574355f9d530c06d568afbeb096611f4c8e85b9a5598",
+    "vendor/bubblewrap/safe_openat.c": "6b4f071ffdff189c71045a8b875d8e56a57b8811325f13d3482b7ca2b28464aa",
+    "vendor/bubblewrap/utils.c": "467867ed425a360c87e44af51a3673cc9ea3fee5f22c9df097ec7006c07d8b8d",
+    "vendor/bubblewrap/utils.h": "219723069d429a5fa17766a86e6cfa5ab1e95279fdef8b180e3d88cd1fad5011",
+    "vendor/libcap/License": "68467e731f4744bd6e0bb69e8df9c3a994e09cd6b203d0c41327ac6d079c581d",
+    "vendor/libcap/Make.Rules": "5184789edaebe543b1ef7bb4b57bbcaee880e531194bca7ceb10b33a9e42a375",
+    "vendor/libcap/README": "e836b0ea7670d2eb8ae0262f7139f33485c0a6ab24de95d0690669073ab9e339",
+    "vendor/libcap/libcap/Makefile": "c4a2014e42b136ee59bc39c7c04c6e4da94fe5aca37635e6f8d43561ec696502",
+    "vendor/libcap/libcap/_makenames.c": "0cc6b26f31044fa563775b146b69f4bef4e4ddfd764bdc2017ed3495e814cf8f",
+    "vendor/libcap/libcap/cap_alloc.c": "1d2550f778368f6c65d5b26337e5bea79a60fd4ac6d85fb6262cf452e0909ec6",
+    "vendor/libcap/libcap/cap_extint.c": "c10519146584a3310b4300094a6cc8e25b59c837e9f27c921b9e084b8fd96b46",
+    "vendor/libcap/libcap/cap_file.c": "a1d873a8796b864358d32fd4b9faff3d456aeb0341c51397e310c317b63df0de",
+    "vendor/libcap/libcap/cap_flag.c": "da7665cd4125a17b27287057ff545622ed0c05e85ced500864a03d5ce9a754f7",
+    "vendor/libcap/libcap/cap_names.h": "79dc8364f4268ac14aa2be9373d95024068515d23380a59b62d9f9d37b4eb18d",
+    "vendor/libcap/libcap/cap_proc.c": "0213a0ca2a6202a72f7573c70f19285d79b816444041ae8d38501f7b21cdf818",
+    "vendor/libcap/libcap/cap_syscalls.c": "7f00d871712c41e3f59cff2c482c2f7987e05ecc7c3431ed5592e564f469551a",
+    "vendor/libcap/libcap/cap_text.c": "f56250c1d9617d362f3aefb7e76864b94cb5d57a48a1db9db3ab5a021254f880",
+    "vendor/libcap/libcap/include/sys/capability.h": "21b635d9cd90e4f9c6da3d73a897a9f71f64f4d43a0ea1bf911e3262bd989e24",
+    "vendor/libcap/libcap/include/sys/securebits.h": "40e409a518862d079f076356a07278a767c822488d859106799fea24c395605b",
+    "vendor/libcap/libcap/include/uapi/linux/capability.h": "c4517ca548a3af619b7bc04894710efade4bf8bdd80631a482ac79f5b6732371",
+    "vendor/libcap/libcap/include/uapi/linux/securebits.h": "7a9b87160263b70642fd650634996f4493c55ee5c37d63895fe93e9d729a70fd",
+    "vendor/libcap/libcap/libcap.h": "e162370b5cd82853daed0fe42ea9d7e14f6d6258c26bcfaeea8e87de88008b7a",
+    "vendor/libcap/libcap/cap_names.list.h": "bff17ee5de16691d0db3bf11715778ef94417033696afa2b456e1e92bdcfcbe9"
+  }
+}

@@ -12,8 +12,17 @@ use rode::{
 use std::{fs, io::Write, path::Path, process::Stdio};
 
 fn headless(request: &Request, path: Option<&Path>) -> anyhow::Result<Response> {
-    let mut command = native_peer::command();
+    headless_using(request, path, native_peer::binary())
+}
+
+fn headless_using(
+    request: &Request,
+    path: Option<&Path>,
+    binary: &str,
+) -> anyhow::Result<Response> {
+    let mut command = std::process::Command::new(binary);
     command
+        .arg("--file-helper")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -121,21 +130,92 @@ fn resolver_symlink_target_is_shared_on_both_backends_without_sharing_run_or_var
 }
 
 #[test]
-fn missing_and_unusable_bwrap_allow_normal_remote_project_work() {
+fn missing_bwrap_uses_the_bundled_launcher_and_unusable_system_bwrap_is_not_retried() {
+    let mut programs = vec![native_peer::binary().to_owned()];
+    if let Ok(binary) = std::env::var("RODE_TEST_SESSION_HELPER")
+        && !programs.contains(&binary)
+    {
+        programs.push(binary);
+    }
+    for program in programs {
+        check_bwrap_fallback(&program);
+    }
+}
+
+fn check_bwrap_fallback(native_binary: &str) {
     let project = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();
+    let endpoint = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let request = Request::Prepare {
         path: project.path().to_str().unwrap().into(),
         sandbox: Options {
             enabled: true,
+            share_network: false,
             ..Default::default()
         },
     };
-    let response = headless(&request, Some(tools.path())).unwrap();
+    let response = headless_using(&request, Some(tools.path()), native_binary).unwrap();
     let plan = response.project.unwrap();
-    assert!(plan.requested && !plan.active);
-    assert!(plan.reason.contains("not installed"));
-    assert!(plan.prefix.is_empty());
+    assert!(plan.requested);
+    assert!(
+        plan.reason.contains("bundled bubblewrap"),
+        "{}",
+        plan.reason
+    );
+    if std::env::var("RODE_TEST_REQUIRE_SANDBOX").as_deref() == Ok("1") {
+        assert!(
+            plan.active,
+            "Required bundled sandbox unavailable: {}",
+            plan.reason
+        );
+    }
+    if plan.active {
+        assert_eq!(plan.prefix[1], "--bwrap-launch");
+        assert_eq!(Some(&plan.prefix[0]), plan.native_helper.as_ref());
+        let helper = Path::new(native_binary);
+        let path = project
+            .path()
+            .join("bundled.txt")
+            .to_string_lossy()
+            .into_owned();
+        plan.local_request_with_helper(
+            &Request::Write {
+                path: path.clone(),
+                text: "bundled project edit".into(),
+                expected: None,
+            },
+            helper,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "bundled project edit");
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("private");
+        fs::write(&secret, "private").unwrap();
+        assert!(
+            plan.local_request_with_helper(
+                &Request::Read {
+                    path: secret.to_string_lossy().into_owned(),
+                },
+                helper
+            )
+            .is_err()
+        );
+        let probe = std::process::Command::new(&plan.prefix[0])
+            .args(&plan.prefix[1..])
+            .args(["/usr/bin/python3", "-I", "-c", "import socket,sys\ns=socket.socket();s.settimeout(1)\ntry: s.connect(('127.0.0.1',int(sys.argv[1])))\nexcept OSError: print('OFFLINE')\nelse: raise SystemExit('Bundled command reached host network')"])
+            .arg(endpoint.local_addr().unwrap().port().to_string())
+            .env("PATH", tools.path())
+            .output().unwrap();
+        assert!(
+            probe.status.success(),
+            "{}",
+            String::from_utf8_lossy(&probe.stderr)
+        );
+        assert_eq!(probe.stdout, b"OFFLINE\n");
+    } else {
+        assert!(plan.prefix.is_empty());
+        assert!(plan.reason.contains("cannot start"));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -146,11 +226,33 @@ fn missing_and_unusable_bwrap_allow_normal_remote_project_work() {
         )
         .unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
-        let response = headless(&request, Some(tools.path())).unwrap();
+        let response = headless_using(&request, Some(tools.path()), native_binary).unwrap();
         let plan = response.project.unwrap();
         assert!(plan.requested && !plan.active);
         assert!(plan.reason.contains("user namespaces disabled"));
+        assert!(!plan.reason.contains("bundled bubblewrap"));
         assert!(plan.prefix.is_empty());
+    }
+}
+
+#[test]
+fn bundled_bwrap_is_available_without_path_from_both_native_entry_points() {
+    let tools = tempfile::tempdir().unwrap();
+    for binary in [env!("CARGO_BIN_EXE_rode"), native_peer::binary()] {
+        let output = std::process::Command::new(binary)
+            .args(["--bwrap-launch", "--version"])
+            .env("PATH", tools.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "bubblewrap 0.13.1 (bundled with RODE)"
+        );
     }
 }
 

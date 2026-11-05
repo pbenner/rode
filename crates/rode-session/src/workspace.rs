@@ -115,7 +115,12 @@ pub fn fingerprint(plan: &sandbox::Plan) -> String {
         let end = prefix.len();
         prefix[end - 3] = HELPER;
         prefix[end - 2] = HELPER;
-        if plan.backend == sandbox::Backend::Landlock {
+        if prefix.first() == Some(&helper)
+            && matches!(
+                prefix.get(1),
+                Some(&"--landlock-launch" | &"--bwrap-launch")
+            )
+        {
             prefix[0] = HELPER;
         }
     }
@@ -388,6 +393,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bundled_bwrap_policy_survives_helper_relocation_without_hiding_backend_changes() {
+        let make = |helper: &str| {
+            let mut plan = sandbox_plan(helper, sandbox::Backend::Bwrap);
+            plan.prefix[0] = helper.into();
+            plan.prefix.insert(1, "--bwrap-launch".into());
+            plan
+        };
+        let plan = make("/old-helper");
+        let relocated = make("/new-helper");
+        assert_ne!(plan.prefix, relocated.prefix);
+        assert_eq!(fingerprint(&plan), fingerprint(&relocated));
+        let mut changed = relocated;
+        changed.prefix[1] = "--landlock-launch".into();
+        assert_ne!(fingerprint(&plan), fingerprint(&changed));
+        changed = plan.clone();
+        changed.prefix.retain(|arg| arg != "--share-net");
+        assert_ne!(fingerprint(&plan), fingerprint(&changed));
     }
 
     #[test]

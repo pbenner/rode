@@ -27,6 +27,7 @@ test_shell_export=
 if [[ "${RODE_SSH_TEST_NO_PYTHON:-0}" == 1 ]]; then
     mkdir -m 700 "$test_dir/native-path"
     for program in sh uname id stat sha256sum wc head mktemp ln chmod cut mkdir rm rmdir readlink git bwrap true env; do
+        if [[ "$program" == bwrap && "${RODE_SSH_TEST_NO_BWRAP:-0}" == 1 ]]; then continue; fi
         program_path=$(command -v "$program" || true)
         if [[ "$program_path" == /* ]]; then ln -s "$program_path" "$test_dir/native-path/$program"; fi
     done

@@ -1,0 +1,15 @@
+[package]
+name = "rode-bwrap"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT AND LGPL-2.1-or-later AND BSD-3-Clause"
+description = "Pinned bubblewrap fallback carried by RODE's native host helper"
+repository = "https://github.com/pbenner/rode"
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+
+[build-dependencies]
+cc = "1"

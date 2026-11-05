@@ -8,6 +8,15 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--bwrap-launch") {
+        // SAFETY: This is a fresh process; no GUI, workers or services have
+        // been initialized. Bubblewrap takes ownership of process setup/exit.
+        if let Err(error) = unsafe { rode_host_core::bwrap::launch(&args[1..]) } {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| {
         matches!(
             arg.as_str(),

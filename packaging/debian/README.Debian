@@ -18,7 +18,9 @@ SSH chat can copy the matching optional runtime into a private project-host
 cache on first use, and runs its tools under the project sandbox.
 
 PDF previews use desktop Poppler tools (poppler-utils). Project sandboxing uses
-bubblewrap when available; normal mode remains usable without it.
+system bubblewrap when available, with a bundled fallback for a missing executable.
+Both require permitted user namespaces; normal mode remains usable if the sandbox
+cannot start. Landlock is available separately on supported kernels.
 Encrypted projects require gocryptfs and working FUSE on the project host.
 Use File -> Open encrypted project to create or unlock encrypted storage.
 

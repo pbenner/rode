@@ -203,7 +203,10 @@ def notices(binary):
     for package in sorted(
         metadata["packages"], key=lambda value: (value["name"], value["version"])
     ):
-        if not package.get("source") or (package["name"], package["version"]) not in active:
+        if (not package.get("source") and package["name"] != "rode-bwrap") or (
+            package["name"],
+            package["version"],
+        ) not in active:
             continue
         source = Path(package["manifest_path"]).parent
         candidates = [

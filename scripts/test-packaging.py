@@ -20,6 +20,21 @@ BUILDER = runpy.run_path(str(Path(__file__).with_name("build-deb.py")))
 BUNDLER = runpy.run_path(str(Path(__file__).with_name("bundle-codex.py")))
 
 
+class VendoredSandbox(unittest.TestCase):
+    def test_pinned_sandbox_sources_match_the_recorded_release_snapshot(self):
+        root = Path(__file__).resolve().parent.parent / "crates/rode-bwrap"
+        manifest = json.loads((root / "vendor.json").read_text())
+        paths = {
+            str(path.relative_to(root)) for path in (root / "vendor").rglob("*") if path.is_file()
+        }
+        self.assertEqual(paths, set(manifest["files"]))
+        for name, digest in manifest["files"].items():
+            self.assertEqual(hashlib.sha256((root / name).read_bytes()).hexdigest(), digest, name)
+        for name in ["bubblewrap", "libcap"]:
+            self.assertTrue(manifest[name]["url"].startswith("https://"))
+            self.assertEqual(len(manifest[name]["sha256"]), 64)
+
+
 @contextlib.contextmanager
 def runtime_fixture():
     """Exercise the real preparer with a tiny pinned archive and no internet/user data."""
