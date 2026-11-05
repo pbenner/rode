@@ -19,6 +19,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
@@ -81,14 +82,17 @@ def preferences(path):
 def agent(window, executable):
     focus(window)
     key("a", ("Control_L", "Shift_L"))
-    time.sleep(0.2)
-    state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-    header = 157 if "[Sandbox]" in state else 187
-    click(1213, header)
-    click(700, header + 94)
+    control(window, "agent-settings")
+    control(window, "agent-codex-executable")
     key("a", ("Control_L",))
     text(executable)
-    click(1213, header)
+    control(window, "agent-settings")
+
+
+def control(window, name):
+    """Resolve this process's current layout, then activate it with native X11 input."""
+    index = windows.index(window)
+    click_button(window, processes[index], log_path, states[index], name)
 
 
 def connection_form(window, name):
@@ -96,21 +100,17 @@ def connection_form(window, name):
     key("p", ("Control_L", "Shift_L"))
     text("Remote: Connect")
     key("Return")
-    time.sleep(0.3)
+    control(window, "ssh-field-Host / alias")
     key("a", ("Control_L",))
     text(name + ".invalid")
-    # Include the optional remote-helper path before the profile-name field.
-    for _ in range(8):
-        key("Tab")
+    control(window, "ssh-field-Profile name")
     key("a", ("Control_L",))
     text(name)
 
 
 def save_profile(window):
     focus(window)
-    for _ in range(3):  # Name → sandbox toggle → Connect → Save profile.
-        key("Tab")
-    key("Return")
+    control(window, "ssh-save-profile")
 
 
 with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
@@ -124,12 +124,17 @@ with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
     )
     saved = base / "data/rode/app.ron"
     connections = base / "config/rode/connections.json"
-    processes, windows = [], []
-    with (ARTIFACTS / "windows.log").open("w") as log:
+    processes, windows, states = [], [], []
+    log_path = ARTIFACTS / "windows.log"
+    with log_path.open("w") as log:
         try:
             for root in roots:
+                states.append(base / f"ui-state-{len(states)}.json")
                 process = subprocess.Popen(
-                    [str(BINARY), "--sandbox", str(root)], env=environment, stdout=log, stderr=log
+                    [str(BINARY), "--sandbox", str(root)],
+                    env=environment | {"RODE_UI_TEST_STATE": str(states[-1])},
+                    stdout=log,
+                    stderr=log,
                 )
                 processes.append(process)
                 windows.append(window_for(process, windows))

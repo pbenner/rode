@@ -536,7 +536,8 @@ impl EditorApp {
                             }
                         } else {
                             ui.label("Codex executable (auto: discover)");
-                            ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Use Install Codex below, the optional rode-codex package or an installed executable. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
+                            let executable = ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Use Install Codex below, the optional rode-codex package or an installed executable. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
+                            ui_probe::button(ui, "agent-codex-executable", &executable);
                             if agents.config.provider == Provider::Local {
                                 ui.label("Local model API base URL");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048)).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");

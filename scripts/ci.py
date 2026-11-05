@@ -276,7 +276,10 @@ def run_suite(name):
     if name in FAST + EXTENDED:
         env.pop("RODE_TEST_SSH_CONFIG", None)
     for index, (command, overrides, timeout) in enumerate(SUITES[name], 1):
-        measure(f"{index:02d}-{Path(command[0]).name}", command, env | overrides, timeout, name)
+        # Name Python/shell fixtures in logs and job summaries, rather than
+        # reporting every UI failure as another indistinguishable "python3".
+        entry = command[1] if command[0] in (sys.executable, "bash") else command[0]
+        measure(f"{index:02d}-{Path(entry).stem}", command, env | overrides, timeout, name)
 
 
 def bundle():

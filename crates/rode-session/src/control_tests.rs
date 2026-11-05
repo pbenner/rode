@@ -52,7 +52,41 @@ fn an_authentication_failure_never_falls_back_to_legacy_control() {
     let _protected = UnixListener::bind_addr(&address).unwrap();
     // The current endpoint exists, but its capability is missing. A legacy
     // listener must not turn this into a successful unauthenticated connection.
-    assert!(connect_control(dir.path()).is_err());
+    let error = connect_control(dir.path()).unwrap_err();
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("outside the project sandbox"),
+        "{diagnostic}"
+    );
+    let cause = std::io::Error::from_raw_os_error(libc::ENOENT).to_string();
+    assert!(diagnostic.contains(&cause), "{diagnostic}");
+}
+
+#[test]
+fn namespace_checks_deny_unreadable_proc_entries_and_keep_the_underlying_error() {
+    for peer_denied in [false, true] {
+        for errno in [libc::EACCES, libc::EPERM, libc::ENOENT] {
+            let denied = Err(std::io::Error::from_raw_os_error(errno));
+            let visible = Ok(PathBuf::from("mnt:[1]"));
+            let error = if peer_denied {
+                verify_control_namespace(denied, visible)
+            } else {
+                verify_control_namespace(visible, denied)
+            }
+            .unwrap_err();
+            assert!(error.to_string().contains("outside the project sandbox"));
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(errno)
+            );
+        }
+    }
+    assert!(verify_control_namespace(Ok("mnt:[1]".into()), Ok("mnt:[1]".into())).is_ok());
+    let error = verify_control_namespace(Ok("mnt:[2]".into()), Ok("mnt:[1]".into())).unwrap_err();
+    assert!(error.to_string().contains("outside the project sandbox"));
 }
 
 #[test]

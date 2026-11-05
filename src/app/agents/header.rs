@@ -89,7 +89,9 @@ fn actions(
     offline: bool,
     result: &mut Actions,
 ) {
-    result.settings = icons::small(ui, Icon::Settings, "Agent settings").clicked();
+    let settings = icons::small(ui, Icon::Settings, "Agent settings");
+    ui_probe::button(ui, "agent-settings", &settings);
+    result.settings = settings.clicked();
     result.new_chat = ui
         .button("New chat")
         .on_hover_text("Stop this agent and start a fresh conversation")

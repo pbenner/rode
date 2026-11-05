@@ -19,6 +19,7 @@ from ui_harness import (
     BINARY,
     ROOT,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
@@ -80,6 +81,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-files-ui-") as directory:
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
     saved = base / "data/rode/app.ron"
     log_path = ARTIFACTS / "file-only.log"
@@ -96,24 +98,26 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-files-ui-") as directory:
             wait_for_project(window, process, log_path, root)
             focus_window(window)
             key("a", ("Control_L", "Shift_L"))
-            state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-            header = 157 if "[Sandbox]" in state else 187
-            click(1213, header)
-            click(1110, header + 94)
+
+            def control(name):
+                click_button(window, process, log_path, base / "ui-state.json", name)
+
+            control("agent-settings")
+            control("agent-codex-executable")
             key("a", ("Control_L",))
             text("./agent.py")
             wait(
                 lambda: preferences(saved).get("codex") == "./agent.py",
                 "Agent executable was not saved",
             )
-            click(1213, header)
-            click(1280, 752)
-            click(1090, 505)  # File-only row in the ordinary access menu.
+            control("agent-settings")
+            control("Access: Project access")
+            control("agent-access-Edit project files only")
             wait(
                 lambda: preferences(saved).get("access") == "files_only",
                 "File-only mode was not saved",
             )
-            click(1280, 752)
+            control("Access: Edit project files only")
             screenshot(window, "file-only-permissions.png")
             key("Escape")
             assert not (root / "file-agent-rpc.jsonl").exists(), "Selecting access started an agent"

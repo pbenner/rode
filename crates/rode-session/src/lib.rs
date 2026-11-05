@@ -425,14 +425,15 @@ pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     let stream = {
         let address = control_address(&meta)?;
         match connect_authenticated(dir, &address) {
-            Ok(stream) => stream,
+            Ok(stream) => Ok(stream),
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
                 // Older services have no abstract listener. New services reject
                 // all requests on this discovery socket, including raw clients.
-                connect_control_fallback(dir, &address)?
+                connect_control_fallback(dir, &address)
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => Err(error),
         }
+        .context("Cannot access terminal control; use a client outside the project sandbox")?
     };
     #[cfg(not(target_os = "linux"))]
     let stream = UnixStream::connect(dir.join("socket"))?;
@@ -1304,6 +1305,23 @@ fn snapshot(state: &mut State) -> Vec<u8> {
     data.extend(screen.state_formatted());
     data
 }
+/// Deny control if mount namespaces differ or either identity cannot be read.
+/// Kernel ptrace/proc restrictions can deny the read before comparison, so both
+/// rejection paths need to explain the same host-only control boundary.
+#[cfg(target_os = "linux")]
+fn verify_control_namespace(
+    peer: std::io::Result<PathBuf>,
+    host: std::io::Result<PathBuf>,
+) -> Result<()> {
+    let context =
+        "Cannot verify terminal control mount namespace; use a client outside the project sandbox";
+    ensure!(
+        peer.context(context)? == host.context(context)?,
+        "Terminal control must originate outside the project sandbox"
+    );
+    Ok(())
+}
+
 fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
@@ -1324,11 +1342,10 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
         );
         // Workspace tools must not gain host execution by reaching an exposed
         // runtime socket. The broker/attach clients run in the host namespace.
-        ensure!(
-            fs::read_link(format!("/proc/{}/ns/mnt", cred.pid))?
-                == fs::read_link("/proc/self/ns/mnt")?,
-            "Terminal control must originate outside the project sandbox"
-        );
+        verify_control_namespace(
+            fs::read_link(format!("/proc/{}/ns/mnt", cred.pid)),
+            fs::read_link("/proc/self/ns/mnt"),
+        )?;
     }
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;

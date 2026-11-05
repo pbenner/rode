@@ -58,6 +58,8 @@ The same suite includes `landlock`. On a host with Landlock ABI 4 or newer, run 
 
 Every test command has a deadline and writes its log and elapsed time under `target/ci-results/<suite>/`. Timings also appear in the Actions job summary. Long console output retains both the beginning and end, so SSH daemon chatter cannot hide an earlier test assertion; the artifact retains the complete log. Job limits bound setup/build hangs; failure logs and screenshots are uploaded even after test failures, with separate artifact names per job. Tests are not automatically retried. Use the recorded timings to rebalance jobs before tightening budgets; a sub-ten-minute fast tier is a target, not an assumed runner speed.
 
+UI fixtures can opt into `RODE_UI_TEST_STATE` to locate named controls in the current rendered layout, including menus and SSH profile fields. They still click with native X11 input and verify persisted settings, process activity and real file effects; the snapshots contain control geometry and availability only. Use a separate snapshot path for each process in multi-window tests. Prefer these controls over fixed menu coordinates or counts of Tab presses, which change when forms gain fields or sandbox options. Test log names include the script, for example `02-test-agent-file-only-ui.log`, so the failing check is identifiable in the job summary.
+
 Inspect or run the same suites locally:
 
 ```sh

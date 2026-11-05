@@ -1108,7 +1108,7 @@ fn exited_sessions_are_removed_while_other_detached_shells_keep_running() {
 #[test]
 fn project_mount_namespace_cannot_control_an_exposed_host_service_socket() {
     let mut fixture = Fixture::new();
-    fixture.create(&fixture.plan());
+    let info = fixture.create(&fixture.plan());
     let mut child = match Command::new("bwrap")
         .args(["--bind", "/", "/", "--"])
         .arg(env!("CARGO_BIN_EXE_rode"))
@@ -1137,6 +1137,17 @@ fn project_mount_namespace_cannot_control_an_exposed_host_service_socket() {
         return;
     }
     assert!(error.contains("outside the project sandbox"), "{error}");
+    assert!(
+        output.stdout.is_empty(),
+        "Sandboxed control exposed session data"
+    );
+    assert!(
+        fixture
+            .direct_list()
+            .iter()
+            .any(|entry| entry.id == info.id && entry.alive),
+        "Denied control request interrupted the existing host session"
+    );
 }
 
 #[test]

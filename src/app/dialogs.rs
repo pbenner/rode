@@ -253,6 +253,7 @@ impl EditorApp {
                                 .hint_text(hint)
                                 .desired_width(field_width),
                         );
+                        ui_probe::button(ui, &format!("ssh-field-{label}"), &response);
                         if self.dialog_focus && label == "Host / alias" {
                             response.request_focus();
                             self.dialog_focus = false;
@@ -290,17 +291,16 @@ impl EditorApp {
                     Err(error) => self.notify(error.to_string(), true),
                 }
             }
-            if ui
-                .add_enabled(
-                    !self.profile_saving,
-                    egui::Button::new(if self.profile_saving {
-                        "Saving…"
-                    } else {
-                        "Save profile"
-                    }),
-                )
-                .clicked()
-            {
+            let save = ui.add_enabled(
+                !self.profile_saving,
+                egui::Button::new(if self.profile_saving {
+                    "Saving…"
+                } else {
+                    "Save profile"
+                }),
+            );
+            ui_probe::button(ui, "ssh-save-profile", &save);
+            if save.clicked() {
                 if let Err(error) = self.profile.validate() {
                     self.notify(error.to_string(), true);
                 } else {
