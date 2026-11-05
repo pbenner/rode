@@ -18,6 +18,9 @@ pub const CAPABILITIES: &[&str] = &[
     "contexts",
     "sessions",
     "native_landlock",
+    // Resolver targets, login profiles and command lookup defaults must match
+    // the desktop's path controls, even when an older helper is preinstalled.
+    "sandbox_system_lookups",
     "native_mise",
     "shared_compute_helper",
     "process",
@@ -222,5 +225,16 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn helpers_with_old_sandbox_defaults_require_an_upgrade() {
+        let mut info = Info::current("0.1.0", 13);
+        info.capabilities
+            .retain(|cap| cap != "sandbox_system_lookups");
+        let error = info
+            .validate(std::env::consts::OS, std::env::consts::ARCH, 13)
+            .unwrap_err();
+        assert!(error.contains("sandbox_system_lookups"), "{error}");
     }
 }

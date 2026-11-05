@@ -160,12 +160,16 @@ fn installed_codex_completes_a_turn_against_a_loopback_responses_fixture() {
     let Ok(program) = std::env::var("RODE_TEST_CODEX") else {
         return;
     };
-    for isolated in [false, true] {
-        codex_turn(&program, isolated);
+    for (isolated, backend) in [
+        (false, sandbox::Backend::Bwrap),
+        (true, sandbox::Backend::Bwrap),
+        (true, sandbox::Backend::Landlock),
+    ] {
+        codex_turn(&program, isolated, backend);
     }
 }
 
-fn codex_turn(program: &str, isolated: bool) {
+fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
     fn finish_turn(chat: &mut Chat) {
         let until = Instant::now() + Duration::from_secs(30);
         while chat.busy {
@@ -272,6 +276,7 @@ fn codex_turn(program: &str, isolated: bool) {
             root.to_str().unwrap(),
             &sandbox::Options {
                 enabled: isolated,
+                backend,
                 read_only: vec![
                     std::path::Path::new(program)
                         .parent()
@@ -290,6 +295,19 @@ fn codex_turn(program: &str, isolated: bool) {
         remote: None,
         python: "auto".into(),
     };
+    if backend == sandbox::Backend::Landlock && !launch.plan.active {
+        assert_ne!(
+            std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "{}",
+            launch.plan.reason
+        );
+        eprintln!(
+            "Real Codex Landlock check unavailable: {}",
+            launch.plan.reason
+        );
+        return;
+    }
     chat.submit(
         launch.clone(),
         "Reply once without tools.".into(),

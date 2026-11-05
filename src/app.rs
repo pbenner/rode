@@ -46,6 +46,7 @@ mod marp_view;
 mod navigation;
 mod notebook_view;
 mod pdf_view;
+mod sandbox_presets;
 mod sessions;
 mod terminal_colors;
 mod ui_probe;
@@ -404,6 +405,7 @@ pub struct EditorApp {
     folder_error: Option<String>,
     folder_policy_path: String,
     sandbox_defaults: sandbox::Options,
+    sandbox_presets: sandbox_presets::State,
     startup_restore: Option<bool>,
     folder_sandbox: sandbox::Options,
     last_window_title: String,
@@ -549,6 +551,7 @@ impl EditorApp {
                 .and_then(|s| s.get_string("sandbox_defaults"))
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
+            sandbox_presets: sandbox_presets::State::load(storage, &mut warnings),
             folder_sandbox: Default::default(),
             startup_restore: None,
             last_window_title: String::new(),
@@ -636,6 +639,7 @@ impl EditorApp {
         self.persist_project_preferences(Some(&mut storage));
         self.persist_agent_preferences(Some(&mut storage));
         self.persist_extensions(Some(&mut storage));
+        self.sandbox_presets.store(&mut storage);
         self.navigation.bindings.store(&mut storage);
         self.terminal_colors.store(&mut storage);
         if self.font_save_pending {
@@ -2757,6 +2761,7 @@ impl eframe::App for EditorApp {
             self.persist_agent_preferences(frame.storage_mut());
             self.persist_extensions(frame.storage_mut());
             if let Some(storage) = frame.storage_mut() {
+                self.sandbox_presets.store(storage);
                 self.navigation.bindings.store(storage);
                 self.terminal_colors.store(storage);
             }
@@ -2782,6 +2787,7 @@ impl eframe::App for EditorApp {
         self.workbench.store(storage);
         self.agents.store(storage);
         self.persist_extensions(Some(storage));
+        self.sandbox_presets.store(storage);
         storage.set_string("font_size", self.font_size.to_string());
         storage.set_string("ui_scale", self.ui_scale.to_string());
         if let Ok(options) = serde_json::to_string(&self.sandbox_defaults) {

@@ -314,7 +314,24 @@ fn landlock_file_and_command_policy_on_direct_and_proxyjump_hosts() {
         );
         // Run an actual remote child under the captured prefix, including UDP denial.
         let mut args = plan.prefix.clone();
-        args.extend(policy_python("import os,socket; assert os.getcwd()==os.environ['EXPECTED_ROOT'];\ntry: socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\nexcept PermissionError: print('LANDLOCK_SSH_OK')\nelse: raise AssertionError('UDP allowed')"));
+        args.extend(policy_python(
+            r#"
+import os, socket, sqlite3
+from pathlib import Path
+assert os.getcwd() == os.environ['EXPECTED_ROOT']
+if Path('/etc/resolv.conf').is_file():
+    Path('/etc/resolv.conf').read_bytes()
+if Path('/var/lib/command-not-found/commands.db').is_file():
+    with sqlite3.connect('file:/var/lib/command-not-found/commands.db?mode=ro', uri=True) as db:
+        assert db.execute('select count(*) from sqlite_master').fetchone() is not None
+try:
+    socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+except PermissionError:
+    print('LANDLOCK_SSH_OK')
+else:
+    raise AssertionError('UDP allowed')
+"#,
+        ));
         let mut command = Command::new("ssh");
         command.args(remote.channel_args(false)).arg(format!(
             "EXPECTED_ROOT={} {}",

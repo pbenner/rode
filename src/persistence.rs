@@ -160,7 +160,11 @@ pub fn apply(value: &mut Value, edits: &[Edit]) {
 fn structured(key: &str) -> bool {
     matches!(
         key,
-        "project_preferences" | "agent_preferences" | "sandbox_defaults" | "extension_preferences"
+        "project_preferences"
+            | "agent_preferences"
+            | "sandbox_defaults"
+            | "sandbox_presets"
+            | "extension_preferences"
     )
 }
 
@@ -172,7 +176,10 @@ fn removable_preference(key: &str, path: &[String]) -> bool {
         (key, parts.as_slice()),
         ("sandbox_defaults", ["overrides", _])
             | (
-                "agent_preferences" | "extension_preferences" | "project_preferences",
+                "agent_preferences"
+                    | "extension_preferences"
+                    | "project_preferences"
+                    | "sandbox_presets",
                 [_]
             )
             | (
@@ -181,6 +188,7 @@ fn removable_preference(key: &str, path: &[String]) -> bool {
             )
             | ("extension_preferences", [_, "settings", _, ..])
             | ("project_preferences", [_, "sandbox", "overrides", _])
+            | ("sandbox_presets", [_, "overrides", _])
             | (
                 "project_preferences",
                 [_, "environment", "variables" | "runtimes", _]
@@ -200,7 +208,9 @@ fn removable_preference(key: &str, path: &[String]) -> bool {
 /// storage without an older form erasing settings it cannot represent.
 fn comparison_base(key: &str, raw: &Value, next: &Value) -> Result<Value> {
     let mut seed = raw.clone();
-    if key != "sandbox_defaults" {
+    // A named preset is a real record even if every option equals its default.
+    // Do not synthesize missing records before diffing the reusable library.
+    if !matches!(key, "sandbox_defaults" | "sandbox_presets") {
         for project in next.as_object().context("Invalid preference map")?.keys() {
             seed.as_object_mut()
                 .context("Invalid preference map")?
@@ -219,6 +229,9 @@ fn comparison_base(key: &str, raw: &Value, next: &Value) -> Result<Value> {
         "sandbox_defaults" => {
             serde_json::to_value(serde_json::from_value::<crate::sandbox::Options>(seed)?)?
         }
+        "sandbox_presets" => serde_json::to_value(serde_json::from_value::<
+            crate::sandbox::presets::Presets,
+        >(seed)?)?,
         _ => raw.clone(),
     };
     fn overlay(base: &mut Value, raw: &Value) {
@@ -256,6 +269,7 @@ fn decode(values: &Values) -> Result<Value> {
                     "sandbox_defaults" => {
                         let _: crate::sandbox::Options = serde_json::from_str(text)?;
                     }
+                    "sandbox_presets" => { crate::sandbox::presets::decode(text)?; }
                     _ => {}
                 }
                 let value: Value = serde_json::from_str(text).with_context(|| {
@@ -304,6 +318,12 @@ fn write_edits(path: &Path, edits: &[Edit]) -> Result<()> {
                     text.len() <= 256 * 1024 && value.as_object().is_some_and(|m| m.len() <= 128),
                     "Agent preference limit reached; changes were not saved."
                 );
+            }
+            // Independent windows can each submit a valid library whose union
+            // exceeds the limit. Validate after merging, before publishing a
+            // file that the next startup would otherwise refuse to load.
+            if key == crate::sandbox::presets::STORAGE_KEY {
+                crate::sandbox::presets::decode(&text).context("Sandbox presets were not saved")?;
             }
             values.insert(key.clone(), text);
         }

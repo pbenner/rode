@@ -3,6 +3,8 @@ use anyhow::{Context, Result};
 pub use rode_host_core::sandbox::*;
 use std::{path::Path, process::Command, time::Duration};
 
+pub(crate) mod presets;
+
 /// Desktop reply decoding and service dispatch, outside the headless policy library.
 pub trait PlanExt {
     /// Run an installed adapter under the captured project policy.

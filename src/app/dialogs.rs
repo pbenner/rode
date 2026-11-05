@@ -262,6 +262,10 @@ impl EditorApp {
                 });
         });
         ui.add_space(12.0);
+        ui.push_id("ssh-sandbox-presets", |ui| {
+            self.sandbox_presets
+                .ui(ui, &mut self.profile.sandbox, palette);
+        });
         workbench::sandbox_backend_ui(ui, &mut self.profile.sandbox);
         if self.profile.sandbox.enabled {
             ui.collapsing("Sandbox access rules", |ui| {
@@ -435,6 +439,10 @@ impl EditorApp {
             self.browse_folder(path, ctx);
         }
         ui.separator();
+        ui.push_id("folder-sandbox-presets", |ui| {
+            self.sandbox_presets
+                .ui(ui, &mut self.folder_sandbox, palette);
+        });
         workbench::sandbox_backend_ui(ui, &mut self.folder_sandbox);
         if self.folder_sandbox.enabled {
             ui.label(RichText::new("If sandboxing is unavailable on this host, the project opens in clearly labelled normal mode.").small().color(palette.muted));

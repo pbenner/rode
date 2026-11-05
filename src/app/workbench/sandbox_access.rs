@@ -92,6 +92,7 @@ pub(in crate::app) fn rules_ui(
         if ui.button("+ Add folder or file").clicked() {
             draft.push(String::new(), sandbox::Access::ReadOnly);
         }
+        ui.small("Add any custom shell setup, tool installation or cache needed on this host. Paths are literal (absolute or ~/); use Read only for configuration and Read + write for tool state.");
         draft.publish(options);
         ui.data_mut(|data| data.insert_temp(draft_id, draft));
         ui.add_space(8.);

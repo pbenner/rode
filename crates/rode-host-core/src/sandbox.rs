@@ -403,14 +403,16 @@ pub fn arguments(
     options.validate()?;
     validate_project_root(root, home)?;
     let policy: Policy = serde_json::from_str(include_str!("sandbox_policy.json"))?;
-    // Resolve built-in aliases once, on the project host during preparation.
+    // Resolve Landlock aliases once, on the project host during preparation.
     // Landlock launch must not reinterpret a captured grant after a tool changes
     // a symlink beneath an already-writable parent.
+    // /etc preserves its nested symlinks in either backend. Share the resolver's
+    // actual file too, commonly under /run/systemd/resolve, without exposing /run.
     let grant_path = |path: &Path| -> Result<String> {
-        if options.backend == Backend::Landlock {
+        if options.backend == Backend::Landlock || path == Path::new("/etc/resolv.conf") {
             let path = path
                 .canonicalize()
-                .context("Cannot resolve Landlock grant")?;
+                .with_context(|| format!("Cannot resolve sandbox grant: {}", path.display()))?;
             validate_project_root(&path, home)?;
             Ok(path.to_string_lossy().into_owned())
         } else {

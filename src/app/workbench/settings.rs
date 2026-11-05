@@ -206,6 +206,8 @@ impl EditorApp {
         });
         layout::section(ui, "Sandbox access", palette, |ui| {
             ui.label(RichText::new("Changes take effect after applying and probing the new policy. Editor buffers stay open; the project shell restarts.").small().color(palette.muted));
+            self.sandbox_presets
+                .ui(ui, &mut self.workbench.draft.sandbox, palette);
             sandbox_options_ui(ui, &mut self.workbench.draft.sandbox, palette);
             ui.add_space(8.);
             if ui

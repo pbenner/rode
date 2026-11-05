@@ -139,6 +139,145 @@ fn saved_backend_is_explicit_and_old_preferences_keep_bwrap() {
 }
 
 #[test]
+fn default_policy_keeps_resolver_and_command_lookup_readable() {
+    let root = tempfile::tempdir().unwrap();
+    let Some(plan) = active(root.path(), &options()) else {
+        return;
+    };
+    if Path::new("/etc/resolv.conf").is_file() {
+        run(
+            &plan,
+            "from pathlib import Path; Path('/etc/resolv.conf').read_bytes()",
+            &[],
+        )
+        .unwrap();
+    }
+    if Path::new("/var/lib/command-not-found/commands.db").is_file() {
+        run(
+            &plan,
+            "import sqlite3\nwith sqlite3.connect('file:/var/lib/command-not-found/commands.db?mode=ro', uri=True) as db:\n assert db.execute('select count(*) from sqlite_master').fetchone() is not None",
+            &[],
+        )
+        .unwrap();
+        // The lookup database must not expose the rest of /var/lib.
+        run(
+            &plan,
+            "import os\ntry: os.listdir('/var/lib')\nexcept PermissionError: pass\nelse: raise AssertionError('Database grant exposed its parent')",
+            &[],
+        )
+        .unwrap();
+    }
+    let resolver = Path::new("/etc/resolv.conf").canonicalize().ok();
+    if resolver
+        .as_ref()
+        .is_some_and(|path| path.starts_with("/run/"))
+    {
+        run(
+            &plan,
+            "import os,sys\ntry: os.listdir(sys.argv[1])\nexcept PermissionError: pass\nelse: raise AssertionError('Resolver grant exposed its parent')",
+            &[resolver.as_ref().unwrap().parent().unwrap().to_str().unwrap()],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn login_shell_profiles_load_aliases_without_exposing_other_home_files() {
+    for profile in [".bash_profile", ".bash_login"] {
+        let base = tempfile::tempdir().unwrap();
+        let home = base.path().join("home");
+        let project = base.path().join("project");
+        fs::create_dir(&home).unwrap();
+        fs::create_dir(&project).unwrap();
+        fs::write(home.join(profile), ". \"$HOME/.bashrc\"\n").unwrap();
+        fs::write(home.join(".bashrc"), ". \"$HOME/.bash_aliases\"\n").unwrap();
+        fs::write(home.join(".bash_aliases"), "alias ll='printf ALIAS_OK'\n").unwrap();
+        let private = home.join("not-shared");
+        fs::write(&private, "private").unwrap();
+        let prepare = |options| {
+            let mut command = native_peer::command();
+            command.env("HOME", &home);
+            let data = run_bounded(
+                command,
+                serde_json::to_vec(&files::Request::Prepare {
+                    path: project.to_string_lossy().into(),
+                    sandbox: options,
+                })
+                .unwrap(),
+                Duration::from_secs(15),
+            )
+            .unwrap();
+            serde_json::from_slice::<files::Response>(&data)
+                .unwrap()
+                .project
+                .unwrap()
+        };
+        let plan = prepare(options());
+        if !plan.active {
+            assert_ne!(
+                std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                Ok("1"),
+                "{}",
+                plan.reason
+            );
+            eprintln!("Landlock unavailable: {}", plan.reason);
+            return;
+        }
+        let mut shell = Command::new(&plan.prefix[0]);
+        shell
+            .args(&plan.prefix[1..])
+            .args(["/bin/bash", "-lic", "ll"]);
+        assert_eq!(
+            run_bounded(shell, vec![], Duration::from_secs(10)).unwrap(),
+            b"ALIAS_OK"
+        );
+        let denied = "from pathlib import Path\nimport sys\ntry: Path(sys.argv[1]).read_bytes()\nexcept PermissionError: pass\nelse: raise AssertionError('Hidden home file was readable')";
+        run(&plan, denied, &[private.to_str().unwrap()]).unwrap();
+
+        // A user's own shell fragments/cache are explicit policy data, not
+        // filenames built into RODE. The same ~/ rules work on any project host.
+        let config = home.join(".config/site-shell");
+        let cache = home.join(".cache/site-tools");
+        fs::create_dir_all(&config).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let fragment = config.join("init.sh");
+        fs::write(&fragment, "export SITE_SETUP=custom\n").unwrap();
+        fs::write(
+            home.join(".bashrc"),
+            ". \"$HOME/.bash_aliases\"\n. \"$HOME/.config/site-shell/init.sh\"\n",
+        )
+        .unwrap();
+        let mut custom = options();
+        custom.read_only.push("~/.config/site-shell".into());
+        custom.read_write.push("~/.cache/site-tools".into());
+        let plan = prepare(custom);
+        assert!(plan.active, "{}", plan.reason);
+        let mut shell = Command::new(&plan.prefix[0]);
+        shell.args(&plan.prefix[1..]).args([
+            "/bin/bash",
+            "-lic",
+            "ll; printf ':%s' \"$SITE_SETUP\"; printf CACHE > \"$HOME/.cache/site-tools/result\"",
+        ]);
+        assert_eq!(
+            run_bounded(shell, vec![], Duration::from_secs(10)).unwrap(),
+            b"ALIAS_OK:custom"
+        );
+        assert_eq!(fs::read_to_string(cache.join("result")).unwrap(), "CACHE");
+        run(&plan, denied, &[private.to_str().unwrap()]).unwrap();
+        run(&plan, "from pathlib import Path\nimport sys\ntry: Path(sys.argv[1]).write_text('overwrite')\nexcept PermissionError: pass\nelse: raise AssertionError('Read-only shell configuration was writable')", &[fragment.to_str().unwrap()]).unwrap();
+        // Restore the default shell startup before checking a hidden profile.
+        fs::write(home.join(".bashrc"), ". \"$HOME/.bash_aliases\"\n").unwrap();
+        let mut hidden = options();
+        hidden
+            .overrides
+            .insert(format!("~/{profile}"), sandbox::Access::Hidden);
+        let plan = prepare(hidden);
+        assert!(plan.active, "{}", plan.reason);
+        run(&plan, denied, &[home.join(profile).to_str().unwrap()]).unwrap();
+    }
+}
+
+#[test]
 fn real_file_helpers_and_children_obey_grants_and_cannot_escape_symlinks() {
     let root = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();

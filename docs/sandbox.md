@@ -62,14 +62,20 @@ The local implementation uses a private Rust file-helper entry point from the ed
 
 | Access | Paths |
 | --- | --- |
-| Read-only system paths, if present | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`, `/run/munge` |
-| Read-only home paths, if present | `~/.local`, `~/.rustup`, `~/.bashrc`, `~/.profile`, `~/.gitconfig`, `~/.config/git` |
+| Read-only system paths, if present | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/etc/resolv.conf`, `/opt`, `/run/munge`, `/var/lib/command-not-found` |
+| Read-only home paths, if present | `~/.local`, `~/.rustup`, `~/.bashrc`, `~/.bash_profile`, `~/.bash_login`, `~/.bash_aliases`, `~/.profile`, `~/.gitconfig`, `~/.config/git` |
 | Writable shared tool paths, if present | `~/.cargo`, `~/.cache/uv`, `~/.codex` |
 | Writable project | The canonical selected project directory |
 | Private temporary locations | Fresh `/tmp` and `/home`; the user's home path and an empty `.config` directory are created inside the sandbox |
 | Process/device views | A new `/proc` and minimal `/dev` |
 
 The namespace/mount flags follow [bubblewrap's documented interface](https://github.com/containers/bubblewrap). RODE uses `--unshare-all`, `--die-with-parent`, and the selected project's directory as the working directory. Network access is shared by default, matching the supplied example; turn off **Allow network access** to retain a private network namespace. `HOME` points to the isolated home path and `UV_LINK_MODE=copy` avoids cross-mount hard-link assumptions.
+
+Both backends share the canonical resolver file separately. On Ubuntu, `/etc/resolv.conf` commonly points into `/run/systemd/resolve`; sharing its target file keeps DNS available without sharing the rest of `/run`. Networked agents still require **Allow network access**. Ubuntu's command lookup database is shared read-only so `command-not-found` can report missing commands normally.
+
+Native project terminals start login shells. The standard Bash profiles and alias file are shared read-only so a login profile can load `~/.bashrc` and its aliases. Custom files sourced by these profiles require their own explicit extra-path grants. After updating the editor and native helper, reapply sandbox settings and open a fresh terminal/chat to use the updated grants; existing persistent jobs keep their captured policy.
+
+Helper discovery requires the `sandbox_system_lookups` capability so an older preinstalled helper cannot silently retain the broken defaults. Automatic discovery can deploy the updated helper; an explicit remote helper override must point to a compatible build.
 
 The sandbox deliberately does not mount VS Code directories, the entire `/run`, or desktop display sockets. RODE's UI/preferences live outside the sandbox. `/run/munge` is included for remote hosts that use Munge authentication. Other remote host-specific software or data locations can be added explicitly.
 
@@ -83,6 +89,22 @@ Bubblewrap project/extra grants are applied from parent to child so the most spe
 
 Saved SSH profile JSON retains `read_only`/`read_write` arrays, plus `project_read_only`, `backend` (`"bwrap"` or `"landlock"`) and a preset `overrides` map. For example, `"overrides": {"~/.cargo": "hidden", "~/.codex": "read_only"}` changes those built-in grants. The access table edits the same configuration. The baseline mount names/defaults live in [crates/rode-host-core/src/sandbox_policy.json](../crates/rode-host-core/src/sandbox_policy.json); ordinary access changes belong in settings, without editing source code.
 
+### Adapting access to your host
+
+Custom shell configuration, site toolchains and caches belong in user-defined grants. RODE does not assume personal filenames or evaluate shell scripts to discover dependencies. A standard login profile can source other files; add those files, or their configuration directory, under **Additional shared paths**. Granting a file makes it accessible; your shell's normal startup configuration still decides whether to source it.
+
+For example, a host might need these additional rules (choose paths that actually exist on your host):
+
+| Path | Access | Purpose |
+| --- | --- | --- |
+| `~/.config/dev-shell` | Read only | Custom shell fragments and their configuration |
+| `/srv/site-tools` | Read only | A site-managed tool installation |
+| `~/.cache/dev-tools` | Read + write | State a tool needs to update |
+
+Use **Reusable sandbox presets** in project settings, the folder picker or the SSH form to save this setup under a descriptive name. **Save current rules** records the complete draft, including the enabled mode, backend, network setting, project access, built-in overrides and extra paths. **Replace saved preset** explicitly updates an existing name. In another project or SSH form, select the preset and click **Load into form**, review its paths, then open/connect or **Apply sandbox settings**. Loading replaces the draft rather than merging grants. Save the SSH connection profile as well if you want it to retain the loaded rules.
+
+Presets are stored in the desktop's shared preferences and can be reused across local and remote projects. Paths remain literal: `~/` expands to the project host's home, and absolute paths refer to that host. A preset is a template, not a live policy link: saving, replacing or deleting one does not change an existing project's access or running processes. No preset is loaded automatically. Up to 64 named presets are supported; the usual extra-path limits still apply. Nothing is added to the project's repository or to shell startup files.
+
 Git worktrees can need the main repository's `.git` directory outside their project root. The Worktrees panel's **Open + share main .git** makes this grant explicit for standard layouts, without sharing the rest of the main project. Nonstandard metadata locations can be added manually. Git network authentication may need separate explicit identity/agent grants and network access; these are not enabled automatically.
 
 Open an actual project directory, not `/`, the whole home directory, or an ancestor of home. These broad project/extra mounts are rejected because they would expose the home directory the policy is intended to hide. Symlink paths are resolved for planning, and symlinks from the project to hidden locations remain inaccessible inside a working sandbox.
@@ -94,6 +116,8 @@ This is a development sandbox with explicit shared resources. Network access, in
 `cargo test --test sandbox` verifies local/remote policy agreement, missing/unusable-bwrap fallback, network/path arguments, and real namespace isolation when available. The active isolation check verifies project writes, hidden outside files, and symlink escapes through the actual Rust helper and PTY.
 
 `RODE_TEST_REQUIRE_LANDLOCK=1 cargo test --test landlock --test sessions` requires real Landlock enforcement on ABI 4+: desktop/headless agreement, native and remote file helpers, inherited child restrictions, read-only/truncate protection, nested writable grants, restrictive-grant rejection, TCP/UDP/Unix network denial, inherited descriptor cleanup, authenticated host control and failure without an unsandboxed retry. Ruleset unit tests cover ABI 4, 5, 6 and newer masks/layouts. Without that environment variable, unavailable-kernel tests report a skip; preference and fallback checks still run.
+
+Landlock compatibility checks also open the host resolver and available Ubuntu command database, verify their parent directories remain restricted, and start login Bash shells with isolated profile/alias fixtures. They retain private-home and explicit-hidden-path denial checks. The real Codex loopback check in [Development](development.md#agent-checks) includes an enforced Landlock case; it uses no real account or model.
 
 `cargo test --test agents` checks whole-agent sandbox scope, read-only writes, streamed protocols, approvals/questions, interruption, bounded output, and child cleanup without inference. SSH roundtrips also exercise agents through the actual multiplexed channels.
 

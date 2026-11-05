@@ -82,6 +82,45 @@ fn normal_and_sandbox_project_preparation_match_on_both_backends() {
 }
 
 #[test]
+fn resolver_symlink_target_is_shared_on_both_backends_without_sharing_run_or_var() {
+    let resolver = Path::new("/etc/resolv.conf");
+    if !resolver.is_file() {
+        return;
+    }
+    let project = tempfile::tempdir().unwrap();
+    let home = files::expand_home("~");
+    let resolved = resolver
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    for backend in [sandbox::Backend::Bwrap, sandbox::Backend::Landlock] {
+        let args = sandbox::arguments(
+            Path::new(native_peer::binary()),
+            project.path(),
+            &home,
+            &Options {
+                enabled: true,
+                backend,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            args.windows(3)
+                .any(|w| w == ["--ro-bind", &resolved, &resolved]),
+            "{backend:?}: {args:?}"
+        );
+        assert!(
+            !args
+                .windows(3)
+                .any(|w| matches!(w[0].as_str(), "--ro-bind" | "--bind")
+                    && matches!(w[1].as_str(), "/run" | "/var"))
+        );
+    }
+}
+
+#[test]
 fn missing_and_unusable_bwrap_allow_normal_remote_project_work() {
     let project = tempfile::tempdir().unwrap();
     let tools = tempfile::tempdir().unwrap();

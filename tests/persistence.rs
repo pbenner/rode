@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn wait(check: impl Fn() -> bool) {
+fn wait(mut check: impl FnMut() -> bool) {
     let until = Instant::now() + Duration::from_secs(10);
     while !check() {
         assert!(
@@ -31,6 +31,131 @@ fn values(path: &Path) -> BTreeMap<String, String> {
 }
 fn open(path: &Path) -> Preferences {
     Preferences::open(path.into(), Arc::new(|| {}))
+}
+
+#[test]
+fn sandbox_presets_merge_across_windows_and_preserve_newer_records() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let mut initial = open(&path);
+    initial.set_string(
+        "sandbox_presets",
+        json!({"Site": {
+            "enabled": true, "backend": "landlock", "future": {"keep": true},
+            "overrides": {"~/.codex": "read_only"}
+        }})
+        .to_string(),
+    );
+    drop(initial);
+    let mut first = open(&path);
+    let mut second = open(&path);
+    let mut deleting = open(&path);
+    let mut idle = open(&path);
+    // Each window saves its typed snapshot, which does not know future fields.
+    first.set_string("sandbox_presets", json!({
+        "Site": {"enabled": true, "backend": "landlock", "read_only": ["~/.config/site-shell"], "overrides": {}},
+        "Local": {"read_write": ["~/.cache/site-tools"]}
+    }).to_string());
+    drop(first);
+    second.set_string("sandbox_presets", json!({
+        "Site": {"enabled": true, "backend": "landlock", "share_network": false, "overrides": {"~/.codex": "read_only"}},
+        "Remote": {"backend": "landlock"}
+    }).to_string());
+    drop(second);
+    // Deleting an old version must not delete a record another window edited.
+    deleting.set_string("sandbox_presets", "{}".into());
+    drop(deleting);
+    idle.set_string(
+        "sandbox_presets",
+        json!({"Site": {
+            "enabled": true, "backend": "landlock", "overrides": {"~/.codex": "read_only"}
+        }})
+        .to_string(),
+    );
+    drop(idle);
+    let presets: Value = serde_json::from_str(&values(&path)["sandbox_presets"]).unwrap();
+    assert_eq!(
+        presets["Site"]["read_only"],
+        json!(["~/.config/site-shell"])
+    );
+    assert_eq!(presets["Site"]["share_network"], false);
+    assert_eq!(presets["Site"]["future"]["keep"], true);
+    assert!(presets["Site"]["overrides"].get("~/.codex").is_none());
+    assert!(presets.get("Local").is_some());
+    assert!(presets.get("Remote").is_some());
+
+    let mut deleting = open(&path);
+    deleting.set_string(
+        "sandbox_presets",
+        json!({
+            "Local": presets["Local"], "Remote": presets["Remote"]
+        })
+        .to_string(),
+    );
+    drop(deleting);
+    let presets: Value = serde_json::from_str(&values(&path)["sandbox_presets"]).unwrap();
+    assert!(
+        presets.get("Site").is_none(),
+        "Explicit deletion of the current record must persist"
+    );
+}
+
+#[test]
+fn sandbox_presets_with_only_default_options_survive_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let mut store = open(&path);
+    let policy = rode::sandbox::Options::default();
+    store.set_string(
+        "sandbox_presets",
+        json!({"Default rules": policy}).to_string(),
+    );
+    drop(store);
+    let stored: Value = serde_json::from_str(&values(&path)["sandbox_presets"]).unwrap();
+    assert_eq!(
+        stored["Default rules"],
+        serde_json::to_value(policy).unwrap()
+    );
+}
+
+#[test]
+fn concurrent_sandbox_preset_additions_cannot_publish_an_unreadable_library() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let initial: BTreeMap<_, _> = (0..63)
+        .map(|i| (format!("Preset {i}"), rode::sandbox::Options::default()))
+        .collect();
+    let mut store = open(&path);
+    store.set_string("sandbox_presets", serde_json::to_string(&initial).unwrap());
+    drop(store);
+    let mut first = open(&path);
+    let mut second = open(&path);
+    for (name, writer) in [
+        ("First addition", &mut first),
+        ("Second addition", &mut second),
+    ] {
+        let mut presets = initial.clone();
+        presets.insert(name.into(), rode::sandbox::Options::default());
+        writer.set_string("sandbox_presets", serde_json::to_string(&presets).unwrap());
+    }
+    drop(first);
+    let preserved = fs::read(&path).unwrap();
+    second.flush();
+    let mut error = None;
+    wait(|| {
+        error = second.take_error();
+        error.is_some()
+    });
+    assert!(error.unwrap().contains("At most 64 sandbox presets"));
+    drop(second);
+    assert_eq!(fs::read(&path).unwrap(), preserved);
+    let reopened = open(&path);
+    assert!(reopened.take_error().is_none());
+    let presets: BTreeMap<String, rode::sandbox::Options> =
+        serde_json::from_str(&reopened.get_string("sandbox_presets").unwrap()).unwrap();
+    assert_eq!(presets.len(), 64);
+    assert!(presets.contains_key("First addition"));
+    assert!(!presets.contains_key("Second addition"));
 }
 
 #[test]
