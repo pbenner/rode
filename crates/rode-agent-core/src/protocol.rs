@@ -496,7 +496,7 @@ impl Chat {
         } else {
             json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}})
         };
-        if self.config.files_only() {
+        if self.config.native_tools() {
             params["capabilities"] = json!({"experimentalApi":true});
         }
         self.call("initialize", params, Call::Initialize)
@@ -611,7 +611,13 @@ impl Chat {
             if !self.config.reasoning_effort.is_empty() {
                 params["effort"] = self.config.reasoning_effort.clone().into();
             }
-            if self.external {
+            if self.config.native_tools() {
+                // Built-in tools stay read-only even though the trusted model
+                // controller has a network exception. Dynamic tools use RODE's
+                // original offline policy and never this inner sandbox.
+                params["sandboxPolicy"] = json!({"type":"readOnly"});
+                params["approvalPolicy"] = "never".into();
+            } else if self.external {
                 // The outer sandbox enforces the project policy for this process
                 // and every child. Tell Codex to use that external sandbox.
                 params["sandboxPolicy"] = json!({"type":"externalSandbox","networkAccess":if self.network {"enabled"} else {"restricted"}});
@@ -734,7 +740,7 @@ impl Chat {
                             Call::Models,
                         )?;
                     }
-                    if self.config.files_only() {
+                    if self.config.native_tools() {
                         self.call(
                             "config/read",
                             json!({"includeLayers":false}),
@@ -1098,7 +1104,7 @@ impl Chat {
         }
         if permission
             && (self.config.approval == Approval::Never
-                || self.config.files_only()
+                || self.config.native_tools()
                 || self.read_only
                 || self.cancelling
                 || !self.busy)
@@ -1131,14 +1137,24 @@ impl Chat {
 
     fn file_request(&mut self, id: Value, params: &Value) -> Result<()> {
         let tool = params["tool"].as_str().unwrap_or_default();
-        let allowed = self.config.files_only()
+        let allowed = self.config.native_tools()
             && self.busy
             && !self.cancelling
             && !self.turn.is_empty()
             && params["threadId"] == self.conversation
             && params["turnId"] == self.turn
             && params.get("namespace").is_none_or(Value::is_null)
-            && super::file_only::supported(tool)
+            && (super::file_only::supported(tool)
+                || (tool == "rode_run_command"
+                    && self.config.offline_commands()
+                    && !self.read_only))
+            // File-only makes Codex's own tools read-only, while its native
+            // file helper independently enforces the project's write policy.
+            && (!self.read_only || self.config.files_only()
+                || !matches!(
+                    tool,
+                    "rode_write_file" | "rode_delete_file" | "rode_create_directory"
+                ))
             && self.file_calls < 128;
         let result = if allowed {
             self.file_calls += 1;
@@ -1152,7 +1168,7 @@ impl Chat {
             )
         } else {
             Err(anyhow::anyhow!(
-                "File tool denied: only supported tools in the current active file-only turn may run"
+                "Native tool denied: only permitted tools in the current active confined turn may run"
             ))
         };
         match result {
@@ -1183,8 +1199,8 @@ impl Chat {
     fn start_file_thread(&mut self, config: Value) -> Result<()> {
         let mut params = json!({
             "cwd":self.root,"approvalPolicy":"never","sandbox":"read-only",
-            "config":config,"dynamicTools":super::file_only::tools(),
-            "developerInstructions":super::file_only::INSTRUCTIONS,
+            "config":config,"dynamicTools":super::network::tools(&self.config, self.read_only),
+            "developerInstructions":if self.config.network == super::network::Network::ModelOnly {super::network::INSTRUCTIONS} else {super::file_only::INSTRUCTIONS},
         });
         if !self.config.model().is_empty() {
             params["model"] = self.config.model().into();

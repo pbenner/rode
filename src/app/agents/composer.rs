@@ -19,6 +19,8 @@ pub(super) struct State {
     drag_start: Option<f32>,
     history: Vec<String>,
     recall: Option<Recall>,
+    older_requested: bool,
+    waiting_older: bool,
 }
 
 impl Default for State {
@@ -29,6 +31,8 @@ impl Default for State {
             drag_start: None,
             history: Vec::new(),
             recall: None,
+            older_requested: false,
+            waiting_older: false,
         }
     }
 }
@@ -55,6 +59,72 @@ impl State {
     /// Leave prompt-history navigation while preserving the separately retained sent prompts.
     pub fn reset_recall(&mut self) {
         self.recall = None;
+        self.finish_older();
+    }
+
+    /// Number of contiguous recent prompts already retained in this window.
+    #[cfg(test)]
+    pub fn history_len(&self) -> usize {
+        self.history.len()
+    }
+    pub fn history(&self) -> impl Iterator<Item = &String> {
+        self.history.iter()
+    }
+    /// An Up at the oldest cached prompt requests an older backend page once.
+    pub fn take_older_request(&mut self) -> bool {
+        std::mem::take(&mut self.older_requested)
+    }
+    pub fn waiting_older(&self) -> bool {
+        self.waiting_older
+    }
+    pub fn finish_older(&mut self) {
+        self.waiting_older = false;
+        self.older_requested = false;
+    }
+
+    /// Prepend an older page without losing edited recall entries or the unsent
+    /// draft. A pending Up moves exactly once; Down/typing while loading cancels
+    /// that movement but still makes the fetched prompts available.
+    pub fn prepend_older(&mut self, prompts: Vec<String>, draft: &mut String, ctx: &egui::Context) {
+        let prompts: Vec<_> = prompts
+            .into_iter()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| crate::agent::protocol::clip(&s, crate::agent::PROMPT_LIMIT))
+            .collect();
+        if prompts.is_empty() {
+            return;
+        }
+        let count = prompts.len();
+        self.history.splice(0..0, prompts.iter().cloned());
+        if let Some(recall) = &mut self.recall {
+            recall.drafts[recall.position].clone_from(draft);
+            recall.drafts.splice(0..0, prompts);
+            recall.position += count;
+        } else if self.waiting_older {
+            let mut drafts = self.history.clone();
+            drafts.push(draft.clone());
+            self.recall = Some(Recall {
+                position: drafts.len() - 1,
+                drafts,
+            });
+        }
+        if self.waiting_older
+            && let Some(recall) = &mut self.recall
+        {
+            recall.position = recall.position.saturating_sub(1);
+            draft.clone_from(&recall.drafts[recall.position]);
+            let id = egui::Id::new("agent-composer");
+            if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::one(
+                        egui::text::CCursor::new(0),
+                    )));
+                state.store(ctx, id);
+            }
+            ctx.data_mut(|data| data.insert_temp(id.with("recall-reveal"), true));
+        }
+        self.finish_older();
     }
 
     /// Retain each submitted prompt independently of the rolling transcript.
@@ -83,9 +153,30 @@ impl State {
 
     /// Only bare arrows at an unselected character zero browse the current chat.
     pub fn recall(&mut self, ui: &mut egui::Ui, draft: &mut String, id: egui::Id, enabled: bool) {
+        if self.waiting_older
+            && ui.input(|input| {
+                input.events.iter().any(|event| match event {
+                    egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Cut
+                    | egui::Event::Ime(_)
+                    | egui::Event::PointerButton { pressed: true, .. } => true,
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => *key != Key::ArrowUp || *modifiers != egui::Modifiers::NONE,
+                    _ => false,
+                })
+            })
+        {
+            self.finish_older();
+        }
         if !enabled
             || !ui.memory(|memory| memory.has_focus(id) && memory.allows_interaction(ui.layer_id()))
         {
+            self.finish_older();
             return;
         }
         let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
@@ -109,6 +200,7 @@ impl State {
                         | egui::Event::Ime(_)
                 )
             }) {
+                self.finish_older();
                 return None;
             }
             input.events.iter().find_map(|event| match event {
@@ -124,12 +216,19 @@ impl State {
         let Some(key) = key else {
             return;
         };
+        if key == Key::ArrowDown {
+            self.finish_older();
+        }
         if self.recall.is_none() {
             if key != Key::ArrowUp {
                 return;
             }
             let mut drafts = self.history.clone();
             if drafts.is_empty() {
+                if !self.waiting_older {
+                    self.older_requested = true;
+                    self.waiting_older = true;
+                }
                 return;
             }
             let position = drafts.len();
@@ -137,6 +236,10 @@ impl State {
             self.recall = Some(Recall { drafts, position });
         }
         let recall = self.recall.as_mut().unwrap();
+        if key == Key::ArrowUp && recall.position == 0 && !self.waiting_older {
+            self.older_requested = true;
+            self.waiting_older = true;
+        }
         recall.drafts[recall.position].clone_from(draft);
         recall.position = if key == Key::ArrowUp {
             recall.position.saturating_sub(1)
@@ -472,6 +575,47 @@ mod tests {
         assert_eq!(view.draft, "another conversation");
         view.arrow(Key::ArrowDown);
         assert_eq!(view.draft, "unfinished λ\nsecond line");
+    }
+
+    #[test]
+    fn older_pages_extend_reattached_recall_without_losing_duplicate_prompts_or_the_draft() {
+        let mut view = RecallView::new("unsent draft", &["latest"]);
+        view.arrow(Key::ArrowUp);
+        view.arrow(Key::ArrowUp);
+        assert!(view.state.take_older_request());
+        assert!(view.state.waiting_older());
+        view.state.prepend_older(
+            vec!["same".into(), "same".into()],
+            &mut view.draft,
+            &view.ctx,
+        );
+        assert_eq!(view.draft, "same");
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "same");
+        for _ in 0..3 {
+            view.arrow(Key::ArrowDown);
+        }
+        assert_eq!(view.draft, "unsent draft");
+        assert_eq!(view.state.history_len(), 3);
+    }
+
+    #[test]
+    fn down_or_typing_while_loading_an_older_page_cancels_the_pending_jump() {
+        for editing in [false, true] {
+            let mut view = RecallView::new("unsent", &["latest"]);
+            view.arrow(Key::ArrowUp);
+            view.arrow(Key::ArrowUp);
+            if editing {
+                view.cursor(view.draft.chars().count(), view.draft.chars().count());
+                view.frame(vec![egui::Event::Text(" edited".into())], true, true);
+            } else {
+                view.arrow(Key::ArrowDown);
+            }
+            let expected = view.draft.clone();
+            view.state
+                .prepend_older(vec!["old".into()], &mut view.draft, &view.ctx);
+            assert_eq!(view.draft, expected);
+        }
     }
 
     #[test]

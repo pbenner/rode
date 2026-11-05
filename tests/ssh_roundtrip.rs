@@ -69,6 +69,16 @@ fn policy_python_ignores_path_managers_and_python_environment() {
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
+    remote_native_tools(false);
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn model_only_tools_keep_network_off_over_ssh_and_proxyjump() {
+    remote_native_tools(true);
+}
+
+fn remote_native_tools(model_only: bool) {
     use rode_agent_core::{
         Access, Config, Plan,
         service::{Spec, State, Update},
@@ -79,13 +89,33 @@ fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
         let base = tempfile::tempdir().unwrap();
         let root = base.path().join("project");
         std::fs::create_dir(&root).unwrap();
+        let endpoint = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        endpoint.set_nonblocking(true).unwrap();
+        if model_only {
+            std::fs::write(
+                root.join("controller-probe-port"),
+                endpoint.local_addr().unwrap().port().to_string(),
+            )
+            .unwrap();
+        }
         let program = root.join("agent.py");
-        std::fs::write(&program, include_str!("fixtures/file_only_agent.py")).unwrap();
+        // PATH can select a mise/venv runtime outside the isolated project.
+        // This peer uses the system interpreter covered by the fixture policy.
+        std::fs::write(
+            &program,
+            include_str!("fixtures/file_only_agent.py").replacen(
+                "#!/usr/bin/env python3",
+                "#!/usr/bin/python3",
+                1,
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(root.join("file-tool-steps.json"),serde_json::json!([
             {"params":{"tool":"rode_write_file","arguments":{"path":"remote-source","text":"remote native edit","revision":null}}},
             {"params":{"tool":"exec_command","arguments":{"cmd":"touch forbidden"}}},
-            {"params":{"tool":"rode_read_file","arguments":{"path":"../private"}}}
+            {"params":{"tool":"rode_read_file","arguments":{"path":"../private"}}},
+            {"params":{"tool":"rode_run_command","arguments":{"command":"/usr/bin/python3 -c 'import socket; socket.socket()' > offline-network 2>&1; result=$?; test \"$result\" -ne 0 && printf REMOTE_OFFLINE_OK > offline-build"}}}
         ]).to_string()).unwrap();
         std::fs::write(base.path().join("private"), "private").unwrap();
         let remote = Remote::new(Profile {
@@ -108,11 +138,25 @@ fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
         let plan = remote
             .request(&Request::Prepare {
                 path: root.to_string_lossy().into(),
-                sandbox: Default::default(),
+                sandbox: rode::sandbox::Options {
+                    enabled: model_only,
+                    backend: rode::sandbox::Backend::Landlock,
+                    share_network: !model_only,
+                    ..Default::default()
+                },
             })
             .unwrap()
             .project
             .unwrap();
+        if model_only && !plan.active {
+            assert_ne!(
+                std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                Ok("1"),
+                "{}",
+                plan.reason
+            );
+            return;
+        }
         let policy = rode::sessions::fingerprint(&plan);
         let rpc = |request| {
             let response = remote
@@ -140,7 +184,16 @@ fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
             mode: plan.label().into(),
             config: Config {
                 codex: program.to_string_lossy().into(),
-                access: Access::FilesOnly,
+                access: if model_only {
+                    Access::Project
+                } else {
+                    Access::FilesOnly
+                },
+                network: if model_only {
+                    rode_agent_core::network::Network::ModelOnly
+                } else {
+                    Default::default()
+                },
                 ..Default::default()
             },
             plan: Plan {
@@ -215,6 +268,23 @@ fn file_only_native_tools_stay_on_the_project_host_over_ssh_and_proxyjump() {
             "remote native edit"
         );
         assert!(!root.join("forbidden").exists());
+        if model_only {
+            assert!(
+                endpoint.accept().is_ok(),
+                "Remote model controller could not reach its endpoint"
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("offline-build")).unwrap(),
+                "REMOTE_OFFLINE_OK"
+            );
+            assert!(
+                std::fs::read_to_string(root.join("offline-network"))
+                    .unwrap()
+                    .contains("PermissionError")
+            );
+        } else {
+            assert!(!root.join("offline-build").exists());
+        }
         let calls = std::fs::read_to_string(root.join("file-agent-rpc.jsonl")).unwrap();
         for id in [101, 102] {
             let result = calls

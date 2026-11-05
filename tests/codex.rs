@@ -330,6 +330,42 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
         finish_turn(&mut chat);
         check_latest_prompt(temp.path(), task);
     }
+    // A second read-only connection can recover old prompts even while this
+    // process owns the live thread. It must not resume it or call the model.
+    let before = fs::read(temp.path().join("request.json")).unwrap();
+    let mut reader = launch
+        .prompt_history(
+            chat.conversation_id().unwrap(),
+            vec!["One more follow-up without tools.".into()],
+            Arc::new(|| {}),
+        )
+        .unwrap();
+    let mut prompts = Vec::new();
+    let until = Instant::now() + Duration::from_secs(15);
+    loop {
+        reader.poll();
+        assert!(Instant::now() < until, "Read-only prompt history timed out");
+        if let Some(error) = reader.take_error() {
+            panic!("{error}");
+        }
+        prompts.splice(0..0, reader.take_prompts());
+        if !reader.busy() {
+            if !reader.more() {
+                break;
+            }
+            reader.load_more().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        prompts,
+        ["Reply once without tools.", "Continue without tools."]
+    );
+    assert_eq!(
+        fs::read(temp.path().join("request.json")).unwrap(),
+        before,
+        "Reading recall history called the model"
+    );
     fs::write(temp.path().join("tool-mode"), "run one tool").unwrap();
     chat.submit(
         launch.clone(),

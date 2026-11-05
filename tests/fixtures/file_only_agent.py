@@ -3,10 +3,16 @@
 
 import json
 import os
+import socket
 import sys
 from pathlib import Path
 
 root = Path.cwd()
+if (root / "controller-probe-port").exists():
+    with socket.create_connection(
+        ("127.0.0.1", int((root / "controller-probe-port").read_text())), timeout=3
+    ) as connection:
+        connection.sendall(b"MODEL_CONTROLLER_OK")
 (root / "file-agent.pid").write_text(str(os.getpid()))
 steps = json.loads((root / "file-tool-steps.json").read_text())
 index = 0
@@ -60,6 +66,7 @@ for line in sys.stdin:
             request,
             {
                 "config": {
+                    "web_search": "disabled",
                     "features": features,
                     "mcp_servers": {"dangerous-server": {"enabled": True, "command": "sh"}},
                 }
@@ -69,7 +76,7 @@ for line in sys.stdin:
         assert request["params"]["sandbox"] == "read-only"
         assert request["params"]["approvalPolicy"] == "never"
         assert request["params"]["config"]["mcp_servers.dangerous-server.enabled"] is False
-        assert len(request["params"]["dynamicTools"]) == 6
+        assert len(request["params"]["dynamicTools"]) in (6, 7)
         result(request, {"thread": {"id": "file-thread"}})
     elif method == "turn/start":
         turn += 1

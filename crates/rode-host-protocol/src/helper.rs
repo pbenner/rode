@@ -31,6 +31,7 @@ pub const CAPABILITIES: &[&str] = &[
     "extensions",
     "runtime_cache",
     "agent_files",
+    "agent_offline_tools",
 ];
 
 /// Metadata repeated in the live handshake after discovery and cache publication.

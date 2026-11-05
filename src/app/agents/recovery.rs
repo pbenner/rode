@@ -9,9 +9,9 @@ pub(super) fn ui(ui: &mut egui::Ui, chat: &Chat, enabled: bool, config: &Config)
     ui.group(|ui| {
         ui.strong(if chat.busy { "Recovering agent…" } else { "Agent connection stopped" });
         ui.add(egui::Label::new("Your draft and queued prompts are kept. Recovery does not repeat the interrupted prompt; resume the queue when ready.").wrap());
-        let fresh_required = config.files_only() && chat.conversation_id().is_some();
+        let fresh_required = config.native_tools() && chat.conversation_id().is_some();
         if fresh_required {
-            ui.label("Choose Start new context in Recovery options to recreate confined file tools.");
+            ui.label("Choose Start new context in Recovery options to recreate confined native tools.");
         }
         ui.horizontal_wrapped(|ui| {
             let ready = enabled && !chat.busy && !chat.stopping() && !chat.queue_pending();
@@ -23,8 +23,8 @@ pub(super) fn ui(ui: &mut egui::Ui, chat: &Chat, enabled: bool, config: &Config)
                     if ui.add_enabled(ready, egui::Button::new("Start new context · keep queue")).on_hover_text(
                         "Use when the saved conversation cannot be resumed. Earlier messages stay visible, but are not sent to the new agent. Queued prompts and attachments are kept.",
                     ).clicked() { action = Some(true); ui.close(); }
-                    if config.files_only() {
-                        ui.label("File-only recovery uses a new context so confined tools are recreated.");
+                    if config.native_tools() {
+                        ui.label("Native-tool recovery uses a new context so confined tools are recreated.");
                     }
                 });
         });

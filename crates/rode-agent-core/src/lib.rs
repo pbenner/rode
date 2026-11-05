@@ -11,7 +11,9 @@ pub mod file_only;
 pub mod history;
 mod input_history;
 pub mod io;
+pub mod network;
 pub mod personality;
+pub mod prompt_history;
 pub mod protocol;
 pub mod queue;
 pub mod service;
@@ -156,6 +158,8 @@ pub struct Config {
     pub access: Access,
     /// Whether additional permission requests require a user decision or are denied.
     pub approval: Approval,
+    /// Network scope for agent tools; model-only mode requires an offline project sandbox.
+    pub network: network::Network,
     /// Optional Codex reasoning effort advertised by the selected model.
     pub reasoning_effort: String,
     /// Explicit ACP selector overrides, keyed by advertised option ID.
@@ -180,6 +184,7 @@ impl Default for Config {
             read_only: false,
             access: Access::default(),
             approval: Approval::default(),
+            network: network::Network::default(),
             reasoning_effort: String::new(),
             acp_options: BTreeMap::new(),
             claude_options: BTreeMap::new(),
@@ -259,6 +264,8 @@ impl Config {
             && self.claude_program == next.claude_program
             && self.claude_arguments == next.claude_arguments
             && self.files_only() == next.files_only()
+            && self.network == next.network
+            && self.offline_commands() == next.offline_commands()
     }
     /// Return the model setting appropriate to the selected provider.
     pub fn model(&self) -> &str {
@@ -275,6 +282,10 @@ impl Config {
     }
     /// Construct arguments with optional model validation for history browsing.
     pub fn arguments(&self, require_model: bool) -> Result<Vec<String>> {
+        ensure!(
+            self.network != network::Network::ModelOnly || !self.provider.is_acp(),
+            "Model connection only is supported by Codex and Codex local models. This ACP provider cannot enforce offline tools."
+        );
         ensure!(
             !self.files_only() || !self.provider.is_acp(),
             "Edit project files only requires Codex. Select another access mode before using Claude Code or another ACP agent."
@@ -294,7 +305,7 @@ impl Config {
                 "stdio://".into(),
             ]
         };
-        if self.files_only() {
+        if self.native_tools() {
             for setting in file_only::LAUNCH_OVERRIDES {
                 args.extend(["-c".into(), (*setting).into()]);
             }
@@ -430,6 +441,18 @@ pub trait Transport: Send {
 }
 /// Launch adapter for local, SSH and service-owned conversation processes.
 pub trait Factory: Send + Sync {
+    /// Run a bounded client-owned command under the original offline project
+    /// policy. Called only by the model-only tool surface, never by file-only
+    /// mode. Unsupported hosts must reject the operation.
+    fn command_tool(
+        &self,
+        _arguments: &Value,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Value> {
+        anyhow::bail!(
+            "This host does not support offline agent commands. Start a new chat with an updated RODE helper."
+        )
+    }
     /// Run one bounded native file operation on the captured project host, inside
     /// its existing policy. Implementations must never accept an executable here.
     /// Observe cancellation before starting work and terminate an interrupted
@@ -461,10 +484,12 @@ impl Session {
     }
     /// Start a conversation process through its captured host factory.
     pub fn start(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
+        launch.plan.controller_prefix(launch.config.network)?;
         launch.factory.start(&launch, false, wake)
     }
     /// Start a history process without model validation or inference.
     pub fn history(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
+        launch.plan.controller_prefix(launch.config.network)?;
         launch.factory.start(&launch, true, wake)
     }
     /// Queue one bounded JSON-RPC message.

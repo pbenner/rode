@@ -24,6 +24,7 @@ from ui_harness import (
     key,
     screenshot,
     text,
+    wait_for_button,
 )
 
 
@@ -63,6 +64,8 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
     root.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/persistent_agent.py", root / "agent.py")
     (root / "record-inputs").touch()
+    saved_prompts = ["oldest saved prompt", "same earlier prompt", "same earlier prompt"]
+    (root / "saved-prompts.json").write_text(json.dumps(saved_prompts))
     attachment = base / "queued-document.txt"
     attachment.write_text("Attachment retained across restart")
     (root / "agent.py").chmod(0o755)
@@ -71,6 +74,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
 
     def infos():
@@ -179,6 +183,68 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             assert not any(
                 "Changed after Rode closed" in block.get("text", "") for block in recorded[1]
             )
+            # Older controllers can expose only the final transcript messages.
+            # These earlier backend-owned prompts are absent from its recall
+            # snapshot; Up must page them without claiming/restarting the chat.
+            click(1280, 785)
+            text("unsent after restart")
+            key("Home", ("Control_L",))
+
+            def expect_draft(expected):
+                wait_for_button(
+                    window, process, log_path, base / "ui-state.json", "agent-prompt-recall-ready"
+                )
+
+                def copied():
+                    key("a", ("Control_L",))
+                    key("c", ("Control_L",))
+                    return (
+                        subprocess.check_output(
+                            ["xclip", "-selection", "clipboard", "-o"], timeout=3
+                        ).decode()
+                        == expected
+                    )
+
+                wait(copied, "Wrong recalled prompt: " + expected)
+                wait_for_button(
+                    window, process, log_path, base / "ui-state.json", "agent-prompt-recall-ready"
+                )
+                key("Home", ("Control_L",))
+
+            # Cancel a deliberately stalled initial lookup. Send must become
+            # usable while that metadata peer is still unable to initialize.
+            for expected in ["queued across restart", "work"]:
+                key("Up")
+                expect_draft(expected)
+            stalled = root / "delay-prompt-bootstrap"
+            stalled.touch()
+            key("Up")
+            wait_for_button(
+                window, process, log_path, base / "ui-state.json", "agent-prompt-recall-loading"
+            )
+            key("Down")
+            expect_draft("queued across restart")
+            key("Down")
+            expect_draft("unsent after restart")
+            wait_for_button(window, process, log_path, base / "ui-state.json", "agent-send")
+            stalled.unlink()
+            recalled = ["queued across restart", "work", *reversed(saved_prompts)]
+            for expected in recalled:
+                key("Up")
+                expect_draft(expected)
+            for expected in [
+                "same earlier prompt",
+                "same earlier prompt",
+                "work",
+                "queued across restart",
+                "unsent after restart",
+            ]:
+                key("Down")
+                expect_draft(expected)
+            key("a", ("Control_L",))
+            key("BackSpace")
+            assert (root / "agent.pid").read_text() == pid, "Recall restarted the live backend"
+            assert (root / "work-done").read_text() == "2", "Recall started inference"
             click(1280, 785)
             text("work again")
             key("Return")

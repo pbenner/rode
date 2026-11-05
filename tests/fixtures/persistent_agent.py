@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 root = Path.cwd()
@@ -23,13 +24,6 @@ def snapshot(name, text):
         pending.replace(root / name)
     finally:
         pending.unlink(missing_ok=True)
-
-
-snapshot("agent.pid", str(os.getpid()))
-snapshot(
-    "agent-scope.json",
-    json.dumps(dict(cwd=str(root), private_visible=(root.parent / "private.txt").exists())),
-)
 
 
 def send(value):
@@ -133,6 +127,9 @@ for line in sys.stdin:
             snapshot("denied", "denied")
             cancelled.set()
     elif method == "initialize":
+        deadline = time.monotonic() + 15
+        while (root / "delay-prompt-bootstrap").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
         reply(
             message,
             dict(
@@ -145,6 +142,11 @@ for line in sys.stdin:
     elif method == "model/list":
         reply(message, dict(data=[], nextCursor=None))
     elif method in ("thread/start", "session/new", "thread/resume", "session/load"):
+        snapshot("agent.pid", str(os.getpid()))
+        snapshot(
+            "agent-scope.json",
+            json.dumps(dict(cwd=str(root), private_visible=(root.parent / "private.txt").exists())),
+        )
         if method == "session/load":
             notify(
                 "session/update",
@@ -166,6 +168,48 @@ for line in sys.stdin:
         reply(
             message,
             dict(sessionId=identity) if acp else dict(thread=dict(id=identity)),
+        )
+    elif method == "thread/read":
+        reply(
+            message,
+            dict(
+                thread=dict(
+                    id="native-thread",
+                    cwd=str(root),
+                    modelProvider="openai",
+                    status=dict(type="active"),
+                )
+            ),
+        )
+    elif method == "thread/turns/list":
+        saved = root / "saved-prompts.json"
+        prompts = json.loads(saved.read_text()) if saved.exists() else []
+        recorded = root / "recorded-inputs.jsonl"
+        if recorded.exists():
+            for line in recorded.read_text().splitlines():
+                try:
+                    blocks = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                prompts.append(blocks[0]["text"])
+        index = int(message["params"].get("cursor", len(prompts))) - 1
+        reply(
+            message,
+            dict(
+                data=[
+                    dict(
+                        id=f"saved-{index}",
+                        items=[
+                            dict(
+                                type="userMessage", content=[dict(type="text", text=prompts[index])]
+                            )
+                        ],
+                    )
+                ]
+                if index >= 0
+                else [],
+                nextCursor=str(index) if index > 0 else None,
+            ),
         )
     elif method in ("turn/start", "session/prompt"):
         if (root / "record-inputs").exists():

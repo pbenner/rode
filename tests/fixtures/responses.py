@@ -68,6 +68,20 @@ class Handler(BaseHTTPRequestHandler):
                 call_id="patch_fixture",
                 input="*** Begin Patch\n*** Add File: ../outside-patch.txt\n+must be blocked\n*** Add File: builtin-patch.txt\n+must also be blocked\n*** End Patch",
             )
+        offline_tool = (root / "offline-mode").exists() and not (root / "offline-replied").exists()
+        if offline_tool:
+            (root / "offline-replied").touch()
+            item = dict(
+                id="offline_fixture",
+                type="function_call",
+                name="rode_run_command",
+                call_id="offline_fixture",
+                arguments=json.dumps(
+                    {
+                        "command": "/usr/bin/python3 -c 'import socket; s=socket.socket()' > network.txt 2>&1; result=$?; test \"$result\" -ne 0 && printf OFFLINE_BUILD_OK > offline-build.txt"
+                    }
+                ),
+            )
         response = {
             "id": f"resp_fixture_{Handler.sequence}",
             "object": "response",
@@ -93,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             {"type": "response.output_item.done", "output_index": 0, "item": item},
             {"type": "response.completed", "response": response},
         ]
-        if tool or file_tool:
+        if tool or file_tool or offline_tool:
             events = [event for event in events if event["type"] != "response.output_text.delta"]
         for event in events:
             self.wfile.write(

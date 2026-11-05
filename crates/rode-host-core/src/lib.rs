@@ -1,5 +1,6 @@
 //! Native host services, independent of GUI and persistent session ownership.
 #![warn(missing_docs)]
+pub mod agent_commands;
 pub mod agent_files;
 pub mod command;
 pub mod debugger;

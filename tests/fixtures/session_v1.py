@@ -102,6 +102,13 @@ def handle(stream):
                 reply(stream, "ok")
             elif action == "supports_automatic_queue" and os.environ.get("RODE_TEST_QUEUE_CAPABLE"):
                 reply(stream, "ok")
+            elif action in (
+                "supports_scoped_control",
+                "supports_file_only",
+                "supports_authenticated_control",
+                "supports_claude",
+            ) and os.environ.get("RODE_TEST_AGENT_CAPABLE"):
+                reply(stream, "ok")
             elif action == "runtimes" and os.environ.get("RODE_TEST_RUNTIME_CAPABLE"):
                 reply(stream, "runtimes", [])
             elif action not in ("attach", "rename", "end", "shutdown", "create"):

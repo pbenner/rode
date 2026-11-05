@@ -7,6 +7,8 @@ pub mod protocol;
 use crate::{sandbox, ssh};
 use anyhow::Result;
 pub use personality::Personality;
+pub use rode_agent_core::network::Network;
+pub use rode_agent_core::prompt_history;
 pub use rode_agent_core::{Access, Approval, Config, LINE_LIMIT, PROMPT_LIMIT, Provider};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -24,6 +26,15 @@ pub struct Launch {
 }
 
 impl Launch {
+    /// Read older prompts without resuming or changing the live agent's session.
+    pub fn prompt_history(
+        &self,
+        thread: &str,
+        known: Vec<String>,
+        wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<prompt_history::Reader> {
+        prompt_history::Reader::open(self.core(), thread, known, wake)
+    }
     /// Adapt the captured desktop host context to the headless controller through an injected transport factory.
     fn core(&self) -> rode_agent_core::Launch {
         rode_agent_core::Launch {
@@ -43,6 +54,22 @@ impl Launch {
 /// Desktop local/SSH transport factory that preserves the captured project-host policy.
 struct HostFactory(Launch);
 impl rode_agent_core::Factory for HostFactory {
+    fn command_tool(
+        &self,
+        arguments: &Value,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Value> {
+        anyhow::ensure!(
+            self.0.remote.is_none(),
+            "Offline remote commands require the native RODE host service"
+        );
+        rode_host_core::agent_commands::run(
+            &self.0.plan,
+            arguments,
+            &std::env::vars().collect(),
+            cancel,
+        )
+    }
     fn file_tool(
         &self,
         tool: &str,
@@ -83,6 +110,9 @@ impl rode_agent_core::Factory for HostFactory {
     ) -> Result<rode_agent_core::Session> {
         let mut host = self.0.clone();
         host.config = launch.config.clone();
+        if host.config.native_tools() {
+            host.plan.environment.mise = false;
+        }
         let session = if history {
             Session::history(host, wake)?
         } else {
@@ -131,9 +161,16 @@ impl Session {
         limit: usize,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
-        if launch.config.files_only() {
+        if launch.config.native_tools() {
             launch.plan.environment.mise = false;
         }
+        launch.plan.prefix = rode_agent_core::Plan {
+            root: launch.plan.root.clone(),
+            active: launch.plan.active,
+            project_read_only: launch.plan.project_read_only,
+            prefix: launch.plan.prefix.clone(),
+        }
+        .controller_prefix(launch.config.network)?;
         crate::process::Session::start(
             crate::process::Launch {
                 native_debug: false,

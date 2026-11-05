@@ -17,6 +17,7 @@ mod controls;
 mod header;
 mod history;
 mod message;
+mod prompt_recall;
 mod queue;
 mod recovery;
 mod runtime;
@@ -50,6 +51,8 @@ pub(super) struct Agents {
     running: background::Running,
     retired: Vec<Chat>,
     attaching: bool,
+    prompt_reader: Option<agent::prompt_history::Reader>,
+    prompt_reader_failed: bool,
 }
 impl Agents {
     /// Restore a bounded configuration map and initialize inert chat/history/setup views.
@@ -85,6 +88,8 @@ impl Agents {
             running: Default::default(),
             retired: vec![],
             attaching: false,
+            prompt_reader: None,
+            prompt_reader_failed: false,
             local_root: std::env::current_dir()
                 .unwrap_or_else(|_| files::expand_home("~"))
                 .to_string_lossy()
@@ -150,6 +155,8 @@ impl Agents {
     fn release_chat(&mut self) {
         self.flush_queue();
         self.composer.clear_history();
+        self.prompt_reader = None;
+        self.prompt_reader_failed = false;
         self.queue.clear();
         let old = std::mem::take(&mut self.chat);
         if old.work_pending() {
@@ -308,6 +315,7 @@ impl EditorApp {
         while let Some(prompt) = self.agents.queue.take_dispatched() {
             self.agents.composer.remember_prompt(prompt);
         }
+        self.poll_prompt_recall(ctx);
         if self.agents.completed != self.agents.chat.completed {
             self.agents.completed = self.agents.chat.completed;
             self.agents.queue.finished();
@@ -701,15 +709,17 @@ impl EditorApp {
                                 && agents.chat.queue_capacity()
                                 && !agents.history_open
                                 && !agents.attaching
+                                && !agents.prompt_reader.as_ref().is_some_and(|reader| reader.anchoring())
                                 && !agents.files.pending
                                 && (!agents.draft.trim().is_empty() || !agents.files.files.is_empty())
                                 && agents.draft.len() <= agent::PROMPT_LIMIT
                                 && (!agents.config.provider.is_acp()
                                     || agents.argument_error.is_empty());
-                            if ui
+                            let send_button = ui
                                 .add_enabled(enabled, egui::Button::new(if agents.chat.busy || agents.queue.waiting_for_reply() || !agents.queue.is_empty() { "Queue" } else { "Send" }))
-                                .on_hover_text("Enter sends when idle or queues a follow-up while working.\nShift+Enter inserts a new line.")
-                                .clicked()
+                                .on_hover_text("Enter sends when idle or queues a follow-up while working.\nShift+Enter inserts a new line.");
+                            ui_probe::button(ui, "agent-send", &send_button);
+                            if send_button.clicked()
                                 || (shortcut && enabled)
                             {
                                 send = true;
@@ -748,10 +758,11 @@ impl EditorApp {
                             if ui.add_enabled(!offline && !modal && !agents.history_open && !agents.files.pending && agents.files.files.len() < rode_agent_core::attachment::MAX_ATTACHMENTS,
                                 egui::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.").clicked() { attach = true; }
                             if ui.available_width() > 100. {
-                                ui.add(
-                                    egui::Label::new(palette.tag("Enter · Shift+Enter")).truncate(),
+                                let hint = ui.add(
+                                    egui::Label::new(palette.tag(if agents.composer.waiting_older() { "Loading earlier prompts…" } else { "Enter · Shift+Enter" })).truncate(),
                                 )
                                 .on_hover_text("Enter to send; Shift+Enter for a new line. At the start of the message, Up/Down recalls sent messages; Down returns to your draft.");
+                                ui_probe::button(ui, if agents.composer.waiting_older() { "agent-prompt-recall-loading" } else { "agent-prompt-recall-ready" }, &hint);
                             }
                         },
                     );
@@ -901,7 +912,14 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Agents) {
             return;
         }
-        if self.agents.files.pending || self.agents.attaching {
+        if self.agents.files.pending
+            || self.agents.attaching
+            || self
+                .agents
+                .prompt_reader
+                .as_ref()
+                .is_some_and(|reader| reader.anchoring())
+        {
             return;
         }
         let text = self.agents.draft.clone();

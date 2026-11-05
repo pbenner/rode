@@ -29,9 +29,9 @@ impl Chat {
         );
         ensure!(
             fresh
-                || !launch.config.files_only()
+                || !launch.config.native_tools()
                 || self.recovery.as_deref().is_none_or(str::is_empty),
-            "File-only agents require Start new context to recreate their confined file tools. Your draft and queued prompts are kept."
+            "Native-tool agents require Start new context to recreate their confined tools. Your draft and queued prompts are kept."
         );
         launch.config.argv()?;
         self.read_only = launch.plan.project_read_only
@@ -55,8 +55,8 @@ impl Chat {
     ) -> Result<()> {
         let preparing_remote_bundle =
             launch.config.argv()?[0] == crate::AUTO_CODEX && launch.remote;
-        self.file_factory = self.config.files_only().then(|| launch.factory.clone());
-        self.file_wake = self.config.files_only().then(|| wake.clone());
+        self.file_factory = self.config.native_tools().then(|| launch.factory.clone());
+        self.file_wake = self.config.native_tools().then(|| wake.clone());
         self.root = launch.plan.root.clone();
         self.session = Some(Session::start(launch, wake)?);
         self.status = if preparing_remote_bundle {

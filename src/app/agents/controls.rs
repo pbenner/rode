@@ -218,13 +218,16 @@ pub(super) fn buttons(
                 Access::Project,
                 Access::Full,
             ] {
-                if ui
-                    .add_enabled(
-                        !read_only || matches!(choice, Access::ReadOnly | Access::FilesOnly),
-                        egui::Button::selectable(access == choice, choice.label()),
-                    )
-                    .clicked()
-                {
+                let response = ui.add_enabled(
+                    !read_only || matches!(choice, Access::ReadOnly | Access::FilesOnly),
+                    egui::Button::selectable(access == choice, choice.label()),
+                );
+                crate::app::ui_probe::button(
+                    ui,
+                    &format!("agent-access-{}", choice.label()),
+                    &response,
+                );
+                if response.clicked() {
                     config.access = choice;
                     config.read_only = false;
                 }
@@ -244,14 +247,39 @@ pub(super) fn buttons(
             }
         }
         ui.separator();
+        ui.label("Agent networking");
+        for choice in [
+            crate::agent::Network::Project,
+            crate::agent::Network::ModelOnly,
+        ] {
+            if ui
+                .add_enabled(
+                    choice == crate::agent::Network::Project || !config.provider.is_acp(),
+                    egui::Button::selectable(config.network == choice, choice.label()),
+                )
+                .on_disabled_hover_text("This provider cannot enforce offline native tools.")
+                .clicked()
+            {
+                config.network = choice;
+            }
+        }
+        if config.network == crate::agent::Network::ModelOnly {
+            ui.small("Requires an active project sandbox with Allow network access turned off. The model controller can connect; native commands stay offline. Web, browser, MCP and plugin tools are disabled. Changing this mode or whether commands are allowed starts a new conversation.");
+        }
+        ui.separator();
         ui.label("Permission requests");
-        if config.files_only() {
+        if config.native_tools() {
             ui.small(
-                "File-only mode automatically declines all requests for additional permissions.",
+                "Confined native tools automatically decline all requests for additional permissions.",
             );
         } else {
             for choice in [Approval::Ask, Approval::Never] {
-                ui.selectable_value(&mut config.approval, choice, choice.label());
+                let response = ui.selectable_value(&mut config.approval, choice, choice.label());
+                crate::app::ui_probe::button(
+                    ui,
+                    &format!("agent-approval-{}", choice.label()),
+                    &response,
+                );
             }
             ui.small("Ask when needed shows the agent's approval requests. Never ask declines requests; tools already permitted by the agent's mode can run automatically.");
         }
@@ -330,11 +358,11 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
         .unwrap_or(&control.current);
     if control.boolean {
         let mut selected = value.as_bool().unwrap_or(false);
-        if ui
+        let response = ui
             .checkbox(&mut selected, &control.name)
-            .on_hover_text(&control.description)
-            .changed()
-        {
+            .on_hover_text(&control.description);
+        crate::app::ui_probe::button(ui, &format!("agent-acp-option-{}", control.id), &response);
+        if response.changed() {
             config
                 .acp_options_mut()
                 .insert(control.id.clone(), Value::Bool(selected));
@@ -385,6 +413,29 @@ mod tests {
             let saved: Config =
                 serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
             assert!(saved.files_only());
+            assert!(!chat.connected());
+            assert!(chat.messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn model_only_network_is_selectable_and_persisted_without_starting_an_agent() {
+        for size in [egui::vec2(1380., 900.), egui::vec2(620., 560.)] {
+            let ctx = egui::Context::default();
+            let mut config = Config::default();
+            let before = config.clone();
+            let chat = Chat::default();
+            frame(&ctx, &mut config, &chat, size, vec![]);
+            let output = frame(&ctx, &mut config, &chat, size, vec![]);
+            let pos = position(&output, "Access: Project access");
+            let output = click(&ctx, &mut config, &chat, size, pos);
+            let pos = position(&output, "Model connection only");
+            click(&ctx, &mut config, &chat, size, pos);
+            assert_eq!(config.network, crate::agent::Network::ModelOnly);
+            assert!(!config.same_process(&before));
+            let saved: Config =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(saved.network, crate::agent::Network::ModelOnly);
             assert!(!chat.connected());
             assert!(chat.messages.is_empty());
         }

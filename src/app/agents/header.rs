@@ -67,12 +67,12 @@ fn provider(ui: &mut egui::Ui, config: &mut Config, width: f32, busy: bool, queu
                     for provider in Provider::ALL {
                         let enabled = !busy
                             && !queued
-                            && !(provider.is_acp() && config.files_only());
+                            && !(provider.is_acp() && config.native_tools());
                         ui.add_enabled_ui(enabled, |ui| {
                             ui.selectable_value(&mut config.provider, provider, provider.label())
                         })
                         .response
-                        .on_disabled_hover_text("Choose another access mode before switching to Claude Code or ACP; file-only tools require Codex.");
+                        .on_disabled_hover_text("File-only and model-connection-only tools require Codex. Change those access/network settings before switching to Claude Code or ACP.");
                     }
                 })
                 .response

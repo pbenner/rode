@@ -401,6 +401,15 @@ fn failed_saved_reconnect_can_fall_back_to_a_new_context_without_losing_work() {
 
 #[test]
 fn native_file_only_controller_edits_through_its_captured_host_policy() {
+    native_tool_controller(false);
+}
+
+#[test]
+fn model_only_controller_retains_offline_commands_after_reattach_and_recovery() {
+    native_tool_controller(true);
+}
+
+fn native_tool_controller(model_only: bool) {
     let fixture = Fixture::new();
     fs::write(
         fixture.root.join("agent.py"),
@@ -409,12 +418,40 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
     .unwrap();
     fs::write(fixture.root.join("file-tool-steps.json"), serde_json::json!([
         {"params":{"tool":"rode_write_file","arguments":{"path":"native-source.py","text":"native controller\n","revision":null}}},
-        {"params":{"tool":"exec_command","arguments":{"cmd":"touch forbidden"}}}
+        {"params":{"tool":"exec_command","arguments":{"cmd":"touch forbidden"}}},
+        {"params":{"tool":"rode_run_command","arguments":{"command":"/usr/bin/python3 -c 'import socket; socket.socket()' > offline-network 2>&1; result=$?; test \"$result\" -ne 0 && touch offline-command"}}}
     ]).to_string()).unwrap();
-    let plan = rode::sandbox::Plan {
+    let mut plan = rode::sandbox::Plan {
         root: fixture.root.to_string_lossy().into(),
         native_helper: Some(env!("CARGO_BIN_EXE_rode-sessiond").into()),
         ..Default::default()
+    };
+    if model_only {
+        plan = rode::sandbox::prepare_with_helper(
+            &plan.root,
+            &rode::sandbox::Options {
+                enabled: true,
+                backend: rode::sandbox::Backend::Landlock,
+                share_network: false,
+                ..Default::default()
+            },
+            std::path::Path::new(env!("CARGO_BIN_EXE_rode-sessiond")),
+        )
+        .unwrap();
+        if !plan.active {
+            assert_ne!(
+                std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                Ok("1"),
+                "{}",
+                plan.reason
+            );
+            return;
+        }
+    }
+    let access = if model_only {
+        rode_agent_core::Access::Project
+    } else {
+        rode_agent_core::Access::FilesOnly
     };
     let spec = Spec {
         id: rode_session::new_id().unwrap(),
@@ -423,12 +460,19 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
         mode: "NORMAL MODE".into(),
         config: Config {
             codex: fixture.root.join("agent.py").to_string_lossy().into(),
-            access: rode_agent_core::Access::FilesOnly,
+            access,
+            network: if model_only {
+                rode_agent_core::network::Network::ModelOnly
+            } else {
+                Default::default()
+            },
             ..Default::default()
         },
         plan: Plan {
             root: plan.root.clone(),
-            ..Default::default()
+            active: plan.active,
+            project_read_only: plan.project_read_only,
+            prefix: plan.prefix.clone(),
         },
         file_tool_plan: Some(serde_json::to_value(&plan).unwrap()),
         executable: fixture.root.join("agent.py").to_string_lossy().into(),
@@ -454,6 +498,14 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
         "native controller\n"
     );
     assert!(!fixture.root.join("forbidden").exists());
+    assert_eq!(fixture.root.join("offline-command").exists(), model_only);
+    if model_only {
+        assert!(
+            fs::read_to_string(fixture.root.join("offline-network"))
+                .unwrap()
+                .contains("PermissionError")
+        );
+    }
     drop(view);
     wait(|| {
         fixture
@@ -463,10 +515,7 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
     });
     let mut view = fixture.attach(&info);
     let state = view.until(|state| state.chat.connected);
-    assert_eq!(
-        state.chat.config.access(),
-        rode_agent_core::Access::FilesOnly
-    );
+    assert_eq!(state.chat.config.access(), access);
     // Recovery must rebuild the verified file-only tools, never resume a thread
     // with command tools enabled or repeat the completed edit automatically.
     let pid: i32 = fs::read_to_string(fixture.root.join("file-agent.pid"))
@@ -484,7 +533,7 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
             config: Box::new(failed.chat.config.clone()),
         },
     );
-    assert!(denied.error.contains("File-only agents require"));
+    assert!(denied.error.contains("Native-tool agents require"));
     view.queue(
         "restart-confined-tools",
         rode_agent_core::queue::Action::Recover {
@@ -493,10 +542,7 @@ fn native_file_only_controller_edits_through_its_captured_host_policy() {
         },
     );
     let ready = view.until(|s| s.chat.connected && !s.chat.busy && !s.chat.recoverable);
-    assert_eq!(
-        ready.chat.config.access(),
-        rode_agent_core::Access::FilesOnly
-    );
+    assert_eq!(ready.chat.config.access(), access);
     assert!(!fixture.root.join("forbidden").exists());
     let calls: Vec<serde_json::Value> =
         fs::read_to_string(fixture.root.join("file-agent-rpc.jsonl"))
@@ -1098,11 +1144,13 @@ fn automatic_queue_configuration_cannot_change_the_captured_backend() {
 
 #[test]
 fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
-    for (generation, queue_capable) in [
-        (None, false),
-        (None, true),
-        (Some("protocol-8"), false),
-        (Some("protocol-9"), true),
+    for (generation, queue_capable, agent_capable) in [
+        (None, false, false),
+        (None, true, false),
+        (Some("protocol-8"), false, false),
+        (Some("protocol-9"), true, false),
+        (None, true, true),
+        (Some("protocol-13"), true, true),
     ] {
         let fixture = Fixture::new();
         let directory = generation.map_or_else(
@@ -1126,6 +1174,10 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             .arg(&id)
             .arg("legacy-policy")
             .env("RODE_TEST_RUNTIME_CAPABLE", "1")
+            .env(
+                "RODE_TEST_AGENT_CAPABLE",
+                if agent_capable { "1" } else { "" },
+            )
             .env(
                 "RODE_TEST_QUEUE_CAPABLE",
                 if queue_capable { "1" } else { "" },
@@ -1155,6 +1207,9 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             assert!(actions.lines().any(|s| s == "supports_automatic_queue"));
             if queue_capable {
                 assert!(actions.lines().any(|s| s == "supports_scoped_control"));
+            }
+            if agent_capable {
+                assert!(actions.lines().any(|s| s == "supports_offline_agent_tools"));
             }
             assert!(
                 fixture

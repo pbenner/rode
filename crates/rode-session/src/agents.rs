@@ -130,6 +130,7 @@ impl Store {
             "Agent environment exceeds 64 KiB"
         );
         spec.config.arguments(spec.text.is_some())?;
+        spec.plan.controller_prefix(spec.config.network)?;
         if let Some(text) = &spec.text {
             rode_agent_core::attachment::validate(text, &spec.attachments)?;
         }

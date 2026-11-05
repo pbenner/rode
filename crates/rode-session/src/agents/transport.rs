@@ -15,6 +15,21 @@ pub(super) struct Factory {
     pub active: Arc<AtomicUsize>,
 }
 impl rode_agent_core::Factory for Factory {
+    fn command_tool(&self, arguments: &Value, cancel: &AtomicBool) -> Result<Value> {
+        let plan: rode_host_core::sandbox::Plan = serde_json::from_value(
+            self.spec
+                .file_tool_plan
+                .clone()
+                .context("This controller lacks offline tool support; start a new chat")?,
+        )?;
+        ensure!(
+            plan.root == self.spec.plan.root
+                && plan.active == self.spec.plan.active
+                && plan.project_read_only == self.spec.plan.project_read_only,
+            "Offline command tools do not match the captured project policy"
+        );
+        rode_host_core::agent_commands::run(&plan, arguments, &self.spec.env, cancel)
+    }
     fn file_tool(&self, tool: &str, arguments: &Value, cancel: &AtomicBool) -> Result<Value> {
         let mut plan: rode_host_core::sandbox::Plan = serde_json::from_value(
             self.spec
@@ -63,7 +78,7 @@ impl rode_agent_core::Factory for Factory {
         let mut argv = launch.config.arguments(!history)?;
         argv[0] = self.spec.executable.clone();
         // A normal-mode plan may still carry an optional environment launcher.
-        let mut argv_with_policy = self.spec.plan.prefix.clone();
+        let mut argv_with_policy = self.spec.plan.controller_prefix(launch.config.network)?;
         argv_with_policy.extend(argv);
         let mut command = ProcessCommand::new(&argv_with_policy[0]);
         command

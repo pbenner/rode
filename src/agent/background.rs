@@ -17,7 +17,7 @@ use std::{
 /// Local/SSH service operation using the same verified helper as native terminals.
 pub fn request(launch: &Launch, request: rode_session::Request) -> Result<service::Reply> {
     let operation = service::Operation::Agents {
-        mise: launch.plan.environment.mise && !launch.config.files_only(),
+        mise: launch.plan.environment.mise && !launch.config.native_tools(),
         request: Box::new(request),
     };
     if let Some(remote) = &launch.remote {
@@ -76,6 +76,13 @@ impl Client {
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
         launch.config.arguments(text.is_some())?;
+        rode_agent_core::Plan {
+            root: launch.plan.root.clone(),
+            active: launch.plan.active,
+            project_read_only: launch.plan.project_read_only,
+            prefix: launch.plan.prefix.clone(),
+        }
+        .controller_prefix(launch.config.network)?;
         if let Some(text) = &text {
             rode_agent_core::attachment::validate(text, &attachments)?;
         }
@@ -88,7 +95,7 @@ impl Client {
             let result = (|| -> Result<_> {
                 let argv = launch.config.arguments(text.is_some())?;
                 let mut plan = launch.plan.clone();
-                if launch.config.files_only() {
+                if launch.config.native_tools() {
                     // Project environment providers may evaluate code from editable files.
                     plan.environment.mise = false;
                 }
@@ -112,6 +119,12 @@ impl Client {
                     .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
                     .unwrap_or("Saved conversations");
                 let name: String = title.chars().filter(|c| !c.is_control()).take(60).collect();
+                // The controller must not evaluate project-controlled setup
+                // with its network exception. Native commands resolve that
+                // setup only after entering the original offline boundary;
+                // native file helpers continue to disable it entirely.
+                let mut tool_plan = plan.clone();
+                tool_plan.environment = launch.plan.environment.clone();
                 let spec = Spec {
                     id: id.clone(),
                     name,
@@ -125,7 +138,7 @@ impl Client {
                         prefix: plan.execution_prefix(&launch.python)?,
                     },
                     executable,
-                    file_tool_plan: Some(serde_json::to_value(&plan)?),
+                    file_tool_plan: Some(serde_json::to_value(&tool_plan)?),
                     env: BTreeMap::new(),
                     python: launch.python.clone(),
                     persistent,

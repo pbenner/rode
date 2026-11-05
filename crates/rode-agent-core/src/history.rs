@@ -394,8 +394,8 @@ impl Browser {
                         return Ok(());
                     }
                 } else {
-                    self.can_resume = !self.launch.config.files_only();
-                    self.can_delete = !self.launch.config.files_only();
+                    self.can_resume = !self.launch.config.native_tools();
+                    self.can_delete = !self.launch.config.native_tools();
                     self.send(json!({"method":"initialized","params":{}}))?;
                 }
                 self.list()?;
@@ -463,8 +463,8 @@ impl Browser {
                 }
                 self.cursor = next;
                 self.busy = false;
-                self.status = if self.launch.config.files_only() {
-                    "File-only mode can browse saved chats. Start a new chat for its confined tools, or reattach a live file-only chat through Running.".into()
+                self.status = if self.launch.config.native_tools() {
+                    "Native-tool modes can browse saved chats. Start a new chat for confined tools, or reattach a live chat through Running.".into()
                 } else if !self.can_resume {
                     "This agent lists history but does not support replay/resume.".into()
                 } else if self.entries.is_empty() {
@@ -628,7 +628,7 @@ impl Browser {
     }
 }
 
-fn in_project(row: &Value, launch: &Launch, acp: bool) -> bool {
+pub(crate) fn in_project(row: &Value, launch: &Launch, acp: bool) -> bool {
     row["cwd"]
         .as_str()
         .is_some_and(|s| Path::new(s) == Path::new(&launch.plan.root))

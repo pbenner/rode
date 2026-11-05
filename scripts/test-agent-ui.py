@@ -515,7 +515,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             key("Escape")
             click(1300, 752)
             screenshot(window, "acp-permission-controls.png")
-            click(1007, 557)  # An agent-advertised boolean, applied without another message.
+            click_button(
+                window, process, log.name, base / "ui-state.json", "agent-acp-option-automatic"
+            )
             wait_for(
                 lambda: (
                     agent_preferences(preferences).get("acp_options", {}).get("automatic") is True
@@ -579,13 +581,17 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             select_provider(preferences, "codex")
             header_click(1213, 0)  # Hide the automatically opened provider settings.
             click(1280, 752)
-            click(1090, 645)  # Never ask.
+            click_button(
+                window, process, log.name, base / "ui-state.json", "agent-approval-Never ask"
+            )
             wait_for(
                 lambda: agent_preferences(preferences).get("approval") == "never",
                 "Approval policy was not persisted",
             )
             click(1280, 752)  # Selecting a policy closes the native menu.
-            click(1090, 557)  # Full access inside the active project sandbox.
+            click_button(
+                window, process, log.name, base / "ui-state.json", "agent-access-Full access"
+            )
             wait_for(
                 lambda: agent_preferences(preferences).get("access") == "full",
                 "Tool access was not persisted",

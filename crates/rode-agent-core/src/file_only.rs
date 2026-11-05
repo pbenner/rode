@@ -56,9 +56,12 @@ impl Jobs {
         let worker = std::thread::Builder::new()
             .name("rode-agent-files".into())
             .spawn(move || {
-                let value = factory
-                    .file_tool(&tool, &arguments, &stopped)
-                    .map_err(|e| format!("{e:#}"));
+                let value = if tool == "rode_run_command" {
+                    factory.command_tool(&arguments, &stopped)
+                } else {
+                    factory.file_tool(&tool, &arguments, &stopped)
+                }
+                .map_err(|e| format!("{e:#}"));
                 let _ = send.send(value);
                 wake();
             })?;
@@ -135,6 +138,10 @@ pub const INSTRUCTIONS: &str = "RODE file-only mode: use only the supplied rode_
 /// Disable each configured MCP server explicitly. Empty tables merge with inherited
 /// configuration and therefore do not remove servers. Nothing is written to config files.
 pub fn thread_config(config: &Value) -> Result<Value> {
+    ensure!(
+        config["web_search"] == "disabled",
+        "Codex did not confirm that web search is disabled; confined native tools cannot start"
+    );
     for feature in [
         "shell_tool",
         "hooks",
@@ -154,7 +161,7 @@ pub fn thread_config(config: &Value) -> Result<Value> {
     ] {
         ensure!(
             config["features"][feature] == false,
-            "Codex did not confirm that {feature} is disabled; file-only mode cannot start"
+            "Codex did not confirm that {feature} is disabled; confined native tools cannot start"
         );
     }
     ensure!(
