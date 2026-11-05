@@ -12,7 +12,7 @@ use rode::{
     sandbox,
 };
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -198,9 +198,26 @@ fn kernel_interrupt_and_scope_cleanup_stop_only_the_owned_kernel() {
     let plan = native_peer::prepare(root.path().to_str().unwrap(), &Default::default()).unwrap();
     let mut kernel = Kernel::start(plan, None, python, "python3".into(), Arc::new(|| {})).unwrap();
     let marker = root.path().join("pid");
+    let pending = root.path().join("pid.pending");
+    let release = root.path().join("publish-pid");
     let code = format!(
-        "import os,time\nopen({:?},'w').write(str(os.getpid()))\ntime.sleep(30)",
-        marker.to_string_lossy()
+        r#"import os
+import time
+from pathlib import Path
+
+marker = Path({:?})
+pending = Path({:?})
+release = Path({:?})
+with pending.open("w", encoding="ascii") as output:
+    while not release.exists():
+        time.sleep(0.01)
+    output.write(str(os.getpid()))
+pending.replace(marker)
+time.sleep(30)
+"#,
+        marker.to_string_lossy(),
+        pending.to_string_lossy(),
+        release.to_string_lossy(),
     );
     kernel
         .run(vec![Run {
@@ -211,18 +228,47 @@ fn kernel_interrupt_and_scope_cleanup_stop_only_the_owned_kernel() {
         }])
         .unwrap();
     let start = Instant::now();
-    while !marker.exists() {
-        for e in kernel.poll() {
-            if let Event::Error(error) = e {
-                panic!("{error}");
+    let mut wait_for_marker = |path: &Path| {
+        while !path.exists() {
+            for event in kernel.poll() {
+                match event {
+                    Event::Error(error) => panic!("{error}"),
+                    Event::Done(_, status) => panic!(
+                        "Kernel finished ({status}) before publishing {}",
+                        path.display()
+                    ),
+                    _ => {}
+                }
             }
+            assert!(
+                start.elapsed() < Duration::from_secs(25),
+                "Kernel did not publish {}: {}",
+                path.display(),
+                kernel.status
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(start.elapsed() < Duration::from_secs(25));
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let pid: i32 = std::fs::read_to_string(marker).unwrap().parse().unwrap();
+    };
+    // Force creation-before-write instead of relying on the runner's scheduler.
+    // Only the renamed, closed file is a readiness signal carrying a usable PID.
+    wait_for_marker(&pending);
+    assert!(std::fs::read(&pending).unwrap().is_empty());
+    assert!(!marker.exists());
+    std::fs::write(release, b"").unwrap();
+    wait_for_marker(&marker);
+    let published = std::fs::read_to_string(marker).unwrap();
+    let pid: i32 = published
+        .parse()
+        .unwrap_or_else(|error| panic!("Invalid published kernel PID {published:?}: {error}"));
+    assert!(pid > 0, "Kernel PID must identify one process: {pid}");
     kernel.interrupt().unwrap();
-    let _ = wait(&mut kernel, 1);
+    let events = wait(&mut kernel, 1);
+    assert!(
+        events.iter().any(
+            |event| matches!(event, Event::Output { output, .. } if output["ename"] == "KeyboardInterrupt")
+        ),
+        "Interrupt did not stop the active execution: {events:?}"
+    );
     assert!(!kernel.busy());
     drop(kernel);
     let start = Instant::now();
