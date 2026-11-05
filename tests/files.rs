@@ -4,6 +4,9 @@
 #[path = "support/native.rs"]
 mod native_peer;
 
+#[path = "files/explorer.rs"]
+mod explorer;
+
 use rode::files::{self, Request};
 use std::{
     fs,

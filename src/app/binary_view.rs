@@ -197,6 +197,13 @@ impl EditorApp {
     }
     /// Submit immutable edited bytes through protected binary saving with the captured revision.
     pub(super) fn save_hex(&mut self, id: u64, path: String, save_as: bool, ctx: &egui::Context) {
+        if self.explorer_state.busy {
+            self.notify(
+                "Wait for the file operation to finish before saving.",
+                false,
+            );
+            return;
+        }
         let Some(doc) = self.documents.iter_mut().find(|d| d.id == id && !d.saving) else {
             return;
         };

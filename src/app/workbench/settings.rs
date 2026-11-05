@@ -211,7 +211,10 @@ impl EditorApp {
             sandbox_options_ui(ui, &mut self.workbench.draft.sandbox, palette);
             ui.add_space(8.);
             if ui
-                .add_enabled(!self.preparing, egui::Button::new("Apply sandbox settings"))
+                .add_enabled(
+                    !self.preparing && !self.explorer_state.busy,
+                    egui::Button::new("Apply sandbox settings"),
+                )
                 .clicked()
             {
                 let options = self.workbench.draft.sandbox.clone();

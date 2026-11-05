@@ -6,6 +6,37 @@ pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum retained entries in one nonrecursive directory listing.
 pub const MAX_ENTRIES: usize = 10_000;
 
+/// Explicit explorer operations executed on the captured project host.
+/// Sources name directory entries: a final symlink is operated on, not followed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum Mutation {
+    /// Create one directory without replacing an existing entry.
+    CreateDirectory {
+        /// New directory path; its parent must exist.
+        path: String,
+    },
+    /// Move an entry without replacing an existing destination.
+    Rename {
+        /// Existing entry path.
+        path: String,
+        /// New path on the same filesystem.
+        destination: String,
+    },
+    /// Duplicate an entry; directory contents are bounded and symlinks retained.
+    Copy {
+        /// Existing entry path.
+        path: String,
+        /// New path, which must not exist.
+        destination: String,
+    },
+    /// Remove an entry, including a directory's children, after explicit confirmation.
+    Remove {
+        /// Entry to remove; a symlink's target is preserved.
+        path: String,
+    },
+}
+
 /// One directory entry on the operation's host.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Entry {
@@ -22,6 +53,11 @@ pub struct Entry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request<T = serde_json::Value, S = serde_json::Value> {
+    /// Perform an explicit explorer operation within the prepared filesystem policy.
+    Mutate {
+        /// Typed operation with literal project-host paths.
+        mutation: Mutation,
+    },
     /// Run a project-host service through the file channel.
     Tool {
         /// Project service request payload.

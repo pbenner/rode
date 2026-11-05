@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FAST = ["workspace", "agents", "terminals", "ssh"]
 EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox"]
 TEST_BINARIES = {
+    "files",
     "runtimes",
     "ssh_roundtrip",
     "native_host",
@@ -59,6 +60,7 @@ SUITES = {
         ([sys.executable, "scripts/test-ui.py"], {}, 180),
         ui("workspace"),
         ui("navigation"),
+        ui("explorer"),
         ui("shortcut-styles"),
         ui("terminal-keys"),
         ui("multiprocess"),
@@ -85,7 +87,10 @@ SUITES = {
             180,
         ),
     ],
-    "remote-smoke": [ui("project", RODE_PROJECT_UI_CASE="ssh")],
+    "remote-smoke": [
+        ui("project", RODE_PROJECT_UI_CASE="ssh"),
+        ui("explorer", RODE_EXPLORER_UI_REMOTE="1"),
+    ],
     "tools": [
         ui("mise"),
         ui("environment"),
@@ -134,6 +139,7 @@ SUITES = {
     ],
     "sandbox": [
         rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
+        rust("files", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("sandbox", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("landlock"),
         rust("agents"),

@@ -34,6 +34,7 @@ mod commands;
 mod connections;
 mod debugging;
 mod dialogs;
+mod explorer;
 mod extensions;
 mod file_browser;
 mod icons;
@@ -229,7 +230,8 @@ enum Job {
         token: u64,
         local: bool,
     },
-    List(String),
+    List(String, u64),
+    Explorer(explorer::Change),
     Open(String),
     SaveBinary {
         id: u64,
@@ -356,6 +358,7 @@ enum Dialog {
     Extensions,
     Encrypted,
     HexOpen,
+    Explorer,
     MarpExport(u64, crate::marp::Format),
 }
 
@@ -389,6 +392,7 @@ pub struct EditorApp {
     tree_rows: Vec<TreeRow>,
     tree_dirty: bool,
     expanded: HashSet<String>,
+    explorer_state: explorer::State,
     loading: HashSet<String>,
     opening: HashSet<String>,
     terminal: Option<Terminal>,
@@ -532,6 +536,7 @@ impl EditorApp {
             tree_rows: Vec::new(),
             tree_dirty: true,
             expanded: HashSet::new(),
+            explorer_state: Default::default(),
             loading: HashSet::new(),
             opening: HashSet::new(),
             terminal: None,
@@ -710,6 +715,7 @@ impl EditorApp {
             }
         }
         self.directories.clear();
+        self.explorer_state = Default::default();
         self.navigation.tree = Default::default();
         self.file_browser.reset();
         self.navigation.editing = Default::default();
@@ -739,6 +745,13 @@ impl EditorApp {
     /// Refuse disconnect while encrypted leases or lifetime mutations require attention;
     /// otherwise unbind remote buffers through the recovery path before returning to local mode.
     fn disconnect_ssh(&mut self, ctx: &egui::Context) {
+        if self.explorer_state.busy {
+            self.notify(
+                "Wait for the file operation to finish before disconnecting SSH.",
+                false,
+            );
+            return;
+        }
         if self.vaults.active.is_some()
             || self.vaults.pending.is_some()
             || self.vaults.staged.is_some()
@@ -762,7 +775,8 @@ impl EditorApp {
 
     /// Validate/probe a candidate asynchronously while retaining the current working project.
     /// Capture document versions so a late candidate cannot discard edits made during
-    /// preparation.
+    /// preparation. Explorer mutations and preparation are mutually exclusive so a
+    /// candidate cannot replace a file operation's captured workspace.
     fn prepare_project(
         &mut self,
         path: String,
@@ -772,6 +786,13 @@ impl EditorApp {
         restore_saved: Option<bool>,
         ctx: &egui::Context,
     ) {
+        if self.explorer_state.busy {
+            self.notify(
+                "Wait for the file operation to finish before preparing another project or policy.",
+                false,
+            );
+            return;
+        }
         if remote
             && self
                 .workspace
@@ -1043,6 +1064,13 @@ impl EditorApp {
     /// Defer an ownership-changing action when source edits or encrypted-project work require
     /// an explicit decision; route accepted actions through the same lifecycle path.
     fn guarded(&mut self, action: Action, ctx: &egui::Context) {
+        if self.explorer_state.busy {
+            self.notify(
+                "Wait for the file operation to finish before closing or changing projects.",
+                false,
+            );
+            return;
+        }
         if matches!(
             action,
             Action::Project { .. } | Action::Remote(_) | Action::PreparedProject { .. }
@@ -1332,6 +1360,13 @@ impl EditorApp {
     /// creates without replacing unrelated files; acknowledgements update only the submitted
     /// baseline.
     fn save_document(&mut self, id: u64, path: String, save_as: bool, ctx: &egui::Context) {
+        if self.explorer_state.busy {
+            self.notify(
+                "Wait for the file operation to finish before saving.",
+                false,
+            );
+            return;
+        }
         if !save_as
             && self
                 .documents
@@ -1867,269 +1902,6 @@ impl EditorApp {
                     ui.label(palette.tag("0.1"));
                 });
             });
-    }
-
-    /// Render cached directory rows and explicit project actions; directory I/O is delegated to workers.
-    fn explorer(&mut self, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        if !self.show_explorer || !self.navigation.visible(navigation::Pane::Explorer) {
-            return;
-        }
-        let maximum = (ctx.available_rect().width() - 320.).clamp(180., 450.);
-        let zoom = self.navigation.zoom == Some(navigation::Pane::Explorer);
-        let panel = egui::SidePanel::left(if zoom { "explorer-zoom" } else { "explorer" })
-            .default_width(250.0)
-            .width_range(180.0..=maximum)
-            .frame(theme::frame(palette.panel));
-        let panel = if zoom {
-            panel.exact_width(ctx.available_rect().width())
-        } else if let Some(width) = self.navigation.widths[0].take() {
-            panel.exact_width(width.clamp(180., maximum))
-        } else {
-            panel
-        };
-        panel.show(ctx, |ui| {
-            palette.paint_panel(ui);
-            self.pane_ui(ui, navigation::Pane::Explorer);
-            ui.horizontal(|ui| {
-                ui.label(
-                    palette
-                        .tag("EXPLORER")
-                        .color(if palette.chrome.is_decorated() {
-                            palette.heading
-                        } else {
-                            palette.muted
-                        }),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icons::small(ui, Icon::Refresh, "Refresh expanded folders").clicked() {
-                        let paths: Vec<_> = self.expanded.iter().cloned().collect();
-                        for path in paths {
-                            self.list(path, ctx);
-                        }
-                    }
-                    if icons::small(ui, Icon::NewFile, "New file").clicked() {
-                        self.new_file();
-                    }
-                });
-            });
-            ui.add_space(12.0);
-            if let Some(workspace) = &self.workspace {
-                let root = workspace.root.clone();
-                let remote = workspace.remote.is_some();
-                let connected = workspace.connected;
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(ssh::display_name(&root).to_uppercase())
-                            .strong()
-                            .size(12.0)
-                            .color(palette.text),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(&root);
-                if remote {
-                    ui.label(palette.tag(if connected {
-                        "● SSH WORKSPACE"
-                    } else {
-                        "○ SSH PENDING / OFFLINE"
-                    }));
-                    if !connected
-                        && ui.button("Reconnect").clicked()
-                        && let Some(profile) = self
-                            .workspace
-                            .as_ref()
-                            .and_then(|w| w.remote.as_ref())
-                            .map(|r| r.profile.clone())
-                    {
-                        self.connect(profile, ctx, true);
-                    }
-                }
-                ui.add_space(8.0);
-                ui.separator();
-                self.tree(ui, &root, ctx);
-            } else {
-                ui.label(
-                    RichText::new("NO FOLDER OPEN")
-                        .size(12.0)
-                        .color(palette.muted),
-                );
-                ui.add_space(10.0);
-                ui.label("Open a local project or connect to another computer with SSH.");
-                ui.add_space(10.0);
-                let action_size = egui::vec2(ui.available_width(), 32.);
-                if ui
-                    .add_sized(action_size, IconButton::new(Icon::Folder, "Open folder"))
-                    .clicked()
-                {
-                    self.set_dialog(Dialog::Folder);
-                }
-                if ui
-                    .add_sized(action_size, IconButton::new(Icon::Remote, "Connect SSH"))
-                    .clicked()
-                {
-                    self.set_dialog(Dialog::Connect);
-                }
-                ui.add_space(28.0);
-                ui.separator();
-                ui.add_space(12.0);
-                ui.label(palette.tag("CONNECTIONS"));
-                let profiles = self.profiles.clone();
-                for profile in profiles {
-                    let label = profile.label();
-                    if ui
-                        .add_sized(
-                            action_size,
-                            IconButton::new(Icon::Remote, &label)
-                                .color(palette.accent)
-                                .truncate(),
-                        )
-                        .on_hover_text(&label)
-                        .clicked()
-                    {
-                        self.profile = profile;
-                        self.guarded(Action::Remote(self.profile.clone()), ctx);
-                    }
-                }
-                if self.profiles.is_empty() {
-                    ui.label(
-                        RichText::new("Saved SSH profiles appear here.")
-                            .small()
-                            .color(palette.muted),
-                    );
-                }
-            }
-        });
-    }
-
-    /// Render flattened visible tree rows, maintaining stable selection and deferred open/list intents.
-    fn tree(&mut self, ui: &mut egui::Ui, root: &str, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        if self.tree_dirty {
-            self.tree_rows.clear();
-            flatten_tree(
-                &self.directories,
-                &self.expanded,
-                root,
-                0,
-                self.show_hidden,
-                &mut self.tree_rows,
-            );
-            self.tree_dirty = false;
-        }
-        if !self.loading.is_empty() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(palette.tag("Loading…"));
-            });
-        } else if !self.directories.contains_key(root) {
-            if ui.button("Load folder").clicked() {
-                self.list(root.into(), ctx);
-            }
-        } else if self.tree_rows.is_empty() {
-            ui.label(palette.tag("No visible files"));
-        }
-        self.tree_keyboard(ctx);
-        ui.spacing_mut().item_spacing.y = 2.0;
-        let mut scroll = egui::ScrollArea::vertical().id_salt("file-tree");
-        if std::mem::take(&mut self.navigation.tree.reveal)
-            && let Some(index) = self
-                .tree_rows
-                .iter()
-                .position(|r| Some(&r.entry.path) == self.navigation.tree.path.as_ref())
-        {
-            let top = index as f32 * 27.;
-            let offset = self.navigation.tree.offset;
-            let height = self.navigation.tree.height.max(27.);
-            if top < offset {
-                scroll = scroll.vertical_scroll_offset(top);
-            } else if top + 27. > offset + height {
-                scroll = scroll.vertical_scroll_offset((top + 27. - height).max(0.));
-            }
-        }
-        let output = scroll.show_rows(ui, 25.0, self.tree_rows.len(), |ui, range| {
-            for index in range {
-                let TreeRow { entry, depth } = self.tree_rows[index].clone();
-                let expanded = self.expanded.contains(&entry.path);
-                let selected = (ctx.memory(|m| m.has_focus(navigation::Pane::Explorer.id()))
-                    && self.navigation.tree.path.as_deref() == Some(&entry.path))
-                    || self
-                        .documents
-                        .get(self.active)
-                        .is_some_and(|d| d.path.as_deref() == Some(&entry.path));
-                let label = if entry.dir {
-                    format!("{}  {}", if expanded { "⌄" } else { "›" }, entry.name)
-                } else {
-                    entry.name.clone()
-                };
-                let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 25.0),
-                    Sense::click().difference(Sense::focusable_noninteractive()),
-                );
-                let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                if selected || response.hovered() {
-                    painter.rect_filled(
-                        rect,
-                        3,
-                        if selected {
-                            palette.raised
-                        } else {
-                            palette.panel
-                        },
-                    );
-                }
-                let color = if selected {
-                    palette.accent
-                } else if entry.dir {
-                    palette.text
-                } else {
-                    palette.muted
-                };
-                let x = rect.left() + depth as f32 * 13. + 6.;
-                let mut job = egui::text::LayoutJob::simple(
-                    label,
-                    FontId::proportional(13.),
-                    color,
-                    (rect.right() - x - 4.).max(1.),
-                );
-                job.wrap.max_rows = 1;
-                job.wrap.break_anywhere = true;
-                let galley = ui.fonts_mut(|f| f.layout_job(job));
-                painter.galley(
-                    egui::pos2(x, rect.center().y - galley.size().y / 2.),
-                    galley,
-                    color,
-                );
-                if !entry.dir {
-                    response.context_menu(|ui| {
-                        if ui.button("Open as hex / inspect binary").clicked() {
-                            self.open_hex(entry.path.clone(), ctx);
-                            ui.close();
-                        }
-                    });
-                }
-                let response = response.on_hover_text(&entry.path);
-                if response.clicked() {
-                    self.navigation.tree.path = Some(entry.path.clone());
-                    ctx.memory_mut(|m| m.request_focus(navigation::Pane::Explorer.id()));
-                    if entry.dir {
-                        if expanded {
-                            self.expanded.remove(&entry.path);
-                        } else {
-                            self.expanded.insert(entry.path.clone());
-                            if !self.directories.contains_key(&entry.path) {
-                                self.list(entry.path.clone(), ctx);
-                            }
-                        }
-                        self.tree_dirty = true;
-                    } else {
-                        self.open_file(entry.path, ctx);
-                    }
-                }
-            }
-        });
-        self.navigation.tree.offset = output.state.offset.y;
-        self.navigation.tree.height = output.inner_rect.height();
     }
 
     /// Render the selected terminal surface, keeping PTY input and native focus ownership together.

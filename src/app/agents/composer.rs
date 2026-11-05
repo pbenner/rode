@@ -152,7 +152,117 @@ impl State {
     }
 
     /// Only bare arrows at an unselected character zero browse the current chat.
+    /// Consume navigation in event order: a slow frame may contain several arrows
+    /// followed by an edit. Leave that edit and all later input to TextEdit.
     pub fn recall(&mut self, ui: &mut egui::Ui, draft: &mut String, id: egui::Id, enabled: bool) {
+        if !enabled
+            || !ui.memory(|memory| memory.has_focus(id) && memory.allows_interaction(ui.layer_id()))
+        {
+            self.finish_older();
+            return;
+        }
+        let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
+            return;
+        };
+        let at_start = state
+            .cursor
+            .char_range()
+            .is_some_and(|range| range.is_empty() && range.primary.index == 0);
+        let navigation = ui.input(|input| {
+            let mut navigation = Vec::new();
+            // IME owns its arrows even when confirmation and navigation share a frame.
+            if !at_start
+                || input
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::Ime(_)))
+            {
+                return navigation;
+            }
+            for (index, event) in input.events.iter().enumerate() {
+                match event {
+                    egui::Event::Key {
+                        key: key @ (Key::ArrowUp | Key::ArrowDown),
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                        ..
+                    } => navigation.push((index, *key)),
+                    egui::Event::Key { pressed: true, .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Cut
+                    | egui::Event::Copy
+                    | egui::Event::PointerButton { pressed: true, .. } => break,
+                    _ => {}
+                }
+            }
+            navigation
+        });
+        let mut consumed = Vec::new();
+        for (index, key) in navigation {
+            if key == Key::ArrowDown {
+                self.finish_older();
+            }
+            if self.recall.is_none() {
+                if key != Key::ArrowUp {
+                    // Native Down can move the caret off character zero; let
+                    // TextEdit handle it and every subsequent event together.
+                    break;
+                }
+                let mut drafts = self.history.clone();
+                if drafts.is_empty() {
+                    if !self.waiting_older {
+                        self.older_requested = true;
+                        self.waiting_older = true;
+                    }
+                    consumed.push(index);
+                    continue;
+                }
+                let position = drafts.len();
+                drafts.push(draft.clone());
+                self.recall = Some(Recall { drafts, position });
+            }
+            let recall = self.recall.as_mut().unwrap();
+            if key == Key::ArrowUp && recall.position == 0 && !self.waiting_older {
+                self.older_requested = true;
+                self.waiting_older = true;
+            }
+            recall.drafts[recall.position].clone_from(draft);
+            recall.position = if key == Key::ArrowUp {
+                recall.position.saturating_sub(1)
+            } else {
+                (recall.position + 1).min(recall.drafts.len() - 1)
+            };
+            draft.clone_from(&recall.drafts[recall.position]);
+            if recall.position == recall.drafts.len() - 1 {
+                self.recall = None;
+            }
+            consumed.push(index);
+        }
+        if !consumed.is_empty() {
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(
+                    egui::text::CCursor::new(0),
+                )));
+            state.store(ui.ctx(), id);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(id.with("recall-reveal"), true));
+            ui.input_mut(|input| {
+                let mut consumed = consumed.into_iter().peekable();
+                let mut index = 0;
+                input.events.retain(|_| {
+                    let keep = consumed.peek() != Some(&index);
+                    if !keep {
+                        consumed.next();
+                    }
+                    index += 1;
+                    keep
+                });
+            });
+        }
+        // Cancel a pending older-page movement before TextEdit applies edits or
+        // cursor changes, including edits following Up in this very frame.
         if self.waiting_older
             && ui.input(|input| {
                 input.events.iter().any(|event| match event {
@@ -173,93 +283,6 @@ impl State {
         {
             self.finish_older();
         }
-        if !enabled
-            || !ui.memory(|memory| memory.has_focus(id) && memory.allows_interaction(ui.layer_id()))
-        {
-            self.finish_older();
-            return;
-        }
-        let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) else {
-            return;
-        };
-        if !state
-            .cursor
-            .char_range()
-            .is_some_and(|range| range.is_empty() && range.primary.index == 0)
-        {
-            return;
-        }
-        let key = ui.input(|input| {
-            // Let TextEdit handle batched edits and IME without replacing their buffer.
-            if input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Text(_)
-                        | egui::Event::Paste(_)
-                        | egui::Event::Cut
-                        | egui::Event::Ime(_)
-                )
-            }) {
-                self.finish_older();
-                return None;
-            }
-            input.events.iter().find_map(|event| match event {
-                egui::Event::Key {
-                    key: key @ (Key::ArrowUp | Key::ArrowDown),
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                    ..
-                } => Some(*key),
-                _ => None,
-            })
-        });
-        let Some(key) = key else {
-            return;
-        };
-        if key == Key::ArrowDown {
-            self.finish_older();
-        }
-        if self.recall.is_none() {
-            if key != Key::ArrowUp {
-                return;
-            }
-            let mut drafts = self.history.clone();
-            if drafts.is_empty() {
-                if !self.waiting_older {
-                    self.older_requested = true;
-                    self.waiting_older = true;
-                }
-                return;
-            }
-            let position = drafts.len();
-            drafts.push(draft.clone());
-            self.recall = Some(Recall { drafts, position });
-        }
-        let recall = self.recall.as_mut().unwrap();
-        if key == Key::ArrowUp && recall.position == 0 && !self.waiting_older {
-            self.older_requested = true;
-            self.waiting_older = true;
-        }
-        recall.drafts[recall.position].clone_from(draft);
-        recall.position = if key == Key::ArrowUp {
-            recall.position.saturating_sub(1)
-        } else {
-            (recall.position + 1).min(recall.drafts.len() - 1)
-        };
-        draft.clone_from(&recall.drafts[recall.position]);
-        if recall.position == recall.drafts.len() - 1 {
-            self.recall = None;
-        }
-        state
-            .cursor
-            .set_char_range(Some(egui::text::CCursorRange::one(
-                egui::text::CCursor::new(0),
-            )));
-        state.store(ui.ctx(), id);
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(id.with("recall-reveal"), true));
-        ui.input_mut(|input| input.events.retain(|event| !matches!(event,
-            egui::Event::Key { key: pressed, pressed: true, modifiers: egui::Modifiers::NONE, .. } if *pressed == key)));
     }
 
     /// Allocate transcript and composer regions within the available bounds, preserving
@@ -398,7 +421,7 @@ pub(super) fn editor(
             .show_viewport(ui, |ui, viewport| {
                 let size_id = id.with("viewport-size");
                 let old = ui.ctx().data_mut(|d| d.get_temp::<Vec2>(size_id));
-                let output = egui::TextEdit::multiline(text)
+                let mut output = egui::TextEdit::multiline(text)
                     .id(id)
                     .frame(false)
                     .desired_rows(1)
@@ -415,6 +438,10 @@ pub(super) fn editor(
                     .ctx()
                     .data_mut(|data| data.remove_temp::<bool>(id.with("recall-reveal")))
                     .unwrap_or(false);
+                if recalled {
+                    // Recall changes the composite editor before TextEdit runs.
+                    output.response.mark_changed();
+                }
                 if (recalled || old != Some(viewport.size()))
                     && output.response.has_focus()
                     && let Some(range) = output.cursor_range
@@ -576,6 +603,85 @@ mod tests {
         assert_eq!(view.draft, "another conversation");
         view.arrow(Key::ArrowDown);
         assert_eq!(view.draft, "unfinished λ\nsecond line");
+    }
+
+    #[test]
+    fn recall_keeps_every_arrow_when_a_slow_frame_batches_key_presses() {
+        let mut view = RecallView::new("unsent draft", &["oldest", "middle", "newest"]);
+        view.frame(
+            vec![
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+            ],
+            true,
+            true,
+        );
+        assert_eq!(view.draft, "middle");
+        view.frame(
+            vec![
+                history_key(Key::ArrowDown, egui::Modifiers::NONE),
+                history_key(Key::ArrowDown, egui::Modifiers::NONE),
+            ],
+            true,
+            true,
+        );
+        assert_eq!(view.draft, "unsent draft");
+        assert!(view.state.recall.is_none());
+    }
+
+    #[test]
+    fn recall_preceding_an_edit_in_the_same_frame_keeps_input_order() {
+        let mut view = RecallView::new("unsent draft", &["newest"]);
+        view.frame(
+            vec![
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                history_key(Key::End, egui::Modifiers::NONE),
+                egui::Event::Text(" edited".into()),
+            ],
+            true,
+            true,
+        );
+        assert_eq!(view.draft, "newest edited");
+    }
+
+    #[test]
+    fn recall_leaves_arrows_after_cursor_movement_to_the_editor() {
+        let mut view = RecallView::new("unsent draft", &["oldest", "newest"]);
+        view.frame(
+            vec![
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                history_key(Key::ArrowRight, egui::Modifiers::NONE),
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+            ],
+            true,
+            true,
+        );
+        assert_eq!(view.draft, "newest");
+        view.cursor(0, 0);
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "oldest");
+    }
+
+    #[test]
+    fn batched_edit_cancels_an_older_page_jump_before_its_reply() {
+        let mut view = RecallView::new("unsent draft", &["newest"]);
+        view.frame(
+            vec![
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                history_key(Key::ArrowUp, egui::Modifiers::NONE),
+                egui::Event::Text("edited ".into()),
+            ],
+            true,
+            true,
+        );
+        assert_eq!(view.draft, "edited newest");
+        assert!(!view.state.waiting_older());
+        view.state
+            .prepend_older(vec!["oldest".into()], &mut view.draft, &view.ctx);
+        assert_eq!(view.draft, "edited newest");
+        view.cursor(0, 0);
+        view.arrow(Key::ArrowUp);
+        assert_eq!(view.draft, "oldest");
     }
 
     #[test]

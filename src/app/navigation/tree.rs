@@ -20,7 +20,13 @@ impl EditorApp {
     /// and delegating opens/listings through the ordinary host-aware app paths.
     pub(in crate::app) fn tree_keyboard(&mut self, ctx: &egui::Context) {
         let id = Pane::Explorer.id();
-        if !ctx.memory(|m| m.has_focus(id)) || self.tree_rows.is_empty() {
+        if !ctx.memory(|m| m.has_focus(id))
+            || self.tree_rows.is_empty()
+            || egui::Popup::is_any_open(ctx)
+            || self.dialog != Dialog::None
+            || self.pending.is_some()
+            || self.workbench_modal()
+        {
             return;
         }
         ctx.memory_mut(|m| {

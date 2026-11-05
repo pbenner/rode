@@ -22,6 +22,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
 | `src/app/navigation/` | Pane focus, validated shortcut presets, explorer keys and native source-editing modes |
+| `src/app/explorer.rs`, `crates/rode-host-core/src/files/mutations.rs` | Explorer menus/forms, acknowledged path updates and bounded native filesystem mutations on the captured project host |
 | `src/app/workbench.rs`, `src/app/workbench/` | Captured project preferences, Git, code tools, environments, monitoring and settings panels |
 | `crates/rode-host-protocol/src/files.rs`, `crates/rode-host-core/src/files.rs`, `src/files.rs` | Wire-only file results, shared revision-checked saves and desktop decode attachments |
 | `src/host/`, `crates/rode-session/src/host.rs` | Verified native deployment, connection-owned RPC, captured contexts and scoped workers |

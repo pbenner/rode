@@ -680,9 +680,9 @@ impl EditorApp {
                 ui, &mut agents.draft, id,
                 !modal && !agents.composing,
             );
-            let response = composer::editor(ui, &mut agents.draft, id, layout.stretch)
-                .inner
-                .response;
+            let output = composer::editor(ui, &mut agents.draft, id, layout.stretch).inner;
+            let at_start = output.cursor_range.is_some_and(|range| range.is_empty() && range.primary.index == 0);
+            let response = output.response;
             if agents.focus && !modal {
                 if ui.memory(|m| m.allows_interaction(ui.layer_id())) {
                     response.request_focus();
@@ -692,6 +692,15 @@ impl EditorApp {
                 }
             }
             ui_probe::button(ui, "agent-composer", &response);
+            if at_start {
+                ui_probe::button(ui, "agent-composer-at-start", &response);
+            }
+            if !agents.chat.busy && !agents.chat.work_pending() && !agents.chat.queue_pending()
+                && !agents.queue.waiting_for_reply() && agents.queue.is_empty() && !agents.attaching
+                && !agents.history_open && !offline && !modal
+            {
+                ui_probe::button(ui, "agent-idle", &response);
+            }
             let action_height = layout::control_height(ui);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), action_height),

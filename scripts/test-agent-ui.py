@@ -80,12 +80,64 @@ def agent_preferences(path):
     return next(iter(json.loads(json.loads(match[1])).values()))
 
 
-def sent(root, message):
-    return any(
-        m.get("method") in ("turn/start", "session/prompt")
-        and m["params"].get("input", m["params"].get("prompt"))[0]["text"] == message
+def submitted(root):
+    """Read accepted user prompts independently of the window's recalled draft."""
+    return [
+        m["params"].get("input", m["params"].get("prompt"))[0]["text"]
         for m in rpc(root)
+        if m.get("method") in ("turn/start", "session/prompt")
+    ]
+
+
+def control(name, **guards):
+    return wait_for_button(
+        window, process, ARTIFACTS / "chat.log", base / "ui-state.json", name, **guards
     )
+
+
+def rendered_pass():
+    return json.loads((base / "ui-state.json").read_text())["pass"]
+
+
+def composer_start():
+    """Wait for the native editor to place an unselected caret at character zero."""
+    before = rendered_pass()
+    key("Home", ("Control_L",))
+    control("agent-composer-at-start", focused=True, after_pass=before)
+
+
+def focus_composer():
+    show_tools()
+    click(*control("agent-composer"))
+    control("agent-composer", focused=True)
+
+
+def browse(prompts, direction="Up"):
+    """Verify each real recall transition before the next dependent key press."""
+    for expected in prompts:
+        composer_start()
+        before = rendered_pass()
+        key(direction)
+        control("agent-composer", focused=True, changed_after=before)
+        key("a", ("Control_L",))
+        key("c", ("Control_L",))
+        copied_text(expected, f"recall-{direction.lower()}-{before}")
+
+
+def submit(root, message, idle=True):
+    # Count this specific request: repeated prompts must not match an old turn.
+    previous = submitted(root).count(message)
+    key("Return")
+    wait_for(
+        lambda: submitted(root).count(message) > previous,
+        "Composer did not submit: " + message,
+    )
+    if idle:
+        # A logged backend request precedes UI history/completion acknowledgement.
+        # Demand a newer idle frame before navigating its newly accepted history.
+        before = rendered_pass()
+        key("Home", ("Control_L",))
+        control("agent-idle", focused=True, after_pass=before)
 
 
 def show_tools():
@@ -128,9 +180,8 @@ def select_personality(preferences, value, capture=False):
     )
 
 
-def send(root, message, first=False):
-    show_tools()
-    click(1280, 785)
+def send(root, message, first=False, idle=True):
+    focus_composer()
     for index, line in enumerate(message.split("\n")):
         if index:
             key("Return", ("Shift_L",))
@@ -140,9 +191,7 @@ def send(root, message, first=False):
         key("Return", ("Shift_L",))
         assert not any(m.get("method") in ("turn/start", "session/prompt") for m in rpc(root))
         key("BackSpace")
-    key("Return")
-    wait_for(lambda: sent(root, message), "Composer did not submit: " + message)
-    time.sleep(0.3)
+    submit(root, message, idle=idle)
 
 
 def copied_text(expected, name):
@@ -366,69 +415,51 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert styled["params"]["input"][0]["text"] == "second"
             assert 'name="jackson_lamb"' in styled["params"]["input"][1]["text"]
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == 2
-            # Recall is local editing: preserve a draft while browsing both ways,
-            # then modify an older prompt and submit it only after explicit Enter.
-            click(1280, 785)
+            # Recall is local editing. Assert each transition through the real
+            # clipboard instead of assuming several X11 keys rendered separately.
+            focus_composer()
             text("saved draft")
-            key("Home", ("Control_L",))
             before_recall = len(rpc(root))
-            key("Up")
-            key("Up")
-            key("Down")
-            key("Down")
+            browse(["second", "first\nsecond line"])
+            browse(["second", "saved draft"], direction="Down")
             assert len(rpc(root)) == before_recall, "History browsing sent an agent request"
             key("End", ("Control_L",))
             text(" restored")
-            key("Return")
-            wait_for(lambda: sent(root, "saved draft restored"), "Recall did not restore the draft")
-            time.sleep(0.3)
-            key("Up")
-            key("Up")
+            submit(root, "saved draft restored")
+            browse(["saved draft restored", "second"])
             key("End", ("Control_L",))
             text(" recalled")
-            key("Return")
-            wait_for(lambda: sent(root, "second recalled"), "Recalled message could not be edited")
-            time.sleep(0.3)
+            submit(root, "second recalled")
             # Tool output may evict user messages from the display transcript;
             # recall must still traverse every sent prompt, in both directions.
             send(root, "history-burst")
             send(root, "newest after burst")
-            key("Up")
+            browse(["newest after burst"])
             key("End", ("Control_L",))
             text(" recalled after eviction")
-            key("Return")
-            wait_for(
-                lambda: sent(root, "newest after burst recalled after eviction"),
-                "Transcript eviction lost the most recently submitted prompt",
-            )
-            time.sleep(0.3)
-            click(1280, 785)
+            submit(root, "newest after burst recalled after eviction")
+            history = [
+                "first\nsecond line",
+                "second",
+                "saved draft restored",
+                "second recalled",
+                "history-burst",
+                "newest after burst",
+                "newest after burst recalled after eviction",
+            ]
+            focus_composer()
             text("draft after burst")
-            key("Home", ("Control_L",))
             before_recall = len(rpc(root))
-            for _ in range(6):
-                key("Up")
-            for _ in range(6):
-                key("Down")
+            browse(reversed(history[1:]))
+            browse(history[2:] + ["draft after burst"], direction="Down")
             assert len(rpc(root)) == before_recall, "Browsing retained prompts sent a request"
             key("End", ("Control_L",))
             text(" restored")
-            key("Return")
-            wait_for(
-                lambda: sent(root, "draft after burst restored"),
-                "Browsing the full prompt history did not restore the unsent draft",
-            )
-            time.sleep(0.3)
-            for _ in range(8):
-                key("Up")
+            submit(root, "draft after burst restored")
+            browse(reversed(history + ["draft after burst restored"]))
             key("End", ("Control_L",))
             text(" from retained history")
-            key("Return")
-            wait_for(
-                lambda: sent(root, "first\nsecond line from retained history"),
-                "Tool output discarded older prompts from input history",
-            )
-            time.sleep(0.3)
+            submit(root, "first\nsecond line from retained history")
             screenshot(window, "conversation-phosphor.png")
             theme("carbon")
             screenshot(window, "conversation-carbon.png")
@@ -455,7 +486,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             click(1280, 752)
             screenshot(window, "codex-access-controls.png")
             key("Escape")
-            send(root, "approve")
+            send(root, "approve", idle=False)
             selected_turn = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert selected_turn["params"]["effort"] == "high"
             assert selected_turn["params"]["input"][1] == styled["params"]["input"][1]
@@ -464,7 +495,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             header_click(350, 188)  # Allow once, after the visible command and Details.
             wait_for(lambda: (root / "approved.txt").exists(), "Approval was not delivered")
             time.sleep(0.3)
-            send(root, "wait")
+            send(root, "wait", idle=False)
             follow_up = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert follow_up["params"]["input"][1] == styled["params"]["input"][1]
             wait_for(lambda: (root / "agent-child.pid").exists(), "Long task did not start")
@@ -726,37 +757,38 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             )
             time.sleep(0.3)
             screenshot(window, "history-restored.png")
-            click(1280, 785)
-            key("Home", ("Control_L",))
-            key("Up")
-            key("Up")
+            focus_composer()
+            control("agent-idle", focused=True)
+            browse(["Earlier question 2", "Earlier question 1"])
             key("End", ("Control_L",))
             text(" reused")
-            key("Return")
-            wait_for(
-                lambda: sent(root, "Earlier question 1 reused"),
-                "Restoring a conversation did not seed its input history",
-            )
-            time.sleep(0.3)
+            submit(root, "Earlier question 1 reused")
             send(root, "continue-saved-work")
             last = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert last["params"]["threadId"] == "saved-2"
-            click(1280, 785)
-            key("Home", ("Control_L",))
-            for _ in range(4):
-                key("Up")
+            browse(
+                [
+                    "continue-saved-work",
+                    "Earlier question 1 reused",
+                    "Earlier question 2",
+                    "Earlier question 1",
+                ]
+            )
             key("End", ("Control_L",))
             text(" after continuation")
-            key("Return")
-            wait_for(
-                lambda: sent(root, "Earlier question 1 after continuation"),
-                "New prompts hid older restored input history",
-            )
+            submit(root, "Earlier question 1 after continuation")
             close_window(window, process)
             print(
                 "Agent UI: long-draft scrolling/resizing, Enter/Shift+Enter, personalities, history restore, model/access selectors, saved policies, chat context, approvals, Stop, themes, and unsaved buffers passed."
             )
         except Exception:
+            # The temporary project disappears on exit; preserve the peer's
+            # actual requests so CI explains wrong, missing or duplicate sends.
+            if (root / "agent-rpc.jsonl").exists():
+                shutil.copy2(root / "agent-rpc.jsonl", ARTIFACTS / "failure-rpc.jsonl")
+                (ARTIFACTS / "failure-prompts.json").write_text(
+                    json.dumps(submitted(root), ensure_ascii=False, indent=2)
+                )
             if (base / "ui-state.json").exists():
                 shutil.copy2(base / "ui-state.json", ARTIFACTS / "failure-state.json")
             if window is not None and process.poll() is None:

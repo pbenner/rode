@@ -1,5 +1,21 @@
 # Editing and shortcuts
 
+## Explorer context menu
+
+Right-click a file, folder, or the project name in the explorer to open its menu. Press Escape to close the menu. Mutations run on supported Linux project hosts.
+
+- **Open as project** opens the selected folder on its current local or SSH host, using the normal unsaved-edit and encrypted-project guards.
+- **New file…** and **New folder…** create a named entry inside the selected folder, or beside a selected file.
+- **Rename…** updates open editor paths, including files inside a renamed folder, while preserving unsaved edits.
+- **Duplicate…** copies saved file or folder contents to a new name. Existing destinations are never replaced. Executable permissions are retained and symbolic links are copied as links.
+- **Delete…** asks for confirmation and removes the selected entry. Folders are removed recursively; symbolic link targets are preserved. Open editors remain available, and **Save As** can retain their contents separately.
+- **Copy path**, **Copy relative path**, and **Refresh** work for both files and folders. Files also retain **Open as hex / inspect binary**.
+
+Names retained by an open editor cannot be reused by creating, renaming or duplicating an entry. Save that buffer under another name or close its tab first.
+
+Operations use the prepared project's actual filesystem policy. Mutation controls are disabled for active read-only projects, during project or sandbox-policy preparation, while files are being opened or saved, and while another explorer mutation is pending. Folder duplication is limited to 10,000 entries, 64 directory levels and 256 MiB; unsupported special files cause a visible error, and incomplete copies are not published.
+
+## Editing features
 
 - Shared local/SSH file and project-folder browser with left-aligned names, optional hidden files, and parent-folder navigation
 - Aligned single-row tabs with bounded widths, duplicate-filename context, active-tab reveal, overflow arrows/editor list, drag reordering, and middle-click closing

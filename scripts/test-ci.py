@@ -80,6 +80,7 @@ class SelectionTests(unittest.TestCase):
         required = {
             "workspace",
             "navigation",
+            "explorer",
             "environment",
             "mise",
             "debugger",

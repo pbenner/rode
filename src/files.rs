@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 pub type Request =
     rode_host_protocol::files::Request<crate::project::Request, crate::sandbox::Options>;
 pub use rode_host_core::files::{digest, expand_home};
-pub use rode_host_protocol::files::{Entry, MAX_ENTRIES, MAX_FILE_BYTES};
+pub use rode_host_protocol::files::{Entry, MAX_ENTRIES, MAX_FILE_BYTES, Mutation};
 
 /// File-channel reply plus desktop-only decoded attachments. Unused wire fields retain
 /// defaults; fields marked `serde(skip)` never cross SSH.

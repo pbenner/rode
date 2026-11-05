@@ -24,14 +24,16 @@ impl EditorApp {
                 );
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
-                        if palette.primary(ui, "Keep editing").clicked() {
+                        let keep = palette.primary(ui, "Keep editing");
+                        ui_probe::button(ui, "guard-keep-editing", &keep);
+                        if keep.clicked() {
                             self.pending = None;
                             self.focus_editor(ctx);
                         }
-                        if ui
-                            .button(RichText::new("Discard changes").color(palette.error))
-                            .clicked()
-                        {
+                        let discard =
+                            ui.button(RichText::new("Discard changes").color(palette.error));
+                        ui_probe::button(ui, "guard-discard", &discard);
+                        if discard.clicked() {
                             self.pending = None;
                             self.perform(action, ctx);
                         }
@@ -105,6 +107,8 @@ impl EditorApp {
                     .show(ui, |ui| {
                         if self.dialog == Dialog::Extensions {
                             self.extensions_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Explorer {
+                            self.explorer_dialog(ui, ctx);
                         } else if self.dialog == Dialog::Encrypted {
                             self.encrypted_ui(ui, ctx);
                         } else if matches!(self.dialog, Dialog::MarpExport(..)) {

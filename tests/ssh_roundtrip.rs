@@ -1,6 +1,8 @@
 //! Run through scripts/test-ssh.sh, which creates an isolated localhost SSH server.
 #[path = "ssh_roundtrip/agent_forwarding.rs"]
 mod agent_forwarding;
+#[path = "ssh_roundtrip/explorer.rs"]
+mod explorer;
 #[path = "support/process.rs"]
 mod fixture_process;
 #[path = "ssh_roundtrip/installed_helpers.rs"]

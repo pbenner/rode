@@ -69,7 +69,13 @@ impl EditorApp {
                 | Job::BrowseFiles { local: true, .. }
                 | Job::AgentAttachment { local: true, .. }
         );
-        if self.vaults.locking
+        let file_operation_pending = self.explorer_state.busy
+            && matches!(
+                &job,
+                Job::Open(_) | Job::Save { .. } | Job::SaveBinary { .. }
+            );
+        if file_operation_pending
+            || self.vaults.locking
             || (!raw
                 && (self.workspace.as_ref().is_some_and(|w| !w.ready)
                     || (self.workspace.is_none() && self.preparing)))
@@ -86,9 +92,10 @@ impl EditorApp {
                             .into(),
                     );
                 }
-                Job::List(path) => {
+                Job::List(path, _) => {
                     self.loading.remove(path);
                 }
+                Job::Explorer(_) => self.explorer_state.busy = false,
                 Job::Open(path) => {
                     self.opening.remove(path);
                 }
@@ -99,7 +106,7 @@ impl EditorApp {
                 }
                 _ => {}
             }
-            self.notify("Open a project folder and wait for its environment to be ready before accessing files.", true);
+            self.notify(if file_operation_pending { "Wait for the file operation to finish before opening or saving files." } else { "Open a project folder and wait for its environment to be ready before accessing files." }, true);
             return;
         }
         let use_remote = match &job {
@@ -322,8 +329,12 @@ impl EditorApp {
 
     /// Queue a project-scoped directory refresh for the explorer cache.
     pub(super) fn list(&mut self, path: String, ctx: &egui::Context) {
-        if self.loading.insert(path.clone()) {
-            self.dispatch(Request::List { path: path.clone() }, Job::List(path), ctx);
+        if !self.explorer_state.busy && self.loading.insert(path.clone()) {
+            self.dispatch(
+                Request::List { path: path.clone() },
+                Job::List(path, self.explorer_state.epoch),
+                ctx,
+            );
         }
     }
 
@@ -496,6 +507,7 @@ impl EditorApp {
                     result,
                 } if generation == self.generation => {
                     match &job {
+                        Job::List(_, epoch) if *epoch != self.explorer_state.epoch => continue,
                         Job::Prepare { token, .. } | Job::StandaloneFile { token, .. }
                             if *token != self.project_token =>
                         {
@@ -526,9 +538,10 @@ impl EditorApp {
                         Job::AgentAttachment { .. } => {}
                         Job::Prepare { .. } | Job::StandaloneFile { .. } => self.preparing = false,
                         Job::Browse { .. } => self.folder_loading = false,
-                        Job::List(path) => {
+                        Job::List(path, _) => {
                             self.loading.remove(path);
                         }
+                        Job::Explorer(_) => self.explorer_state.busy = false,
                         Job::Open(path) => {
                             self.opening.remove(path);
                         }
@@ -554,7 +567,11 @@ impl EditorApp {
                     }
                     if matches!(
                         &job,
-                        Job::List(_) | Job::Open(_) | Job::Save { .. } | Job::SaveBinary { .. }
+                        Job::List(..)
+                            | Job::Explorer(_)
+                            | Job::Open(_)
+                            | Job::Save { .. }
+                            | Job::SaveBinary { .. }
                     ) {
                         self.file_browser.invalidate_rows();
                     }
@@ -562,6 +579,10 @@ impl EditorApp {
                         && let Some(Err(error)) = &response.notebook
                     {
                         self.notify(format!("Notebook: {error} JSON source is available."), true);
+                    }
+                    if let Job::Explorer(change) = job {
+                        self.finish_explorer(change, *result, ctx);
+                        continue;
                     }
                     match *result {
                         Err(error) => {
@@ -687,7 +708,8 @@ impl EditorApp {
                                     response.entries.into_iter().filter(|e| e.dir).collect();
                                 self.folder_error = None;
                             }
-                            Job::List(path) => {
+                            Job::Explorer(_) => unreachable!("Explorer results are handled above"),
+                            Job::List(path, _) => {
                                 if let Some(workspace) = &mut self.workspace
                                     && workspace.root == path
                                 {

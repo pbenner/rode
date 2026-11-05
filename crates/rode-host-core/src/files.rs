@@ -8,6 +8,8 @@
 //! Source directories need no permanent lock files, which avoids leaving editor
 //! artifacts in repositories; configuration uses a different stable-lock scheme
 //! because merging shared preferences must also cover destination creation.
+//! Explorer mutations instead address directory entries without following their
+//! final symlink; moves and staged copies publish without replacing a destination.
 //!
 //! Saves acknowledge their submitted snapshot, not the buffer at completion, so
 //! typing during I/O remains unsaved rather than being incorrectly marked clean.
@@ -22,6 +24,8 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
+
+mod mutations;
 
 pub use rode_host_protocol::files::{
     Entry, MAX_ENTRIES, MAX_FILE_BYTES, MAX_PREVIEW_BYTES, Response,
@@ -53,6 +57,9 @@ pub fn expand_home(path: &str) -> PathBuf {
 /// cooperating writers, compares revisions, and publishes through a neighboring temporary
 /// inode. Call off the UI thread or inside the prepared helper boundary.
 pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
+    if let Envelope::Mutate { mutation } = request {
+        return mutations::dispatch(mutation);
+    }
     let path = match request {
         Envelope::ReadAuto { path }
         | Envelope::ReadHex { path }
@@ -62,7 +69,9 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
         | Envelope::ReadImage { path }
         | Envelope::ReadBinary { path }
         | Envelope::Write { path, .. } => expand_home(path),
-        Envelope::Prepare { .. } | Envelope::Tool { .. } => bail!("Not a filesystem operation"),
+        Envelope::Prepare { .. } | Envelope::Tool { .. } | Envelope::Mutate { .. } => {
+            bail!("Not a filesystem operation")
+        }
     };
     let path = if matches!(
         request,
@@ -83,7 +92,9 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
         ..Default::default()
     };
     match request {
-        Envelope::Prepare { .. } | Envelope::Tool { .. } => bail!("Not a filesystem operation"),
+        Envelope::Prepare { .. } | Envelope::Tool { .. } | Envelope::Mutate { .. } => {
+            bail!("Not a filesystem operation")
+        }
         Envelope::List { .. } => {
             for entry in fs::read_dir(&path)? {
                 let entry = entry?;

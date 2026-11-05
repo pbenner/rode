@@ -33,6 +33,7 @@ pub const CAPABILITIES: &[&str] = &[
     "agent_files",
     "agent_offline_tools",
     "bundled_bwrap",
+    "explorer_mutations",
 ];
 
 /// Metadata repeated in the live handshake after discovery and cache publication.
