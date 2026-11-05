@@ -119,11 +119,15 @@ def window_geometry(window):
     )
 
 
-def wait_for_button(window, process, log_path, state_path, name, timeout=20):
+def wait_for_button(
+    window, process, log_path, state_path, name, timeout=20, *, focused=False, changed_after=None
+):
     """Wait for an enabled, visible registered control and resolve its current physical centre.
 
     RODE_UI_TEST_STATE opts the application into atomic, read-only layout snapshots.
     Input still goes through XTest; metadata cannot activate a control or start work.
+    Optional focus/edit revision guards wait for dependent input to be processed,
+    including when one busy native frame outlasts several keyboard shortcuts.
     """
     deadline = time.monotonic() + timeout
     last = "No layout snapshot received"
@@ -138,6 +142,12 @@ def wait_for_button(window, process, log_path, state_path, name, timeout=20):
         if state.get("pid") == process.pid:
             for button in state["buttons"]:
                 if button["name"] != name or not button["enabled"]:
+                    continue
+                if focused and not button.get("focused", False):
+                    continue
+                if changed_after is not None and (
+                    button.get("changed_pass") is None or button["changed_pass"] <= changed_after
+                ):
                     continue
                 x, y, width, height = window_geometry(window)
                 scale = state["pixels_per_point"]

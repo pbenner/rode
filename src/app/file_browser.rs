@@ -431,6 +431,7 @@ impl EditorApp {
                     "File name, search, or path…"
                 }),
         );
+        ui_probe::button(ui, "file-dialog-path", &response);
         if response.changed() {
             self.file_browser.query = self.dialog_input.clone();
             self.file_browser.selected = None;

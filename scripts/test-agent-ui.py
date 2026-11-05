@@ -25,6 +25,7 @@ from ui_harness import (
     screenshot,
     text,
     theme,
+    wait_for_button,
     x11,
     xtest,
 )
@@ -144,21 +145,76 @@ def send(root, message, first=False):
     time.sleep(0.3)
 
 
-def long_composer(root, window, prompt):
-    """Use native clipboard/input to exercise long drafts without an external clipboard tool."""
+def copied_text(expected, name):
+    """Observe the native clipboard after Copy; never populate the application buffer."""
+    deadline = time.monotonic() + 10
+    actual = ""
+    while time.monotonic() < deadline:
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=1,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        if result.returncode == 0:
+            actual = result.stdout
+            if actual == expected:
+                return
+        time.sleep(0.05)
+    text_matches(actual, expected, name)
+    raise AssertionError(f"Clipboard did not provide {name} within 10 seconds")
+
+
+def text_matches(actual, expected, name):
+    """Keep exact fixture contents and a bounded mismatch diagnostic in CI artifacts."""
+    if actual == expected:
+        return
+    (ARTIFACTS / f"{name}-actual.txt").write_text(actual)
+    (ARTIFACTS / f"{name}-expected.txt").write_text(expected)
+    different = next(
+        (index for index, (left, right) in enumerate(zip(actual, expected)) if left != right),
+        min(len(actual), len(expected)),
+    )
+    raise AssertionError(
+        f"{name}: expected {len(expected)} characters, got {len(actual)}; "
+        f"first difference at {different}: "
+        f"{actual[different : different + 80]!r} != {expected[different : different + 80]!r}. "
+        f"Full contents: {ARTIFACTS / (name + '-actual.txt')}"
+    )
+
+
+def long_composer(root, window, process, state_path, prompt):
+    """Exercise real copy/paste, scrolling, resize and save with input-readiness barriers."""
+
+    def control(name, **guards):
+        return wait_for_button(window, process, ARTIFACTS / "chat.log", state_path, name, **guards)
+
+    def paste(name):
+        # Focus alone can already be true before Paste reaches the native frame.
+        # Wait for this editor's next actual edit before issuing Save As/Copy.
+        before = json.loads(state_path.read_text())["pass"]
+        key("v", ("Control_L",))
+        control(name, focused=True, changed_after=before)
+
     key("p", ("Control_L",))
+    control("file-dialog-path", focused=True)
     text("prompt.txt")
     key("Return")
-    time.sleep(0.4)
-    click(500, 220)
+    control("source-editor", focused=True)
     key("a", ("Control_L",))
     key("c", ("Control_L",))
+    copied_text(prompt, "long-composer-source-copy")
     show_tools()
-    click(1280, 785)
-    key("v", ("Control_L",))
+    click(*control("agent-composer"))
+    control("agent-composer", focused=True)
+    paste("agent-composer")
     screenshot(window, "long-composer-end.png")
 
-    xtest.XTestFakeMotionEvent(display, -1, 1280, 795, 0)
+    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer"), 0)
     for _ in range(24):
         xtest.XTestFakeButtonEvent(display, 4, 1, 0)
         xtest.XTestFakeButtonEvent(display, 4, 0, 0)
@@ -167,40 +223,53 @@ def long_composer(root, window, prompt):
     screenshot(window, "long-composer-scrolled.png")
 
     # Drag the divider upward; releasing it must return typing to the draft.
-    xtest.XTestFakeMotionEvent(display, -1, 1180, 725, 0)
+    divider_x, divider_y = control("agent-composer-resize")
+    xtest.XTestFakeMotionEvent(display, -1, divider_x, divider_y, 0)
     xtest.XTestFakeButtonEvent(display, 1, 1, 0)
     x11.XFlush(display)
     time.sleep(0.1)
     for step in range(1, 11):
-        xtest.XTestFakeMotionEvent(display, -1, 1180, 725 - 20 * step, 0)
+        xtest.XTestFakeMotionEvent(display, -1, divider_x, divider_y - 20 * step, 0)
         x11.XFlush(display)
         time.sleep(0.03)
     xtest.XTestFakeButtonEvent(display, 1, 0, 0)
     x11.XFlush(display)
-    time.sleep(0.2)
+    wait_for(
+        lambda: control("agent-composer-resize")[1] <= divider_y - 180,
+        "Dragging did not expand the message input",
+    )
+    control("agent-composer", focused=True)
     key("End", ("Control_L",))
     text(" visible-tail")
     screenshot(window, "long-composer-resized.png")
     key("a", ("Control_L",))
     key("c", ("Control_L",))
-    xtest.XTestFakeMotionEvent(display, -1, 1180, 523, 0)
+    copied_text(prompt + " visible-tail", "long-composer-draft-copy")
+    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer-resize"), 0)
     for _ in range(2):
         xtest.XTestFakeButtonEvent(display, 1, 1, 0)
         xtest.XTestFakeButtonEvent(display, 1, 0, 0)
         x11.XFlush(display)
         time.sleep(0.05)
+    wait_for(
+        lambda: abs(control("agent-composer-resize")[1] - divider_y) <= 2,
+        "Double-click did not reset the message input height",
+    )
     screenshot(window, "long-composer-reset.png")
     # Inspect what was retained through resize/scroll using the editor's ordinary
-    # save path, without sending a model prompt or adding a testing API to RODE.
+    # save path. Readiness metadata contains no draft/document text.
     key("n", ("Control_L",))
-    key("v", ("Control_L",))
+    control("source-editor", focused=True)
+    paste("source-editor")
     key("s", ("Control_L", "Shift_L"))
-    time.sleep(0.2)
+    control("file-dialog-path", focused=True)
     key("a", ("Control_L",))
     text("composed.txt")
     key("Return")
     wait_for(lambda: (root / "composed.txt").exists(), "Could not inspect the long chat draft")
-    assert (root / "composed.txt").read_text() == prompt + " visible-tail"
+    text_matches(
+        (root / "composed.txt").read_text(), prompt + " visible-tail", "long-composer-save"
+    )
     assert (root / "prompt.txt").read_text() == prompt
     assert not (root / "agent-rpc.jsonl").exists(), "Composing or resizing started an agent"
     show_tools()
@@ -256,7 +325,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert not (root / "agent-rpc.jsonl").exists()
             # Default before the first turn leaves the task unmodified.
             select_personality(preferences, "default")
-            long_composer(root, window, prompt)
+            long_composer(root, window, process, base / "ui-state.json", prompt)
             # Discover and select models/efforts before the first prompt. The
             # temporary catalog connection must never create a conversation.
             click(1090, 752)
@@ -688,6 +757,8 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 "Agent UI: long-draft scrolling/resizing, Enter/Shift+Enter, personalities, history restore, model/access selectors, saved policies, chat context, approvals, Stop, themes, and unsaved buffers passed."
             )
         except Exception:
+            if (base / "ui-state.json").exists():
+                shutil.copy2(base / "ui-state.json", ARTIFACTS / "failure-state.json")
             if window is not None and process.poll() is None:
                 screenshot(window, "failure.png")
             raise

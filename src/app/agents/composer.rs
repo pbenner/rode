@@ -300,6 +300,7 @@ impl State {
         let response = ui.interact(handle, ui.id().with("agent-composer-resize"), sense)
             .on_hover_cursor(egui::CursorIcon::ResizeVertical)
             .on_hover_text("Drag to resize message input · Double-click to reset\nWhen focused: Up/Down to resize, Home to reset");
+        crate::app::ui_probe::button(ui, "agent-composer-resize", &response);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::DragValue, enabled, "Message input height")
         });

@@ -162,6 +162,44 @@ class ButtonReadinessTests(unittest.TestCase):
             focus.assert_called_once_with(0x123)
             click.assert_called_once_with(190, 245)
 
+    def test_focused_control_waits_for_final_focus(self):
+        focused = dict(self.state, buttons=[dict(self.state["buttons"][0], focused=True)])
+        self.read.side_effect = [json.dumps(self.state), json.dumps(focused)]
+        self.assertEqual(
+            wait_for_button(0x123, self.process, "log", "state", "Install Codex", focused=True),
+            (190, 245),
+        )
+        self.assertEqual(self.read.call_count, 2)
+
+    def test_edit_barrier_waits_for_a_new_change_not_just_another_repaint(self):
+        def snapshot(render_pass, changed):
+            return json.dumps(
+                {
+                    **self.state,
+                    "pass": render_pass,
+                    "buttons": [dict(self.state["buttons"][0], changed_pass=changed)],
+                }
+            )
+
+        self.read.side_effect = [
+            snapshot(11, None),
+            snapshot(12, 9),
+            snapshot(13, 10),
+            snapshot(14, 11),
+        ]
+        self.assertEqual(
+            wait_for_button(0x123, self.process, "log", "state", "Install Codex", changed_after=10),
+            (190, 245),
+        )
+        self.assertEqual(self.read.call_count, 4)
+
+    def test_missing_edit_times_out_instead_of_sending_the_next_action(self):
+        with patch("ui_harness.time.monotonic", side_effect=[0, 0, 21]):
+            with self.assertRaisesRegex(AssertionError, "Install Codex.*log"):
+                wait_for_button(
+                    0x123, self.process, "log", "state", "Install Codex", changed_after=10
+                )
+
     def test_timeout_identifies_disabled_control_and_log(self):
         self.state["buttons"][0]["enabled"] = False
         self.read.return_value = json.dumps(self.state)

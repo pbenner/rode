@@ -17,6 +17,7 @@ install       Build/install the editor and an automatically discovered static he
 build-helper  Build/verify a musl helper and print its absolute artifact path.
               Defaults to the current architecture; cross builds need a linker.
 
+Static builds need a musl C toolchain (Debian/Ubuntu: musl-tools), in addition to Rust.
 Installation defaults to CARGO_INSTALL_ROOT, CARGO_HOME, or ~/.cargo.
 ";
 

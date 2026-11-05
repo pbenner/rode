@@ -2412,6 +2412,7 @@ impl EditorApp {
                                 .layouter(&mut layouter)
                                 .show(ui);
                             editing.after_source(ui,doc.id,&mut output,&doc.text,palette);
+                            ui_probe::button(ui, "source-editor", &output.response);
                             if jump_requested
                                 && let Some(cursor) = output
                                     .cursor_range

@@ -19,6 +19,9 @@ required. Cross builds must supply a target compiler/sysroot through Cargo/cc's
 standard `CC_<target>` and `CFLAGS_<target>` settings.
 Native musl builds discover missing Linux UAPI include roots from the native
 compiler. Cross builds never borrow headers from the build host.
+Rustup's musl target supplies Rust libraries, not a C toolchain. A missing
+`musl-gcc`/target compiler stops the build with prerequisite instructions;
+RODE does not install OS packages or substitute a glibc compiler automatically.
 
 ## Source provenance and updates
 

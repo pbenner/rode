@@ -4,7 +4,7 @@
 
 For Debian/Ubuntu, `scripts/build-deb.sh` creates an installable editor package with the desktop launcher and terminal helper. Codex is a separate optional package built with `scripts/build-deb.sh --component codex`. See [package prerequisites and installation](packaging.md).
 
-Install Rust (1.88 or newer) with rustup and the native build prerequisites below, then run the source installer on Linux x86_64 or aarch64:
+Install Rust (1.88 or newer) with rustup and the native build prerequisites below, including a musl C toolchain (`musl-tools` on Debian/Ubuntu). Then run the source installer on Linux x86_64 or aarch64:
 
 ```sh
 cargo xtask install
@@ -31,6 +31,8 @@ On Debian/Ubuntu, common build/runtime prerequisites are a C compiler, `pkg-conf
 sudo apt install build-essential pkg-config musl-tools \
   libxkbcommon-dev libwayland-dev libgl1-mesa-dev openssh-client
 ```
+
+`musl-tools` is required by `cargo xtask install` and `cargo xtask build-helper` to compile the bundled bubblewrap C sources for the static helper. Rustup installs Rust's musl libraries, but not the musl C compiler or headers. If the build reports a missing `musl-gcc` or `x86_64-linux-musl-gcc`, install this prerequisite and retry. A custom or cross toolchain can instead provide the target compiler and sysroot through `CC_<target>` and `CFLAGS_<target>`; an ordinary glibc compiler is insufficient.
 
 RODE uses egui/eframe with the OpenGL renderer. It repaints on input, terminal output, and cursor/UI changes, rather than continuously running an animation loop. Directory listings and file transfers run on background threads. The explorer loads folders on demand, caches the visible tree, and renders only visible rows. Syntax highlighting is cached and disabled above 512 KiB. Release binaries use thin LTO and stripped symbols. On Linux installations with incompatible OpenGL drivers, startup retries once with Mesa software rendering if Mesa is available.
 

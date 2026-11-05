@@ -691,6 +691,7 @@ impl EditorApp {
                     ctx.request_repaint();
                 }
             }
+            ui_probe::button(ui, "agent-composer", &response);
             let action_height = layout::control_height(ui);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), action_height),
