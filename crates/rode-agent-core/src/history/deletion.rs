@@ -86,11 +86,11 @@ impl Browser {
         );
         let cursor = deletion.cursor.clone();
         let mut params = self.list_params(cursor);
-        if self.launch.config.provider != Provider::Acp {
+        if !self.launch.config.provider.is_acp() {
             params["archived"] = self.deletion.as_ref().unwrap().archived.into();
         }
         self.call(
-            if self.launch.config.provider == Provider::Acp {
+            if self.launch.config.provider.is_acp() {
                 "session/list"
             } else {
                 "thread/list"
@@ -103,7 +103,7 @@ impl Browser {
     /// Validate a discovered page, deduplicate captured identities and advance bounded
     /// pagination before any bulk mutation changes the backend list.
     pub(super) fn deleted_list(&mut self, result: &Value) -> Result<()> {
-        let acp = self.launch.config.provider == Provider::Acp;
+        let acp = self.launch.config.provider.is_acp();
         let rows = result[if acp { "sessions" } else { "data" }]
             .as_array()
             .context("History deletion received an invalid list")?;
@@ -177,7 +177,7 @@ impl Browser {
             .deletion
             .as_mut()
             .context("No history deletion is pending")?;
-        if self.launch.config.provider != Provider::Acp && !deletion.protection_done {
+        if !self.launch.config.provider.is_acp() && !deletion.protection_done {
             if !deletion.protection_started {
                 deletion.checking = deletion.protected.iter().cloned().collect();
                 deletion.protection_started = true;
@@ -207,7 +207,7 @@ impl Browser {
                 deletion.deleted,
                 deletion.queue.len() + 1
             );
-            if self.launch.config.provider == Provider::Acp {
+            if self.launch.config.provider.is_acp() {
                 self.call("session/delete", json!({"sessionId":id}), Call::Delete)
             } else {
                 self.call(
@@ -341,7 +341,7 @@ impl Browser {
             return Ok(false);
         }
         if matches!(call, Call::Delete)
-            && self.launch.config.provider == Provider::Acp
+            && self.launch.config.provider.is_acp()
             && error["code"] == -32002
         {
             self.deleted()?;

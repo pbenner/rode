@@ -411,35 +411,50 @@ fn eviction_does_not_remove_another_processes_updated_profile() {
 
 #[test]
 fn resetting_agent_controls_preserves_other_windows_model_and_permission_edits() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("app.ron");
-    let initial = json!({"same":{"acp_options":{"mode":"ask"},"model":"old"}});
-    fs::write(
-        &path,
-        ron::ser::to_string(&BTreeMap::from([(
-            "agent_preferences",
-            initial.to_string(),
-        )]))
-        .unwrap(),
-    )
-    .unwrap();
-    let mut resetting = open(&path);
-    let mut changing = open(&path);
-    let mut next = initial.clone();
-    next["same"]["model"] = "new-model".into();
-    next["same"]["approval"] = "never".into();
-    next["same"]["acp_options"]["model"] = "remote-model".into();
-    changing.set_string("agent_preferences", next.to_string());
-    drop(changing);
-    let mut reset = initial;
-    reset["same"]["acp_options"] = json!({});
-    resetting.set_string("agent_preferences", reset.to_string());
-    drop(resetting);
-    let merged: Value = serde_json::from_str(&values(&path)["agent_preferences"]).unwrap();
-    assert_eq!(merged["same"]["model"], "new-model");
-    assert_eq!(merged["same"]["approval"], "never");
-    assert_eq!(merged["same"]["acp_options"]["model"], "remote-model");
-    assert!(merged["same"]["acp_options"].get("mode").is_none());
+    for (options, other) in [
+        ("acp_options", "claude_options"),
+        ("claude_options", "acp_options"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("app.ron");
+        let initial = json!({"same":{
+            "acp_options":{"mode":"ask"},
+            "claude_options":{"mode":"default"},
+            "model":"old"
+        }});
+        fs::write(
+            &path,
+            ron::ser::to_string(&BTreeMap::from([(
+                "agent_preferences",
+                initial.to_string(),
+            )]))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut resetting = open(&path);
+        let mut changing = open(&path);
+        let mut next = initial.clone();
+        next["same"]["model"] = "new-model".into();
+        next["same"]["approval"] = "never".into();
+        next["same"][options]["model"] = "remote-model".into();
+        next["same"][other]["model"] = "other-provider-model".into();
+        changing.set_string("agent_preferences", next.to_string());
+        drop(changing);
+        let mut reset = initial;
+        reset["same"][options] = json!({});
+        resetting.set_string("agent_preferences", reset.to_string());
+        drop(resetting);
+        let merged: Value = serde_json::from_str(&values(&path)["agent_preferences"]).unwrap();
+        assert_eq!(merged["same"]["model"], "new-model");
+        assert_eq!(merged["same"]["approval"], "never");
+        assert_eq!(
+            merged["same"][options],
+            json!({"model":"remote-model"}),
+            "{options}"
+        );
+        assert_eq!(merged["same"][other]["model"], "other-provider-model");
+        assert!(merged["same"][other].get("mode").is_some());
+    }
 }
 
 #[test]
@@ -577,6 +592,20 @@ fn roundtrip(key: &str, initial: Value, next: Value) -> Value {
     drop(prefs);
     let saved: BTreeMap<String, String> = ron::de::from_bytes(&fs::read(path).unwrap()).unwrap();
     serde_json::from_str(&saved[key]).unwrap()
+}
+
+#[test]
+fn resetting_the_last_agent_control_survives_restart() {
+    for options in ["acp_options", "claude_options"] {
+        let before = json!({"local":{
+            "acp_options":{"mode":"ask"},
+            "claude_options":{"mode":"default"},
+            "future_agent_field":{"retained":true}
+        }});
+        let mut after = before.clone();
+        after["local"][options] = json!({});
+        assert_eq!(roundtrip("agent_preferences", before, after.clone()), after);
+    }
 }
 
 #[test]

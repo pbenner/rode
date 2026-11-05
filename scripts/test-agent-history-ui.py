@@ -20,6 +20,7 @@ from ui_harness import (
     ROOT,
     assert_running,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
@@ -92,6 +93,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
 
     def calls():
@@ -236,7 +238,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             )
             time.sleep(0.5)
             screenshot(window, "saved-chat-row.png")
-            click(600, header + 264)
+            click_button(window, process, log_path, base / "ui-state.json", "Restore conversation")
             wait(
                 lambda: any(
                     c.get("method") == "thread/resume" and c["params"]["threadId"] == "saved-3"
@@ -260,7 +262,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 "History did not refresh after the restore writer conflict",
             )
             time.sleep(0.5)
-            click(600, header + 264)
+            click_button(window, process, log_path, base / "ui-state.json", "Restore conversation")
             wait(
                 lambda: any(c.get("method") == "thread/turns/list" for c in calls()),
                 "Conversation did not restore after the writer lock was released",
@@ -284,7 +286,9 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             )
             time.sleep(0.5)
             screenshot(window, "current-chat-row.png")
-            click(600, header + 264)
+            click_button(
+                window, process, log_path, base / "ui-state.json", "Show current conversation"
+            )
             time.sleep(0.5)
             assert sum(c.get("method") == "thread/resume" for c in calls()) == resumes_before, (
                 "Selecting the open chat tried to acquire a second writer"

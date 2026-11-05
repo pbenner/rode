@@ -32,12 +32,7 @@ fn fixture() -> Vec<Info> {
             } else {
                 "NORMAL MODE".into()
             },
-            provider: [
-                Provider::Codex,
-                Provider::Acp,
-                Provider::Local,
-                Provider::Codex,
-            ][index],
+            provider: Provider::ALL[index],
             alive: true,
             busy: index == 1,
             status: if index == 2 {

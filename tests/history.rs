@@ -31,6 +31,7 @@ fn fixture(provider: Provider, isolated: bool) -> (tempfile::TempDir, Launch) {
             provider,
             codex: program.to_string_lossy().into(),
             acp_program: program.to_string_lossy().into(),
+            claude_program: program.to_string_lossy().into(),
             ..Default::default()
         },
         plan: native_peer::prepare(
@@ -139,7 +140,7 @@ fn deleted(root: &Path) -> Vec<String> {
 
 #[test]
 fn individual_deletion_is_acknowledged_persisted_and_never_requests_inference() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
         wait(&mut browser);
@@ -210,7 +211,7 @@ fn individual_codex_deletion_protects_active_descendants_on_unloaded_and_archive
 
 #[test]
 fn delete_all_enumerates_beyond_the_browser_limit_and_keeps_open_active_and_foreign_chats() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         options(
             temp.path(),
@@ -224,7 +225,7 @@ fn delete_all_enumerates_beyond_the_browser_limit_and_keeps_open_active_and_fore
         browser.delete(None, vec!["saved-42".into()]).unwrap();
         wait(&mut browser);
         let mut expected: Vec<_> = (0..300)
-            .filter(|n| *n != 42 && *n != 43 && (provider == Provider::Acp || *n != 44))
+            .filter(|n| *n != 42 && *n != 43 && (provider.is_acp() || *n != 44))
             .map(|n| format!("saved-{n}"))
             .collect();
         if provider == Provider::Codex {
@@ -262,7 +263,7 @@ fn delete_all_enumerates_beyond_the_browser_limit_and_keeps_open_active_and_fore
 
 #[test]
 fn deletion_revalidates_saved_scope_and_partial_failures_leave_unacknowledged_rows() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
         wait(&mut browser);
@@ -296,7 +297,7 @@ fn deletion_revalidates_saved_scope_and_partial_failures_leave_unacknowledged_ro
 
 #[test]
 fn an_idle_history_process_exit_disables_restoration_deletion_and_pagination() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         options(temp.path(), serde_json::json!({"exit_after_list": true}));
         let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
@@ -326,7 +327,7 @@ fn an_idle_history_process_exit_disables_restoration_deletion_and_pagination() {
 
 #[test]
 fn active_writer_restore_keeps_current_chat_and_explains_how_to_reattach() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         let mut current = Chat::default();
         current
@@ -423,7 +424,7 @@ fn active_writer_restore_keeps_current_chat_and_explains_how_to_reattach() {
 
 #[test]
 fn active_writer_deletions_explain_idle_or_detached_owners_and_keep_raw_diagnostics() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         for (target, count) in [("saved-1", 0), ("saved-2", 1)] {
             let (temp, launch) = fixture(provider, false);
             options(
@@ -479,12 +480,12 @@ fn active_writer_deletions_explain_idle_or_detached_owners_and_keep_raw_diagnost
 
 #[test]
 fn unsupported_deletion_keeps_history_resumable_and_invalid_pagination_never_deletes() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         options(temp.path(), serde_json::json!({"delete_supported":false}));
         let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
         wait(&mut browser);
-        if provider == Provider::Acp {
+        if provider.is_acp() {
             assert!(!browser.can_delete);
             assert!(browser.delete(Some("saved-1"), vec![]).is_err());
             assert!(
@@ -528,7 +529,7 @@ fn acp_missing_session_delete_is_idempotent_success() {
 
 #[test]
 fn a_failed_refresh_reports_the_deletion_that_already_committed() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
         wait(&mut browser);
@@ -553,7 +554,7 @@ fn a_failed_refresh_reports_the_deletion_that_already_committed() {
 
 #[test]
 fn both_protocols_list_without_inference_filter_projects_page_and_resume_in_place() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         for (requested, unavailable) in [(false, false), (true, false), (true, true)] {
             let (temp, mut launch) = fixture(provider, requested && !unavailable);
             if unavailable {
@@ -618,7 +619,7 @@ fn both_protocols_list_without_inference_filter_projects_page_and_resume_in_plac
                 .rfind(|v| matches!(v["method"].as_str(), Some("turn/start" | "session/prompt")))
                 .unwrap();
             assert_eq!(
-                prompt["params"][if provider == Provider::Acp {
+                prompt["params"][if provider.is_acp() {
                     "sessionId"
                 } else {
                     "threadId"
@@ -669,7 +670,7 @@ fn unsupported_history_and_cancelled_replay_preserve_the_current_chat() {
         wait_chat(&mut chat);
         let count = chat.messages.len();
         let current_launch = launch.clone();
-        launch.config.acp_arguments.push(flag.into());
+        launch.config.acp_arguments_mut().push(flag.into());
         let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
         wait(&mut browser);
         if flag == "--no-history" {
@@ -743,7 +744,7 @@ fn local_history_does_not_require_a_model_and_read_only_wins_over_saved_access()
 
 #[test]
 fn restored_prompts_continue_beyond_the_display_budget_and_32_turns() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         options(
             temp.path(),
@@ -767,7 +768,7 @@ fn restored_prompts_continue_beyond_the_display_budget_and_32_turns() {
 
 #[test]
 fn restored_input_history_survives_tool_replay_and_later_submissions() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);
         options(temp.path(), serde_json::json!({"replay_tools": 80}));
         let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
@@ -806,7 +807,7 @@ fn restored_input_history_survives_tool_replay_and_later_submissions() {
 
 #[test]
 fn both_protocols_hide_saved_personality_instructions_in_previews_and_recalled_prompts() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         for hint in [
             include_str!("../crates/rode-agent-core/src/personality/lamb.txt"),
             "<rode_response_style version=\"2\" name=\"jackson_lamb\">\nOlder personality instructions.\n</rode_response_style>",

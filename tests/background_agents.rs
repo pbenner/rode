@@ -97,6 +97,8 @@ impl Fixture {
             provider,
             codex: executable.clone(),
             acp_program: executable.clone(),
+            claude_program: executable.clone(),
+            claude_arguments: vec!["--acp".into()],
             acp_arguments: vec!["--acp".into()],
             local_model: "fixture-only".into(),
             ..Default::default()
@@ -184,7 +186,7 @@ struct View {
 #[test]
 fn an_idle_agent_exit_pauses_existing_and_future_queued_work() {
     use rode_agent_core::queue::Action as Queue;
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("continue"), "").unwrap();
         let info = fixture.create(provider, true, "completed work");
@@ -231,7 +233,7 @@ fn an_idle_agent_exit_pauses_existing_and_future_queued_work() {
 
 #[test]
 fn diagnostic_lines_up_to_one_mib_keep_the_native_agent_connected() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("continue"), "").unwrap();
         let info = fixture.create(provider, true, "long-stderr");
@@ -246,7 +248,7 @@ fn diagnostic_lines_up_to_one_mib_keep_the_native_agent_connected() {
 #[test]
 fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_prompt() {
     use rode_agent_core::{attachment::Attachment, queue::Action as Queue};
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         for stream in ["stdout", "stderr"] {
             let fixture = Fixture::new();
             fs::write(fixture.root.join("record-inputs"), "").unwrap();
@@ -322,7 +324,7 @@ fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_promp
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
             if !fresh {
-                let method = if provider == Provider::Acp {
+                let method = if provider.is_acp() {
                     "session/load"
                 } else {
                     "thread/resume"
@@ -352,7 +354,7 @@ fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_promp
 #[test]
 fn failed_saved_reconnect_can_fall_back_to_a_new_context_without_losing_work() {
     use rode_agent_core::queue::Action as Queue;
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("no-resume"), "").unwrap();
         let info = fixture.create(provider, true, "overflow-stdout");
@@ -558,7 +560,7 @@ impl Drop for View {
 
 #[test]
 fn restored_prompt_recall_survives_native_deltas_and_reattachment() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         fs::write(
             fixture.root.join("agent.py"),
@@ -646,7 +648,7 @@ fn restored_prompt_recall_survives_native_deltas_and_reattachment() {
 
 #[test]
 fn history_marks_attached_and_detached_owners_without_trying_to_resume_them() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         fs::write(
             fixture.root.join("agent.py"),
@@ -749,7 +751,13 @@ fn history_marks_attached_and_detached_owners_without_trying_to_resume_them() {
 
 #[test]
 fn history_deletion_uses_host_backend_and_protects_another_open_controller() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for (provider, browser_provider) in [
+        (Provider::Codex, Provider::Codex),
+        (Provider::Claude, Provider::Claude),
+        (Provider::Acp, Provider::Acp),
+        (Provider::Claude, Provider::Acp),
+        (Provider::Acp, Provider::Claude),
+    ] {
         let fixture = Fixture::new();
         fs::write(
             fixture.root.join("agent.py"),
@@ -769,9 +777,13 @@ fn history_deletion_uses_host_backend_and_protects_another_open_controller() {
         let conversation = state.chat.conversation.clone();
         let config = state.chat.config.clone();
         assert!(!conversation.is_empty());
-        let info = fixture.create_agent(provider, false, None, vec![]);
+        let info = fixture.create_agent(browser_provider, false, None, vec![]);
         let mut browser = fixture.attach(&info);
-        browser.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_delete));
+        let listed = browser.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_delete));
+        assert_eq!(
+            listed.history.unwrap().owners.get(&conversation),
+            Some(&Owner::Attached)
+        );
         browser.send(Action::HistoryDelete {
             id: None,
             protected: vec![],
@@ -815,7 +827,7 @@ fn history_deletion_uses_host_backend_and_protects_another_open_controller() {
 
 #[test]
 fn persistent_agents_finish_without_a_view_and_resume_the_same_conversation() {
-    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+    for provider in Provider::ALL {
         let fixture = Fixture::new();
         assert!(fixture.infos().is_empty());
         assert!(
@@ -897,7 +909,7 @@ fn persistence_toggles_in_place_and_off_ends_the_last_view() {
 }
 #[test]
 fn offline_approvals_wait_and_wrong_policy_or_stale_answers_are_rejected() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         let info = fixture.create(provider, true, "approval");
         let mut view = fixture.attach(&info);
@@ -944,7 +956,7 @@ fn offline_approvals_wait_and_wrong_policy_or_stale_answers_are_rejected() {
 #[test]
 fn automatic_queue_preserves_pause_edit_and_failure_holds_while_detached() {
     use rode_agent_core::queue::Action as Queue;
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         for hold in ["pause", "edit", "failure"] {
             let fixture = Fixture::new();
             if hold == "failure" {
@@ -1202,7 +1214,7 @@ fn native_agent_creation_and_follow_ups_preserve_large_document_snapshots() {
 #[test]
 fn queued_prompts_and_files_survive_view_replacement_without_reordering_or_duplicate_dispatch() {
     use rode_agent_core::{attachment::Attachment, queue::Action as Queue};
-    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+    for provider in Provider::ALL {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("record-inputs"), "").unwrap();
         let info = fixture.create(provider, true, "work");
@@ -1322,7 +1334,7 @@ fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_
     use rode_agent_core::{
         attachment::Attachment, personality::Personality, queue::Action as Queue,
     };
-    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+    for provider in Provider::ALL {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("record-inputs"), "").unwrap();
         let info = fixture.create(provider, true, "work");

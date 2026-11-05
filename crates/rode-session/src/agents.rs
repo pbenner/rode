@@ -3,6 +3,7 @@
 //! that view disconnects. No transcript or credentials are written to disk.
 use super::*;
 use rode_agent_core::{
+    Provider,
     history::{Browser, Owner},
     protocol::Chat,
     service::{Command as Action, Info, Spec, State},
@@ -608,7 +609,10 @@ fn run(
                                 let state = other.shared.lock().unwrap();
                                 if !state.finished
                                     && state.state.info.root == spec.plan.root
-                                    && state.state.info.provider == spec.config.provider
+                                    && history_provider_matches(
+                                        state.state.info.provider,
+                                        spec.config.provider,
+                                    )
                                     && !state.state.chat.conversation.is_empty()
                                 {
                                     protected.push(state.state.chat.conversation.clone());
@@ -638,6 +642,13 @@ fn run(
     }
 }
 
+/// Claude's named provider and a custom ACP command may expose the same backend
+/// storage. Conservatively protect matching opaque IDs across ACP providers;
+/// Codex cloud/local retain their separate provider filters.
+fn history_provider_matches(left: Provider, right: Provider) -> bool {
+    left == right || (left.is_acp() && right.is_acp())
+}
+
 /// Read only host-owned conversation identities, including idle persistent chats.
 /// Backend ownership outside this service is learned from rejected restores.
 fn history_owners(
@@ -650,7 +661,7 @@ fn history_owners(
             let shared = job.shared.lock().unwrap();
             if !shared.finished
                 && shared.state.info.root == spec.plan.root
-                && shared.state.info.provider == spec.config.provider
+                && history_provider_matches(shared.state.info.provider, spec.config.provider)
                 && !shared.state.chat.conversation.is_empty()
             {
                 owners.insert(

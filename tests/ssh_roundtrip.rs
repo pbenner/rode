@@ -735,13 +735,16 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
         };
         let done = root.join("queue-done");
         let first = root.join("queue-started");
+        // Publish readiness only after closing the written file. The parent
+        // observes existence; open(..., 'w') exposes an empty file first.
         let runs = vec![
             Run {
                 uid: 1,
                 cell: "first".into(),
                 version: 0,
                 code: format!(
-                    "import os,time\ncounter=41\nopen({:?},'w').write(os.environ['SLURM_JOB_ID'])\ntime.sleep(1)",
+                    "import os,time\nfrom pathlib import Path\ncounter=41\nmarker=Path({:?})\nmarker.write_text(os.environ['SLURM_JOB_ID'])\nos.replace(marker,{:?})\ntime.sleep(1)",
+                    first.with_extension("tmp").to_string_lossy(),
                     first.to_string_lossy()
                 ),
             },
@@ -750,7 +753,8 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
                 cell: "second".into(),
                 version: 0,
                 code: format!(
-                    "counter+=1\nprint(counter)\nopen({:?},'w').write(str(counter))",
+                    "counter+=1\nprint(counter)\nmarker=Path({:?})\nmarker.write_text(str(counter))\nos.replace(marker,{:?})",
+                    done.with_extension("tmp").to_string_lossy(),
                     done.to_string_lossy()
                 ),
             },
@@ -2429,7 +2433,7 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
     std::fs::write(&program, include_str!("fixtures/agent.py")).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(root.parent().unwrap().join("private.txt"), "hidden").unwrap();
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let deleted = root.join("history-deleted.json");
         if deleted.exists() {
             std::fs::remove_file(&deleted).unwrap();
@@ -2439,6 +2443,7 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
                 provider,
                 codex: program.to_string_lossy().into(),
                 acp_program: program.to_string_lossy().into(),
+                claude_program: program.to_string_lossy().into(),
                 personality: rode::agent::Personality::JacksonLamb,
                 ..Default::default()
             },
@@ -2457,11 +2462,7 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
             .find(|r| matches!(r["method"].as_str(), Some("turn/start" | "session/prompt")))
             .unwrap();
-        let field = if provider == Provider::Acp {
-            "prompt"
-        } else {
-            "input"
-        };
+        let field = if provider.is_acp() { "prompt" } else { "input" };
         assert_eq!(prompt["params"][field][0]["text"], "remote");
         assert!(
             prompt["params"][field][1]["text"]
@@ -2497,14 +2498,14 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
         assert!(chat.connected());
         launch.config.approval = Approval::Never;
         launch.config.access = Access::Full;
-        if provider == Provider::Acp {
+        if provider.is_acp() {
             launch
                 .config
-                .acp_options
+                .acp_options_mut()
                 .insert("model".into(), serde_json::json!("fixture-deep"));
             launch
                 .config
-                .acp_options
+                .acp_options_mut()
                 .insert("mode".into(), serde_json::json!("code"));
         } else {
             launch.config.model = "fixture-deep".into();
@@ -2517,7 +2518,7 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
         wait_agent(&mut chat, |c| c.completed > completed);
         assert!(chat.prompts.is_empty());
         assert!(!root.join("approved.txt").exists());
-        if provider == Provider::Acp {
+        if provider.is_acp() {
             assert!(
                 chat.controls
                     .iter()

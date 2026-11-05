@@ -64,15 +64,15 @@ fn provider(ui: &mut egui::Ui, config: &mut Config, width: f32, busy: bool, queu
                 .truncate()
                 .selected_text(config.provider.label())
                 .show_ui(ui, |ui| {
-                    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+                    for provider in Provider::ALL {
                         let enabled = !busy
                             && !queued
-                            && !(provider == Provider::Acp && config.files_only());
+                            && !(provider.is_acp() && config.files_only());
                         ui.add_enabled_ui(enabled, |ui| {
                             ui.selectable_value(&mut config.provider, provider, provider.label())
                         })
                         .response
-                        .on_disabled_hover_text("Choose another access mode before switching to ACP; ACP cannot enforce file-only tools.");
+                        .on_disabled_hover_text("Choose another access mode before switching to Claude Code or ACP; file-only tools require Codex.");
                     }
                 })
                 .response

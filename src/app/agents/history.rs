@@ -493,6 +493,11 @@ fn conversation(
                 ),
             )
         });
+        if availability == Availability::Saved {
+            super::super::ui_probe::button(&interaction, "Restore conversation", &body);
+        } else if availability == Availability::Current {
+            super::super::ui_probe::button(&interaction, "Show current conversation", &body);
+        }
         resume = body.clicked();
         hovered |= body.hovered() || body.has_focus();
         if body.has_focus() {

@@ -44,6 +44,7 @@ fn launch(root: &Path, program: &Path, provider: Provider, isolated: bool) -> La
             provider,
             codex: program.to_string_lossy().into(),
             acp_program: program.to_string_lossy().into(),
+            claude_program: program.to_string_lossy().into(),
             ..Default::default()
         },
         plan,
@@ -84,7 +85,7 @@ fn log(root: &Path) -> Vec<Value> {
 
 #[test]
 fn personalities_change_only_reply_hints_without_restarting_or_changing_permissions() {
-    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+    for provider in Provider::ALL {
         for isolated in [false, true] {
             let (_temp, root, program) = fixture();
             let mut launch = launch(&root, &program, provider, isolated);
@@ -99,11 +100,7 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
                 .iter()
                 .find(|v| matches!(v["method"].as_str(), Some("turn/start" | "session/prompt")))
                 .unwrap();
-            let field = if provider == Provider::Acp {
-                "prompt"
-            } else {
-                "input"
-            };
+            let field = if provider.is_acp() { "prompt" } else { "input" };
             assert_eq!(
                 first["params"][field].as_array().unwrap().len(),
                 1,
@@ -225,7 +222,7 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
 
 #[test]
 fn both_protocols_stream_keep_context_and_relay_explicit_approvals() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (_temp, root, program) = fixture();
         let launch = launch(&root, &program, provider, false);
         let mut chat = Chat::default();
@@ -354,7 +351,7 @@ fn codex_model_reasoning_and_access_changes_apply_to_the_next_turn() {
 
 #[test]
 fn never_ask_declines_requests_for_both_protocols_without_ending_the_conversation() {
-    for provider in [Provider::Codex, Provider::Acp] {
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (_temp, root, program) = fixture();
         let mut launch = launch(&root, &program, provider, false);
         launch.config.approval = Approval::Never;
@@ -391,46 +388,48 @@ fn project_read_only_overrides_full_access_and_cannot_be_approved_away() {
 
 #[test]
 fn acp_controls_are_acknowledged_in_dependency_order_before_the_next_prompt() {
-    let (_temp, root, program) = fixture();
-    let mut launch = launch(&root, &program, Provider::Acp, false);
-    let mut chat = Chat::default();
-    submit(&mut chat, launch.clone(), "first");
-    wait(&mut chat, |c| c.completed == 1);
-    assert_eq!(chat.controls.len(), 4);
-    launch.config.acp_options = std::collections::BTreeMap::from([
-        ("model".into(), json!("fixture-deep")),
-        ("mode".into(), json!("code")),
-        ("effort".into(), json!("high")),
-        ("automatic".into(), json!(true)),
-    ]);
-    submit(&mut chat, launch, "second");
-    wait(&mut chat, |c| c.completed == 2);
-    let log = log(&root);
-    assert_eq!(
-        log.iter().filter(|r| r["method"] == "initialize").count(),
-        1
-    );
-    let configured: Vec<_> = log
-        .iter()
-        .filter(|r| r["method"] == "session/set_config_option")
-        .collect();
-    assert_eq!(configured.len(), 4);
-    assert_eq!(configured[0]["params"]["configId"], "model");
-    assert_eq!(configured[3]["params"]["type"], "boolean");
-    assert!(
-        chat.controls
+    for provider in [Provider::Claude, Provider::Acp] {
+        let (_temp, root, program) = fixture();
+        let mut launch = launch(&root, &program, provider, false);
+        let mut chat = Chat::default();
+        submit(&mut chat, launch.clone(), "first");
+        wait(&mut chat, |c| c.completed == 1);
+        assert_eq!(chat.controls.len(), 4);
+        *launch.config.acp_options_mut() = std::collections::BTreeMap::from([
+            ("model".into(), json!("fixture-deep")),
+            ("mode".into(), json!("code")),
+            ("effort".into(), json!("high")),
+            ("automatic".into(), json!(true)),
+        ]);
+        submit(&mut chat, launch, "second");
+        wait(&mut chat, |c| c.completed == 2);
+        let log = log(&root);
+        assert_eq!(
+            log.iter().filter(|r| r["method"] == "initialize").count(),
+            1
+        );
+        let configured: Vec<_> = log
             .iter()
-            .any(|c| c.id == "effort" && c.current == "high")
-    );
-    let prompt = log
-        .iter()
-        .rposition(|r| r["method"] == "session/prompt")
-        .unwrap();
-    let last_set = log
-        .iter()
-        .rposition(|r| r["method"] == "session/set_config_option")
-        .unwrap();
-    assert!(prompt > last_set);
+            .filter(|r| r["method"] == "session/set_config_option")
+            .collect();
+        assert_eq!(configured.len(), 4);
+        assert_eq!(configured[0]["params"]["configId"], "model");
+        assert_eq!(configured[3]["params"]["type"], "boolean");
+        assert!(
+            chat.controls
+                .iter()
+                .any(|c| c.id == "effort" && c.current == "high")
+        );
+        let prompt = log
+            .iter()
+            .rposition(|r| r["method"] == "session/prompt")
+            .unwrap();
+        let last_set = log
+            .iter()
+            .rposition(|r| r["method"] == "session/set_config_option")
+            .unwrap();
+        assert!(prompt > last_set);
+    }
 }
 
 #[test]
@@ -502,26 +501,28 @@ fn cancelling_pending_acp_settings_never_submits_the_queued_prompt() {
 
 #[test]
 fn idle_acp_model_changes_refresh_capabilities_without_a_prompt_or_completed_turn() {
-    let (_temp, root, program) = fixture();
-    let launch = launch(&root, &program, Provider::Acp, false);
-    let mut chat = Chat::default();
-    submit(&mut chat, launch.clone(), "first");
-    wait(&mut chat, |c| c.completed == 1);
-    let mut next = launch.config;
-    next.acp_options
-        .insert("model".into(), json!("fixture-deep"));
-    chat.configure_idle(&next).unwrap();
-    wait(&mut chat, |c| !c.busy);
-    assert_eq!(chat.completed, 1);
-    let effort = chat.controls.iter().find(|c| c.id == "effort").unwrap();
-    assert!(effort.accepts(&json!("high")));
-    assert_eq!(
-        log(&root)
-            .iter()
-            .filter(|r| r["method"] == "session/prompt")
-            .count(),
-        1
-    );
+    for provider in [Provider::Claude, Provider::Acp] {
+        let (_temp, root, program) = fixture();
+        let launch = launch(&root, &program, provider, false);
+        let mut chat = Chat::default();
+        submit(&mut chat, launch.clone(), "first");
+        wait(&mut chat, |c| c.completed == 1);
+        let mut next = launch.config;
+        next.acp_options_mut()
+            .insert("model".into(), json!("fixture-deep"));
+        chat.configure_idle(&next).unwrap();
+        wait(&mut chat, |c| !c.busy);
+        assert_eq!(chat.completed, 1);
+        let effort = chat.controls.iter().find(|c| c.id == "effort").unwrap();
+        assert!(effort.accepts(&json!("high")));
+        assert_eq!(
+            log(&root)
+                .iter()
+                .filter(|r| r["method"] == "session/prompt")
+                .count(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -821,11 +822,11 @@ fn file_contents_reach_codex_local_and_capable_acp_agents_without_payloads_in_tr
         data.len() > 256 * 1024,
         "Exercise the larger image-bearing transport"
     );
-    for provider in [Provider::Codex, Provider::Local, Provider::Acp] {
+    for provider in Provider::ALL {
         let (_temp, root, program) = fixture();
         let mut launch = launch(&root, &program, provider, false);
         launch.config.local_model = "fixture-local".into();
-        launch.config.acp_arguments = vec!["--image-input".into()];
+        *launch.config.acp_arguments_mut() = vec!["--image-input".into()];
         let mut chat = Chat::default();
         let files = vec![
             Attachment::Image {
@@ -846,7 +847,7 @@ fn file_contents_reach_codex_local_and_capable_acp_agents_without_payloads_in_tr
             .iter()
             .find(|v| matches!(v["method"].as_str(), Some("turn/start" | "session/prompt")))
             .unwrap();
-        let blocks = if provider == Provider::Acp {
+        let blocks = if provider.is_acp() {
             &turn["params"]["prompt"]
         } else {
             &turn["params"]["input"]
@@ -858,7 +859,7 @@ fn file_contents_reach_codex_local_and_capable_acp_agents_without_payloads_in_tr
             .iter()
             .find(|b| b["type"] == "image")
             .unwrap();
-        if provider == Provider::Acp {
+        if provider.is_acp() {
             assert_eq!(image["data"], data);
             assert_eq!(image["mimeType"], "image/png");
         } else {

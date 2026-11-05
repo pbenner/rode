@@ -1,4 +1,4 @@
-//! Headless Codex/ACP conversation state shared by the GUI and native host service.
+//! Headless Codex/Claude/ACP conversation state shared by the GUI and native host service.
 //!
 //! Protocol state belongs beside the agent process so it can keep handling output,
 //! deadlines and existing permission policies without a desktop connection. Host
@@ -15,6 +15,8 @@ pub mod personality;
 pub mod protocol;
 pub mod queue;
 pub mod service;
+#[cfg(test)]
+mod tests;
 use anyhow::{Result, ensure};
 pub use personality::Personality;
 use serde::{Deserialize, Serialize};
@@ -22,6 +24,8 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 /// Automatic executable marker resolved by the host adapter before agent execution.
 pub const AUTO_CODEX: &str = "@rode/codex";
+/// Installed Claude Agent SDK adapter, using ACP v1 over stdio.
+pub const CLAUDE_ACP: &str = "claude-agent-acp";
 /// Bounded agent JSON line limit, including submitted image content.
 pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
 /// Maximum diagnostic stderr line size, including its trailing newline.
@@ -38,6 +42,8 @@ pub enum Provider {
     Codex,
     /// Codex app-server using an explicitly configured local Responses endpoint.
     Local,
+    /// Anthropic Claude Code through its installed Claude Agent SDK ACP adapter.
+    Claude,
     /// An installed Agent Client Protocol v1 executable.
     Acp,
 }
@@ -103,11 +109,20 @@ impl Access {
     }
 }
 impl Provider {
+    /// Providers offered by the chat selector, in presentation order.
+    pub const ALL: [Self; 4] = [Self::Codex, Self::Claude, Self::Local, Self::Acp];
+
+    /// Whether this provider speaks ACP, independently of its executable preset.
+    pub fn is_acp(self) -> bool {
+        matches!(self, Self::Claude | Self::Acp)
+    }
+
     /// Human-readable provider name for settings and chat headers.
     pub fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
             Self::Local => "Codex · local model",
+            Self::Claude => "Claude Code · Anthropic",
             Self::Acp => "Other agent · ACP",
         }
     }
@@ -131,6 +146,10 @@ pub struct Config {
     pub acp_program: String,
     /// Literal ACP executable arguments.
     pub acp_arguments: Vec<String>,
+    /// Installed Claude ACP adapter or wrapper on the project host.
+    pub claude_program: String,
+    /// Literal arguments for the Claude ACP adapter; never shell-expanded.
+    pub claude_arguments: Vec<String>,
     /// Request read-only agent operation without widening the outer sandbox.
     pub read_only: bool,
     /// Agent tool scope; the outer project sandbox always remains authoritative.
@@ -141,6 +160,8 @@ pub struct Config {
     pub reasoning_effort: String,
     /// Explicit ACP selector overrides, keyed by advertised option ID.
     pub acp_options: BTreeMap<String, Value>,
+    /// Claude's advertised model/effort/mode choices, separate from other ACP agents.
+    pub claude_options: BTreeMap<String, Value>,
     /// Chat response tone only; does not change tools, execution or permission settings.
     pub personality: Personality,
 }
@@ -154,16 +175,67 @@ impl Default for Config {
             local_url: "http://127.0.0.1:11434/v1".into(),
             acp_program: String::new(),
             acp_arguments: vec![],
+            claude_program: CLAUDE_ACP.into(),
+            claude_arguments: vec![],
             read_only: false,
             access: Access::default(),
             approval: Approval::default(),
             reasoning_effort: String::new(),
             acp_options: BTreeMap::new(),
+            claude_options: BTreeMap::new(),
             personality: Personality::Default,
         }
     }
 }
 impl Config {
+    /// Executable for the selected ACP provider. Blank Claude settings use the preset.
+    pub fn acp_program(&self) -> &str {
+        if self.provider == Provider::Claude {
+            match self.claude_program.trim() {
+                "" => CLAUDE_ACP,
+                program => program,
+            }
+        } else {
+            self.acp_program.trim()
+        }
+    }
+
+    /// Literal arguments for the selected ACP provider.
+    pub fn acp_arguments(&self) -> &[String] {
+        if self.provider == Provider::Claude {
+            &self.claude_arguments
+        } else {
+            &self.acp_arguments
+        }
+    }
+
+    /// Edit the selected provider's argument list without overwriting another provider.
+    pub fn acp_arguments_mut(&mut self) -> &mut Vec<String> {
+        if self.provider == Provider::Claude {
+            &mut self.claude_arguments
+        } else {
+            &mut self.acp_arguments
+        }
+    }
+
+    /// Saved options for the selected ACP provider.
+    pub fn acp_options(&self) -> &BTreeMap<String, Value> {
+        if self.provider == Provider::Claude {
+            &self.claude_options
+        } else {
+            &self.acp_options
+        }
+    }
+
+    /// Edit only the selected provider's advertised options.
+    pub fn acp_options_mut(&mut self) -> &mut BTreeMap<String, Value> {
+        if self.provider == Provider::Claude {
+            &mut self.claude_options
+        } else {
+            &mut self.acp_options
+        }
+    }
+
     /// Whether only the host's confined file tools may change the project.
     pub fn files_only(&self) -> bool {
         self.access() == Access::FilesOnly
@@ -184,6 +256,8 @@ impl Config {
             && self.local_url == next.local_url
             && self.acp_program == next.acp_program
             && self.acp_arguments == next.acp_arguments
+            && self.claude_program == next.claude_program
+            && self.claude_arguments == next.claude_arguments
             && self.files_only() == next.files_only()
     }
     /// Return the model setting appropriate to the selected provider.
@@ -202,12 +276,12 @@ impl Config {
     /// Construct arguments with optional model validation for history browsing.
     pub fn arguments(&self, require_model: bool) -> Result<Vec<String>> {
         ensure!(
-            !self.files_only() || self.provider != Provider::Acp,
-            "Edit project files only requires Codex. Select another access mode before using an ACP agent."
+            !self.files_only() || !self.provider.is_acp(),
+            "Edit project files only requires Codex. Select another access mode before using Claude Code or another ACP agent."
         );
-        let mut args = if self.provider == Provider::Acp {
-            let mut args = vec![self.acp_program.trim().to_owned()];
-            args.extend(self.acp_arguments.clone());
+        let mut args = if self.provider.is_acp() {
+            let mut args = vec![self.acp_program().to_owned()];
+            args.extend_from_slice(self.acp_arguments());
             args
         } else {
             vec![
@@ -250,9 +324,9 @@ impl Config {
             "Invalid reasoning effort."
         );
         ensure!(
-            self.acp_options.len() <= 32
+            self.acp_options().len() <= 32
                 && self
-                    .acp_options
+                    .acp_options()
                     .iter()
                     .all(|(key, value)| controls::identifier(key, false)
                         && (value.is_boolean()

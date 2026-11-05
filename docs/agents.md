@@ -109,6 +109,7 @@ RODE displays up to 32 recent Codex turns, 128 messages and 512 KiB of replay; t
 | --- | --- | --- |
 | Codex | Optional `rode-codex` runtime or an installed Codex; authenticate on the project host | Executable defaults to `auto`; optional model; blank model uses the Codex default |
 | Codex · local model | Optional runtime or installed Codex and a running Ollama or compatible Responses server | Executable defaults to `auto`, API base URL, and an already installed model name |
+| Claude Code · Anthropic | Installed `claude-agent-acp` adapter and Claude authentication on the project host | Adapter defaults to `claude-agent-acp`; optional literal arguments; advertised model, effort and permission controls |
 | Other agent · ACP | An agent implementing ACP v1 over stdio, with its own file/command tools | Executable and arguments as a JSON array |
 
 Custom executables can be absolute paths, project-relative paths such as `./tools/my-agent`, or names on PATH. RODE also checks `~/.local/bin`. Arguments are passed directly, without shell expansion. To customize environment variables or launch a special CLI profile, select your own small wrapper script. Other agents and model servers remain user-installed; RODE does not download models, manage accounts, or store API keys.
@@ -160,6 +161,19 @@ Use Codex as the coding agent and Ollama as the model server. This keeps plannin
 **`localhost` means the project host.** For an SSH project, that endpoint is on the remote computer. If your server is on your desktop, use an explicitly configured SSH reverse tunnel or another address reachable from the remote host. RODE does not create model tunnels. A server offering only `/v1/chat/completions` is insufficient; it must implement Codex-compatible `/v1/responses` streaming and tools. Other local servers can use the same settings when they meet that interface. Select an actual local model if you want local inference; a server may also expose cloud-backed model names.
 
 The model server is a separately managed service. The coding agent and its command children enter the project sandbox; RODE does not start the model server inside it. A loopback server also requires **Allow network access** in the sandbox policy.
+
+### Claude Code / Anthropic
+
+Choose **Claude Code · Anthropic** in the chat provider selector. RODE uses the maintained [Claude Agent SDK ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp), sharing the existing chat, attachments, approvals, history, recovery, queues and persistent-agent UI. Codex is not required for this provider. The adapter uses Claude's own coding tools; it runs on the captured project host inside the selected outer sandbox.
+
+1. Install the adapter on that host. With Node.js 22 or newer, the tested npm release is `npm install --global @agentclientprotocol/claude-agent-acp@0.100.0`. Upstream also publishes [standalone executables](https://github.com/agentclientprotocol/claude-agent-acp/releases), which include their Claude CLI and need no Node.js installation; keep the two executables together.
+2. Authenticate there before sending a message: run `claude-agent-acp --cli` in a terminal and use Claude's `/login`, or provide `ANTHROPIC_API_KEY` in the host environment. The adapter's `--cli` mode forwards to its bundled Claude CLI. `CLAUDE_CODE_EXECUTABLE` can select a separately installed Claude CLI. RODE does not store API keys, copy desktop credentials to SSH hosts, or perform an interactive login inside chat.
+3. Leave **Claude ACP adapter on this host** at `claude-agent-acp`, or set an installed executable/wrapper path. Optional arguments use a JSON array and are passed literally. RODE never runs `npx` or installs the adapter automatically when selecting the provider, browsing history or sending a prompt.
+4. Send a message. **Model** and **Permissions** show the adapter's advertised model, effort and mode choices once the session is initialized; saved choices are acknowledged before the next prompt. These settings are separate from **Other agent · ACP**, so switching providers does not overwrite another adapter's executable, arguments or controls.
+
+For SSH projects, install/authenticate on the remote host. With sandboxing enabled, explicitly grant the adapter/Node or standalone runtime paths and Claude's configuration/history paths (normally `~/.claude` and `~/.claude.json`) as required by that installation. Credentials and writable caches remain subject to your project grants. **Edit project files only** is a Codex-specific mode and cannot be selected for Claude or another ACP agent. Claude's advertised permission modes and RODE's request-approval setting remain available; neither can widen the outer sandbox.
+
+ACP v1 capabilities determine history listing/loading/deletion, images and selector availability. The common ACP limitations below also apply; RODE does not advertise client filesystem/terminal tools or form elicitation. Session protocol 13 selects a matching host controller for the named Claude settings while preserving existing older service generations and their running jobs. Rebuild/update the native helper together with the editor.
 
 ### Other agents
 

@@ -221,7 +221,7 @@ impl EditorApp {
                 .get(&key)
                 .cloned()
                 .unwrap_or_default();
-            self.agents.arguments = serde_json::to_string(&self.agents.config.acp_arguments)
+            self.agents.arguments = serde_json::to_string(self.agents.config.acp_arguments())
                 .unwrap_or_else(|_| "[]".into());
             self.agents.argument_error.clear();
             self.agents.key = key;
@@ -275,7 +275,7 @@ impl EditorApp {
             self.agents
                 .composer
                 .restore_history(self.agents.chat.input_history().map(str::to_owned));
-            self.agents.arguments = serde_json::to_string(&self.agents.config.acp_arguments)
+            self.agents.arguments = serde_json::to_string(self.agents.config.acp_arguments())
                 .unwrap_or_else(|_| "[]".into());
             self.agents.save_config();
             self.agents.attaching = false;
@@ -478,7 +478,7 @@ impl EditorApp {
             && matches!(agents.config.codex.trim(), "" | "auto" | "codex")
             && std::env::var_os("RODE_CODEX_BUNDLE").is_none();
         let automatic_codex = matches!(agents.config.codex.trim(), "" | "auto" | "codex");
-        let codex_available = if agents.config.provider == Provider::Acp || !automatic_codex {
+        let codex_available = if agents.config.provider.is_acp() || !automatic_codex {
             Some(true)
         } else if offline {
             None
@@ -489,7 +489,11 @@ impl EditorApp {
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(content.expand(paint_margin)));
             let actions = header::show(ui, &mut agents.config, agents.chat.busy, agents.chat.queue_pending(), offline);
-            if actions.provider_changed { agents.settings = true; }
+            if actions.provider_changed {
+                agents.settings = true;
+                agents.arguments = serde_json::to_string(agents.config.acp_arguments()).unwrap_or_else(|_| "[]".into());
+                agents.argument_error.clear();
+            }
             if actions.settings { agents.settings = !agents.settings; }
             new_chat |= actions.new_chat;
             ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
@@ -498,20 +502,26 @@ impl EditorApp {
                 egui::ScrollArea::vertical().id_salt("agent-settings-scroll")
                     .max_height((ui.available_height()-90.).clamp(60.,240.)).show(ui,|ui| {
                     ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui| {
-                        if agents.config.provider == Provider::Acp {
-                            ui.label("ACP executable on this host");
-                            ui.add(egui::TextEdit::singleline(&mut agents.config.acp_program).desired_width(f32::INFINITY).hint_text("agent executable or absolute path").char_limit(4096));
+                        if agents.config.provider.is_acp() {
+                            let claude = agents.config.provider == Provider::Claude;
+                            ui.label(if claude { "Claude ACP adapter on this host" } else { "ACP executable on this host" });
+                            let program = if claude { &mut agents.config.claude_program } else { &mut agents.config.acp_program };
+                            ui.add(egui::TextEdit::singleline(program).desired_width(f32::INFINITY).hint_text(if claude { rode_agent_core::CLAUDE_ACP } else { "agent executable or absolute path" }).char_limit(4096));
                             ui.label("Arguments (JSON array)");
                             if ui.add(egui::TextEdit::singleline(&mut agents.arguments).desired_width(f32::INFINITY).hint_text("[\"acp\"]").char_limit(16384)).changed() {
                                 match serde_json::from_str::<Vec<String>>(&agents.arguments) {
-                                    Ok(args) => { agents.config.acp_arguments=args; agents.argument_error.clear(); }
+                                    Ok(args) => { *agents.config.acp_arguments_mut()=args; agents.argument_error.clear(); }
                                     Err(_) => agents.argument_error="Use a JSON array of argument strings.".into(),
                                 }
                             }
                             if !agents.argument_error.is_empty() { ui.colored_label(palette.error,&agents.argument_error); }
                             ui.label(palette.tag("Agent must provide its own file and command tools."));
+                            if claude {
+                                ui.add(egui::Label::new("Install claude-agent-acp and authenticate Claude on this project host. The adapter uses your Claude login or ANTHROPIC_API_KEY from the host environment.").wrap());
+                                ui.hyperlink_to("Claude adapter setup", "https://github.com/agentclientprotocol/claude-agent-acp");
+                            }
                             if ui.small_button("Reset saved agent controls").clicked() {
-                                agents.config.acp_options.clear();
+                                agents.config.acp_options_mut().clear();
                                 agents.queue.clear();
                                 agents.chat.disconnect();
                                 agents.chat.notice("Agent controls reset. The next message starts a fresh conversation.");
@@ -581,7 +591,7 @@ impl EditorApp {
                 });
             }
             egui::ScrollArea::vertical().id_salt("agent-transcript").stick_to_bottom(true).auto_shrink([false,false]).max_height(ui.available_height().max(1.)).show(ui,|ui| {
-                if agents.config.provider != Provider::Acp && !agents.settings
+                if !agents.config.provider.is_acp() && !agents.settings
                     && (agents.chat.messages.is_empty() || agents.runtime.started()) {
                     agents.runtime.ui(ui, remote.as_ref(), install_enabled, codex_available);
                 }
@@ -591,6 +601,7 @@ impl EditorApp {
                     ui.add(egui::Label::new("Ask a question, request a change, or investigate an issue. The agent works in the folder above.").wrap());
                     if agents.config.provider == Provider::Local { ui.add(egui::Label::new("Start Ollama or a compatible local server and select an installed model in settings.").wrap()); }
                     else if agents.config.provider == Provider::Codex { ui.add(egui::Label::new(if codex_available == Some(false) { "Install Codex above or use an existing executable. Authenticate on the project host before sending a message." } else { "Authenticate Codex on the project host before sending a message." }).wrap()); }
+                    else if agents.config.provider == Provider::Claude { ui.add(egui::Label::new("Install claude-agent-acp and authenticate Claude on this host, then send a message. Model, effort and permission choices come from Claude.").wrap()); }
                     else { ui.add(egui::Label::new("Install and authenticate your agent on this host before sending a message.").wrap()); }
                 }
                 for message in &agents.chat.messages {
@@ -693,7 +704,7 @@ impl EditorApp {
                                 && !agents.files.pending
                                 && (!agents.draft.trim().is_empty() || !agents.files.files.is_empty())
                                 && agents.draft.len() <= agent::PROMPT_LIMIT
-                                && (agents.config.provider != Provider::Acp
+                                && (!agents.config.provider.is_acp()
                                     || agents.argument_error.is_empty());
                             if ui
                                 .add_enabled(enabled, egui::Button::new(if agents.chat.busy || agents.queue.waiting_for_reply() || !agents.queue.is_empty() { "Queue" } else { "Send" }))

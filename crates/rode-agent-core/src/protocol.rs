@@ -215,7 +215,7 @@ impl Chat {
         self.config = restored.launch.config;
         self.root = restored.launch.plan.root;
         self.read_only = restored.launch.plan.project_read_only
-            || (self.config.provider != Provider::Acp && self.config.access() == Access::ReadOnly);
+            || (!self.config.provider.is_acp() && self.config.access() == Access::ReadOnly);
         self.external = restored.launch.plan.active && !self.read_only;
         self.network = restored
             .launch
@@ -272,7 +272,7 @@ impl Chat {
     /// Apply advertised ACP choices to an idle session without submitting a prompt.
     /// New processes are still started only by an explicit chat message.
     pub fn configure_idle(&mut self, config: &Config) -> Result<()> {
-        if config.provider != Provider::Acp
+        if !config.provider.is_acp()
             || !self.connected()
             || self.busy
             || !self.config.same_process(config)
@@ -326,7 +326,7 @@ impl Chat {
             self.notice("Agent settings changed · starting a new conversation");
         }
         self.read_only = launch.plan.project_read_only
-            || (launch.config.provider != Provider::Acp
+            || (!launch.config.provider.is_acp()
                 && matches!(launch.config.access(), Access::ReadOnly | Access::FilesOnly));
         self.external = launch.plan.active && !self.read_only;
         self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
@@ -450,7 +450,7 @@ impl Chat {
             self.disconnect();
             self.status = "Stopped".into();
             Ok(())
-        } else if self.config.provider == Provider::Acp {
+        } else if self.config.provider.is_acp() {
             self.send(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":self.conversation}}))
         } else if !self.turn.is_empty() {
             self.interrupt()
@@ -490,7 +490,7 @@ impl Chat {
 
     fn initialize(&mut self) -> Result<()> {
         self.deadline = Some(Instant::now() + Duration::from_secs(60));
-        let mut params = if self.config.provider == Provider::Acp {
+        let mut params = if self.config.provider.is_acp() {
             json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},
                 "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"configOptions":{"boolean":true}}}})
         } else {
@@ -505,10 +505,10 @@ impl Chat {
         if self.cancelling {
             return Ok(());
         }
-        if self.config.provider == Provider::Acp {
+        if self.config.provider.is_acp() {
             ensure!(
                 self.config
-                    .acp_options
+                    .acp_options()
                     .keys()
                     .all(|id| self.controls.iter().any(|c| c.id == *id)),
                 "Agent no longer exposes a saved option. Reset agent controls in settings before sending."
@@ -522,7 +522,7 @@ impl Chat {
                 .chain(self.controls.iter().filter(|c| c.category != "model"))
             {
                 let id = &control.id;
-                let Some(value) = self.config.acp_options.get(id) else {
+                let Some(value) = self.config.acp_options().get(id) else {
                     continue;
                 };
                 ensure!(
@@ -562,7 +562,7 @@ impl Chat {
                 }
             }
         }
-        if self.config.provider == Provider::Acp && !self.image_support {
+        if self.config.provider.is_acp() && !self.image_support {
             ensure!(
                 !self
                     .pending
@@ -585,13 +585,13 @@ impl Chat {
             json!({"type":"text","text":if text.trim().is_empty() { "Attached files.".into() } else { text }}),
         ];
         for attachment in attachments {
-            input.extend(attachment.blocks(self.config.provider == Provider::Acp));
+            input.extend(attachment.blocks(self.config.provider.is_acp()));
         }
         if let Some(hint) = self.config.personality.hint(self.response_style_context) {
             input.push(json!({"type":"text","text":format!("\n\n{hint}")}));
             self.response_style_context = true;
         }
-        if self.config.provider == Provider::Acp {
+        if self.config.provider.is_acp() {
             self.call(
                 "session/prompt",
                 json!({"sessionId":self.conversation,"prompt":input}),
@@ -658,7 +658,7 @@ impl Chat {
             if let Some(id) = value.get("id") {
                 return self.request(method, id.clone(), params);
             }
-            if self.config.provider == Provider::Acp {
+            if self.config.provider.is_acp() {
                 // session/load may replay saved messages before its response.
                 // Recovery retains our transcript; only accept live updates once
                 // the returned conversation ID has been validated and adopted.
@@ -700,7 +700,7 @@ impl Chat {
         let result = &value["result"];
         match call {
             Call::Initialize => {
-                if self.config.provider == Provider::Acp {
+                if self.config.provider.is_acp() {
                     ensure!(
                         result["protocolVersion"].as_u64() == Some(1),
                         "Agent does not support ACP v1."
@@ -767,7 +767,7 @@ impl Chat {
             }
             Call::Conversation => {
                 let expected = self.resume_id().map(str::to_owned);
-                let id = if self.config.provider == Provider::Acp {
+                let id = if self.config.provider.is_acp() {
                     result["sessionId"].as_str().or(expected.as_deref())
                 } else {
                     result["thread"]["id"].as_str()
@@ -779,7 +779,7 @@ impl Chat {
                     "Agent reconnected a different conversation; no prompt was sent"
                 );
                 self.conversation = id.into();
-                if self.config.provider == Provider::Acp {
+                if self.config.provider.is_acp() {
                     self.controls = controls::acp(result);
                 }
                 if self.recovery.take().is_some() {
@@ -801,7 +801,7 @@ impl Chat {
                 self.begin_turn()?;
             }
             Call::Turn => {
-                if self.config.provider == Provider::Acp {
+                if self.config.provider.is_acp() {
                     self.finish(result["stopReason"].as_str() != Some("cancelled"), None);
                 } else if self.busy {
                     self.turn = result["turn"]["id"]
@@ -962,7 +962,7 @@ impl Chat {
             return self.file_request(id, params);
         }
         if let Some(scope) = params
-            .get(if self.config.provider == Provider::Acp {
+            .get(if self.config.provider.is_acp() {
                 "sessionId"
             } else {
                 "threadId"

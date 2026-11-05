@@ -35,7 +35,7 @@ impl Chat {
         );
         launch.config.argv()?;
         self.read_only = launch.plan.project_read_only
-            || (launch.config.provider != Provider::Acp
+            || (!launch.config.provider.is_acp()
                 && matches!(launch.config.access(), Access::ReadOnly | Access::FilesOnly));
         self.external = launch.plan.active && !self.read_only;
         self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");

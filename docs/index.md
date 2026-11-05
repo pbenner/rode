@@ -15,7 +15,7 @@ RODE combines a familiar editor layout with a real terminal, configurable dark t
 - Work with Git branches/worktrees, Python environments, and Ruff formatting and diagnostics.
 - Inspect CPU, memory, processes, and available GPU telemetry on demand.
 - Optionally isolate project access with configurable bubblewrap policies.
-- Use [agent chat](agents.md) with Codex, local models through Ollama, and compatible ACP agents inside the project sandbox.
+- Use [agent chat](agents.md) with Codex, Claude Code / Anthropic, local models through Ollama, and compatible ACP agents inside the project sandbox.
 
 [Get started](getting-started.md) · [Connect over SSH](remote.md) · [Keyboard shortcuts](editing.md)
 

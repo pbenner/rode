@@ -77,7 +77,7 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                     },
                 );
                 ctx.set_zoom_factor(scale);
-                app.agents.config.provider = Provider::Acp;
+                app.agents.config.provider = Provider::Claude;
                 let mut render = || {
                     ctx.run(
                         egui::RawInput {

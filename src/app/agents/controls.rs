@@ -51,11 +51,17 @@ pub(super) fn buttons(
     };
     let mut discover = false;
     let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.).max(60.);
-    let model = if config.provider == Provider::Acp {
+    let model = if config.provider.is_acp() {
         chat.controls
             .iter()
             .find(|c| c.category == "model" && chat.controls_match(config))
-            .and_then(|c| config.acp_options.get(&c.id).unwrap_or(&c.current).as_str())
+            .and_then(|c| {
+                config
+                    .acp_options()
+                    .get(&c.id)
+                    .unwrap_or(&c.current)
+                    .as_str()
+            })
             .unwrap_or("agent")
     } else if config.model().is_empty() {
         "default"
@@ -67,7 +73,7 @@ pub(super) fn buttons(
         ui.set_min_width(260.);
         ui.set_max_width(360.);
         ui.label(egui::RichText::new("Model and reasoning").strong());
-        if config.provider == Provider::Acp {
+        if config.provider.is_acp() {
             acp(ui, config, chat, false);
         } else {
             let old = config.model().to_owned();
@@ -194,7 +200,7 @@ pub(super) fn buttons(
     } else {
         config.access()
     };
-    let label = if config.provider == Provider::Acp {
+    let label = if config.provider.is_acp() {
         "Permissions".into()
     } else {
         format!("Access: {}", access.label())
@@ -203,7 +209,7 @@ pub(super) fn buttons(
         ui.set_min_width(260.);
         ui.set_max_width(360.);
         ui.label(egui::RichText::new("Agent permissions").strong());
-        if config.provider == Provider::Acp {
+        if config.provider.is_acp() {
             acp(ui, config, chat, true);
         } else {
             for choice in [
@@ -319,7 +325,7 @@ fn acp(ui: &mut egui::Ui, config: &mut Config, chat: &Chat, permissions: bool) {
 
 fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
     let value = config
-        .acp_options
+        .acp_options()
         .get(&control.id)
         .unwrap_or(&control.current);
     if control.boolean {
@@ -330,7 +336,7 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
             .changed()
         {
             config
-                .acp_options
+                .acp_options_mut()
                 .insert(control.id.clone(), Value::Bool(selected));
         }
     } else {
@@ -350,7 +356,7 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
         });
         if value.as_str() != Some(selected.as_str()) {
             config
-                .acp_options
+                .acp_options_mut()
                 .insert(control.id.clone(), selected.into());
         }
     }

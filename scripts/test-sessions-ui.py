@@ -17,6 +17,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
@@ -111,6 +112,7 @@ def run():
             XDG_DATA_HOME=str(base / "data"),
             PATH=str(tools) + os.pathsep + os.environ["PATH"],
             SHELL=str(shell),
+            RODE_UI_TEST_STATE=str(root / "ui-state.json"),
         )
         processes, windows = [], []
         with (ARTIFACTS / "native.log").open("w") as log:
@@ -307,9 +309,15 @@ def run():
                 )
                 command("Terminal: Sessions and Slurm allocations")
                 screenshot(window, "before-release.png")
-                # The fixture has two terminal rows, followed by job 42. Focus
-                # order also includes live refresh controls; do not count Tabs.
-                click(670, 600)  # Release allocation 42 in its card; confirmation comes first.
+                # Refresh and removed terminal rows can move the allocation
+                # within the scroller. Click its current visible control.
+                click_button(
+                    window,
+                    process,
+                    ARTIFACTS / "native.log",
+                    root / "ui-state.json",
+                    "Release allocation",
+                )
                 time.sleep(0.3)
                 assert not released.exists(), "Release ran without confirmation"
                 screenshot(window, "release-confirmation.png")

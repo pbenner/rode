@@ -175,7 +175,10 @@ fn removable_preference(key: &str, path: &[String]) -> bool {
                 "agent_preferences" | "extension_preferences" | "project_preferences",
                 [_]
             )
-            | ("agent_preferences", [_, "acp_options", _, ..])
+            | (
+                "agent_preferences",
+                [_, "acp_options" | "claude_options", _, ..]
+            )
             | ("extension_preferences", [_, "settings", _, ..])
             | ("project_preferences", [_, "sandbox", "overrides", _])
             | (

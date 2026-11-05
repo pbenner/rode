@@ -17,6 +17,7 @@ from ui_harness import (
     BINARY,
     ROOT,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
@@ -98,6 +99,17 @@ def header_click(x, offset):
     if int(re.search(r"Width: (\d+)", info)[1]) < 1000:
         y += 26
     click(x, y + offset)
+
+
+def select_provider(preferences, provider):
+    """Select a known native menu row and wait for the saved provider identity."""
+    offsets = {"codex": 35, "claude": 68, "local": 102, "acp": 136}
+    header_click(1150, 0)
+    header_click(340, offsets[provider])
+    wait_for(
+        lambda: agent_preferences(preferences).get("provider") == provider,
+        f"Provider {provider!r} was not selected",
+    )
 
 
 def select_personality(preferences, value, capture=False):
@@ -214,7 +226,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
     shutil.copy2(ROOT / "tests/fixtures/agent.py", root / "agent.py")
     (root / "agent.py").chmod(0o755)
     environment = dict(
-        os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+        os.environ,
+        XDG_CONFIG_HOME=str(base / "config"),
+        XDG_DATA_HOME=str(base / "data"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
     preferences = base / "data/rode/app.ron"
     with (ARTIFACTS / "chat.log").open("w") as log:
@@ -436,8 +451,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert selected_turn["params"]["effort"] == "high"
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
             assert "keep my unsaved change" not in preferences.read_text()
-            header_click(1150, 0)
-            header_click(340, 68)  # Local model provider opens its settings.
+            select_provider(preferences, "local")
             header_click(1280, 193)
             text("fixture-local-model")
             wait_for(
@@ -455,8 +469,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.3)
-            header_click(1150, 0)
-            header_click(340, 102)  # ACP, with the same deterministic executable.
+            select_provider(preferences, "acp")
             header_click(1280, 94)
             text("./agent.py")
             header_click(1213, 0)
@@ -530,10 +543,40 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             time.sleep(0.3)
             send(root, "new-acp-conversation")
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
+            # Claude is a distinct provider using the same ACP transport. Its
+            # executable and controls must not overwrite the custom ACP profile.
+            saved_acp = agent_preferences(preferences)["acp_options"].copy()
+            before = len(rpc(root))
+            select_provider(preferences, "claude")
+            header_click(1280, 94)
+            key("a", ("Control_L",))
+            text("./agent.py")
+            wait_for(
+                lambda: agent_preferences(preferences).get("claude_program") == "./agent.py",
+                "Claude adapter setting was not saved",
+            )
+            assert len(rpc(root)) == before, "Selecting Claude started an agent"
+            header_click(1213, 0)
+            send(root, "claude-provider")
+            initialized = next(m for m in reversed(rpc(root)) if m.get("method") == "initialize")
+            assert initialized["params"]["protocolVersion"] == 1
+            assert agent_preferences(preferences)["acp_options"] == saved_acp
+            click(1090, 752)
+            click(1000, 645)
+            click(820, 670)
+            wait_for(
+                lambda: (
+                    agent_preferences(preferences).get("claude_options", {}).get("model")
+                    == "fixture-deep"
+                ),
+                "Claude model control did not save its separate selection",
+            )
+            assert agent_preferences(preferences)["acp_options"] == saved_acp
+            key("Escape")
+            screenshot(window, "claude-provider.png")
             # The native permission selectors persist choices and affect the
             # next Codex turn while the existing outer sandbox remains active.
-            header_click(1150, 0)
-            header_click(340, 35)
+            select_provider(preferences, "codex")
             header_click(1213, 0)  # Hide the automatically opened provider settings.
             click(1280, 752)
             click(1090, 645)  # Never ask.
@@ -593,7 +636,15 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             text("saved-2")
             time.sleep(0.2)
             screenshot(window, "history-filtered.png")
-            header_click(600, 264)  # The filter exposes the older conversation first.
+            # The filter exposes the older conversation first. Resolve its real
+            # content bounds after layout instead of clicking the card's padding.
+            click_button(
+                window,
+                process,
+                ARTIFACTS / "chat.log",
+                base / "ui-state.json",
+                "Restore conversation",
+            )
             wait_for(
                 lambda: any(m.get("method") == "thread/resume" for m in rpc(root)),
                 "History did not restore the selected conversation",

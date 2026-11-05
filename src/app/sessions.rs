@@ -1108,17 +1108,15 @@ impl EditorApp {
                             "requested"
                         }
                     ));
-                    if ui
-                        .add_enabled(
-                            !self.sessions.slurm_busy,
-                            egui::Button::new(if job.state == "PENDING" {
-                                "Cancel queued allocation"
-                            } else {
-                                "Release allocation"
-                            }),
-                        )
-                        .clicked()
-                    {
+                    let action = if job.state == "PENDING" {
+                        "Cancel queued allocation"
+                    } else {
+                        "Release allocation"
+                    };
+                    let release =
+                        ui.add_enabled(!self.sessions.slurm_busy, egui::Button::new(action));
+                    super::ui_probe::button(ui, action, &release);
+                    if release.clicked() {
                         self.sessions.confirm = Some(Confirm::Release(job.clone()));
                     }
                 });

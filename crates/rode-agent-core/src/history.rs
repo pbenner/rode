@@ -201,7 +201,7 @@ impl Browser {
         self.busy = true;
         self.deadline = Instant::now() + Duration::from_secs(60);
         self.status = "Restoring conversation…".into();
-        let result = if self.launch.config.provider == Provider::Acp {
+        let result = if self.launch.config.provider.is_acp() {
             self.call(
                 "session/load",
                 json!({"sessionId":id,"cwd":self.launch.plan.root,"mcpServers":[]}),
@@ -227,7 +227,7 @@ impl Browser {
                 break;
             };
             let result = match event {
-                Event::Started => self.call("initialize",if self.launch.config.provider == Provider::Acp {
+                Event::Started => self.call("initialize",if self.launch.config.provider.is_acp() {
                     json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"configOptions":{"boolean":true}}}})
                 } else { json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}}) },Call::Initialize),
                 Event::Message(value) => self.receive(value),
@@ -278,7 +278,7 @@ impl Browser {
         self.busy = true;
         self.deadline = Instant::now() + Duration::from_secs(60);
         self.status = "Loading saved conversations…".into();
-        let acp = self.launch.config.provider == Provider::Acp;
+        let acp = self.launch.config.provider.is_acp();
         let params = self.list_params(self.cursor.clone());
         self.call(
             if acp { "session/list" } else { "thread/list" },
@@ -287,7 +287,7 @@ impl Browser {
         )
     }
     fn list_params(&self, cursor: Option<String>) -> Value {
-        let acp = self.launch.config.provider == Provider::Acp;
+        let acp = self.launch.config.provider.is_acp();
         let mut params = json!({"cwd":self.launch.plan.root});
         if let Some(cursor) = cursor {
             params["cursor"] = cursor.into();
@@ -379,7 +379,7 @@ impl Browser {
         let result = &value["result"];
         match call {
             Call::Initialize => {
-                if self.launch.config.provider == Provider::Acp {
+                if self.launch.config.provider.is_acp() {
                     ensure!(
                         result["protocolVersion"] == 1,
                         "Agent does not support ACP v1"
@@ -401,7 +401,7 @@ impl Browser {
                 self.list()?;
             }
             Call::List => {
-                let acp = self.launch.config.provider == Provider::Acp;
+                let acp = self.launch.config.provider.is_acp();
                 let list = if acp {
                     &result["sessions"]
                 } else {
@@ -577,7 +577,7 @@ impl Browser {
         self.call("thread/turns/list", params, Call::Turns)
     }
     fn finish(&mut self, mut controls: Vec<controls::Control>) -> Result<()> {
-        if self.launch.config.provider != Provider::Acp {
+        if !self.launch.config.provider.is_acp() {
             for page in std::mem::take(&mut self.pages).into_iter().rev() {
                 self.replay.extend(page);
             }
