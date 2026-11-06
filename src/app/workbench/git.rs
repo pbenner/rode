@@ -7,6 +7,8 @@ use super::*;
 mod history;
 pub(super) mod identity;
 mod rows;
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone)]
 /// Confirmed Git mutation payload. Stash actions capture both selector and immutable
@@ -30,6 +32,8 @@ impl From<Vec<String>> for Mutation {
 pub(super) struct State {
     pub(super) git_root: String,
     pub(super) git_busy: bool,
+    /// Only an in-flight commit locks the draft that its success will clear.
+    pub(super) committing: bool,
     pub(super) git_error: String,
     pub(super) git_output: String,
     pub(super) git_last: Option<Instant>,
@@ -60,6 +64,7 @@ impl Default for State {
         Self {
             git_root: String::new(),
             git_busy: false,
+            committing: false,
             git_error: String::new(),
             git_output: String::new(),
             git_last: None,
@@ -213,7 +218,10 @@ impl EditorApp {
             }
         });
         ui.add_space(8.);
-        ui.add_enabled_ui(!self.workbench.git.git_busy,|ui| {
+        // The commit draft is local state. Keep it editable during host refreshes;
+        // Changes guards each repository action against overlapping Git requests.
+        let changes = self.workbench.git.git_tab == GitTab::Changes;
+        ui.add_enabled_ui(changes || !self.workbench.git.git_busy,|ui| {
             let tab = self.workbench.git.git_tab;
             if tab == GitTab::Changes {
                 self.git_changes_ui(ui, ctx);
@@ -422,8 +430,10 @@ impl EditorApp {
         }
         ui.add_space(8.);
         ui.label("Commit message");
-        let message = ui.add(
+        let message = ui.add_enabled(
+            !self.workbench.git.committing,
             egui::TextEdit::multiline(&mut self.workbench.git.commit_message)
+                .id(egui::Id::new(("git-commit-message", &self.workbench.key)))
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
@@ -438,7 +448,10 @@ impl EditorApp {
             // Reserve the button's full height before laying out the checkbox.
             let height = layout::control_height(ui);
             ui.spacing_mut().interact_size.y = height;
-            ui.checkbox(&mut self.workbench.git.amend, "Amend last commit");
+            ui.add_enabled(
+                !self.workbench.git.committing,
+                egui::Checkbox::new(&mut self.workbench.git.amend, "Amend last commit"),
+            );
             let hint = if !ready {
                 "Wait for the current Git operation to finish."
             } else if conflicts {
@@ -475,19 +488,31 @@ impl EditorApp {
                 "Merge conflicts: open files, edit markers, save, then Mark resolved.",
             );
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Continue merge").clicked() {
+                if ui
+                    .add_enabled(ready, egui::Button::new("Continue merge"))
+                    .clicked()
+                {
                     self.git_mutate(strings(&["merge", "--continue"]), "Continue merge", ctx);
                 }
-                if ui.button("Continue rebase").clicked() {
+                if ui
+                    .add_enabled(ready, egui::Button::new("Continue rebase"))
+                    .clicked()
+                {
                     self.git_mutate(strings(&["rebase", "--continue"]), "Continue rebase", ctx);
                 }
-                if ui.button("Abort merge").clicked() {
+                if ui
+                    .add_enabled(ready, egui::Button::new("Abort merge"))
+                    .clicked()
+                {
                     self.workbench.git.confirm = Some((
                         "Abort the in-progress merge?".into(),
                         strings(&["merge", "--abort"]).into(),
                     ));
                 }
-                if ui.button("Abort rebase").clicked() {
+                if ui
+                    .add_enabled(ready, egui::Button::new("Abort rebase"))
+                    .clicked()
+                {
                     self.workbench.git.confirm = Some((
                         "Abort the in-progress rebase?".into(),
                         strings(&["rebase", "--abort"]).into(),
@@ -863,6 +888,13 @@ impl EditorApp {
             return;
         }
         self.workbench.git.git_busy = true;
+        self.workbench.git.committing = matches!(
+            job,
+            GitJob::Mutate {
+                clear_message: true,
+                ..
+            }
+        );
         let root = if self.workbench.git.git_root.is_empty() {
             self.root()
         } else {
@@ -1043,6 +1075,7 @@ impl EditorApp {
         ctx: &egui::Context,
     ) {
         self.workbench.git.git_busy = false;
+        self.workbench.git.committing = false;
         self.workbench.git.git_last = Some(Instant::now());
         let output = match result {
             Ok(project::Response::Command(output)) => output,

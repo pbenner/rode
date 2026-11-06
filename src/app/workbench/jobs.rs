@@ -456,6 +456,7 @@ impl EditorApp {
                     self.handle_git(job, result, ctx);
                 } else {
                     self.workbench.git.git_busy = false;
+                    self.workbench.git.committing = false;
                 }
             }
         }

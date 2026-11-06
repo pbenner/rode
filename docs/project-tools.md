@@ -12,6 +12,8 @@ Use the **Source control** activity icon, **View → Source control**, or **Ctrl
 - Repository initialization and cloning into an empty selected project directory.
 - Commit name/email configuration in the **Settings** tab, for this repository or your account on the project host.
 
+The commit message remains editable during background status refreshes, including over SSH. Refreshed file rows and error messages preserve its keyboard focus, caret and selection. While an explicit commit is pending, the submitted message and amend option are locked; a successful commit clears them, while a failure retains them for retry.
+
 Open **Git → Settings** to set the name and email used for future commits. **This repository** is selected by default; **Global on this host** configures all repositories for your account on the computer hosting the project, including an SSH host. The form shows Git's configured defaults and fills repository fields from inherited values when needed. **Save identity** changes Git configuration without committing, changing the index or clearing your commit message. A missing-identity commit error offers **Configure Git identity** directly and remains visible across automatic status refreshes.
 
 **Use inherited identity** removes the name/email entries from the selected scope. Other Git scopes, includes, worktree configuration and author/committer environment overrides still follow [Git's identity rules](https://git-scm.com/docs/git-config#Documentation/git-config.txt-username). These fields configure commit attribution; authentication credentials and existing commits are separate. Git writes the two keys separately, and a partial save reports which step failed while retaining your draft for retry.
