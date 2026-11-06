@@ -26,6 +26,7 @@ from ui_harness import (
     text,
     theme,
     wait_for_button,
+    window_geometry,
     x11,
     xtest,
 )
@@ -499,12 +500,32 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             follow_up = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert follow_up["params"]["input"][1] == styled["params"]["input"][1]
             wait_for(lambda: (root / "agent-child.pid").exists(), "Long task did not start")
+
+            def new_chat_state():
+                state = json.loads((base / "ui-state.json").read_text())
+                button = next(item for item in state["buttons"] if item["name"] == "agent-new-chat")
+                return state, button
+
+            wait_for(
+                lambda: not new_chat_state()[1]["enabled"],
+                "New chat was enabled during active work",
+            )
+            state, button = new_chat_state()
+            x, y, _, _ = window_geometry(window)
+            left, top, right, bottom = button["rect"]
+            scale = state["pixels_per_point"]
+            interrupts = sum(m.get("method") == "turn/interrupt" for m in rpc(root))
+            click(round(x + (left + right) * scale / 2), round(y + (top + bottom) * scale / 2))
+            wait_for(lambda: rendered_pass() > state["pass"], "Disabled click was not rendered")
+            assert not new_chat_state()[1]["enabled"], "New chat discarded the active turn"
+            assert sum(m.get("method") == "turn/interrupt" for m in rpc(root)) == interrupts
+            screenshot(window, "new-chat-disabled.png")
             click(380, 840)  # Stop, without interrupting the project terminal.
             wait_for(
                 lambda: any(m.get("method") == "turn/interrupt" for m in rpc(root)),
                 "Stop did not interrupt the turn",
             )
-            time.sleep(0.3)
+            control("agent-new-chat")  # Stop must finish before starting another conversation.
             # Open and edit a file without saving. Agent edits must not replace that buffer.
             key("p", ("Control_L", "Shift_L"))
             text("Open file by path")
@@ -639,7 +660,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             time.sleep(0.4)
             screenshot(window, "minimum-acp-chat.png")
             before = sum(m.get("method") == "initialize" for m in rpc(root))
-            header_click(760, 0)  # New chat remains accessible beside the long provider label.
+            click_button(window, process, log.name, base / "ui-state.json", "agent-new-chat")
             x11.XResizeWindow(display, window, 1380, 900)
             x11.XFlush(display)
             time.sleep(0.3)

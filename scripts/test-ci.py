@@ -4,6 +4,7 @@
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -144,10 +145,35 @@ class RunnerTests(unittest.TestCase):
             ci.measure("failure", [sys.executable, "-c", "print('diagnostic');exit(7)"])
         self.assertEqual(error.exception.code, 7)
         self.assertEqual(self.record()["status"], "failed")
+        self.assertEqual(self.record()["exit_code"], 7)
+        self.assertEqual(self.record()["timeout_seconds"], 300)
         self.assertIn(
             "diagnostic", (self.root / "target/ci-results/commands/failure.log").read_text()
         )
         self.assertIn("failed", self.summary.read_text())
+        self.assertIn("failure.json", self.summary.read_text())
+        self.assertIn("Run from the repository root", self.summary.read_text())
+
+    def test_context_preserves_literal_arguments_and_excludes_unlisted_environment(self):
+        literal = "literal argument '$HOME' $(false)\nsecond line"
+        command = [
+            sys.executable,
+            "-c",
+            f"import sys;assert sys.argv[1] == {literal!r}",
+            literal,
+        ]
+        environment = dict(os.environ, RODE_TEST_REQUIRE_SANDBOX="1", GITHUB_TOKEN="fixture-secret")
+        ci.measure("context", command, env=environment, timeout=4)
+        context = json.loads((self.root / "target/ci-results/commands/context.json").read_text())
+        self.assertEqual(context, self.record())
+        self.assertEqual(shlex.split(context["invocation"]), command)
+        self.assertEqual(context["exit_code"], 0)
+        self.assertEqual(context["timeout_seconds"], 4)
+        self.assertEqual(context["cwd"], str(self.root))
+        self.assertEqual(context["environment"]["RODE_TEST_REQUIRE_SANDBOX"], "1")
+        self.assertNotIn("GITHUB_TOKEN", context["environment"])
+        self.assertNotIn("fixture-secret", json.dumps(context))
+        self.assertNotIn("fixture-secret", self.summary.read_text())
 
     def test_missing_executable_also_has_a_diagnostic_and_failed_timing(self):
         with self.assertRaises(SystemExit) as error:
@@ -186,6 +212,8 @@ class RunnerTests(unittest.TestCase):
             ci.measure("timeout", [sys.executable, "-c", source], timeout=0.5)
         self.assertEqual(error.exception.code, 124)
         self.assertEqual(self.record()["status"], "timeout")
+        self.assertEqual(self.record()["exit_code"], 124)
+        self.assertEqual(self.record()["timeout_seconds"], 0.5)
         pid = child_pid.read_text()
         status = Path(f"/proc/{pid}/stat")
         deadline = time.monotonic() + 1

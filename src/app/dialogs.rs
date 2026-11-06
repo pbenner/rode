@@ -267,6 +267,11 @@ impl EditorApp {
                 });
         });
         ui.add_space(12.0);
+        ui.checkbox(
+            &mut self.profile.x11_forwarding,
+            "Forward X11 when available",
+        )
+        .on_hover_text("Launch remote X applications on your desktop. Requires a local X server and remote SSH X11 support. Trust and timeout follow your SSH config; sandbox restrictions still apply. Reconnect and open a new terminal after changing this setting.");
         ui.push_id("ssh-sandbox-presets", |ui| {
             self.sandbox_presets
                 .ui(ui, &mut self.profile.sandbox, palette);

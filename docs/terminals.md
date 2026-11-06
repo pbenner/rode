@@ -19,6 +19,13 @@ Several windows may attach to the same session: their keystrokes go to the same 
 
 New terminals receive the selected Python environment plus applied runtime paths and project variables from **Environment**. Reattachment preserves the original running environment; RODE does not send activation commands into an existing program. **Activate in current terminal** remains an explicit action.
 
+SSH terminals support [X11 applications](remote.md#x11-applications) when the
+desktop and remote server provide X11 forwarding. The connection's native
+gateway keeps the display tunnel alive when a terminal view is detached.
+After an SSH reconnect, use a new terminal for X applications; persistent
+shells retain their original display environment. Sandbox access restrictions
+continue to apply.
+
 Terminal text and prompt colours follow the selected theme’s palette, including bright entries for bold PS1 segments. Default text matches the theme’s UI text. PS1 paths using the bold-blue ANSI slot render in warm gold for Carbon/Amber, green for Phosphor/Matrix, cool blue for Ice/Code Dark and violet for Neon. Red/green status indicators remain distinct. Open **View → Terminal colors…** to adjust these swatches or foreground/background; optional minimum contrast is separate. Settings apply immediately without restarting the shell. See [themes](themes.md). Each attached RODE window renders with its own selected theme; the shared session's output stays unchanged.
 
 ## Bash prompts and colors
@@ -69,7 +76,7 @@ Package `rode-sessiond-static` beside `rode`, or set desktop `RODE_SESSION_HELPE
 
 A compatible preinstalled remote `rode-sessiond` is discovered automatically, or selected with the SSH profile’s **Remote helper** / `--remote-helper PATH`. It is copied on the host into the private cache after version/capability checks, so no desktop artifact for that architecture is needed. Explicit remote paths fail on incompatibility; automatic discovery can fall back to desktop deployment.
 
-The [native SSH helper](remote.md#host-service-backends) is verified and published at `~/.rode-host/host-<sha256>` for both ordinary host work and session control. The cache is private to the user. No separate TCP listener or application port forwarding is used. Helper generations referenced by live jobs are retained; existing session protocol generations and service ownership remain independent of the connection gateway.
+The [native SSH helper](remote.md#host-service-backends) is verified and published at `~/.rode-host/host-<sha256>` for both ordinary host work and session control. The cache is private to the user. Session control uses no separate TCP listener or application port forwarding; optional X11 uses OpenSSH's display forwarding. Helper generations referenced by live jobs are retained; existing session protocol generations and service ownership remain independent of the connection gateway.
 
 ## Lifetime and limits
 

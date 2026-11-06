@@ -4,6 +4,8 @@
 import argparse
 import json
 import os
+import platform
+import shlex
 import shutil
 import signal
 import subprocess
@@ -30,6 +32,37 @@ TEST_BINARIES = {
     "background_agents",
     "sessions",
 }
+# Record reproducible runner/fixture settings without copying arbitrary host
+# variables, credentials, tokens or user project values into public artifacts.
+CONTEXT_ENV = (
+    "GITHUB_SHA",
+    "RUNNER_OS",
+    "RUNNER_ARCH",
+    "DISPLAY",
+    "RODE_XVFB_SCREEN",
+    "LIBGL_ALWAYS_SOFTWARE",
+    "__GLX_VENDOR_LIBRARY_NAME",
+    "__EGL_VENDOR_LIBRARY_FILENAMES",
+    "RODE_TEST_BINARY",
+    "RODE_TEST_SESSION_HELPER",
+    "RODE_SESSION_HELPER",
+    "RODE_TEST_LLDB",
+    "RODE_TEST_DEBUGPY",
+    "RODE_TEST_JUPYTER",
+    "RODE_TEST_RUFF",
+    "RODE_TEST_PRETTIER",
+    "RODE_TEST_MISE",
+    "RODE_TEST_REQUIRE_SANDBOX",
+    "RODE_TEST_REQUIRE_LANDLOCK",
+    "RODE_TEST_SANDBOX_BACKEND",
+    "RODE_PROJECT_UI_CASE",
+    "RODE_SSH_RUN_TRANSPORT",
+    "RODE_SSH_TEST_FILTER",
+    "RODE_SSH_TEST_NO_PYTHON",
+    "RODE_SSH_TEST_NO_BWRAP",
+    "RODE_SSH_TEST_X11",
+    "RODE_TEST_REQUIRE_X11",
+)
 
 
 def ui(name, **env):
@@ -46,7 +79,10 @@ def remote(group, transport=False):
     """Wrap a suite in the private SSH fixture, explicitly selecting whether transport tests run."""
     return (
         ["bash", "scripts/test-ssh.sh", sys.executable, "scripts/ci.py", "run", group],
-        {"RODE_SSH_RUN_TRANSPORT": "1" if transport else "0"},
+        {
+            "RODE_SSH_RUN_TRANSPORT": "1" if transport else "0",
+            **({"RODE_TEST_REQUIRE_X11": "1"} if transport else {}),
+        },
         900,
     )
 
@@ -77,6 +113,15 @@ SUITES = {
     "ssh": [
         rust("native_host"),
         remote("remote-smoke", transport=True),
+        (
+            ["bash", "scripts/test-ssh.sh"],
+            {
+                "RODE_SSH_TEST_FILTER": "x11_forwarding",
+                "RODE_SSH_TEST_X11": "no",
+                "RODE_TEST_REQUIRE_X11": "1",
+            },
+            180,
+        ),
         (
             ["bash", "scripts/test-ssh.sh"],
             {
@@ -197,7 +242,9 @@ def measure(label, command, env=None, timeout=300, group="commands"):
     directory = ROOT / "target/ci-results" / group
     directory.mkdir(parents=True, exist_ok=True)
     logfile = directory / f"{label}.log"
-    print(f"::group::{label}: {' '.join(command)}", flush=True)
+    invocation = shlex.join(command)
+    title = invocation.replace("\r", r"\r").replace("\n", r"\n")
+    print(f"::group::{label}: {title}", flush=True)
     start = time.monotonic()
     code = 1
     state = "failed"
@@ -243,14 +290,39 @@ def measure(label, command, env=None, timeout=300, group="commands"):
             output.seek(-12000, os.SEEK_END)
             rest = b"\n... middle omitted; full output is in the log artifact ...\n" + output.read()
         print((start_output + rest).decode(errors="replace"), flush=True)
-    print(f"{label}: {state} in {elapsed}s (log: {logfile.relative_to(ROOT)})", flush=True)
+    print(
+        f"{label}: {state} in {elapsed}s; exit {code}; deadline {timeout}s "
+        f"(log: {logfile.relative_to(ROOT)})",
+        flush=True,
+    )
     print("::endgroup::", flush=True)
-    record = dict(name=label, status=state, seconds=elapsed, command=command)
+    environment = os.environ if env is None else env
+    record = dict(
+        name=label,
+        status=state,
+        seconds=elapsed,
+        command=command,
+        invocation=invocation,
+        cwd=str(ROOT),
+        exit_code=code,
+        timeout_seconds=timeout,
+        python=dict(executable=sys.executable, version=platform.python_version()),
+        platform=platform.platform(),
+        environment={key: environment[key] for key in CONTEXT_ENV if key in environment},
+    )
+    (directory / f"{label}.json").write_text(json.dumps(record, indent=2) + "\n")
     with (directory / "timings.jsonl").open("a") as output:
         output.write(json.dumps(record) + "\n")
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a") as output:
-            output.write(f"- `{group}/{label}`: **{state}**, {elapsed}s\n")
+            output.write(
+                f"- `{group}/{label}`: **{state}**, {elapsed}s; exit {code}; deadline {timeout}s. "
+                f"Log: `{logfile.relative_to(ROOT)}`; context: `{directory.relative_to(ROOT)}/{label}.json`.\n"
+            )
+            if code:
+                output.write(
+                    f"\nRun from the repository root with the same toolchain/fixture:\n\n```sh\n{invocation}\n```\n\n"
+                )
     if code:
         raise SystemExit(code)
 

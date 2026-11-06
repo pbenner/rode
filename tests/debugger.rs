@@ -38,8 +38,13 @@ fn wait(client: &mut Client, check: impl Fn(&Client) -> bool) {
         );
         assert!(
             Instant::now() < deadline,
-            "Timed out: {}\n{}",
+            "Timed out: {}; phase={:?}, frames={}, scopes={}, variable sets={}, watches={:?}\n{}",
             client.status,
+            client.phase,
+            client.frames.len(),
+            client.scopes.len(),
+            client.variables.len(),
+            client.watch_values,
             client.output
         );
         std::thread::sleep(Duration::from_millis(10));
@@ -68,7 +73,7 @@ fn make(root: &Path, peer: bool, isolated: bool, python: String, settings: Setti
     }
     let plan = native_peer::prepare(root.to_str().unwrap(), &options).unwrap();
     if isolated && !plan.active {
-        eprintln!("bwrap unavailable: {}", plan.label());
+        eprintln!("bwrap unavailable: {}: {}", plan.label(), plan.reason);
     }
     let argv = if peer {
         vec![
@@ -366,6 +371,10 @@ fn real_lldb_native_breakpoints_and_steps() {
                     3,
                 ),
             ] {
+                eprintln!(
+                    "LLDB case: source={filename}, transport={}, sandbox_requested={isolated}, adapter={adapter}",
+                    if peer { "headless" } else { "desktop" }
+                );
                 let temp = setup();
                 let root = temp.path().join("project ' 🦀");
                 let source = root.join(filename);
@@ -396,7 +405,16 @@ fn real_lldb_native_breakpoints_and_steps() {
                 settings.config.backend = Backend::Lldb;
                 settings.config.adapter = adapter.clone();
                 settings.config.program = binary.to_string_lossy().into();
-                settings.config.extra = json!({"disableASLR":false});
+                // Only fixture symbols are needed. Preloading every shared
+                // library can index the LLDB terminal launcher itself before
+                // exec, making this test depend on host debug-info packages.
+                settings.config.extra = json!({
+                    "disableASLR":false,
+                    "initCommands":[
+                        "settings set target.preload-symbols false",
+                        "settings set symbols.enable-external-lookup false"
+                    ]
+                });
                 settings.breakpoints.insert(
                     source.to_string_lossy().into(),
                     vec![Breakpoint {
@@ -406,14 +424,17 @@ fn real_lldb_native_breakpoints_and_steps() {
                 );
                 settings.watches = vec!["answer".into()];
                 let mut client = make(&root, peer, isolated, "auto".into(), settings);
+                eprintln!("LLDB case: waiting for the initial breakpoint and answer=40");
                 wait(&mut client, |c| {
                     stopped(c) && c.watch_values[0].contains("40")
                 });
                 client.control("next").unwrap();
+                eprintln!("LLDB case: waiting for the step and answer=42");
                 wait(&mut client, |c| {
                     stopped(c) && c.watch_values[0].contains("42")
                 });
                 client.evaluate("answer * 2").unwrap();
+                eprintln!("LLDB case: waiting for expression result 84");
                 wait(&mut client, |c| c.output.contains("84"));
                 client.stop();
                 let deadline = Instant::now() + Duration::from_secs(8);

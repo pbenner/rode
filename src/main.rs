@@ -144,7 +144,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--remote-helper PATH] [--sandbox]\n\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nSSH aliases and settings from ~/.ssh/config are honored.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: phosphor (default), carbon, carbon-edge, code-dark, matrix, amber, ice, neon, afterglow, knight-rider, hologram, telemetry, studio, studio-neutral, studio-hacker, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
+            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--remote-helper PATH] [--no-x11] [--sandbox]\n\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nSSH aliases and settings from ~/.ssh/config are honored.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: phosphor (default), carbon, carbon-edge, code-dark, matrix, amber, ice, neon, afterglow, knight-rider, hologram, telemetry, studio, studio-neutral, studio-hacker, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
         );
         println!(
             "\nOptional Codex runtime: rode --codex [ARGUMENTS], e.g. rode --codex login.\nInstall rode-codex or supply an installed Codex executable."
@@ -155,7 +155,12 @@ fn main() -> eframe::Result {
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
-        if arg == "--sandbox" {
+        if arg == "--no-x11" {
+            startup
+                .remote
+                .get_or_insert_with(Default::default)
+                .x11_forwarding = false;
+        } else if arg == "--sandbox" {
             startup.sandbox = true;
         } else if arg == "--theme" || arg == "--syntax-theme" {
             i += 1;

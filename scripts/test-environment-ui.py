@@ -21,6 +21,7 @@ from ui_harness import (
     key,
     screenshot,
     text,
+    wait_for_button,
     wait_for_window,
 )
 
@@ -49,7 +50,10 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
     )
     runtime.chmod(0o755)
     environment = dict(
-        os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+        os.environ,
+        XDG_CONFIG_HOME=str(base / "config"),
+        XDG_DATA_HOME=str(base / "data"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
     log_path = ARTIFACTS / "environment.log"
     preferences = base / "data/rode/app.ron"
@@ -93,6 +97,15 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 wait(lambda: (project / filename).exists(), "New terminal did not execute input")
                 return (project / filename).read_text()
 
+            def applied_status(applied):
+                wait_for_button(
+                    window,
+                    process,
+                    log_path,
+                    base / "ui-state.json",
+                    "environment-applied" if applied else "environment-unapplied",
+                )
+
             window = wait_for_window(process, log_path)
             focus_window(window)
             command("Open file by path")
@@ -106,11 +119,13 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             text(str(runtime))
             click(700, 620)  # Literal project variables.
             text("PROJECT_MODE=first")
+            applied_status(False)
             click(430, 702)  # Apply environment in the Project variables card.
             wait(
                 lambda: settings().get("variables", {}).get("PROJECT_MODE") == "first",
                 "Environment settings were not saved",
             )
+            applied_status(True)
             assert settings()["runtimes"]["node"] == str(runtime)
             command("Tasks: Run, build and test")
             screenshot(window, "tasks.png")
@@ -125,11 +140,13 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             click(700, 620)
             key("a", ("Control_L",))
             text("PROJECT_MODE=second")
+            applied_status(False)
             click(430, 702)
             wait(
                 lambda: settings().get("variables", {}).get("PROJECT_MODE") == "second",
                 "Updated project variables were not saved",
             )
+            applied_status(True)
             key("space", ("Control_L",))
             key("t")
             assert shell_record("existing.txt") == "first", (

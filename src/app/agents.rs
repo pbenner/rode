@@ -145,6 +145,25 @@ impl Agents {
             }
         }
     }
+    /// New chat must not replace a working controller or an unfinished Stop.
+    fn can_start_new_chat(&self) -> bool {
+        !self.chat.busy && !self.chat.stopping()
+    }
+
+    /// Reset an idle conversation without starting a backend. Recheck here so
+    /// a stale UI action cannot bypass the disabled header control.
+    fn start_new_chat(&mut self) -> bool {
+        if !self.can_start_new_chat() {
+            return false;
+        }
+        self.browser = None;
+        self.history_open = false;
+        self.replace_chat();
+        self.completed = 0;
+        self.focus = true;
+        true
+    }
+
     /// Release the old conversation view and invalidate pending composer attachment reads.
     fn replace_chat(&mut self) {
         self.release_chat();
@@ -420,6 +439,27 @@ impl EditorApp {
             .as_ref()
             .map(|w| w.plan.label())
             .unwrap_or("NORMAL MODE");
+        // The chat can be detached from the main project banner. Keep the
+        // applied grants and fallback reason reachable in that window too.
+        let mode_detail = self.workspace.as_ref().map_or_else(
+            || "No outer project sandbox is active. Agent access controls still apply.".to_owned(),
+            |workspace| {
+                let plan = &workspace.plan;
+                if plan.active {
+                    format!(
+                        "{} is active. Project tools have {} network access.\n{}{}",
+                        plan.backend.label(),
+                        if plan.prefix.iter().any(|arg| arg == "--share-net") { "enabled" } else { "blocked" },
+                        if plan.project_read_only { "The project is read only.\n" } else { "" },
+                        plan.reason,
+                    )
+                } else if plan.requested {
+                    format!("The requested {} sandbox is unavailable; the project is in normal mode. Agent access controls still apply.\n{}", plan.backend.label(), plan.reason)
+                } else {
+                    "No outer project sandbox is active. Agent access controls still apply.".to_owned()
+                }
+            },
+        );
         let offline = self
             .workspace
             .as_ref()
@@ -496,7 +536,8 @@ impl EditorApp {
         let before = agents.config.clone();
         ui.scope_builder(egui::UiBuilder::new().max_rect(content),|ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(content.expand(paint_margin)));
-            let actions = header::show(ui, &mut agents.config, agents.chat.busy, agents.chat.queue_pending(), offline);
+            let new_chat_enabled = agents.can_start_new_chat();
+            let actions = header::show(ui, &mut agents.config, agents.chat.busy, agents.chat.queue_pending(), offline, new_chat_enabled);
             if actions.provider_changed {
                 agents.settings = true;
                 agents.arguments = serde_json::to_string(agents.config.acp_arguments()).unwrap_or_else(|_| "[]".into());
@@ -504,7 +545,7 @@ impl EditorApp {
             }
             if actions.settings { agents.settings = !agents.settings; }
             new_chat |= actions.new_chat;
-            ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
+            ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate()).on_hover_text(&mode_detail);
             ui.add(egui::Label::new(palette.tag(&root)).truncate()).on_hover_text(&root);
             if agents.settings {
                 egui::ScrollArea::vertical().id_salt("agent-settings-scroll")
@@ -805,13 +846,9 @@ impl EditorApp {
                     .notice(&format!("Agent control was not applied: {error}"));
             }
         }
-        let refresh = (new_chat || (stop && agents.chat.stopping())) && agents.chat.busy;
+        let refresh = stop && agents.chat.stopping() && agents.chat.busy;
         if new_chat {
-            agents.browser = None;
-            agents.history_open = false;
-            agents.replace_chat();
-            agents.completed = 0;
-            agents.focus = true;
+            agents.start_new_chat();
         }
         if stop {
             agents.queue.pause();

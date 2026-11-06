@@ -183,7 +183,7 @@ impl Terminal {
             "SSH connection is offline. Reconnect before starting a terminal."
         );
         let mut command = CommandBuilder::new("ssh");
-        command.args(remote.channel_args(true));
+        command.args(remote.display_channel_args(true));
         command.arg(remote.shell_command(plan));
         Self::spawn(
             ctx,

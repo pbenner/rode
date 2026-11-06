@@ -51,6 +51,9 @@ pub struct Profile {
     pub config: String,
     /// Optional preinstalled helper on the remote host; empty enables discovery/deployment.
     pub remote_helper: String,
+    /// Request X11 forwarding when the desktop has a display. OpenSSH still owns
+    /// authentication, trust/timeout policy and server capability negotiation.
+    pub x11_forwarding: bool,
     /// Initial project directory on the remote host.
     pub root: String,
     /// Requested sandbox defaults for this profile.
@@ -68,6 +71,7 @@ impl Default for Profile {
             jump: String::new(),
             config: String::new(),
             remote_helper: String::new(),
+            x11_forwarding: true,
             root: "~".into(),
             sandbox: Default::default(),
         }
@@ -207,6 +211,7 @@ impl Remote {
     /// Arguments for the interactive authentication master, retaining normal host-key checks.
     pub fn master_args(&self) -> Vec<String> {
         let mut args = self.profile.options();
+        args.push(self.x11_flag().into());
         args.extend([
             "-M".into(),
             "-S".into(),
@@ -248,8 +253,29 @@ impl Remote {
     }
 
     /// Build multiplex-only channel arguments that cannot fall back to a fresh authentication
-    /// flow.
+    /// flow. Short-lived work channels do not request a display: their X11
+    /// listener would disappear as soon as the command returns.
     pub fn channel_args(&self, tty: bool) -> Vec<String> {
+        self.channel_args_with_x11(tty, false)
+    }
+
+    /// Request a display on a long-lived shell or native gateway channel. The
+    /// gateway's environment is captured for new native terminals, and its SSH
+    /// channel keeps their display listener alive across view detach/reattach.
+    /// No display or a server refusing X11 must not prevent normal shell use.
+    pub fn display_channel_args(&self, tty: bool) -> Vec<String> {
+        self.channel_args_with_x11(tty, self.profile.x11_forwarding)
+    }
+
+    fn x11_flag(&self) -> &'static str {
+        if self.profile.x11_forwarding {
+            "-X"
+        } else {
+            "-x"
+        }
+    }
+
+    fn channel_args_with_x11(&self, tty: bool, x11: bool) -> Vec<String> {
         vec![
             "-F".into(),
             "/dev/null".into(),
@@ -264,6 +290,7 @@ impl Remote {
             // Each multiplexed session must request forwarding separately. The
             // master grants it only when its own ForwardAgent policy allows it.
             "-A".into(),
+            if x11 { "-X".into() } else { "-x".into() },
             if tty { "-tt".into() } else { "-T".into() },
             "--".into(),
             self.profile.host.clone(),
@@ -536,12 +563,40 @@ mod tests {
         assert_eq!(profile.jump, "login");
         assert_eq!(profile.root, "/work/project");
         assert!(profile.remote_helper.is_empty());
+        assert!(profile.x11_forwarding);
         assert!(
             serde_json::to_value(profile)
                 .unwrap()
                 .get("backend")
                 .is_none()
         );
+    }
+    #[test]
+    fn display_channels_keep_multiplex_only_policy_and_profile_preference() {
+        for enabled in [false, true] {
+            let profile = Profile {
+                host: "cluster".into(),
+                x11_forwarding: enabled,
+                ..Default::default()
+            };
+            let saved: Profile =
+                serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+            assert_eq!(saved.x11_forwarding, enabled);
+            let remote = Remote::new(saved).unwrap();
+            let flag = if enabled { "-X" } else { "-x" };
+            assert!(remote.master_args().iter().any(|arg| arg == flag));
+            for tty in [false, true] {
+                let args = remote.display_channel_args(tty);
+                assert!(args.iter().any(|arg| arg == flag));
+                assert!(args.iter().any(|arg| arg == "ProxyCommand=false"));
+                assert!(args.iter().any(|arg| arg == "BatchMode=yes"));
+                assert!(!args.iter().any(|arg| arg == "-Y"));
+                let work = remote.channel_args(tty);
+                assert!(work.iter().any(|arg| arg == "-x"));
+                assert!(!work.iter().any(|arg| arg == "-X"));
+            }
+            remote.cleanup();
+        }
     }
     #[test]
     fn remote_helper_paths_are_literal_bounded_and_saved() {

@@ -18,6 +18,25 @@ pub(super) struct State {
     pub(super) mise_error: String,
 }
 
+impl State {
+    /// Parse the editable form without publishing it. Blank runtime fields are
+    /// placeholders; comments/order in the variable editor do not change values.
+    fn settings(&self) -> anyhow::Result<Settings> {
+        let mut settings = self.draft.clone();
+        settings
+            .runtimes
+            .retain(|_, value| !value.trim().is_empty());
+        settings.variables = Settings::parse_variables(&self.variables)?;
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    fn unapplied(&self, applied: &Settings) -> bool {
+        self.settings()
+            .map_or(true, |settings| settings != *applied)
+    }
+}
+
 impl EditorApp {
     /// Copy only applied opt-in settings into future launch plans; running sessions are untouched.
     pub(in crate::app) fn sync_project_environment(&mut self) {
@@ -288,17 +307,20 @@ impl EditorApp {
                     .char_limit(65536)
                     .hint_text("APP_MODE=development\nDATA_DIR=/scratch/data"),
             );
-            if ui.button("Apply environment").clicked() {
-                let result = (|| -> anyhow::Result<Settings> {
-                    let mut settings = state.draft.clone();
-                    settings
-                        .runtimes
-                        .retain(|_, value| !value.trim().is_empty());
-                    settings.variables = Settings::parse_variables(&state.variables)?;
-                    settings.validate()?;
-                    Ok(settings)
-                })();
-                match result {
+            let unapplied = state.unapplied(&self.workbench.prefs.environment);
+            let apply = ui.horizontal_wrapped(|ui| {
+                let apply = ui.button("Apply environment").clicked();
+                let status = ui.label(RichText::new(if unapplied {
+                    "Unapplied environment changes"
+                } else {
+                    "Environment applied"
+                }).small().color(if unapplied { palette.accent } else { palette.muted }))
+                    .on_hover_text("Runtime versions describe the applied environment. New terminals and tasks receive applied settings; existing sessions keep their captured environment.");
+                ui_probe::button(ui, if unapplied { "environment-unapplied" } else { "environment-applied" }, &status);
+                apply
+            }).inner;
+            if apply {
+                match state.settings() {
                     Ok(settings) => {
                         self.workbench.prefs.environment = settings.clone();
                         self.workbench.draft.environment = settings;
@@ -448,6 +470,29 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_status_compares_effective_values_and_keeps_invalid_edits_unapplied() {
+        let mut applied = Settings::default();
+        applied.variables.insert("MODE".into(), "saved".into());
+        let mut state = State {
+            draft: applied.clone(),
+            variables: "# A comment\n MODE =saved\n".into(),
+            ..Default::default()
+        };
+        state.draft.runtimes.insert("node".into(), String::new());
+        assert!(!state.unapplied(&applied));
+        state.variables = "MODE=changed".into();
+        assert!(state.unapplied(&applied));
+        assert_eq!(applied.variables["MODE"], "saved");
+        assert!(!state.unapplied(&state.settings().unwrap()));
+        state.variables = "INVALID LINE".into();
+        assert!(state.unapplied(&applied));
+        assert!(state.settings().is_err());
+        state.variables = "MODE=saved".into();
+        state.draft.mise = true;
+        assert!(state.unapplied(&applied));
+    }
 
     #[test]
     fn generic_environment_survives_disabling_python_and_old_preferences_migrate() {

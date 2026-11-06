@@ -4,6 +4,39 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
+    let mut agents = Agents::load(None);
+    agents.draft = "unsent draft".into();
+    agents.queue.push("queued work".into()).unwrap();
+    agents.chat.messages.push_back(agent::protocol::Message {
+        id: "working-message".into(),
+        role: Role::User,
+        title: "You".into(),
+        text: "current work".into(),
+    });
+    agents.chat.busy = true;
+    let queued = agents.queue.head_id();
+    assert!(!agents.start_new_chat());
+    assert!(agents.chat.busy);
+    assert_eq!(agents.chat.messages.len(), 1);
+    assert_eq!(agents.queue.head_id(), queued);
+    assert_eq!(agents.draft, "unsent draft");
+    // Pending attachment is busy too. A failed attachment can retain its UI
+    // marker after becoming idle; that marker must not block recovery forever.
+    agents.attaching = true;
+    assert!(!agents.start_new_chat());
+    assert_eq!(agents.chat.messages.len(), 1);
+    assert_eq!(agents.queue.head_id(), queued);
+    agents.chat.busy = false;
+    assert!(agents.start_new_chat());
+    assert!(!agents.attaching);
+    assert!(agents.chat.messages.is_empty());
+    assert!(agents.queue.is_empty());
+    assert_eq!(agents.draft, "unsent draft");
+    assert!(agents.focus);
+}
+
+#[test]
 fn recovery_actions_fit_the_panel_and_preserve_unsent_work() {
     for scale in [0.75, 1., 1.5] {
         for width in [320., 650.] {

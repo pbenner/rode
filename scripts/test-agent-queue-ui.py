@@ -18,6 +18,7 @@ from ui_harness import (
     ROOT,
     assert_running,
     click,
+    click_button,
     close_window,
     focus_window,
     key,
@@ -39,7 +40,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
         json.dumps({"agent_preferences": json.dumps({profile: {"codex": "./agent.py"}})})
     )
     environment = dict(
-        os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+        os.environ,
+        XDG_CONFIG_HOME=str(base / "config"),
+        XDG_DATA_HOME=str(base / "data"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
     log_path = ARTIFACTS / "queue.log"
     with log_path.open("w") as log:
@@ -128,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
             time.sleep(0.8)
             assert "after failure" not in prompts(), "Failure did not pause the queue"
             screenshot(window, "failed-paused.png")
-            click(1260, 115)  # New chat clears the old conversation's queue.
+            click_button(window, process, log_path, base / "ui-state.json", "agent-new-chat")
             time.sleep(0.3)
             send("new conversation")
             wait(lambda: prompts()[-1] == "new conversation", "New chat did not accept input")

@@ -9,6 +9,8 @@ mod fixture_process;
 mod installed_helpers;
 #[path = "ssh_roundtrip/large_files.rs"]
 mod large_files;
+#[path = "ssh_roundtrip/x11.rs"]
+mod x11;
 
 use rode::{
     files::Request,

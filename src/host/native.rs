@@ -139,7 +139,10 @@ impl Client {
         );
         let mut command = Command::new("ssh");
         command
-            .args(remote.channel_args(false))
+            // Native terminal creation captures this gateway's environment.
+            // Keep its forwarded display alive for the connection, rather than
+            // capturing one from a short-lived creation/attachment command.
+            .args(remote.display_channel_args(false))
             .arg(format!("exec {} host-rpc", ssh::quote(&executable)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

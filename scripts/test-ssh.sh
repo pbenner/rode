@@ -24,6 +24,26 @@ test_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)
 test_user=$(id -un)
 test_path=$PATH
 test_shell_export=
+# Keep sshd's X11 cookies in the fixture, even though its account database points
+# at the real user's home. The forced command changes HOME only after xauth ran.
+xauth_bin=$(command -v xauth || true)
+if [[ -z "$xauth_bin" && "${RODE_TEST_REQUIRE_X11:-0}" == 1 ]]; then
+    echo 'Install xauth for required X11 forwarding coverage.' >&2
+    exit 1
+fi
+x11_config='X11Forwarding no'
+client_xauth=
+if [[ -n "$xauth_bin" ]]; then
+    client_xauth="XAuthLocation \"$xauth_bin\""
+    cat > "$test_dir/xauth" <<EOF
+#!/bin/sh
+exec '$xauth_bin' -f '$test_dir/home/.Xauthority' "\$@"
+EOF
+    chmod 700 "$test_dir/xauth"
+    x11_config="X11Forwarding ${RODE_SSH_TEST_X11:-yes}
+X11UseLocalhost yes
+XAuthLocation $test_dir/xauth"
+fi
 if [[ "${RODE_SSH_TEST_NO_PYTHON:-0}" == 1 ]]; then
     mkdir -m 700 "$test_dir/native-path"
     for program in sh uname id stat sha256sum wc head mktemp ln chmod cut mkdir rm rmdir readlink git bwrap true env; do
@@ -63,6 +83,7 @@ cat > "$test_dir/host-shell" <<EOF
 # Apply the fixture home after the account's initial shell startup files.
 export HOME='$test_dir/home'
 export PATH='$test_path'
+export XAUTHORITY='$test_dir/home/.Xauthority'
 $test_shell_export
 if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then
     exec /bin/sh -c "\$SSH_ORIGINAL_COMMAND"
@@ -85,6 +106,7 @@ LogLevel VERBOSE
 # Parallel direct/ProxyJump tests exceed sshd's default ten-login throttle.
 # Keep a bounded limit on this private loopback daemon without random drops.
 MaxStartups 64
+$x11_config
 AcceptEnv CODEX_HOME RODE_CODEX_CACHE
 # The fixture runs on this host; expose the same CI-installed tools to its child shells.
 SetEnv "PATH=$test_path"
@@ -103,6 +125,7 @@ Host rode-test rode-jump
     UserKnownHostsFile $test_dir/known_hosts
     StrictHostKeyChecking yes
     BatchMode yes
+    $client_xauth
     SetEnv CODEX_HOME=$test_dir/codex-home RODE_CODEX_CACHE=$test_dir/codex-cache
 EOF
 "$sshd_bin" -D -e -f "$test_dir/sshd_config" > "$test_dir/sshd.log" 2>&1 &
@@ -127,6 +150,8 @@ then
     exit 1
 fi
 export RODE_TEST_SSH_CONFIG="$test_dir/ssh_config"
+export RODE_TEST_SSH_X11="${RODE_SSH_TEST_X11:-yes}"
+if [[ -z "$xauth_bin" ]]; then export RODE_TEST_SSH_X11=no; fi
 export RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home"
 case "${RODE_SSH_RUN_TRANSPORT:-1}" in
     1)

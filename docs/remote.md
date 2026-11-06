@@ -7,9 +7,10 @@ Click **Connect SSH**. Every connection can configure:
 - One or more comma-separated ProxyJump hosts
 - An alternative SSH config file
 - An optional preinstalled remote helper path
+- X11 forwarding when available (enabled by default)
 - A friendly name for a saved connection profile
 
-Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's forwarding policy; forwarding remains off unless you enable it for that host.
+Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's agent-forwarding policy; agent forwarding remains off unless you enable it for that host.
 
 To use your desktop's SSH agent for Git operations on a remote host, enable `ForwardAgent yes` for that host in your desktop SSH config, then reconnect RODE and open a new terminal. The desktop process must have access to the agent when it connects. In a normal-mode remote terminal, `ssh-add -l` should list the forwarded identities, and the Git tab uses the same agent. Existing persistent terminals retain their original environment. This is separate from the project's sandbox setting.
 
@@ -30,6 +31,41 @@ Or configure a direct connection with a jump host:
 ```
 
 OpenSSH reads `~/.ssh/config`, including `Include` and `ProxyJump` settings. The connection picker discovers literal aliases in the main config file; aliases defined in included files can be entered manually. Use `--ssh-config FILE` to select an alternative configuration.
+
+## X11 applications
+
+**Forward X11 when available** in the connection form requests OpenSSH X11
+forwarding (`-X`). It is saved with the profile and works through ProxyJump.
+The desktop running RODE needs an X server (or XWayland), a valid `DISPLAY` and
+`xauth`; the remote SSH server needs `X11Forwarding yes` and `xauth`. If these
+are unavailable, the connection and ordinary terminal still work.
+
+Open a new remote terminal and run an X application, such as `xclock`. OpenSSH
+sets the remote `DISPLAY` and manages authentication cookies; do not copy the
+desktop's display value to the remote shell. Local terminals already inherit
+the desktop display environment. Native Wayland forwarding is not included.
+
+Clear the checkbox, or use `rode --ssh HOST --no-x11`, to disable forwarding
+even if your SSH config enables it. When checked, the profile explicitly
+requests forwarding; `ForwardX11Trusted`, `ForwardX11Timeout` and
+`XAuthLocation` still follow your desktop SSH config. RODE does not request
+trusted forwarding (`-Y`), disable authentication or change the timeout. See
+the [OpenSSH X11 settings](https://man.openbsd.org/ssh_config#ForwardX11) for
+trust and timeout behaviour.
+
+The native gateway owns the forwarded listener, so detaching and reattaching
+a terminal view within the same SSH connection keeps it usable. Disconnecting
+SSH closes that display tunnel, even for persistent shells. After reconnecting,
+open a **new terminal** for X applications. RODE preserves existing programs
+and does not inject replacement display settings into their shells. Already
+running X applications can lose their display when SSH disconnects.
+
+Forwarding does not relax the project's sandbox. Network-isolated terminals
+cannot reach the SSH display listener. A filesystem sandbox also needs explicit
+read access to the remote Xauthority file (usually `~/.Xauthority`, or the file
+selected by `XAUTHORITY`). Add that file in **Sandbox access rules** if needed;
+RODE does not expose display sockets or authorization files automatically.
+Compute-node applications need the site's own Slurm X11 support as well.
 
 ## Host-service backends
 

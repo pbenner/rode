@@ -14,6 +14,7 @@ pub(super) fn show(
     busy: bool,
     queued: bool,
     offline: bool,
+    new_chat_enabled: bool,
 ) -> Actions {
     let mut result = Actions::default();
     let button_width = |label: &str| {
@@ -39,13 +40,15 @@ pub(super) fn show(
     if width >= reserved + 80. {
         ui.horizontal(|ui| {
             result.provider_changed = provider(ui, config, width - reserved, busy, queued);
-            actions(ui, config, busy, offline, &mut result);
+            actions(ui, config, busy, offline, new_chat_enabled, &mut result);
         });
     } else {
         ui.horizontal(|ui| {
             result.provider_changed = provider(ui, config, width, busy, queued);
         });
-        ui.horizontal_wrapped(|ui| actions(ui, config, busy, offline, &mut result));
+        ui.horizontal_wrapped(|ui| {
+            actions(ui, config, busy, offline, new_chat_enabled, &mut result)
+        });
     }
     result
 }
@@ -87,14 +90,72 @@ fn actions(
     config: &mut Config,
     busy: bool,
     offline: bool,
+    new_chat_enabled: bool,
     result: &mut Actions,
 ) {
     let settings = icons::small(ui, Icon::Settings, "Agent settings");
     ui_probe::button(ui, "agent-settings", &settings);
     result.settings = settings.clicked();
-    result.new_chat = ui
-        .button("New chat")
-        .on_hover_text("Stop this agent and start a fresh conversation")
-        .clicked();
+    let new_chat = ui
+        .add_enabled(new_chat_enabled, egui::Button::new("New chat"))
+        .on_hover_text("Start a fresh conversation")
+        .on_disabled_hover_text(
+            "Wait for the agent to become idle. Use Stop to interrupt active work.",
+        );
+    ui_probe::button(ui, "agent-new-chat", &new_chat);
+    result.new_chat = new_chat.clicked();
     controls::personality(ui, config, !busy && !offline);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_chat_stays_visible_and_only_accepts_clicks_when_idle() {
+        for width in [1100., 320.] {
+            for (busy, enabled) in [(true, false), (false, false), (false, true)] {
+                let ctx = egui::Context::default();
+                let mut config = Config::default();
+                let mut frame = |events| {
+                    let mut clicked = false;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 400.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                clicked =
+                                    show(ui, &mut config, busy, false, false, enabled).new_chat;
+                            });
+                        },
+                    );
+                    (output, clicked)
+                };
+                frame(vec![]);
+                let (output, _) = frame(vec![]);
+                let (rect, clip) = layout::tests::button_frame(&output, "New chat");
+                assert!(clip.contains_rect(rect));
+                let mut clicked = false;
+                for pressed in [true, false] {
+                    clicked |= frame(vec![
+                        egui::Event::PointerMoved(rect.center()),
+                        egui::Event::PointerButton {
+                            pos: rect.center(),
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ])
+                    .1;
+                }
+                assert_eq!(clicked, enabled, "busy={busy}, width={width}");
+            }
+        }
+    }
 }
