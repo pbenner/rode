@@ -6,6 +6,26 @@ The general Python host backend described in the historical findings below has b
 
 ## Findings fixed
 
+### Custom Codex state directories could be read through file-only tools
+
+**Configuration/credential disclosure (fourth pass, 2026-11-06).** File-only tools excluded directories literally named `.codex` and prevented modifications to the configured `CODEX_HOME`, but did not apply that protection to reads, listings or recursive searches. If the agent inherited a custom `CODEX_HOME` inside the editable project, native file tools could return its configuration or credentials as ordinary project text. The prior static helper returned a fake credential from such a directory in a controlled reproduction; no real credentials or model account were used.
+
+The helper now derives its effective state directory independently and excludes it from every file operation. Controllers additionally capture sandbox environment overrides and host/mount aliases. Absolute, project-relative, symlinked and lexically normalized state paths are protected. Unset/empty `CODEX_HOME` uses the usual home-directory default; the helper also handles a HOME-less Unix environment through the account database and fails closed if it cannot determine the state root. These rules follow the backend's [Codex home-directory semantics](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/utils/home-dir/src/lib.rs).
+
+Direct and host-owned protocol regressions verify denied reads/edits/deletes, omitted directory entries and excluded search results while ordinary source edits still succeed. A separate helper regression omits all optional controller hints, verifying that its actual environment remains authoritative. Session protocol **15** and required helper capability `agent_private_state` select updated controllers for new jobs while preserving older jobs. **End and restart existing chats to acquire the fix**; reattaching an old controller does not replace its code or captured policy. These checks apply to native file tools; full command access retains the selected project policy. A trusted custom wrapper that changes `CODEX_HOME` internally must keep private state outside the editable tree or expose the setting to RODE before launch.
+
+Implementation: `crates/rode-host-core/src/agent_files.rs`, `crates/rode-host-core/src/command.rs`, `src/agent.rs`, `crates/rode-session/src/agents/transport.rs` and helper/service compatibility checks. Regression coverage: `tests/agent_files.rs`, shared file-tool/command unit tests and legacy-service upgrade tests.
+
+### File-only tools could protect the wrong executable path
+
+**File-only policy bypass (third pass, 2026-11-06).** The direct agent API protected the configured command string instead of the executable selected during asynchronous launch. With a bare custom command name found through `PATH`, native file tools could therefore overwrite an agent script within the editable project. A deterministic protocol fixture reproduced a successful self-edit while file-only access was selected. The reproduction wrote harmless replacement text; it did not attempt a code-execution payload. Replacing a trusted agent script could affect later agent execution, so the executable guard must not depend on configuration spelling.
+
+The launch worker now publishes immutable executable identities before spawning the local process. File-tool requests protect both the launch path and its host alias, and reject missing/unresolved identities. Weak references retain protection for live/retiring transports without retaining completed controllers. Host-side command discovery also resolves relative/empty `PATH` entries against the child's project directory, rather than the broker's working directory; the selected absolute path is then used for launch and protection. Bind aliases for packaged runtimes are translated through the captured sandbox policy, and native service tools protect both spellings too.
+
+Regression tests cover direct and host-owned file-only agents, absolute/relative `PATH` entries and an editable script executable. They also check longest-prefix bind translation and that command/environment arguments are not interpreted as mounts. Existing real-Codex, offline-tool, recovery and persistent-agent tests continue to exercise the protocol and lifecycle restrictions.
+
+Implementation: `src/process.rs`, `src/agent.rs`, `crates/rode-host-core/src/command.rs`, `crates/rode-session/src/agents/transport.rs`. Regression coverage: `tests/agent_files.rs` and shared command-unit tests. This finding concerns native file-tool executable protection; it does not demonstrate a kernel sandbox escape.
+
 ### Special files could stall render preparation or editor startup
 
 **Availability issue (second pass, 2026-11-06).** LaTeX root-comment resolution used a blocking open before validating the source type. A saved source could point `% !TeX root` at a FIFO and retain the coordinator before the compiler and its deadline even started. Successful LaTeX/Marp tools could also leave FIFO output paths that blocked preview reads after the tool exited. A bounded reproduction confirmed the LaTeX root-comment hang without starting a compiler.
@@ -64,7 +84,7 @@ Implementation: `src/process.rs`, `crates/rode-host-core/src/command.rs`, `crate
 
 ## Dependency audit
 
-On **2026-11-06**, `cargo-audit` **0.22.2** checked **384 locked packages** against the RustSec database at commit `26fd2d43f7280a1fb925a3743ec463017afe7119`, last updated **2026-11-05**. After the parser update it reported **zero known vulnerabilities** and these informational maintenance warnings:
+On **2026-11-06**, `cargo-audit` **0.22.2** checked **384 locked packages** against the RustSec database at commit `fbba727d074c77fe5f7aced91930ad33eede654c`, last updated **2026-11-06** (1,413 advisories). After the parser update it reported **zero known vulnerabilities** and these informational maintenance warnings:
 
 | Dependency | Dependency path | Advisory |
 | --- | --- | --- |
@@ -80,7 +100,9 @@ The vendored sandbox manifest pins bubblewrap **0.13.1** and libcap **2.78**. Th
 
 ## Validation snapshot
 
-The latest 2026-11-06 workspace run passed **691 Rust tests** (25 harness/opt-in tests ignored by that invocation). Across the two passes, validation also included **10 packaging tests**, **19 CI-runner regressions**, Clippy with warnings denied, Ruff checks/formatting, Rustdoc with warnings denied and the strict MkDocs build. The static musl helper was rebuilt and verified after each pass. Native installer, Markdown, syntax-theme, LaTeX and Marp UI checks plus the SSH CI group exercised ordinary installation, cancellation, protected paths, remote project/file operations and direct/ProxyJump connections. These checks establish the tested behavior, not exhaustive exploit coverage.
+The fourth 2026-11-06 pass attempted the full workspace suite with installed real adapters. The optional `real_lldb_native_breakpoints_and_steps` test timed out, and an isolated recheck timed out too. Its cause is unresolved; this is **not a fully green workspace run**. A subsequent run excluding only that test passed **695 Rust tests**, with 27 harness/opt-in tests ignored and the single LLDB test filtered out. The preceding third-pass full run had passed all 693 tests then present. No debugger code or timeout was changed to conceal the failure.
+
+The fourth pass also passed all **six agent UI checks**, **10 packaging tests**, **19 CI-runner regressions**, Clippy with warnings denied, Ruff checks/formatting, Rustdoc with warnings denied and the strict MkDocs build. The static musl helper was rebuilt and verified. Across the four passes, native installer, Markdown, syntax-theme, LaTeX, Marp and agent UI checks plus SSH tests exercised ordinary installation, cancellation, protected paths, remote project/file operations and direct/ProxyJump connections. The fourth-pass SSH fixture explicitly ran 16 opt-in transport tests that the ordinary workspace invocation ignores. These checks establish the tested behavior, not exhaustive exploit coverage.
 
 ## Boundaries and limits
 

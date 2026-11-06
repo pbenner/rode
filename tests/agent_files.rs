@@ -59,6 +59,288 @@ fn log(root: &Path) -> Vec<Value> {
 }
 
 #[test]
+#[ignore = "isolated child with an explicit agent PATH"]
+fn file_only_command_name_child() {
+    let root = std::path::PathBuf::from(std::env::var_os("RODE_FILE_ONLY_PROJECT").unwrap());
+    let launch = Launch {
+        config: Config {
+            codex: "review-agent".into(),
+            access: Access::FilesOnly,
+            ..Default::default()
+        },
+        plan: sandbox::Plan {
+            root: root.to_string_lossy().into(),
+            native_helper: Some(native::binary().into()),
+            ..Default::default()
+        },
+        remote: None,
+        python: "off".into(),
+    };
+    let mut chat = Chat::default();
+    if std::env::var("RODE_FILE_ONLY_MANAGED").as_deref() == Ok("1") {
+        chat.use_service();
+    }
+    chat.submit(
+        launch,
+        "Keep the agent executable protected".into(),
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    wait(&mut chat);
+    let calls = log(&root);
+    let created = calls
+        .iter()
+        .find(|v| v["id"] == 100 && v.get("method").is_none())
+        .unwrap();
+    assert_eq!(created["result"]["success"], true, "{created}");
+    assert_eq!(
+        fs::read_to_string(root.join("ordinary.txt")).unwrap(),
+        "allowed source edit\n"
+    );
+    for id in [101, 102] {
+        let reply = calls
+            .iter()
+            .find(|v| v["id"] == id && v.get("method").is_none())
+            .unwrap();
+        assert_eq!(
+            reply["result"]["success"], false,
+            "The agent could mutate its own executable: {reply}"
+        );
+        assert!(reply.to_string().contains("protected"), "{reply}");
+    }
+    assert_eq!(
+        fs::read(root.join("tools/review-agent")).unwrap(),
+        include_bytes!("fixtures/file_only_agent.py")
+    );
+}
+
+#[test]
+fn file_only_agents_protect_executables_resolved_from_absolute_and_relative_path_entries() {
+    use std::process::{Command, Stdio};
+    for managed in [false, true] {
+        for relative in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join("project");
+            fs::create_dir(&root).unwrap();
+            fixture(
+                &root,
+                json!([
+                    {"params":{"tool":"rode_write_file","arguments":{"path":"ordinary.txt","text":"allowed source edit\n","revision":null}}},
+                    {"params":{"tool":"rode_write_file","arguments":{
+                    "path":"tools/review-agent",
+                    "text":"harmless unexpected replacement\n",
+                    "revision":rode::files::digest(include_bytes!("fixtures/file_only_agent.py"))
+                    }}},
+                    {"params":{"tool":"rode_delete_file","arguments":{"path":"tools/review-agent","revision":rode::files::digest(include_bytes!("fixtures/file_only_agent.py"))}}}
+                ]),
+            );
+            fs::create_dir(root.join("tools")).unwrap();
+            fs::rename(root.join("agent.py"), root.join("tools/review-agent")).unwrap();
+            let path = if relative {
+                "tools:/usr/bin".into()
+            } else {
+                format!("{}:/usr/bin", root.join("tools").display())
+            };
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "file_only_command_name_child",
+                    "--nocapture",
+                ])
+                .env("PATH", path)
+                // Empty CODEX_HOME uses the backend's default; it must not
+                // accidentally protect the entire project from ordinary edits.
+                .env("CODEX_HOME", "")
+                .env("RODE_FILE_ONLY_PROJECT", &root)
+                .env("RODE_FILE_ONLY_MANAGED", if managed { "1" } else { "0" })
+                .env("RODE_SESSION_DIR", temporary.path().join("sessions"))
+                .current_dir(temporary.path())
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "managed={managed}, relative={relative}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "isolated child with project-scoped Codex configuration"]
+fn file_only_configuration_child() {
+    let root = std::path::PathBuf::from(std::env::var_os("RODE_FILE_ONLY_PROJECT").unwrap());
+    let launch = Launch {
+        config: Config {
+            codex: root.join("agent.py").to_string_lossy().into(),
+            access: Access::FilesOnly,
+            ..Default::default()
+        },
+        plan: sandbox::Plan {
+            root: root.to_string_lossy().into(),
+            native_helper: Some(native::binary().into()),
+            ..Default::default()
+        },
+        remote: None,
+        python: "off".into(),
+    };
+    let mut chat = Chat::default();
+    if std::env::var("RODE_FILE_ONLY_MANAGED").as_deref() == Ok("1") {
+        chat.use_service();
+    }
+    chat.submit(
+        launch,
+        "Edit source without accessing agent state".into(),
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    wait(&mut chat);
+    let calls = log(&root);
+    let reply = |id| {
+        calls
+            .iter()
+            .find(|v| v["id"] == id && v.get("method").is_none())
+            .unwrap()
+    };
+    assert_eq!(reply(100)["result"]["success"], true, "{}", reply(100));
+    for id in [101, 102, 103, 104, 107, 108] {
+        assert_eq!(
+            reply(id)["result"]["success"],
+            false,
+            "Codex state was accessible: {}",
+            reply(id)
+        );
+        assert!(reply(id).to_string().contains("protected"), "{}", reply(id));
+    }
+    let search: Value = serde_json::from_str(
+        reply(105)["result"]["contentItems"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(search["matches"].as_array().unwrap().iter().all(|v| {
+        !Path::new(v["path"].as_str().unwrap())
+            .components()
+            .any(|component| component.as_os_str() == "agent-state")
+    }));
+    let listed: Value = serde_json::from_str(
+        reply(106)["result"]["contentItems"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        listed["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["path"] != "./agent-state")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("public.txt")).unwrap(),
+        "ordinary edit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("agent-state/config.toml")).unwrap(),
+        "fixture configuration\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("agent-state/auth.json")).unwrap(),
+        "fixture-state-secret\n"
+    );
+    assert!(!root.join("agent-state/new").exists());
+}
+
+#[test]
+fn file_only_tools_protect_the_effective_project_codex_home() {
+    use std::process::{Command, Stdio};
+    for managed in [false, true] {
+        for spelling in ["absolute", "relative", "symlink"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().join("project");
+            fs::create_dir_all(root.join("agent-state")).unwrap();
+            fs::write(
+                root.join("agent-state/config.toml"),
+                "fixture configuration\n",
+            )
+            .unwrap();
+            fs::write(root.join("agent-state/auth.json"), "fixture-state-secret\n").unwrap();
+            fixture(
+                &root,
+                json!([
+                    {"params":{"tool":"rode_write_file","arguments":{"path":"public.txt","text":"ordinary edit\n","revision":null}}},
+                    {"params":{"tool":"rode_read_file","arguments":{"path":"agent-state/config.toml"}}},
+                    {"params":{"tool":"rode_read_file","arguments":{"path":"agent-state/auth.json"}}},
+                    {"params":{"tool":"rode_write_file","arguments":{"path":"agent-state/config.toml","text":"unexpected configuration","revision":rode::files::digest(b"fixture configuration\n")}}},
+                    {"params":{"tool":"rode_create_directory","arguments":{"path":"agent-state/new"}}},
+                    {"params":{"tool":"rode_search_files","arguments":{"path":".","text":"fixture-state-secret"}}},
+                    {"params":{"tool":"rode_list_files","arguments":{"path":"."}}},
+                    {"params":{"tool":"rode_list_files","arguments":{"path":"agent-state"}}},
+                    {"params":{"tool":"rode_delete_file","arguments":{"path":"agent-state/auth.json","revision":rode::files::digest(b"fixture-state-secret\n")}}}
+                ]),
+            );
+            let config = match spelling {
+                "relative" => "agent-state".into(),
+                "symlink" => {
+                    let alias = temporary.path().join("state-alias");
+                    symlink(root.join("agent-state"), &alias).unwrap();
+                    alias.to_string_lossy().into_owned()
+                }
+                _ => root.join("agent-state").to_string_lossy().into_owned(),
+            };
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "file_only_configuration_child",
+                    "--nocapture",
+                ])
+                .env("CODEX_HOME", config)
+                .env("RODE_FILE_ONLY_PROJECT", &root)
+                .env("RODE_FILE_ONLY_MANAGED", if managed { "1" } else { "0" })
+                .env("RODE_SESSION_DIR", temporary.path().join("sessions"))
+                .current_dir(temporary.path())
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "managed={managed}, {spelling}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
+fn native_file_helpers_protect_effective_state_without_controller_hints() {
+    use std::process::Command;
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let state = root.join("private-state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("auth.json"), "fixture credential").unwrap();
+    for executable in [env!("CARGO_BIN_EXE_rode"), native::binary()] {
+        let mut command = Command::new(executable);
+        command.arg("--agent-file-tool").env("CODEX_HOME", &state);
+        let input = serde_json::to_vec(&json!({
+            "root":root,"tool":"rode_read_file","arguments":{"path":"private-state/auth.json"},
+            "read_only":false,"protected_paths":[]
+        }))
+        .unwrap();
+        let output = rode::project::run(command, input, Duration::from_secs(5)).unwrap();
+        assert_eq!(output.code, 0, "{output:?}");
+        let reply: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert!(reply["error"].as_str().unwrap().contains("protected"));
+        assert!(reply.get("value").is_none());
+    }
+}
+
+#[test]
 fn file_only_tools_edit_only_the_project_and_decline_execution_and_escalation() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("project");

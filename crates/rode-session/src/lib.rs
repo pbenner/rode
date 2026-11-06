@@ -62,8 +62,8 @@ mod runtimes;
 
 /// Runtime-directory generation; distinct from optional protocol feature levels.
 pub const VERSION: u32 = 1;
-/// Current feature level, including the split model-controller/offline-tool boundary.
-pub const PROTOCOL: u32 = 14;
+/// Current feature level, including private agent configuration/credential roots.
+pub const PROTOCOL: u32 = 15;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -143,6 +143,8 @@ pub enum Request {
     SupportsFileOnly,
     /// Probe enforced model-controller networking with native offline commands.
     SupportsOfflineAgentTools,
+    /// Probe configuration and credential privacy in native agent file tools.
+    SupportsPrivateAgentState,
     /// Discover retained notebook and debugger runtimes.
     Runtimes,
     /// Create a captured host-owned runtime.
@@ -486,7 +488,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 12] {
+fn service_directories() -> [PathBuf; 13] {
     let primary = directory();
     [
         primary.clone(),
@@ -500,6 +502,7 @@ fn service_directories() -> [PathBuf; 12] {
         primary.join("protocol-11"),
         primary.join("protocol-12"),
         primary.join("protocol-13"),
+        primary.join("protocol-14"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -544,6 +547,7 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
             Request::SupportsAuthenticatedControl,
             Request::SupportsClaude,
             Request::SupportsOfflineAgentTools,
+            Request::SupportsPrivateAgentState,
         ] {
             match request_once(&probe, launcher, &primary) {
                 Ok(Response::Ok) => {}
@@ -569,7 +573,10 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
                             .contains("unknown variant `supports_claude`")
                         || error
                             .to_string()
-                            .contains("unknown variant `supports_offline_agent_tools`") =>
+                            .contains("unknown variant `supports_offline_agent_tools`")
+                        || error
+                            .to_string()
+                            .contains("unknown variant `supports_private_agent_state`") =>
                 {
                     return Ok(compatible);
                 }
@@ -734,7 +741,8 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         | Request::SupportsAuthenticatedControl
         | Request::SupportsClaude
         | Request::SupportsFileOnly
-        | Request::SupportsOfflineAgentTools => request_once(request, launcher, &directory()),
+        | Request::SupportsOfflineAgentTools
+        | Request::SupportsPrivateAgentState => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -1450,7 +1458,8 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
             | Request::SupportsAuthenticatedControl
             | Request::SupportsClaude
             | Request::SupportsFileOnly
-            | Request::SupportsOfflineAgentTools => Response::Ok,
+            | Request::SupportsOfflineAgentTools
+            | Request::SupportsPrivateAgentState => Response::Ok,
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();

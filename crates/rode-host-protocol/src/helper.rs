@@ -32,6 +32,7 @@ pub const CAPABILITIES: &[&str] = &[
     "runtime_cache",
     "agent_files",
     "agent_offline_tools",
+    "agent_private_state",
     "bundled_bwrap",
     "explorer_mutations",
     "large_document_transfer",
@@ -175,6 +176,14 @@ mod tests {
         assert!(
             info.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
                 .is_ok()
+        );
+        let mut old = info.clone();
+        old.capabilities
+            .retain(|capability| capability != "agent_private_state");
+        assert!(
+            old.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
+                .unwrap_err()
+                .contains("agent_private_state")
         );
         for field in [
             "format",

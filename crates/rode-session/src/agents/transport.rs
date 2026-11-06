@@ -55,8 +55,21 @@ impl rode_agent_core::Factory for Factory {
             tool: tool.into(),
             arguments: arguments.clone(),
             read_only: plan.project_read_only,
+            protected_configuration: rode_host_core::agent_files::configuration_paths(
+                std::path::Path::new(&plan.root),
+                self.spec.env.get("CODEX_HOME").map(String::as_str),
+                self.spec.env.get("HOME").map(String::as_str),
+                &plan.prefix,
+            )?,
             protected_paths: std::iter::once(self.spec.executable.clone())
-                .chain(self.spec.env.get("CODEX_HOME").cloned())
+                .chain(std::iter::once(
+                    rode_host_core::command::sandbox_host_path(
+                        std::path::Path::new(&self.spec.executable),
+                        &plan.prefix,
+                    )
+                    .to_string_lossy()
+                    .into_owned(),
+                ))
                 .collect(),
         };
         let output = rode_host_core::project::run_controlled(

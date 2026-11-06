@@ -38,6 +38,73 @@ pub struct Request {
     /// Trusted executable paths that must not be replaced by their own agent.
     #[serde(default)]
     pub protected_paths: Vec<String>,
+    /// Configuration aliases captured by the controller's sandbox plan. These
+    /// supplement the helper's own effective CODEX_HOME and deny reads too.
+    #[serde(default)]
+    pub protected_configuration: Vec<String>,
+}
+
+/// Capture the effective Codex state root and its host/mount aliases without
+/// granting access to it. Relative CODEX_HOME follows the project working folder;
+/// an unset/empty value defaults to HOME/.codex. Unknown controller HOME produces
+/// no extra aliases; the helper independently resolves its actual OS home and
+/// rejects requests if its state root cannot be determined.
+pub fn configuration_paths(
+    root: &Path,
+    codex_home: Option<&str>,
+    home: Option<&str>,
+    prefix: &[String],
+) -> Result<Vec<String>> {
+    ensure!(
+        root.is_absolute(),
+        "Agent configuration needs an absolute project root"
+    );
+    let configured = crate::command::sandbox_variable(prefix, "CODEX_HOME")
+        .or(codex_home)
+        .filter(|value| !value.is_empty());
+    let path = if let Some(configured) = configured {
+        let path = PathBuf::from(configured);
+        if path.is_absolute() {
+            path
+        } else {
+            root.join(path)
+        }
+    } else {
+        let Some(home) = crate::command::sandbox_variable(prefix, "HOME")
+            .or(home)
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+        else {
+            return Ok(vec![]);
+        };
+        home.join(".codex")
+    };
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    let mut paths = vec![path.clone(), normalized];
+    if let Ok(resolved) = path.canonicalize() {
+        paths.push(resolved);
+    }
+    paths.extend(
+        paths
+            .clone()
+            .iter()
+            .map(|path| crate::command::sandbox_host_path(path, prefix)),
+    );
+    paths.sort();
+    paths.dedup();
+    Ok(paths
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect())
 }
 
 /// Decode the fixed helper response without treating a denied operation as success.
@@ -89,7 +156,7 @@ pub fn serve() -> Result<()> {
     );
     let request: Request = serde_json::from_slice(&bytes)?;
     let result = (|| {
-        let root = Root::open(&request.root)?;
+        let root = Root::open(&request.root, &request.protected_configuration)?;
         crate::landlock::confine_agent_files(&root.directory, request.read_only)?;
         execute(&request, &root)
     })();
@@ -179,6 +246,8 @@ fn execute(request: &Request, root: &Root) -> Result<Value> {
 /// An opened root, rather than a mutable current working directory, owns all lookups.
 struct Root {
     directory: File,
+    path: PathBuf,
+    configuration: Vec<PathBuf>,
 }
 impl Root {
     fn check_mutation(&self, path: &str, request: &Request) -> Result<()> {
@@ -199,7 +268,7 @@ impl Root {
         }
         Ok(())
     }
-    fn open(root: &str) -> Result<Self> {
+    fn open(root: &str, additional_configuration: &[String]) -> Result<Self> {
         ensure!(
             Path::new(root).is_absolute(),
             "A canonical project directory is required"
@@ -210,7 +279,52 @@ impl Root {
             libc::O_PATH | libc::O_DIRECTORY,
             false,
         )?;
-        Ok(Self { directory })
+        let path = fs::canonicalize(root).context("Cannot resolve the file-tool project")?;
+        // The helper's actual environment is authoritative; controller aliases
+        // additionally cover a state directory mounted at a different path.
+        // Linux std's home lookup also handles HOME-less subprocesses using the
+        // account database, matching the backend's normal Unix fallback. The
+        // deprecated cross-platform caveat concerns Windows, not this helper.
+        #[allow(deprecated)]
+        let home = std::env::home_dir();
+        let mut configuration_paths = configuration_paths(
+            &path,
+            std::env::var("CODEX_HOME").ok().as_deref(),
+            home.as_deref().and_then(Path::to_str),
+            &[],
+        )?;
+        ensure!(
+            !configuration_paths.is_empty(),
+            "Cannot protect agent configuration; set an absolute HOME or CODEX_HOME"
+        );
+        ensure!(
+            additional_configuration.len() <= 32,
+            "Too many protected configuration paths"
+        );
+        for additional in additional_configuration {
+            configuration_paths.push(additional.clone());
+            if let Ok(resolved) = Path::new(additional).canonicalize() {
+                configuration_paths.push(resolved.to_string_lossy().into_owned());
+            }
+        }
+        ensure!(
+            configuration_paths
+                .iter()
+                .all(|path| Path::new(path).is_absolute()),
+            "Protected configuration paths must be absolute"
+        );
+        Ok(Self {
+            directory,
+            path,
+            configuration: configuration_paths.into_iter().map(PathBuf::from).collect(),
+        })
+    }
+
+    fn is_configuration(&self, relative: &Path) -> bool {
+        let absolute = self.path.join(relative);
+        self.configuration
+            .iter()
+            .any(|path| absolute.starts_with(path))
     }
 
     fn relative(&self, path: &str, directory: bool) -> Result<PathBuf> {
@@ -241,6 +355,10 @@ impl Root {
         if relative.as_os_str().is_empty() {
             relative.push(".");
         }
+        ensure!(
+            !self.is_configuration(&relative),
+            "Codex configuration and credentials are protected"
+        );
         Ok(relative)
     }
 
@@ -365,7 +483,11 @@ impl Root {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            if name == ".git" || name == ".codex" || name.starts_with(".rode-agent-") {
+            if name == ".git"
+                || name == ".codex"
+                || name.starts_with(".rode-agent-")
+                || self.is_configuration(&path.join(&name))
+            {
                 continue;
             }
             let kind = entry.file_type()?;

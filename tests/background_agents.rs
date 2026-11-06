@@ -1144,13 +1144,15 @@ fn automatic_queue_configuration_cannot_change_the_captured_backend() {
 
 #[test]
 fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
-    for (generation, queue_capable, agent_capable) in [
-        (None, false, false),
-        (None, true, false),
-        (Some("protocol-8"), false, false),
-        (Some("protocol-9"), true, false),
-        (None, true, true),
-        (Some("protocol-13"), true, true),
+    for (generation, queue_capable, agent_capable, offline_capable) in [
+        (None, false, false, false),
+        (None, true, false, false),
+        (Some("protocol-8"), false, false, false),
+        (Some("protocol-9"), true, false, false),
+        (None, true, true, false),
+        (Some("protocol-13"), true, true, false),
+        (None, true, true, true),
+        (Some("protocol-14"), true, true, true),
     ] {
         let fixture = Fixture::new();
         let directory = generation.map_or_else(
@@ -1174,6 +1176,10 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             .arg(&id)
             .arg("legacy-policy")
             .env("RODE_TEST_RUNTIME_CAPABLE", "1")
+            .env(
+                "RODE_TEST_OFFLINE_CAPABLE",
+                if offline_capable { "1" } else { "" },
+            )
             .env(
                 "RODE_TEST_AGENT_CAPABLE",
                 if agent_capable { "1" } else { "" },
@@ -1210,6 +1216,9 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             }
             if agent_capable {
                 assert!(actions.lines().any(|s| s == "supports_offline_agent_tools"));
+            }
+            if offline_capable {
+                assert!(actions.lines().any(|s| s == "supports_private_agent_state"));
             }
             assert!(
                 fixture

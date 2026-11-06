@@ -12,6 +12,7 @@ pub use rode_agent_core::prompt_history;
 pub use rode_agent_core::{Access, Approval, Config, LINE_LIMIT, PROMPT_LIMIT, Provider};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, Weak};
 /// Agent launch context captured from the active workspace.
 #[derive(Clone)]
 pub struct Launch {
@@ -47,12 +48,20 @@ impl Launch {
             },
             remote: self.remote.is_some(),
             python: self.python.clone(),
-            factory: std::sync::Arc::new(HostFactory(self.clone())),
+            factory: Arc::new(HostFactory {
+                launch: self.clone(),
+                executables: Mutex::new(vec![]),
+            }),
         }
     }
 }
 /// Desktop local/SSH transport factory that preserves the captured project-host policy.
-struct HostFactory(Launch);
+struct HostFactory {
+    launch: Launch,
+    // Weak references protect active/retiring transports without retaining
+    // their controllers or accumulating completed history/recovery sessions.
+    executables: Mutex<Vec<Weak<crate::process::ExecutablePaths>>>,
+}
 impl rode_agent_core::Factory for HostFactory {
     fn command_tool(
         &self,
@@ -60,11 +69,11 @@ impl rode_agent_core::Factory for HostFactory {
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<Value> {
         anyhow::ensure!(
-            self.0.remote.is_none(),
+            self.launch.remote.is_none(),
             "Offline remote commands require the native RODE host service"
         );
         rode_host_core::agent_commands::run(
-            &self.0.plan,
+            &self.launch.plan,
             arguments,
             &std::env::vars().collect(),
             cancel,
@@ -77,20 +86,48 @@ impl rode_agent_core::Factory for HostFactory {
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<Value> {
         anyhow::ensure!(
-            self.0.remote.is_none(),
+            self.launch.remote.is_none(),
             "File-only remote editing requires the native RODE host service"
         );
-        let mut plan = self.0.plan.clone();
+        let mut executables = self
+            .executables
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Agent executable identity lock failed"))?;
+        executables.retain(|program| program.strong_count() != 0);
+        let mut protected_paths = Vec::new();
+        for program in executables.iter().filter_map(Weak::upgrade) {
+            let paths = program
+                .get()
+                .ok_or_else(|| anyhow::anyhow!("Agent executable identity is not ready"))?;
+            for path in paths {
+                anyhow::ensure!(
+                    path.is_absolute(),
+                    "Agent executable identity is unresolved; configure an absolute agent path"
+                );
+                protected_paths.push(path.to_string_lossy().into_owned());
+            }
+        }
+        anyhow::ensure!(
+            !protected_paths.is_empty(),
+            "No active agent executable identity is available"
+        );
+        drop(executables);
+        let mut plan = self.launch.plan.clone();
         plan.environment.mise = false;
-        let (command, _lease) = plan.coordinator_command("--agent-file-tool")?;
+        let (mut command, _lease) = plan.coordinator_command("--agent-file-tool")?;
+        command.current_dir(&plan.root);
         let request = rode_host_core::agent_files::Request {
-            root: self.0.plan.root.clone(),
+            root: self.launch.plan.root.clone(),
             tool: tool.into(),
             arguments: arguments.clone(),
-            read_only: self.0.plan.project_read_only,
-            protected_paths: std::iter::once(self.0.config.codex.clone())
-                .chain(std::env::var("CODEX_HOME").ok())
-                .collect(),
+            read_only: self.launch.plan.project_read_only,
+            protected_paths,
+            protected_configuration: rode_host_core::agent_files::configuration_paths(
+                std::path::Path::new(&plan.root),
+                std::env::var("CODEX_HOME").ok().as_deref(),
+                std::env::var("HOME").ok().as_deref(),
+                &plan.prefix,
+            )?,
         };
         let output = crate::project::run_controlled(
             command,
@@ -108,7 +145,7 @@ impl rode_agent_core::Factory for HostFactory {
         history: bool,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<rode_agent_core::Session> {
-        let mut host = self.0.clone();
+        let mut host = self.launch.clone();
         host.config = launch.config.clone();
         if host.config.native_tools() {
             host.plan.environment.mise = false;
@@ -118,6 +155,12 @@ impl rode_agent_core::Factory for HostFactory {
         } else {
             Session::start(host, wake)?
         };
+        let mut executables = self
+            .executables
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Agent executable identity lock failed"))?;
+        executables.retain(|program| program.strong_count() != 0);
+        executables.push(Arc::downgrade(&session.0.executable()));
         Ok(rode_agent_core::Session::new(session))
     }
 }

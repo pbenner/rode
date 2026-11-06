@@ -16,9 +16,51 @@ fn call(root: &Path, tool: &str, arguments: Value, read_only: bool) -> Result<Va
             arguments,
             read_only,
             protected_paths: vec![],
+            protected_configuration: vec![],
         },
-        &Root::open(root.to_str().unwrap())?,
+        &Root::open(root.to_str().unwrap(), &[])?,
     )
+}
+
+#[test]
+fn private_configuration_aliases_are_excluded_from_reads_lists_and_searches() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let state = root.join("state");
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("auth.json"), "fixture credential").unwrap();
+    fs::write(root.join("source.txt"), "fixture source").unwrap();
+    let prefix = vec![
+        "bwrap".into(),
+        "--ro-bind".into(),
+        state.to_string_lossy().into(),
+        "/rode-private-state".into(),
+        "--".into(),
+    ];
+    let paths = configuration_paths(root, Some("/rode-private-state"), None, &prefix).unwrap();
+    assert!(paths.iter().any(|path| Path::new(path) == state));
+    let capability = Root::open(root.to_str().unwrap(), &paths).unwrap();
+    assert!(capability.relative("state/auth.json", false).is_err());
+    let listed = capability.list(Path::new(".")).unwrap();
+    assert_eq!(listed["entries"].as_array().unwrap().len(), 1);
+    let search = capability.search(PathBuf::from("."), "fixture").unwrap();
+    assert_eq!(search["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(search["matches"][0]["path"], "./source.txt");
+    let home = root.join("home");
+    assert_eq!(
+        configuration_paths(root, Some(""), home.to_str(), &[]).unwrap(),
+        configuration_paths(root, None, home.to_str(), &[]).unwrap()
+    );
+    assert!(
+        configuration_paths(root, None, None, &[])
+            .unwrap()
+            .is_empty()
+    );
+    let captured_home = ["landlock", "--setenv", "HOME", "/captured/home", "--"].map(String::from);
+    assert_eq!(
+        configuration_paths(root, None, None, &captured_home).unwrap(),
+        vec!["/captured/home/.codex"]
+    );
 }
 
 #[test]
@@ -268,8 +310,9 @@ fn protected_directories_and_scan_budgets_apply_to_every_entry_and_byte() {
         arguments: json!({"path":"runtime/new"}),
         read_only: false,
         protected_paths: vec![protected.to_str().unwrap().into()],
+        protected_configuration: vec![],
     };
-    assert!(execute(&request, &Root::open(root.to_str().unwrap()).unwrap()).is_err());
+    assert!(execute(&request, &Root::open(root.to_str().unwrap(), &[]).unwrap()).is_err());
     assert!(!protected.join("new").exists());
     for index in 0..=MAX_ENTRIES {
         symlink("missing", root.join(format!("link-{index}"))).unwrap();

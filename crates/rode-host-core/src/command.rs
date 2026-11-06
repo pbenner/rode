@@ -139,13 +139,87 @@ pub fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
             root.join(path)
         }
     } else {
-        crate::sandbox::find_program(program)
+        // Relative/empty PATH entries are relative to the child's working
+        // directory, not this broker's current directory. Return an absolute
+        // identity so native file tools protect the same executable we launch.
+        std::env::var_os("PATH")
+            .and_then(|paths| {
+                use std::os::unix::fs::PermissionsExt;
+                std::env::split_paths(&paths)
+                    .map(|directory| {
+                        let directory = if directory.is_absolute() {
+                            directory
+                        } else {
+                            root.join(directory)
+                        };
+                        directory.join(program)
+                    })
+                    .find(|candidate| {
+                        candidate.metadata().is_ok_and(|metadata| {
+                            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                        })
+                    })
+            })
             .or_else(|| {
                 let local = crate::files::expand_home("~/.local/bin").join(program);
                 local.is_file().then_some(local)
             })
             .unwrap_or_else(|| PathBuf::from(program))
     }
+}
+
+/// Translate a sandbox path back to its host path through RODE's captured bind
+/// policy, preserving protection for executable and configuration mount aliases.
+/// Longest destination wins; arguments after the policy delimiter are not mounts.
+pub fn sandbox_host_path(program: &std::path::Path, prefix: &[String]) -> PathBuf {
+    let mut result = program.to_owned();
+    let mut specificity = 0;
+    for (flag, source, destination) in sandbox_options(prefix) {
+        if !matches!(flag, "--bind" | "--ro-bind") {
+            continue;
+        }
+        let destination = std::path::Path::new(destination);
+        if let Ok(suffix) = program.strip_prefix(destination) {
+            let depth = destination.components().count();
+            if depth >= specificity {
+                result = if suffix.as_os_str().is_empty() {
+                    PathBuf::from(source)
+                } else {
+                    std::path::Path::new(source).join(suffix)
+                };
+                specificity = depth;
+            }
+        }
+    }
+    result
+}
+
+/// Last literal environment override in RODE's captured sandbox policy.
+/// Option values and the command following `--` never become policy flags.
+pub fn sandbox_variable<'a>(prefix: &'a [String], name: &str) -> Option<&'a str> {
+    sandbox_options(prefix)
+        .filter_map(|(flag, key, value)| (flag == "--setenv" && key == name).then_some(value))
+        .last()
+}
+
+fn sandbox_options(prefix: &[String]) -> impl Iterator<Item = (&str, &str, &str)> {
+    let mut args = prefix.iter().skip(1);
+    std::iter::from_fn(move || {
+        loop {
+            let flag = args.next()?.as_str();
+            match flag {
+                "--" => return None,
+                "--bind" | "--ro-bind" | "--setenv" => {
+                    return Some((flag, args.next()?.as_str(), args.next()?.as_str()));
+                }
+                "--proc" | "--dev" | "--tmpfs" | "--dir" | "--chdir" | "--rode-home"
+                | "--rode-deny" => {
+                    args.next()?;
+                }
+                _ => {}
+            }
+        }
+    })
 }
 
 /// Set only by a transient helper when its owning input channel closes.
@@ -190,5 +264,53 @@ mod tests {
         let error = run_bounded_limited(Command::new("/bin/cat"), data, Duration::from_secs(5), 3)
             .unwrap_err();
         assert!(error.to_string().contains("size limit"), "{error:#}");
+    }
+    #[test]
+    fn executable_identity_uses_the_most_specific_host_mount_without_parsing_command_arguments() {
+        let prefix = [
+            "bwrap",
+            "--ro-bind",
+            "/bundle",
+            "/tools",
+            "--ro-bind",
+            "/project/active",
+            "/tools/agent",
+            "--setenv",
+            "LABEL",
+            "--bind",
+            "--setenv",
+            "HOME",
+            "/first",
+            "--setenv",
+            "HOME",
+            "/captured",
+            "--",
+            "--bind",
+            "/wrong",
+            "/tools/agent",
+            "--setenv",
+            "HOME",
+            "/wrong",
+        ]
+        .map(String::from);
+        assert_eq!(
+            sandbox_host_path(std::path::Path::new("/tools/agent/codex"), &prefix),
+            PathBuf::from("/project/active/codex")
+        );
+        assert_eq!(
+            sandbox_host_path(std::path::Path::new("/tools/helper"), &prefix),
+            PathBuf::from("/bundle/helper")
+        );
+        assert_eq!(
+            sandbox_host_path(std::path::Path::new("/tools-other/codex"), &prefix),
+            PathBuf::from("/tools-other/codex")
+        );
+        assert_eq!(
+            sandbox_host_path(std::path::Path::new("/tools/agent"), &prefix).as_os_str(),
+            std::ffi::OsStr::new("/project/active")
+        );
+        assert_eq!(sandbox_variable(&prefix, "HOME"), Some("/captured"));
+        assert_eq!(sandbox_variable(&prefix, "LABEL"), Some("--bind"));
+        assert_eq!(sandbox_variable(&prefix, "CODEX_HOME"), None);
     }
 }

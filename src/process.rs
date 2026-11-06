@@ -23,7 +23,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
@@ -85,7 +85,12 @@ struct Control {
     alive: AtomicBool,
     stopped: AtomicBool,
     finished: AtomicBool,
+    executable: Arc<ExecutablePaths>,
 }
+
+/// Immutable executable aliases in the sandbox and on its host, published by
+/// the launch worker before spawn. Both must stay protected from native edits.
+pub(crate) type ExecutablePaths = OnceLock<[PathBuf; 2]>;
 impl Control {
     fn kill(&self, signal: i32) {
         let pid = self.pid.load(Ordering::Acquire);
@@ -164,6 +169,12 @@ impl Writer {
     }
 }
 impl Session {
+    /// Observe the local executable selected by the launch worker. The identity
+    /// is published before spawn and stays unset for remote/coordinator launches.
+    /// Callers must fail closed while preparation has not resolved the program.
+    pub(crate) fn executable(&self) -> Arc<ExecutablePaths> {
+        self.control.executable.clone()
+    }
     /// Transfer ownership to a headless notebook/debugger controller.
     pub fn into_runtime(self) -> rode_runtime_core::process::Session {
         rode_runtime_core::process::Session::new(self)
@@ -339,6 +350,9 @@ fn run_session(
         }
         .to_string_lossy()
         .into();
+        let program = PathBuf::from(&argv[0]);
+        let host = rode_host_core::command::sandbox_host_path(&program, &launch.plan.prefix);
+        let _ = control.executable.set([program, host]);
         let prefix = launch.plan.execution_prefix(&launch.python)?;
         let mut command = if !prefix.is_empty() {
             let mut command = Command::new(&prefix[0]);
