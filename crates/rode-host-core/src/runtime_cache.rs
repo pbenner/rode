@@ -251,6 +251,7 @@ fn run(spec: Specification, input: &mut impl Read) -> Result<Reply> {
         &std::env::var("RODE_CODEX_CACHE").unwrap_or_else(|_| "~/.cache/rode/codex".into()),
     );
     ensure!(base.is_absolute(), "Codex cache path must be absolute");
+    crate::paths::trusted_ancestors(&base).context("Unsafe Codex cache directory ancestors")?;
     let version = base.join(&spec.version);
     let folder = version.join(std::env::consts::ARCH);
     let key = target.key()?;

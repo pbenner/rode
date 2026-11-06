@@ -16,6 +16,8 @@ use std::{
     time::{Duration, Instant},
 };
 mod stash;
+#[cfg(test)]
+mod tests;
 pub use stash::Action as StashAction;
 
 const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
@@ -205,12 +207,23 @@ impl Output {
     pub fn success(&self) -> bool {
         self.code == 0
     }
-    /// Return stdout on success or combine diagnostic output into an error on failure.
+    /// Return stdout on success, or diagnostics with an exit-status fallback on failure.
     pub fn checked(self) -> Result<String> {
         if self.success() {
             Ok(self.stdout)
         } else {
-            bail!("{}", self.stderr.trim().to_owned() + &self.stdout)
+            let diagnostics = [self.stderr.trim(), self.stdout.trim()]
+                .into_iter()
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !diagnostics.is_empty() {
+                bail!("{diagnostics}");
+            }
+            if self.code < 0 {
+                bail!("Command terminated without an exit code");
+            }
+            bail!("Command exited with status {}", self.code)
         }
     }
 }

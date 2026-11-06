@@ -326,6 +326,49 @@ fn native_runtime_upload_cancellation_removes_only_its_staging_directory() {
 }
 
 #[test]
+fn native_bootstrap_rejects_writable_home_ancestors_before_creating_its_cache() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let shared = root.path().join("shared");
+    let home = shared.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    let payload = b"verified helper fixture, never executed";
+    let digest = files::digest(payload);
+    let call = || {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                include_str!("../src/host/bootstrap.sh"),
+                "bootstrap",
+                &digest,
+                &payload.len().to_string(),
+            ])
+            .env("HOME", &home);
+        project::run(command, payload.to_vec(), Duration::from_secs(5))
+            .unwrap()
+            .checked()
+    };
+    for mode in [0o777, 0o770] {
+        fs::set_permissions(&shared, fs::Permissions::from_mode(mode)).unwrap();
+        assert!(
+            call()
+                .unwrap_err()
+                .to_string()
+                .contains("ancestor is writable")
+        );
+        assert!(!home.join(".rode-host").exists());
+    }
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o1777)).unwrap();
+    let published = PathBuf::from(call().unwrap().trim());
+    assert_eq!(fs::read(&published).unwrap(), payload);
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(PathBuf::from(call().unwrap().trim()), published);
+}
+
+#[test]
 fn native_bootstrap_verifies_before_publication_and_preserves_suspect_cache() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();

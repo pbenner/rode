@@ -198,7 +198,9 @@ pub fn main_file(root: &Path, path: &str, settings: &Settings) -> Result<PathBuf
             "Cycle in LaTeX root comments."
         );
         let mut header = vec![];
-        File::open(&source)?.take(8192).read_to_end(&mut header)?;
+        crate::locking::open_regular(&source, false)?
+            .take(8192)
+            .read_to_end(&mut header)?;
         let text = String::from_utf8_lossy(&header);
         let target = text.lines().take(32).find_map(|line| {
             let (key, value) = line.trim().strip_prefix('%')?.trim().split_once('=')?;
@@ -345,7 +347,7 @@ pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
     if reply.output.success() {
         let path = pdf_path(&root, &source, settings);
         let valid = (|| -> Result<()> {
-            let mut file = File::open(&path)?;
+            let mut file = crate::locking::open_regular(&path, false)?;
             ensure!(
                 file.metadata()?.is_file() && file.metadata()?.len() <= LIMIT as u64,
                 "Generated PDF exceeds the 8 MiB preview limit."

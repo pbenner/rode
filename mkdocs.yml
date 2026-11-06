@@ -44,6 +44,7 @@ nav:
   - Development:
       - Validation and hooks: development.md
       - Source architecture: architecture.md
+      - Release checklist: release.md
 hooks:
   - scripts/docs_hook.py
 plugins:

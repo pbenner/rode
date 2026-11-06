@@ -137,7 +137,7 @@ impl Themes {
                                 metadata.len() <= MAX_THEME_BYTES,
                                 "Theme exceeds 64 KiB"
                             );
-                            let file = std::fs::File::open(&path)?;
+                            let file = crate::persistence::open_regular(&path, false)?;
                             anyhow::ensure!(
                                 file.metadata()?.is_file(),
                                 "Theme must be a regular file"

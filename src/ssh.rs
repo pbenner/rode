@@ -407,7 +407,11 @@ pub(crate) use rode_host_core::command::run_bounded;
 /// Discover bounded host aliases from the default OpenSSH configuration.
 pub fn aliases() -> Vec<String> {
     let mut aliases = Vec::new();
-    if let Ok(config) = std::fs::read_to_string(files::expand_home("~/.ssh/config")) {
+    if let Ok(Some(bytes)) = crate::persistence::read(
+        &files::expand_home("~/.ssh/config"),
+        crate::persistence::LIMIT,
+    ) && let Ok(config) = std::str::from_utf8(&bytes)
+    {
         for line in config.lines() {
             let mut words = line.split('#').next().unwrap_or("").split_whitespace();
             if words

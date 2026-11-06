@@ -188,6 +188,8 @@ fn protected(metadata: &fs::Metadata) -> bool {
 /// The optional package's selector is bounded data from a trusted installation,
 /// never a URL, executable probe or project-provided configuration file.
 fn read_release(directory: &Path) -> Result<Arc<Release>> {
+    rode_host_core::paths::trusted_ancestors(directory)
+        .context("Unsafe Codex runtime directory ancestors")?;
     let metadata = fs::symlink_metadata(directory)?;
     ensure!(
         metadata.is_dir() && protected(&metadata),
@@ -268,6 +270,8 @@ fn verify_files(
     cancel: &AtomicBool,
     repair: bool,
 ) -> Result<()> {
+    rode_host_core::paths::trusted_ancestors(directory)
+        .context("Unsafe Codex bundle directory ancestors")?;
     let metadata = fs::symlink_metadata(directory)?;
     ensure!(
         metadata.is_dir() && protected(&metadata),

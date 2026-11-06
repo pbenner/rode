@@ -338,9 +338,14 @@ def main():
     helper_target = {"amd64": "x86_64", "arm64": "aarch64"}[architecture] + "-unknown-linux-musl"
     if args.skip_build:
         binary = (args.binary or target / "release/rode").resolve()
-        standalone = target / helper_target / "release/rode-sessiond-standalone"
-        legacy = target / helper_target / "release/rode-sessiond"
-        helper = (args.helper or (standalone if standalone.is_file() else legacy)).resolve()
+        helper = (
+            args.helper or target / helper_target / "release/rode-sessiond-standalone"
+        ).resolve()
+        if not helper.is_file():
+            raise ValueError(
+                f"Missing static native helper: {helper}. "
+                "Run cargo xtask build-helper, or select a built helper with --helper PATH."
+            )
     else:
         binary = build("rode", "rode")
         helper = Path(

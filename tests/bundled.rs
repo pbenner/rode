@@ -192,6 +192,26 @@ fn corrupt_truncated_and_excess_transfers_never_publish_or_replace_a_valid_runti
 }
 
 #[test]
+fn runtime_cache_rejects_private_leaves_beneath_writable_ancestors() {
+    let (root, bytes, mut spec) = fixture();
+    let shared = root.path().join("shared");
+    let home = shared.join("private-home");
+    fs::create_dir_all(&home).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    let cache = home.join("codex");
+    for action in ["probe", "install"] {
+        spec["action"] = action.into();
+        let output = call(&cache, &spec, bytes.clone());
+        assert!(!output.success());
+        assert!(output.stderr.contains("writable by another user"));
+        assert!(!cache.exists());
+    }
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(call(&cache, &spec, bytes).success());
+}
+
+#[test]
 fn cache_symlinks_and_modified_executables_are_rejected() {
     use std::os::unix::fs::symlink;
     let (root, bytes, spec) = fixture();
@@ -270,6 +290,46 @@ fn write_runtime(directory: &Path, architecture: &str) -> Value {
         fs::set_permissions(directory.join(name), fs::Permissions::from_mode(0o644)).unwrap();
     }
     manifest
+}
+
+#[test]
+fn user_runtime_discovery_rejects_a_writable_ancestor_before_execution() {
+    let root = tempfile::tempdir().unwrap();
+    let editor = root.path().join("rode");
+    fs::copy(env!("CARGO_BIN_EXE_rode"), &editor).unwrap();
+    let shared = root.path().join("shared");
+    let data = shared.join("private-data");
+    let base = data.join("rode/codex");
+    let directory = base
+        .join("9-independent-fixture")
+        .join(std::env::consts::ARCH);
+    let manifest = write_runtime(&directory, std::env::consts::ARCH);
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(base.join("manifest.json"), manifest.to_string()).unwrap();
+    fs::set_permissions(
+        base.join("manifest.json"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let call = || {
+        let mut command = Command::new(&editor);
+        command
+            .args(["--codex", "--version"])
+            .env("XDG_DATA_HOME", &data)
+            .env_remove("RODE_CODEX_BUNDLE");
+        project::run(command, vec![], Duration::from_secs(5)).unwrap()
+    };
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    let output = call();
+    assert!(!output.success());
+    assert!(
+        output.stderr.contains("writable by another user"),
+        "{}",
+        output.stderr
+    );
+    assert!(!output.stdout.contains("optional-runtime-fixture"));
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(call().checked().unwrap().trim(), "optional-runtime-fixture");
 }
 
 #[test]

@@ -348,7 +348,7 @@ pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
         "Marp conversion cancelled."
     );
     let mut bytes = Vec::new();
-    fs::File::open(&output_path)
+    crate::locking::open_regular(&output_path, false)
         .context("Marp did not produce the requested output")?
         .take(MAX_OUTPUT as u64 + 1)
         .read_to_end(&mut bytes)?;

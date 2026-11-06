@@ -85,6 +85,24 @@ def runtime_fixture():
 
 
 class UserRuntime(unittest.TestCase):
+    def test_user_install_rejects_writable_ancestors_before_downloading(self):
+        with runtime_fixture() as (root, _manifest):
+            shared = root / "shared"
+            data = shared / "data"
+            data.mkdir(parents=True, mode=0o700)
+            shared.chmod(0o777)
+            with patch.dict(os.environ, XDG_DATA_HOME=str(data)):
+                with self.assertRaisesRegex(ValueError, "ancestor is writable"):
+                    BUNDLER["install"]("x86_64")
+            self.assertFalse((data / "rode").exists())
+            # Even an alias whose target returns to a protected directory must
+            # not conceal a replaceable component of the resolution path.
+            (data / "back").symlink_to(root, target_is_directory=True)
+            alias = root / "alias"
+            alias.symlink_to(data / "back", target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "ancestor is writable"):
+                BUNDLER["trusted_ancestors"](alias)
+
     def test_install_repairs_missing_helpers_without_replacing_the_main_executable(self):
         with runtime_fixture() as (root, manifest):
             destination = BUNDLER["install"]("x86_64")
@@ -205,6 +223,12 @@ class Components(unittest.TestCase):
                 "packages": [{"name": "rode", "version": "1.2.3"}],
                 "target_directory": str(root / "target"),
             }
+            helper = root / "target/x86_64-unknown-linux-musl/release/rode-sessiond-standalone"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"static helper fixture")
+
+            def check_elf(path, _architecture, static=False):
+                self.assertEqual(path, helper if static else root / "target/release/rode")
 
             def output(*command):
                 if "metadata" in command:
@@ -232,7 +256,7 @@ class Components(unittest.TestCase):
                     scope,
                     ROOT=root,
                     output=output,
-                    check_elf=lambda *_a, **_k: None,
+                    check_elf=check_elf,
                     notices=lambda _binary: b"licenses",
                     write_package=write_package,
                 ),
@@ -244,6 +268,32 @@ class Components(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 BUILDER["main"]()
+
+    def test_skip_build_does_not_silently_package_an_obsolete_helper_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "target/x86_64-unknown-linux-musl/release/rode-sessiond"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_bytes(b"stale pre-migration helper")
+            metadata = {
+                "packages": [{"name": "rode", "version": "1.2.3"}],
+                "target_directory": str(root / "target"),
+            }
+
+            def output(*command):
+                return json.dumps(metadata) if "metadata" in command else "amd64"
+
+            with (
+                patch.dict(BUILDER["main"].__globals__, ROOT=root, output=output),
+                patch.object(
+                    sys, "argv", ["build-deb.py", "--skip-build", "--shlibs-depends", "libc6"]
+                ),
+                patch("shutil.which", return_value="/build-tool"),
+            ):
+                with self.assertRaisesRegex(ValueError, "Run cargo xtask build-helper"):
+                    BUILDER["main"]()
+            self.assertEqual(legacy.read_bytes(), b"stale pre-migration helper")
+            self.assertFalse((root / "target/debian").exists())
 
     def test_missing_codex_target_fails_only_the_explicit_runtime_component(self):
         """An unsupported runtime target must not run Cargo or download anything."""

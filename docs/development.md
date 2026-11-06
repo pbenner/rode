@@ -17,7 +17,9 @@ Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_
 
 The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; the remaining interpreter/Jupyter adapter docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
 
-Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
+Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
+
+Use the [release checklist](release.md) before tagging a version. `mise run check` runs lint and ordinary Rust tests; it does not establish native UI, real-tool, sandbox or package coverage on its own.
 
 ## Native SSH validation
 

@@ -185,7 +185,7 @@ pub(super) fn load(directory: &Path) -> (Vec<SyntaxPalette>, Vec<String>) {
                     std::fs::metadata(&path)?.is_file(),
                     "Syntax theme must be a regular file"
                 );
-                let file = std::fs::File::open(&path)?;
+                let file = crate::persistence::open_regular(&path, false)?;
                 ensure!(
                     file.metadata()?.is_file(),
                     "Syntax theme must be a regular file"

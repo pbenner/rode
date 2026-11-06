@@ -1,4 +1,4 @@
-//! Regression checks for special files, canonical grants and inherited terminal access.
+//! Regression checks for special files, converter outputs, canonical grants and inherited terminal access.
 //! Every subprocess has a deadline so failures cannot hang the test runner.
 #[path = "support/native.rs"]
 mod native_peer;
@@ -59,6 +59,7 @@ fn desktop_and_headless_reads_and_saves_reject_fifos_without_a_writer() {
                 "read_hex",
                 "read_image",
                 "read_binary",
+                "read_attachment",
                 "write",
                 "write_binary",
             ] {
@@ -86,8 +87,96 @@ fn desktop_and_headless_reads_and_saves_reject_fifos_without_a_writer() {
 }
 
 #[test]
+fn render_coordinators_reject_fifo_sources_and_outputs_without_hanging() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    fn call(command: Command, payload: &impl serde::Serialize) -> rode::project::Output {
+        let mut input = serde_json::to_vec(payload).unwrap();
+        input.push(b'\n');
+        rode::project::run_controlled(
+            command,
+            input,
+            Duration::from_secs(5),
+            &std::sync::atomic::AtomicBool::new(false),
+            true,
+        )
+        .unwrap()
+    }
+    let root = tempfile::tempdir().unwrap();
+    let fifo = root.path().join("pipe.tex");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let alias = root.path().join("alias.tex");
+    symlink(&fifo, &alias).unwrap();
+    let source = root.path().join("chapter.tex");
+    let converter = root.path().join("fifo-converter");
+    fs::write(
+        &converter,
+        "#!/bin/sh\nwhile [ \"$1\" != --output ]; do shift; done\nmkfifo -- \"$2\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&converter, fs::Permissions::from_mode(0o700)).unwrap();
+    for peer in [false, true] {
+        let command = |flag| {
+            let mut command = Command::new(if peer {
+                native_peer::binary()
+            } else {
+                env!("CARGO_BIN_EXE_rode")
+            });
+            command.arg(flag);
+            command
+        };
+        for target in [&fifo, &alias] {
+            fs::write(&source, format!("% !TeX root = {}\n", target.display())).unwrap();
+            let mut invocation = rode::latex::Invocation {
+                root: root.path().to_string_lossy().into(),
+                path: source.to_string_lossy().into(),
+                settings: rode::latex::Settings {
+                    program: "/bin/true".into(),
+                    arguments: vec![],
+                    ..Default::default()
+                },
+            };
+            let output = call(command("--latex-helper"), &invocation);
+            assert!(!output.success());
+            assert!(output.stderr.contains("regular"));
+
+            // A successful compiler can leave unusable output. Keep the build
+            // result, report the preview error and never wait for a FIFO writer.
+            fs::write(&source, "ordinary source\n").unwrap();
+            invocation.settings.pdf_file = target.to_string_lossy().into();
+            let output = call(command("--latex-helper"), &invocation);
+            assert!(output.success(), "{:?}", output);
+            let reply: rode::latex::Reply = serde_json::from_str(&output.stdout).unwrap();
+            assert!(reply.output.success() && reply.pdf.is_none());
+            assert!(reply.note.contains("regular"));
+        }
+        let invocation = rode::marp::Invocation {
+            root: root.path().to_string_lossy().into(),
+            path: root.path().join("slides.md").to_string_lossy().into(),
+            text: "# Snapshot\n".into(),
+            settings: rode::marp::Settings {
+                program: converter.to_string_lossy().into(),
+                ..Default::default()
+            },
+            format: rode::marp::Format::Html,
+            destination: None,
+        };
+        let output = call(command("--marp-helper"), &invocation);
+        assert!(!output.success());
+        assert!(output.stderr.contains("regular"));
+    }
+}
+
+#[test]
 #[ignore = "private subprocess entry point for bounded configuration checks"]
 fn configuration_special_file_child() {
+    if std::env::var("RODE_SECURITY_OPERATION").as_deref() == Ok("ssh_aliases") {
+        let expected: Vec<String> =
+            serde_json::from_str(&std::env::var("RODE_SECURITY_EXPECTED_ALIASES").unwrap())
+                .unwrap();
+        assert_eq!(rode::ssh::aliases(), expected);
+        return;
+    }
     let path = std::env::var_os("RODE_SECURITY_FIFO").unwrap();
     let path = Path::new(&path);
     let result = match std::env::var("RODE_SECURITY_OPERATION").unwrap().as_str() {
@@ -123,6 +212,57 @@ fn preference_reads_and_transactions_reject_fifos_without_hanging() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[test]
+fn ssh_alias_discovery_is_bounded_and_rejects_fifos_without_hanging() {
+    use std::os::unix::fs::symlink;
+    for case in ["normal", "invalid", "oversized", "fifo", "symlink"] {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".ssh")).unwrap();
+        let config = root.path().join(".ssh/config");
+        match case {
+            "normal" => fs::write(&config, "Host beta alpha beta *.example !denied\n").unwrap(),
+            "invalid" => fs::write(&config, [0xff]).unwrap(),
+            "oversized" => {
+                let mut file = fs::File::create(&config).unwrap();
+                file.write_all(b"Host should-not-load\n").unwrap();
+                file.set_len(persistence::LIMIT as u64 + 1).unwrap();
+            }
+            "fifo" | "symlink" => {
+                let fifo = if case == "fifo" {
+                    config.clone()
+                } else {
+                    root.path().join("pipe")
+                };
+                let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+                assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+                if case == "symlink" {
+                    symlink(&fifo, &config).unwrap();
+                }
+            }
+            _ => unreachable!(),
+        }
+        let output = finish(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact", "configuration_special_file_child"])
+                .env("HOME", root.path())
+                .env("RODE_SECURITY_OPERATION", "ssh_aliases")
+                .env(
+                    "RODE_SECURITY_EXPECTED_ALIASES",
+                    if case == "normal" {
+                        "[\"alpha\",\"beta\"]"
+                    } else {
+                        "[]"
+                    },
+                )
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        assert!(output.status.success(), "{case}: {:?}", output);
     }
 }
 

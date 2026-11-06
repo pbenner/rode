@@ -90,6 +90,8 @@ python3 scripts/test-deb.py target/debian/rode_0.1.0-1_amd64.deb
 
 `--binary PATH` and `--helper PATH`, used with `--skip-build`, select other existing release outputs. The helper must be static, and both ELF architectures must match the native Debian architecture; mismatches are rejected. This is a native packager, not a cross-build system.
 
+Without `--helper`, the expected artifact is `<Cargo target directory>/<architecture>-unknown-linux-musl/release/rode-sessiond-standalone`, produced by `cargo xtask build-helper`. A missing artifact is an error; the packager does not substitute an older `rode-sessiond` build left in that directory.
+
 For an optional portable runtime, run `python3 scripts/bundle-codex.py` and copy its `VERSION/ARCH` directory into `rode-codex/VERSION/ARCH` beside the editor. Also copy `packaging/codex.json` to `rode-codex/manifest.json` to select that runtime version independently. Keep directories/files protected from writes by other users, and retain all manifest and notice files with the executable. The runtime is a separate on-demand process; its substantial disk size does not add an always-running model or Node.js runtime. Model servers and models remain separately managed.
 
 `dpkg-shlibdeps` normally uses `/var/lib/dpkg`. Restricted project sandboxes sometimes hide it. For the current native GUI, which links only libc/libgcc, the builder then uses a conservative requirement for the build host's glibc version and reports this choice. This can require a newer target system than a normal symbol-based scan. Unknown additional linked libraries cause an error rather than guessed dependencies.

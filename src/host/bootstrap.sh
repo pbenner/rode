@@ -15,6 +15,18 @@ case "$HOME" in /*) ;; *) echo 'Native helper requires an absolute HOME' >&2; ex
 # Resolve an automounted/symlinked home once; reject writable ancestors in the helper subtree.
 home=$(cd -- "$HOME" && pwd -P)
 check_directory "$home"
+# The cache's private mode cannot protect its name if another user can rename
+# an ancestor. Root/user-owned sticky parents retain ordinary /tmp fixtures.
+ancestor=$home
+while :; do
+    owner=$(stat -c %u -- "$ancestor")
+    mode=$(stat -c %a -- "$ancestor")
+    [ "$owner" = "$uid" ] || [ "$owner" = 0 ] || { echo 'Native helper ancestor has an unsafe owner' >&2; exit 1; }
+    [ $((0$mode & 022)) -eq 0 ] || [ $((0$mode & 01000)) -ne 0 ] || { echo 'Native helper ancestor is writable by another user' >&2; exit 1; }
+    [ "$ancestor" != / ] || break
+    ancestor=${ancestor%/*}
+    [ -n "$ancestor" ] || ancestor=/
+done
 directory="$home/.rode-host"
 if [ ! -e "$directory" ]; then mkdir -m 700 -- "$directory" 2>/dev/null || [ -d "$directory" ]; fi
 check_directory "$directory"

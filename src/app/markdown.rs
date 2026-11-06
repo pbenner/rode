@@ -755,6 +755,21 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn untrusted_wikilinks_stay_literal_without_asset_requests() {
+        // RUSTSEC-2026-0433 affects ENABLE_WIKILINKS (including Options::all()).
+        // Keep this opt-in parser feature outside the supported preview surface.
+        assert!(!options().contains(Options::ENABLE_WIKILINKS));
+        let nested = format!("{}asset.png{}", "![[".repeat(2000), "]]".repeat(2000));
+        for source in ["![[https://example.invalid/tracker.png]]", nested.as_str()] {
+            let prepared = prepare(source, "/project/README.md", 1).unwrap();
+            assert_eq!(prepared.source, source);
+            assert!(prepared.images.is_empty());
+            assert!(prepared.links.is_empty());
+        }
+    }
+
     fn render(app: &mut EditorApp, ctx: &egui::Context) -> String {
         ctx.run(
             egui::RawInput {

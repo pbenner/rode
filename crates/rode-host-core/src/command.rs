@@ -1,4 +1,8 @@
-//! Literal quoting and bounded host processes.
+//! Literal quoting, executable resolution and bounded host-process capture.
+//!
+//! This runner serves local helpers and remote transport commands. Keep errors
+//! tied to the actual executable, preserve binary stdout, and bound stderr
+//! independently; only the caller knows whether a missing tool is OpenSSH.
 use anyhow::{Context, Result, bail};
 use std::{
     io::{Read, Write},
@@ -12,12 +16,12 @@ pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Concurrently drain both pipes and stdin so large saves cannot deadlock SSH.
+/// Concurrently drain both pipes and stdin with the default 64 MiB stdout bound.
 pub fn run_bounded(command: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
     run_bounded_limited(command, input, timeout, 64 * 1024 * 1024)
 }
 
-/// Run an SSH command with a caller-specific stdout cap, enforced while reading.
+/// Run a host command with a caller-specific stdout cap, enforced while reading.
 /// Stderr retains its separate 64 KiB diagnostic limit.
 pub fn run_bounded_limited(
     mut command: Command,
@@ -25,12 +29,13 @@ pub fn run_bounded_limited(
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Vec<u8>> {
+    let program = command.get_program().to_string_lossy().into_owned();
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("Could not run OpenSSH; install the ssh client")?;
+        .with_context(|| format!("Could not start {program}"))?;
     let mut stdin = child.stdin.take().context("Missing SSH stdin")?;
     let stdout = child.stdout.take().context("Missing SSH stdout")?;
     let stderr = child.stderr.take().context("Missing SSH stderr")?;
@@ -59,9 +64,7 @@ pub fn run_bounded_limited(
         if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            bail!(
-                "SSH operation timed out. The remote host may be unreachable; your edits are still open."
-            );
+            bail!("{program} timed out; the operation did not finish within its deadline.");
         }
         std::thread::sleep(Duration::from_millis(20));
     };
@@ -70,7 +73,7 @@ pub fn run_bounded_limited(
     for _ in 0..2 {
         let (is_out, bytes, result) = rx
             .recv_timeout(Duration::from_secs(2))
-            .context("SSH output exceeded its limit or did not close")?;
+            .with_context(|| format!("{program} output exceeded its limit or did not close"))?;
         result?;
         if is_out {
             output = bytes;
@@ -79,10 +82,14 @@ pub fn run_bounded_limited(
         }
     }
     if output.len() > output_limit {
-        bail!("SSH response exceeded its size limit.");
+        bail!("{program} response exceeded its size limit.");
     }
     if !status.success() {
-        bail!("{}", String::from_utf8_lossy(&error).trim());
+        let detail = String::from_utf8_lossy(&error);
+        if !detail.trim().is_empty() {
+            bail!("{}", detail.trim());
+        }
+        bail!("{program} failed ({status})");
     }
     Ok(output)
 }
@@ -147,6 +154,27 @@ pub static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_command_failures_identify_the_executable_and_keep_silent_exits_informative() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing-helper");
+        let error =
+            run_bounded(Command::new(&missing), vec![], Duration::from_secs(5)).unwrap_err();
+        assert!(error.to_string().contains(missing.to_str().unwrap()));
+        assert!(!error.to_string().contains("OpenSSH"));
+
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 7"]);
+        let error = run_bounded(command, vec![], Duration::from_secs(5)).unwrap_err();
+        assert!(error.to_string().contains("/bin/sh"));
+        assert!(error.to_string().contains("7"));
+
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf 'setup failed\\n' >&2; exit 1"]);
+        let error = run_bounded(command, vec![], Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.to_string(), "setup failed");
+    }
 
     #[test]
     fn small_ssh_output_limits_preserve_binary_data_and_reject_overflow() {

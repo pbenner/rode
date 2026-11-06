@@ -165,9 +165,51 @@ def user_runtime_root():
     return data_home / "rode/codex"
 
 
+def trusted_ancestors(path):
+    """Reject runtime path substitution through writable/foreign directory ancestors."""
+    existing = path.absolute()
+    while True:
+        try:
+            existing.lstat()
+            break
+        except FileNotFoundError:
+            if existing == existing.parent:
+                raise
+            existing = existing.parent
+    checked = set()
+    pending = [existing]
+    # Inspect link targets even when another alias leads back into a safe tree.
+    while pending:
+        prefix = pending.pop()
+        for spelling in (prefix, prefix.resolve(strict=True)):
+            for ancestor in (spelling, *spelling.parents):
+                if ancestor in checked:
+                    continue
+                checked.add(ancestor)
+                metadata = ancestor.lstat()
+                link = stat.S_ISLNK(metadata.st_mode)
+                directory = stat.S_ISDIR(metadata.st_mode)
+                if metadata.st_uid not in (0, os.geteuid()) or not (directory or link):
+                    raise ValueError(f"Unsafe executable-cache ancestor owner/type: {ancestor}")
+                if (
+                    not link
+                    and metadata.st_mode & 0o022
+                    and not (directory and metadata.st_mode & stat.S_ISVTX)
+                ):
+                    raise ValueError(
+                        f"Executable-cache ancestor is writable by another user: {ancestor}"
+                    )
+                if link:
+                    target = ancestor.readlink()
+                    pending.append(target if target.is_absolute() else ancestor.parent / target)
+
+
 def protected_directory(path):
     """Refuse existing symlinked/shared runtime directories instead of trusting their contents."""
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not path.exists() and not path.is_symlink():
+        if not path.parent.exists():
+            protected_directory(path.parent)
+        path.mkdir(mode=0o700, exist_ok=True)
     metadata = path.lstat()
     if (
         not stat.S_ISDIR(metadata.st_mode)
@@ -190,6 +232,7 @@ def install(architecture=None):
     if architecture not in manifest["targets"]:
         raise ValueError("Bundled Codex supports Linux x86_64 and aarch64")
     base = user_runtime_root()
+    trusted_ancestors(base.parent.parent)
     # Existing preferences may have created RODE's parent with umask 002.
     # Tighten that owned directory without touching its files or stable locks.
     if base.parent.exists():
@@ -205,6 +248,7 @@ def install(architecture=None):
         finally:
             os.close(descriptor)
     protected_directory(base.parent)
+    trusted_ancestors(base.parent)
     protected_directory(base)
     descriptor = os.open(
         base / ".install.lock",

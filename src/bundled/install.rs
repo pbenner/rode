@@ -362,7 +362,14 @@ fn install_to(
     mut fetch: impl FnMut(&Download) -> Result<Box<dyn Read>>,
 ) -> Result<PathBuf> {
     cancelled(cancel)?;
-    application_directory(base.parent().context("Missing user-data directory")?)?;
+    let application = base.parent().context("Missing user-data directory")?;
+    rode_host_core::paths::trusted_ancestors(
+        application
+            .parent()
+            .context("Missing application-data parent")?,
+    )?;
+    application_directory(application)?;
+    rode_host_core::paths::trusted_ancestors(application)?;
     private_directory(base)?;
     progress("Waiting for other Codex installers…", 0, 0);
     let _lock = install_lock(base, cancel)?;
