@@ -689,11 +689,31 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 "Approval policy was not persisted",
             )
             click(1280, 752)  # Selecting a policy closes the native menu.
+            sandboxed = "[Sandbox]" in subprocess.check_output(
+                ["xwininfo", "-id", hex(window)], text=True
+            )
+            if sandboxed:
+                control("agent-access-project-sandbox")
+                controls = {
+                    item["name"]: item
+                    for item in json.loads((base / "ui-state.json").read_text())["buttons"]
+                }
+                for choice in ["Project access", "Full access"]:
+                    assert not controls[f"agent-access-{choice}"]["enabled"], (
+                        "An active project sandbox left duplicate agent sandbox controls enabled"
+                    )
             click_button(
-                window, process, log.name, base / "ui-state.json", "agent-access-Full access"
+                window,
+                process,
+                log.name,
+                base / "ui-state.json",
+                "agent-access-project-sandbox" if sandboxed else "agent-access-Full access",
             )
             wait_for(
-                lambda: agent_preferences(preferences).get("access") == "full",
+                lambda: (
+                    agent_preferences(preferences).get("access")
+                    == ("project" if sandboxed else "full")
+                ),
                 "Tool access was not persisted",
             )
             screenshot(window, "selected-access-controls.png")
@@ -711,7 +731,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             last = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert last["params"]["model"] == "fixture-deep"
             assert last["params"]["approvalPolicy"] == "never"
-            if "[Sandbox]" in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True):
+            if sandboxed:
                 assert last["params"]["sandboxPolicy"]["type"] == "externalSandbox"
             # History is explicit host work; opening it must not send a model prompt.
             prompts_before = sum(m.get("method") == "turn/start" for m in rpc(root))

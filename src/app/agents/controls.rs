@@ -202,6 +202,8 @@ pub(super) fn buttons(
     };
     let label = if config.provider.is_acp() {
         "Permissions".into()
+    } else if isolated && matches!(access, Access::Project | Access::Full) {
+        "Access: Project sandbox".into()
     } else {
         format!("Access: {}", access.label())
     };
@@ -212,39 +214,7 @@ pub(super) fn buttons(
         if config.provider.is_acp() {
             acp(ui, config, chat, true);
         } else {
-            for choice in [
-                Access::ReadOnly,
-                Access::FilesOnly,
-                Access::Project,
-                Access::Full,
-            ] {
-                let response = ui.add_enabled(
-                    !read_only || matches!(choice, Access::ReadOnly | Access::FilesOnly),
-                    egui::Button::selectable(access == choice, choice.label()),
-                );
-                crate::app::ui_probe::button(
-                    ui,
-                    &format!("agent-access-{}", choice.label()),
-                    &response,
-                );
-                if response.clicked() {
-                    config.access = choice;
-                    config.read_only = false;
-                }
-            }
-            if read_only {
-                ui.small("The project's read-only policy still prevents all file edits.");
-            }
-            if access == Access::Full {
-                ui.label("Full access uses the permissions available to the agent on this host.");
-            }
-            if access == Access::ReadOnly {
-                ui.small("Read-only mode rejects requests for additional tool permissions.");
-            }
-            if access == Access::FilesOnly {
-                ui.small("Read, search and edit project files without running commands. Builds, tests and Git commands are left to you. Symlinks and Git/Codex metadata are protected.");
-                ui.small("Changing this mode starts a new Codex conversation. Live file-only chats can be reattached through Running.");
-            }
+            codex_access(ui, config, access, read_only, isolated);
         }
         ui.separator();
         ui.label("Agent networking");
@@ -295,6 +265,75 @@ pub(super) fn buttons(
         ui.small("Changes apply before the next message.");
     });
     discover
+}
+
+/// Show the actual enforced access without rewriting saved normal-mode choices.
+/// Project/Full already share Codex's external sandbox policy when RODE enforces
+/// the project boundary. Keep both visible but disabled, and offer a safe way
+/// back from read-only/file-only access without persisting unrestricted access.
+fn codex_access(
+    ui: &mut egui::Ui,
+    config: &mut Config,
+    access: Access,
+    read_only: bool,
+    isolated: bool,
+) {
+    if isolated {
+        let response = ui
+            .add_enabled(
+                !read_only,
+                egui::Button::selectable(
+                    matches!(access, Access::Project | Access::Full),
+                    "Use project sandbox",
+                ),
+            )
+            .on_disabled_hover_text("The project's read-only policy prevents file edits.");
+        crate::app::ui_probe::button(ui, "agent-access-project-sandbox", &response);
+        if response.clicked() {
+            config.access = Access::Project;
+            config.read_only = false;
+        }
+    }
+    for choice in [
+        Access::ReadOnly,
+        Access::FilesOnly,
+        Access::Project,
+        Access::Full,
+    ] {
+        let redundant = isolated && matches!(choice, Access::Project | Access::Full);
+        let response = ui
+            .add_enabled(
+                !redundant
+                    && (!read_only || matches!(choice, Access::ReadOnly | Access::FilesOnly)),
+                egui::Button::selectable(!redundant && access == choice, choice.label()),
+            )
+            .on_disabled_hover_text(if redundant {
+                "RODE already enforces the project sandbox. Choose Use project sandbox to avoid duplicate agent sandboxing."
+            } else {
+                "The project's read-only policy prevents file edits."
+            });
+        crate::app::ui_probe::button(ui, &format!("agent-access-{}", choice.label()), &response);
+        if response.clicked() {
+            config.access = choice;
+            config.read_only = false;
+        }
+    }
+    if isolated {
+        ui.small("RODE provides the sandbox. Duplicate agent sandbox settings are disabled.");
+    }
+    if read_only {
+        ui.small("The project's read-only policy still prevents all file edits.");
+    }
+    if access == Access::Full && !isolated {
+        ui.label("Full access uses the permissions available to the agent on this host.");
+    }
+    if access == Access::ReadOnly {
+        ui.small("Read-only mode rejects requests for additional tool permissions.");
+    }
+    if access == Access::FilesOnly {
+        ui.small("Read, search and edit project files without running commands. Builds, tests and Git commands are left to you. Symlinks and Git/Codex metadata are protected.");
+        ui.small("Changing this mode starts a new Codex conversation. Live file-only chats can be reattached through Running.");
+    }
 }
 
 fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::Ui)) {
@@ -449,7 +488,7 @@ mod tests {
         size: egui::Vec2,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        frame_policy(ctx, config, chat, size, events, false)
+        frame_policy(ctx, config, chat, size, events, false, false)
     }
 
     fn frame_policy(
@@ -459,6 +498,7 @@ mod tests {
         size: egui::Vec2,
         events: Vec<egui::Event>,
         read_only: bool,
+        isolated: bool,
     ) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {
@@ -469,7 +509,7 @@ mod tests {
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.add_space(size.y - 160.);
-                    ui.horizontal(|ui| buttons(ui, config, chat, None, read_only, false));
+                    ui.horizontal(|ui| buttons(ui, config, chat, None, read_only, isolated));
                 });
             },
         )
@@ -495,7 +535,7 @@ mod tests {
         size: egui::Vec2,
         pos: egui::Pos2,
     ) -> egui::FullOutput {
-        click_policy(ctx, config, chat, size, pos, false)
+        click_policy(ctx, config, chat, size, pos, false, false)
     }
 
     fn click_policy(
@@ -505,6 +545,7 @@ mod tests {
         size: egui::Vec2,
         pos: egui::Pos2,
         read_only: bool,
+        isolated: bool,
     ) -> egui::FullOutput {
         for pressed in [true, false] {
             frame_policy(
@@ -522,9 +563,10 @@ mod tests {
                     },
                 ],
                 read_only,
+                isolated,
             );
         }
-        frame_policy(ctx, config, chat, size, vec![], read_only)
+        frame_policy(ctx, config, chat, size, vec![], read_only, isolated)
     }
 
     #[test]
@@ -533,20 +575,115 @@ mod tests {
         let mut config = Config::default();
         let chat = Chat::default();
         let size = egui::vec2(1100., 900.);
-        frame_policy(&ctx, &mut config, &chat, size, vec![], true);
-        let output = frame_policy(&ctx, &mut config, &chat, size, vec![], true);
+        frame_policy(&ctx, &mut config, &chat, size, vec![], true, false);
+        let output = frame_policy(&ctx, &mut config, &chat, size, vec![], true, false);
         let pos = position(&output, "Access: Read only");
-        let output = click_policy(&ctx, &mut config, &chat, size, pos, true);
+        let output = click_policy(&ctx, &mut config, &chat, size, pos, true, false);
         let pos = position(&output, "Edit project files only");
-        click_policy(&ctx, &mut config, &chat, size, pos, true);
+        click_policy(&ctx, &mut config, &chat, size, pos, true, false);
         assert!(config.files_only());
-        let output = frame_policy(&ctx, &mut config, &chat, size, vec![], true);
+        let output = frame_policy(&ctx, &mut config, &chat, size, vec![], true, false);
         let pos = position(&output, "Access: Edit project files only");
-        let output = click_policy(&ctx, &mut config, &chat, size, pos, true);
+        let output = click_policy(&ctx, &mut config, &chat, size, pos, true, false);
         let pos = position(&output, "Full access");
-        click_policy(&ctx, &mut config, &chat, size, pos, true);
+        click_policy(&ctx, &mut config, &chat, size, pos, true, false);
         assert!(config.files_only());
         assert!(!chat.connected());
+    }
+
+    #[test]
+    fn active_sandboxes_disable_duplicate_choices_without_rewriting_normal_mode_preferences() {
+        for provider in [Provider::Codex, Provider::Local] {
+            for saved in [Access::Project, Access::Full] {
+                for size in [egui::vec2(1100., 900.), egui::vec2(390., 600.)] {
+                    let ctx = egui::Context::default();
+                    let chat = Chat::default();
+                    let mut config = Config {
+                        provider,
+                        access: saved,
+                        ..Default::default()
+                    };
+                    frame_policy(&ctx, &mut config, &chat, size, vec![], false, true);
+                    let output = frame_policy(&ctx, &mut config, &chat, size, vec![], false, true);
+                    let pos = position(&output, "Access: Project sandbox");
+                    let output = click_policy(&ctx, &mut config, &chat, size, pos, false, true);
+                    position(
+                        &output,
+                        "RODE provides the sandbox. Duplicate agent sandbox settings are disabled.",
+                    );
+                    for choice in [Access::Project, Access::Full] {
+                        let pos = position(&output, choice.label());
+                        click_policy(&ctx, &mut config, &chat, size, pos, false, true);
+                        assert_eq!(
+                            config.access(),
+                            saved,
+                            "Disabled choice changed preferences"
+                        );
+                    }
+                    // With no enforced outer sandbox (including a failed
+                    // sandbox probe), the saved choice is still available.
+                    let ctx = egui::Context::default();
+                    frame(&ctx, &mut config, &chat, size, vec![]);
+                    let output = frame(&ctx, &mut config, &chat, size, vec![]);
+                    let pos = position(&output, &format!("Access: {}", saved.label()));
+                    let output = click(&ctx, &mut config, &chat, size, pos);
+                    let other = if saved == Access::Project {
+                        Access::Full
+                    } else {
+                        Access::Project
+                    };
+                    let pos = position(&output, other.label());
+                    click(&ctx, &mut config, &chat, size, pos);
+                    assert_eq!(config.access(), other);
+                    assert!(!chat.connected());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sandboxed_chats_keep_action_restrictions_and_can_return_to_the_project_policy() {
+        for (read_only, network) in [
+            (false, crate::agent::Network::Project),
+            (true, crate::agent::Network::Project),
+            (false, crate::agent::Network::ModelOnly),
+            (true, crate::agent::Network::ModelOnly),
+        ] {
+            let ctx = egui::Context::default();
+            let chat = Chat::default();
+            let size = egui::vec2(390., 600.);
+            let mut config = Config {
+                access: Access::ReadOnly,
+                approval: Approval::Never,
+                network,
+                ..Default::default()
+            };
+            frame_policy(&ctx, &mut config, &chat, size, vec![], read_only, true);
+            for choice in [Access::FilesOnly, Access::ReadOnly, Access::FilesOnly] {
+                let output = frame_policy(&ctx, &mut config, &chat, size, vec![], read_only, true);
+                let pos = position(&output, &format!("Access: {}", config.access().label()));
+                let output = click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
+                let pos = position(&output, choice.label());
+                click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
+                assert_eq!(config.access(), choice);
+            }
+            let output = frame_policy(&ctx, &mut config, &chat, size, vec![], read_only, true);
+            let pos = position(&output, "Access: Edit project files only");
+            let output = click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
+            let pos = position(&output, "Use project sandbox");
+            click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
+            assert_eq!(
+                config.access(),
+                if read_only {
+                    Access::FilesOnly
+                } else {
+                    Access::Project
+                }
+            );
+            assert_eq!(config.approval, Approval::Never);
+            assert_eq!(config.network, network);
+            assert!(!chat.connected());
+        }
     }
 
     #[test]

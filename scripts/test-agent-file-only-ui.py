@@ -111,7 +111,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-files-ui-") as directory:
                 "Agent executable was not saved",
             )
             control("agent-settings")
-            control("Access: Project access")
+            sandboxed = "[Sandbox]" in subprocess.check_output(
+                ["xwininfo", "-id", hex(window)], text=True
+            )
+            control("Access: Project sandbox" if sandboxed else "Access: Project access")
             control("agent-access-Edit project files only")
             wait(
                 lambda: preferences(saved).get("access") == "files_only",
