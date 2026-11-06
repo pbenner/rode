@@ -80,6 +80,7 @@ def text(value):
         "$": ("4", True),
         "#": ("3", True),
         "!": ("1", True),
+        "@": ("2", True),
         "[": ("bracketleft", False),
         "]": ("bracketright", False),
         "\\": ("backslash", False),

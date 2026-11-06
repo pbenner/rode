@@ -85,6 +85,15 @@ fn log(root: &Path) -> Vec<Value> {
 
 #[test]
 fn personalities_change_only_reply_hints_without_restarting_or_changing_permissions() {
+    for personality in Personality::ALL
+        .into_iter()
+        .filter(|style| *style != Personality::Default)
+    {
+        check_reply_personality(personality);
+    }
+}
+
+fn check_reply_personality(personality: Personality) {
     for provider in Provider::ALL {
         for isolated in [false, true] {
             let (_temp, root, program) = fixture();
@@ -107,7 +116,7 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
                 "Fresh Default is unmodified"
             );
 
-            launch.config.personality = Personality::JacksonLamb;
+            launch.config.personality = personality;
             assert!(original.same_process(&launch.config));
             assert_eq!(launch.config.argv().unwrap(), argv);
             submit(&mut chat, launch.clone(), "approve");
@@ -125,9 +134,11 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
                 .unwrap();
             assert_eq!(styled["params"][field][0]["text"], "approve");
             let hint = styled["params"][field][1]["text"].as_str().unwrap();
-            assert!(hint.contains("jackson_lamb"));
+            assert!(hint.contains(&format!("name=\"{}\"", personality.id())));
             assert!(!hint.contains("version="));
-            assert!(hint.contains("not assumed knowledge"));
+            if personality == Personality::JacksonLamb {
+                assert!(hint.contains("not assumed knowledge"));
+            }
             assert!(hint.contains("final answer"));
             assert!(hint.contains("presentation guidance only"));
             for key in [
@@ -561,6 +572,25 @@ fn questions_interrupts_and_final_output_survive_process_exit() {
     let mut chat = Chat::default();
     submit(&mut chat, launch.clone(), "question");
     wait(&mut chat, |c| !c.prompts.is_empty());
+    assert!(chat.busy);
+    assert_eq!(chat.status, "Waiting for you");
+    assert_eq!(chat.prompts[0].questions[0].header, "Tests");
+    assert_eq!(
+        chat.prompts[0].questions[0].descriptions,
+        ["Run the full suite"]
+    );
+    assert!(chat.prompts[0].answers().is_none());
+    // A fresh controller view must carry the unanswered question through
+    // reattachment; refreshing it must retain any local answer draft.
+    let mut restored = rode_agent_core::protocol::Chat::default();
+    restored.apply_view(chat.view());
+    restored.prompts[0].questions[0].answer = "My answer".into();
+    restored.apply_view(chat.view());
+    assert_eq!(restored.prompts[0].questions[0].answer, "My answer");
+    assert_eq!(
+        restored.prompts[0].questions[0].descriptions,
+        ["Run the full suite"]
+    );
     chat.answer(json!({"answers":{"test_mode":{"answers":["All"]}}}))
         .unwrap();
     wait(&mut chat, |c| c.completed == 1);

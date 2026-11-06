@@ -4,6 +4,8 @@
 //! buffers before worktree/index/history mutations, and destructive actions require explicit
 //! choices. Render from cached results rather than running Git during layout.
 use super::*;
+mod history;
+pub(super) mod identity;
 mod rows;
 
 #[derive(Clone)]
@@ -49,6 +51,8 @@ pub(super) struct State {
     pub(super) worktree_branch: String,
     pub(super) worktree_new_branch: bool,
     pub(super) clone_url: String,
+    identity: identity::State,
+    history: history::State,
     pub(super) confirm: Option<(String, Mutation)>,
 }
 impl Default for State {
@@ -77,6 +81,8 @@ impl Default for State {
             worktree_branch: String::new(),
             worktree_new_branch: true,
             clone_url: String::new(),
+            identity: Default::default(),
+            history: Default::default(),
             confirm: None,
         }
     }
@@ -120,6 +126,21 @@ impl EditorApp {
         });
         if !self.workbench.git.git_error.is_empty() {
             ui.colored_label(palette.error, &self.workbench.git.git_error);
+            if self.workbench.git.git_tab != GitTab::Settings
+                && identity::missing(&self.workbench.git.git_error)
+            {
+                let configure = ui
+                    .add_enabled(
+                        !self.workbench.git.git_busy,
+                        egui::Button::new("Configure Git identity"),
+                    )
+                    .on_disabled_hover_text("Wait for the current Git request to finish.");
+                ui_probe::button(ui, "git-configure-identity", &configure);
+                if configure.clicked() {
+                    self.workbench.git.git_tab = GitTab::Settings;
+                    self.refresh_git_tab(ctx);
+                }
+            }
             if self.workbench.git.git_root.is_empty() {
                 if ui.button("Initialize Git repository").clicked() {
                     self.git_mutate(strings(&["init"]), "Initialize repository", ctx);
@@ -171,14 +192,20 @@ impl EditorApp {
                 (GitTab::Tags, "Tags"),
                 (GitTab::Worktrees, "Worktrees"),
                 (GitTab::Submodules, "Submodules"),
+                (GitTab::Settings, "Settings"),
             ] {
-                if ui
-                    .add_enabled(
-                        !self.workbench.git.git_busy,
-                        egui::Button::selectable(self.workbench.git.git_tab == tab, label),
-                    )
-                    .clicked()
-                {
+                let button = ui.add_enabled(
+                    !self.workbench.git.git_busy,
+                    egui::Button::selectable(self.workbench.git.git_tab == tab, label),
+                );
+                if tab == GitTab::Settings {
+                    ui_probe::button(ui, "git-tab-settings", &button);
+                } else if tab == GitTab::Changes {
+                    ui_probe::button(ui, "git-tab-changes", &button);
+                } else if tab == GitTab::History {
+                    ui_probe::button(ui, "git-tab-history", &button);
+                }
+                if button.clicked() {
                     self.workbench.git.git_tab = tab;
                     self.workbench.git.git_tab_data.clear();
                     self.refresh_git_tab(ctx);
@@ -192,6 +219,10 @@ impl EditorApp {
                 self.git_changes_ui(ui, ctx);
                 return;
             }
+            if tab == GitTab::Settings {
+                self.git_identity_ui(ui, ctx);
+                return;
+            }
             let title = match tab {
                 GitTab::History => "Commit history",
                 GitTab::Branches => "Branches",
@@ -200,11 +231,11 @@ impl EditorApp {
                 GitTab::Tags => "Tags",
                 GitTab::Worktrees => "Worktrees",
                 GitTab::Submodules => "Submodules",
-                GitTab::Changes => unreachable!(),
+                GitTab::Changes | GitTab::Settings => unreachable!(),
             };
             layout::section(ui, title, palette, |ui| {
             match tab {
-                GitTab::Changes => unreachable!(),
+                GitTab::Changes | GitTab::Settings => unreachable!(),
                 GitTab::History => self.git_history_ui(ui,ctx),
                 GitTab::Branches => self.git_branches_ui(ui,ctx),
                 GitTab::Stash => self.git_stash_ui(ui,ctx),
@@ -391,11 +422,12 @@ impl EditorApp {
         }
         ui.add_space(8.);
         ui.label("Commit message");
-        ui.add(
+        let message = ui.add(
             egui::TextEdit::multiline(&mut self.workbench.git.commit_message)
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
+        ui_probe::button(ui, "git-commit-message", &message);
         let conflicts = self
             .workbench
             .git
@@ -414,14 +446,14 @@ impl EditorApp {
             } else {
                 "Enter a commit message."
             };
-            if ui
+            let commit = ui
                 .add_enabled(
                     ready && !conflicts && !self.workbench.git.commit_message.trim().is_empty(),
                     egui::Button::new("Commit staged"),
                 )
-                .on_disabled_hover_text(hint)
-                .clicked()
-            {
+                .on_disabled_hover_text(hint);
+            ui_probe::button(ui, "git-commit", &commit);
+            if commit.clicked() {
                 let mut args = strings(&["commit", "-m"]);
                 args.push(self.workbench.git.commit_message.clone());
                 if self.workbench.git.amend {
@@ -502,18 +534,19 @@ impl EditorApp {
     }
     /// Render cached commit metadata and explicit show/history actions.
     pub(in crate::app) fn git_history_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let data = self.workbench.git.git_tab_data.clone();
-        for line in data.lines() {
-            let fields: Vec<_> = line.splitn(5, '\0').collect();
-            if fields.len() != 5 {
-                continue;
-            }
-            ui.push_id(fields[0], |ui| {
-                if ui
-                    .button(format!("{}  {}", fields[1], fields[4]))
-                    .on_hover_text(format!("{} · {}", fields[2], fields[3]))
-                    .clicked()
-                {
+        if self.workbench.git.git_busy && self.workbench.git.git_tab_data.is_empty() {
+            ui.label("Loading commit history…");
+            return;
+        }
+        let palette = self.themes.active().palette;
+        if let Some((oid, action)) = history::show(
+            ui,
+            &mut self.workbench.git.history,
+            &self.workbench.git.git_tab_data,
+            palette,
+        ) {
+            match action {
+                history::Action::Details => {
                     self.git_command(
                         vec![
                             "show".into(),
@@ -522,29 +555,23 @@ impl EditorApp {
                             "--format=fuller".into(),
                             "--stat".into(),
                             "--patch".into(),
-                            fields[0].into(),
+                            oid,
                         ],
                         GitJob::Show,
                         None,
                         ctx,
                     );
                 }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Cherry-pick").clicked() {
-                        self.git_mutate(
-                            vec!["cherry-pick".into(), fields[0].into()],
-                            "Cherry-pick commit",
-                            ctx,
-                        );
-                    }
-                    if ui.small_button("Revert").clicked() {
-                        self.workbench.git.confirm = Some((
-                            format!("Create a new commit reverting {}?", fields[1]),
-                            vec!["revert".into(), "--no-edit".into(), fields[0].into()].into(),
-                        ));
-                    }
-                });
-            });
+                history::Action::CherryPick => {
+                    self.git_mutate(vec!["cherry-pick".into(), oid], "Cherry-pick commit", ctx);
+                }
+                history::Action::Revert => {
+                    self.workbench.git.confirm = Some((
+                        format!("Create a new commit reverting {oid}?"),
+                        vec!["revert".into(), "--no-edit".into(), oid].into(),
+                    ));
+                }
+            }
         }
         if let Some(path) = self.documents.get(self.active).and_then(|d| d.path.clone())
             && ui.button("Blame current file").clicked()
@@ -790,7 +817,9 @@ impl EditorApp {
                 .default_size([850., 580.])
                 .frame(layout::dialog_frame(&ctx.style(), palette))
                 .show(ctx, |ui| {
-                    diff_view(ui, &self.workbench.git.git_output, palette);
+                    let output =
+                        ui.scope(|ui| diff_view(ui, &self.workbench.git.git_output, palette));
+                    ui_probe::button(ui, "git-output-view", &output.response);
                 });
         }
         if let Some((message, mutation)) = self.workbench.git.confirm.clone() {
@@ -875,6 +904,10 @@ impl EditorApp {
     /// Queue only the selected Git view's bounded metadata command.
     pub(in crate::app) fn refresh_git_tab(&mut self, ctx: &egui::Context) {
         let args = match self.workbench.git.git_tab {
+            GitTab::Settings => {
+                self.git_identity_load(ctx);
+                return;
+            }
             GitTab::Changes => {
                 self.refresh_git(ctx);
                 return;
@@ -1014,7 +1047,10 @@ impl EditorApp {
         let output = match result {
             Ok(project::Response::Command(output)) => output,
             Err(error) => {
-                self.workbench.git.git_error = error;
+                self.workbench.git.git_error = match &job {
+                    GitJob::Identity(job) => self.workbench.git.identity.failure(job, &error),
+                    _ => error,
+                };
                 return;
             }
             _ => {
@@ -1022,22 +1058,37 @@ impl EditorApp {
                 return;
             }
         };
+        if let GitJob::Identity(job) = job {
+            self.git_identity_reply(job, output, ctx);
+            return;
+        }
         let diff_exit = matches!(job, GitJob::Diff { .. }) && output.code == 1;
-        if !output.success() && !diff_exit {
+        let empty_history = matches!(job, GitJob::Tab)
+            && self.workbench.git.git_tab == GitTab::History
+            && history::empty_error(&output);
+        if !output.success() && !diff_exit && !empty_history {
             self.workbench.git.git_error = (output.stderr + &output.stdout).trim().into();
             if matches!(job, GitJob::Mutate { .. }) {
                 self.workbench.git.git_output = self.workbench.git.git_error.clone();
-                self.workbench.git.show_output = true;
+                self.workbench.git.show_output = !identity::missing(&self.workbench.git.git_error);
                 self.reload_clean_documents(ctx);
                 self.refresh_git(ctx);
             }
             return;
         }
-        self.workbench.git.git_error.clear();
+        // Polling Changes must not erase a missing-identity error before the
+        // user can follow its Settings action. A successful settings request
+        // or another successful Git operation clears it.
+        if !matches!(job, GitJob::Root | GitJob::Status | GitJob::Tab)
+            || !identity::missing(&self.workbench.git.git_error)
+        {
+            self.workbench.git.git_error.clear();
+        }
         if matches!(job, GitJob::Diff { .. } | GitJob::Show) {
             ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
         }
         match job {
+            GitJob::Identity(_) => unreachable!(),
             GitJob::Root => {
                 self.workbench.git.git_root = output.stdout.trim_end_matches('\n').into();
                 self.refresh_git(ctx);

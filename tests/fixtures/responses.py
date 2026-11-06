@@ -82,6 +82,30 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 ),
             )
+        question = (root / "question-mode").exists() and not (root / "question-replied").exists()
+        if question:
+            (root / "question-replied").touch()
+            item = dict(
+                id="question_fixture",
+                type="function_call",
+                name="request_user_input",
+                call_id="question_fixture",
+                arguments=json.dumps(
+                    {
+                        "questions": [
+                            {
+                                "id": "test_scope",
+                                "header": "Tests",
+                                "question": "Which tests should I run?",
+                                "options": [
+                                    {"label": "All", "description": "Run the full suite"},
+                                    {"label": "Focused", "description": "Run the changed tests"},
+                                ],
+                            }
+                        ]
+                    }
+                ),
+            )
         response = {
             "id": f"resp_fixture_{Handler.sequence}",
             "object": "response",
@@ -107,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
             {"type": "response.output_item.done", "output_index": 0, "item": item},
             {"type": "response.completed", "response": response},
         ]
-        if tool or file_tool or offline_tool:
+        if tool or file_tool or offline_tool or question:
             events = [event for event in events if event["type"] != "response.output_text.delta"]
         for event in events:
             self.wfile.write(

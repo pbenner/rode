@@ -386,6 +386,51 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
         tool_request.contains("RODE_TOOL_OK"),
         "Tool output was not returned to the model"
     );
+    // The real runtime must ask in ordinary coding mode and deliver the user's
+    // answer back to the loopback peer. Current Codex marks this non-blocking.
+    fs::write(temp.path().join("question-mode"), "").unwrap();
+    chat.submit(
+        launch.clone(),
+        "Ask which tests to run.".into(),
+        Arc::new(|| {}),
+    )
+    .unwrap();
+    let end = Instant::now() + Duration::from_secs(20);
+    while chat.prompts.is_empty() {
+        chat.poll();
+        assert!(
+            chat.busy && Instant::now() < end,
+            "No question: {}: {:?}",
+            chat.status,
+            chat.messages
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        chat.status,
+        if chat.prompts[0].blocking {
+            "Waiting for you"
+        } else {
+            "Question awaiting your answer · agent working"
+        }
+    );
+    assert_eq!(
+        chat.prompts[0].questions[0].descriptions[0],
+        "Run the full suite"
+    );
+    assert!(
+        !fs::read_to_string(temp.path().join("request.json"))
+            .unwrap()
+            .contains("Changed tests only")
+    );
+    chat.prompts[0].questions[0].answer = "Changed tests only".into();
+    chat.answer(chat.prompts[0].answers().unwrap()).unwrap();
+    finish_turn(&mut chat);
+    assert!(
+        fs::read_to_string(temp.path().join("request.json"))
+            .unwrap()
+            .contains("Changed tests only")
+    );
     // A second process cannot resume an idle chat that still has an owner.
     // Keep that chat usable, and distinguish the lock from startup diagnostics.
     {

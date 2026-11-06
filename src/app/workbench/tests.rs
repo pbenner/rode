@@ -163,6 +163,7 @@ fn tool_pages_fit_compact_and_detached_widths() {
                         GitTab::Tags,
                         GitTab::Worktrees,
                         GitTab::Submodules,
+                        GitTab::Settings,
                     ]
                 } else {
                     vec![GitTab::Changes]

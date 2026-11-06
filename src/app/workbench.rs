@@ -103,6 +103,7 @@ enum GitTab {
     Tags,
     Worktrees,
     Submodules,
+    Settings,
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +115,7 @@ pub(super) enum GitJob {
     Diff { path: String, staged: bool },
     Show,
     Mutate { label: String, clear_message: bool },
+    Identity(git::identity::Job),
 }
 #[derive(Clone, Debug)]
 /// UI completion metadata for a project-service request. Analysis carries the

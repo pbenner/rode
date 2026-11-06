@@ -50,8 +50,14 @@ pub struct Question {
     pub id: String,
     /// Human-readable question text.
     pub text: String,
+    /// Short agent-supplied heading; absent in older native service views.
+    #[serde(default)]
+    pub header: String,
     /// Suggested answers supplied by the agent.
     pub options: Vec<String>,
+    /// Explanations aligned with `options`; empty for older native service views.
+    #[serde(default)]
+    pub descriptions: Vec<String>,
     /// Current unsubmitted answer draft.
     pub answer: String,
     /// Whether the answer field should obscure its text.
@@ -72,7 +78,31 @@ pub struct Prompt {
     pub choices: Vec<Choice>,
     /// Questions to include in the reply.
     pub questions: Vec<Question>,
+    /// Whether the agent is waiting rather than continuing independent work.
+    /// Older services only exposed blocking questions and permission requests.
+    #[serde(default = "blocking_request")]
+    pub blocking: bool,
     cancel: Value,
+}
+
+fn blocking_request() -> bool {
+    true
+}
+
+impl Prompt {
+    /// Construct the question reply only after every question has an answer.
+    /// Free-form text and suggested labels use the same app-server answer format.
+    pub fn answers(&self) -> Option<Value> {
+        if self.questions.is_empty() || self.questions.iter().any(|q| q.answer.trim().is_empty()) {
+            return None;
+        }
+        let answers: serde_json::Map<String, Value> = self
+            .questions
+            .iter()
+            .map(|q| (q.id.clone(), json!({"answers":[q.answer]})))
+            .collect();
+        Some(json!({"answers":answers}))
+    }
 }
 #[derive(Clone)]
 enum Call {
@@ -415,11 +445,7 @@ impl Chat {
         if let Some(prompt) = self.prompts.front() {
             self.send(json!({"jsonrpc":"2.0", "id":prompt.id, "result":result}))?;
             self.prompts.pop_front();
-            self.status = if self.prompts.is_empty() {
-                "Working…".into()
-            } else {
-                "Waiting for you".into()
-            };
+            self.request_status();
         }
         Ok(())
     }
@@ -496,7 +522,7 @@ impl Chat {
         } else {
             json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}})
         };
-        if self.config.native_tools() {
+        if !self.config.provider.is_acp() {
             params["capabilities"] = json!({"experimentalApi":true});
         }
         self.call("initialize", params, Call::Initialize)
@@ -913,8 +939,17 @@ impl Chat {
                 }
             }
             "serverRequest/resolved" => {
-                self.prompts
-                    .retain(|prompt| prompt.id != params["requestId"]);
+                if params["threadId"]
+                    .as_str()
+                    .is_none_or(|id| id == self.conversation)
+                {
+                    let before = self.prompts.len();
+                    self.prompts
+                        .retain(|prompt| prompt.id != params["requestId"]);
+                    if before != self.prompts.len() && self.busy && !self.cancelling {
+                        self.request_status();
+                    }
+                }
             }
             "error" if !params["willRetry"].as_bool().unwrap_or(false) => {
                 self.notice(
@@ -992,6 +1027,7 @@ impl Chat {
             detail: clip(&pretty(params), 16384),
             choices: vec![],
             questions: vec![],
+            blocking: true,
             cancel: json!({"decision":"cancel"}),
         };
         let permission = matches!(
@@ -1048,17 +1084,35 @@ impl Chat {
             "item/tool/requestUserInput" => {
                 prompt.cancel = json!({"answers":{}});
                 prompt.title = "Agent needs your input".into();
+                prompt.blocking = params["isBlocking"].as_bool().unwrap_or(true);
                 if let Some(questions) = params["questions"].as_array() {
                     for question in questions.iter().take(8) {
                         prompt.questions.push(Question {
                             id: question["id"].as_str().unwrap_or_default().into(),
                             text: clip(question["question"].as_str().unwrap_or("Answer"), 2048),
+                            header: clip(question["header"].as_str().unwrap_or_default(), 256),
                             options: question["options"]
                                 .as_array()
                                 .map(|v| {
                                     v.iter()
                                         .take(16)
-                                        .filter_map(|o| o["label"].as_str().map(str::to_owned))
+                                        .filter_map(|o| o["label"].as_str().map(|s| clip(s, 1024)))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            descriptions: question["options"]
+                                .as_array()
+                                .map(|options| {
+                                    options
+                                        .iter()
+                                        .take(16)
+                                        .filter(|o| o["label"].is_string())
+                                        .map(|o| {
+                                            clip(
+                                                o["description"].as_str().unwrap_or_default(),
+                                                2048,
+                                            )
+                                        })
                                         .collect()
                                 })
                                 .unwrap_or_default(),
@@ -1131,8 +1185,22 @@ impl Chat {
             "Agent sent a request with no supported choices."
         );
         self.prompts.push_back(prompt);
-        self.status = "Waiting for you".into();
+        self.request_status();
         Ok(())
+    }
+
+    /// Pending requests take precedence over the generic turn-running status.
+    fn request_status(&mut self) {
+        self.status = if self.prompts.iter().any(|prompt| prompt.blocking) {
+            "Waiting for you"
+        } else if !self.prompts.is_empty() {
+            "Question awaiting your answer · agent working"
+        } else if self.busy {
+            "Working…"
+        } else {
+            "Ready"
+        }
+        .into();
     }
 
     fn file_request(&mut self, id: Value, params: &Value) -> Result<()> {
@@ -1391,6 +1459,73 @@ fn append_bounded(target: &mut String, text: &str, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn questions_need_all_answers_and_preserve_legacy_views_and_request_lifetimes() {
+        let mut chat = Chat {
+            busy: true,
+            conversation: "thread".into(),
+            ..Default::default()
+        };
+        for (id, blocking) in [(401, false), (402, true)] {
+            chat.receive(
+                json!({"id":id,"method":"item/tool/requestUserInput","params":{
+                    "threadId":"thread", "isBlocking":blocking, "questions":[
+                        {"id":"scope","header":"Scope","question":"Which tests?","options":[
+                            {"label":"All","description":"Run everything"}]},
+                        {"id":"note","header":"Note","question":"Anything else?","isSecret":true}
+                    ]
+                }}),
+            )
+            .unwrap();
+        }
+        assert_eq!(chat.status, "Waiting for you");
+        let prompt = &mut chat.prompts[0];
+        assert!(prompt.answers().is_none());
+        prompt.questions[0].answer = "All".into();
+        prompt.questions[1].answer = "  ".into();
+        assert!(prompt.answers().is_none());
+        prompt.questions[1].answer = "Keep this exact text\nplease".into();
+        assert_eq!(
+            prompt.answers().unwrap(),
+            json!({"answers":{
+                "scope":{"answers":["All"]}, "note":{"answers":["Keep this exact text\nplease"]}
+            }})
+        );
+        let mut old = serde_json::to_value(&*prompt).unwrap();
+        old.as_object_mut().unwrap().remove("blocking");
+        for question in old["questions"].as_array_mut().unwrap() {
+            question.as_object_mut().unwrap().remove("header");
+            question.as_object_mut().unwrap().remove("descriptions");
+        }
+        let old: Prompt = serde_json::from_value(old).unwrap();
+        assert!(old.blocking);
+        assert!(old.questions[0].descriptions.is_empty());
+        chat.codex_update(
+            "serverRequest/resolved",
+            &json!({"threadId":"other","requestId":402}),
+        )
+        .unwrap();
+        assert_eq!(chat.prompts.len(), 2);
+        chat.codex_update(
+            "serverRequest/resolved",
+            &json!({"threadId":"thread","requestId":402}),
+        )
+        .unwrap();
+        assert_eq!(chat.prompts.len(), 1);
+        assert_eq!(chat.status, "Question awaiting your answer · agent working");
+        chat.codex_update(
+            "serverRequest/resolved",
+            &json!({"threadId":"thread","requestId":401}),
+        )
+        .unwrap();
+        assert!(chat.prompts.is_empty());
+        assert_eq!(chat.status, "Working…");
+        assert!(
+            chat.busy,
+            "Resolving a question must not complete the turn or release its queue"
+        );
+    }
 
     #[test]
     fn escaped_prompt_history_keeps_snapshots_within_the_desktop_line_limit() {

@@ -167,14 +167,17 @@ def select_provider(preferences, provider):
 
 
 def select_personality(preferences, value, capture=False):
-    """Click the centre of a tone-menu row and verify the persisted selection."""
-    # Offsets are relative to the chat header. The native menu's rows are
-    # 25 px apart; clicking their gap closes the menu without changing tone.
-    row_offsets = {"default": 51, "jackson_lamb": 76}
-    header_click(1346, 0)
+    """Use rendered tone controls and verify the persisted selection."""
+    click_button(window, process, ARTIFACTS / "chat.log", base / "ui-state.json", "agent-tone")
     if capture:
         screenshot(window, "personality-menu.png")
-    header_click(1180, row_offsets[value])
+    click_button(
+        window,
+        process,
+        ARTIFACTS / "chat.log",
+        base / "ui-state.json",
+        f"agent-tone-choice-{value}",
+    )
     wait_for(
         lambda: agent_preferences(preferences).get("personality") == value,
         f"Personality choice {value!r} was not saved",
@@ -372,6 +375,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             header_click(1213, 0)
             # Tone choices alone must not start an agent.
             select_personality(preferences, "jackson_lamb", capture=True)
+            select_personality(preferences, "panne")
             assert not (root / "agent-rpc.jsonl").exists()
             # Default before the first turn leaves the task unmodified.
             select_personality(preferences, "default")
@@ -410,11 +414,11 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
             if "[Sandbox]" in info:
                 assert not scope["private_visible"]
-            select_personality(preferences, "jackson_lamb")
+            select_personality(preferences, "panne")
             send(root, "second")
             styled = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert styled["params"]["input"][0]["text"] == "second"
-            assert 'name="jackson_lamb"' in styled["params"]["input"][1]["text"]
+            assert 'name="panne"' in styled["params"]["input"][1]["text"]
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == 2
             # Recall is local editing. Assert each transition through the real
             # clipboard instead of assuming several X11 keys rendered separately.

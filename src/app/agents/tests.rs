@@ -93,12 +93,15 @@ fn recovery_actions_fit_the_panel_and_preserve_unsent_work() {
 fn chat_header_actions_fit_inside_the_visible_panel() {
     for scale in [0.75, 1., 1.25, 1.5] {
         for theme in ["phosphor", "studio", "studio-neutral", "studio-hacker"] {
-            for (width, oversized) in [
-                (1100., false),
-                (650., false),
-                (320., false),
-                (260., false),
-                (650., true),
+            for (width, oversized, personality) in [
+                (1100., false, agent::Personality::Default),
+                (650., false, agent::Personality::Default),
+                (320., false, agent::Personality::Default),
+                (260., false, agent::Personality::Default),
+                (650., true, agent::Personality::Default),
+                (320., false, agent::Personality::Panne),
+                (260., false, agent::Personality::Panne),
+                (650., true, agent::Personality::Panne),
             ] {
                 let ctx = egui::Context::default();
                 let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -111,6 +114,7 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                 );
                 ctx.set_zoom_factor(scale);
                 app.agents.config.provider = Provider::Claude;
+                app.agents.config.personality = personality;
                 let mut render = || {
                     ctx.run(
                         egui::RawInput {
@@ -141,7 +145,7 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                     "Model/Access misaligned in {theme} at {width}, scale={scale}: {model:?} vs {access:?}"
                 );
                 for label in [
-                    "Tone",
+                    personality.button(),
                     "New chat",
                     "History",
                     "Running",

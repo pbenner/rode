@@ -954,6 +954,56 @@ fn persistence_toggles_in_place_and_off_ends_the_last_view() {
     assert!(!fixture.root.join("work-done").exists());
 }
 #[test]
+fn unanswered_questions_survive_detachment_and_hold_queued_work_until_an_explicit_answer() {
+    let fixture = Fixture::new();
+    let info = fixture.create(Provider::Codex, true, "question");
+    let mut view = fixture.attach(&info);
+    let state = view.until(|s| s.chat.prompts.len() == 1);
+    let question = state.chat.prompts[0].clone();
+    assert!(state.chat.busy);
+    assert!(question.blocking);
+    assert_eq!(question.questions[0].descriptions, ["Run the full suite"]);
+    view.queue(
+        "after-question",
+        rode_agent_core::queue::Action::Push {
+            id: 1,
+            text: "next task".into(),
+            attachments: vec![],
+        },
+    );
+    drop(view);
+    fs::write(fixture.root.join("continue"), "").unwrap();
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|i| i.id == info.id && !i.attached)
+    });
+    let mut view = fixture.attach(&info);
+    let state = view.until(|s| s.chat.prompts.len() == 1);
+    assert!(state.chat.busy);
+    assert_eq!(state.chat.completed, 0);
+    assert_eq!(state.queue.items.len(), 1);
+    assert!(!fixture.root.join("work-done").exists());
+    assert!(!fixture.root.join("question-answer.json").exists());
+    view.send(Action::Answer {
+        id: question.id,
+        result: serde_json::json!({"answers":{"scope":{"answers":["Focused tests please"]}}}),
+    });
+    view.until(|s| s.chat.completed == 2 && !s.chat.busy);
+    let answer: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(fixture.root.join("question-answer.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        answer["answers"]["scope"]["answers"][0],
+        "Focused tests please"
+    );
+    view.send(Action::End);
+    view.until(|s| !s.info.alive);
+}
+
+#[test]
 fn offline_approvals_wait_and_wrong_policy_or_stale_answers_are_rejected() {
     for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
@@ -1406,7 +1456,7 @@ fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_
         let mut view = fixture.attach(&info);
         let state = view.until(|s| s.chat.connected && s.chat.busy);
         let mut config = state.chat.config;
-        config.personality = Personality::JacksonLamb;
+        config.personality = Personality::Panne;
         view.queue(
             "settings",
             Queue::Configure {
@@ -1475,7 +1525,7 @@ fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_
                 .to_string()
                 .contains("Immutable detached snapshot λ")
         );
-        assert!(calls[1].to_string().contains("jackson_lamb"));
+        assert!(calls[1].to_string().contains("panne"));
         view.send(Action::End);
         view.until(|s| !s.info.alive);
     }

@@ -9,6 +9,7 @@ use crate::agent::{
     self, Config, Launch, Preferences, Provider,
     protocol::{Chat, Role},
 };
+#[cfg(test)]
 use serde_json::json;
 pub(super) mod attachments;
 mod background;
@@ -18,6 +19,7 @@ mod header;
 mod history;
 mod message;
 mod prompt_recall;
+mod questions;
 mod queue;
 mod recovery;
 mod runtime;
@@ -480,7 +482,19 @@ impl EditorApp {
         self.agents
             .composer
             .set_attachment_height(self.agents.files.height());
-        let hide_composer = self.agents.history_open && !self.agents.chat.busy;
+        let answering = self
+            .agents
+            .chat
+            .prompts
+            .front()
+            .is_some_and(|p| !p.questions.is_empty());
+        if answering {
+            // Questions take precedence over a history browser opened while
+            // the turn was running. Never hide an outstanding input request.
+            self.agents.history_open = false;
+            self.agents.browser = None;
+        }
+        let hide_composer = answering || self.agents.history_open && !self.agents.chat.busy;
         let read_only = self
             .workspace
             .as_ref()
@@ -547,7 +561,7 @@ impl EditorApp {
             new_chat |= actions.new_chat;
             ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate()).on_hover_text(&mode_detail);
             ui.add(egui::Label::new(palette.tag(&root)).truncate()).on_hover_text(&root);
-            if agents.settings {
+            if agents.settings && !answering {
                 egui::ScrollArea::vertical().id_salt("agent-settings-scroll")
                     .max_height((ui.available_height()-90.).clamp(60.,240.)).show(ui,|ui| {
                     ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui| {
@@ -595,13 +609,19 @@ impl EditorApp {
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled(!offline && !installing,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
+                if ui.add_enabled(!offline && !installing && !answering,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
                     agents.history_open = !agents.history_open;
                     if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
                 }
                 if ui.add_enabled(!offline, egui::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
+            if answering {
+                let action = questions::show(ui, agents.chat.prompts.front_mut().unwrap(), !offline && !modal, palette);
+                answer = action.answer;
+                stop = action.stop;
+                return;
+            }
             recover = recovery::ui(ui, &agents.chat, !offline && !modal && !installing, &agents.config);
             if agents.history_open {
                 let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal,agents.chat.conversation_id(),&mut agents.history_delete,palette);
@@ -622,17 +642,6 @@ impl EditorApp {
                         }
                         if prompt.questions.is_empty() {
                             ui.collapsing("Details",|ui| { ui.add(egui::Label::new(RichText::new(&prompt.detail).monospace().size(11.)).wrap().selectable(true)); });
-                        }
-                        for (index, question) in prompt.questions.iter_mut().enumerate() {
-                            ui.push_id(index,|ui| {
-                                ui.label(&question.text);
-                                for option in &question.options { if ui.selectable_label(question.answer==*option,option).clicked() {question.answer=option.clone();} }
-                                ui.add(egui::TextEdit::singleline(&mut question.answer).password(question.secret).desired_width(f32::INFINITY).char_limit(8192));
-                            });
-                        }
-                        if !prompt.questions.is_empty() && ui.button("Send answers").clicked() {
-                            let values: serde_json::Map<String,serde_json::Value> = prompt.questions.iter().map(|q|(q.id.clone(),json!({"answers":[q.answer]}))).collect();
-                            answer=Some(json!({"answers":values}));
                         }
                         ui.horizontal_wrapped(|ui| {
                             for choice in &prompt.choices { if ui.button(&choice.label).clicked() {answer=Some(choice.result.clone());} }

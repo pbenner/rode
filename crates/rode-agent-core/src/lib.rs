@@ -310,6 +310,14 @@ impl Config {
                 args.extend(["-c".into(), (*setting).into()]);
             }
         }
+        if !self.provider.is_acp() {
+            // Apply after the native-tool feature table so its replacement
+            // cannot disable ordinary coding-mode questions. No user config is edited.
+            args.extend([
+                "-c".into(),
+                "features.default_mode_request_user_input=true".into(),
+            ]);
+        }
         ensure!(
             !args[0].is_empty(),
             "Choose an installed agent executable in Agent settings."

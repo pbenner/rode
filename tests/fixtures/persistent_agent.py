@@ -40,6 +40,31 @@ def notify(method, params):
 
 
 def work(message, number, prompt):
+    if prompt == "question":
+        send(
+            dict(
+                jsonrpc="2.0",
+                id="question-one",
+                method="item/tool/requestUserInput",
+                params=dict(
+                    threadId="native-thread",
+                    turnId=str(number),
+                    itemId="question-item",
+                    isBlocking=True,
+                    questions=[
+                        dict(
+                            id="scope",
+                            header="Tests",
+                            question="Which tests?",
+                            options=[dict(label="All", description="Run the full suite")],
+                        )
+                    ],
+                ),
+            )
+        )
+        while not approved.wait(0.05):
+            if cancelled.is_set():
+                return
     if "approval" in prompt:
         send(
             dict(
@@ -116,7 +141,10 @@ for line in sys.stdin:
         with (root / "backend-rpc.jsonl").open("a") as recorded:
             recorded.write(json.dumps(message) + "\n")
     method = message.get("method", "")
-    if message.get("id") == "approval-one" and "result" in message:
+    if message.get("id") == "question-one" and "result" in message:
+        snapshot("question-answer.json", json.dumps(message["result"]))
+        approved.set()
+    elif message.get("id") == "approval-one" and "result" in message:
         result = message["result"]
         if (
             result.get("decision") in ("accept", "acceptForSession")
@@ -221,9 +249,10 @@ for line in sys.stdin:
         turn += 1
         cancelled.clear()
         params = message["params"]
-        prompt = " ".join(
-            block.get("text", "") for block in params.get("prompt", params.get("input", []))
-        )
+        # Fixture control words belong to the user's task. Attachments and
+        # response-style hints must not accidentally trigger approval scenarios.
+        blocks = params.get("prompt", params.get("input", []))
+        prompt = blocks[0].get("text", "") if blocks else ""
         if not acp:
             reply(message, dict(turn=dict(id=str(turn))))
         threading.Thread(target=work, args=(message, turn, prompt), daemon=True).start()

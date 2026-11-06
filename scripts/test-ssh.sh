@@ -150,6 +150,7 @@ then
     exit 1
 fi
 export RODE_TEST_SSH_CONFIG="$test_dir/ssh_config"
+export RODE_TEST_SSH_HOME="$test_dir/home"
 export RODE_TEST_SSH_X11="${RODE_SSH_TEST_X11:-yes}"
 if [[ -z "$xauth_bin" ]]; then export RODE_TEST_SSH_X11=no; fi
 export RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home"

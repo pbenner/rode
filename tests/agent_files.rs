@@ -87,6 +87,11 @@ fn file_only_command_name_child() {
     )
     .unwrap();
     wait(&mut chat);
+    assert!(
+        chat.last_turn_succeeded,
+        "File-tool agent failed: {}: {:?}",
+        chat.status, chat.messages
+    );
     let calls = log(&root);
     let created = calls
         .iter()
@@ -155,6 +160,10 @@ fn file_only_agents_protect_executables_resolved_from_absolute_and_relative_path
                 .env("RODE_FILE_ONLY_PROJECT", &root)
                 .env("RODE_FILE_ONLY_MANAGED", if managed { "1" } else { "0" })
                 .env("RODE_SESSION_DIR", temporary.path().join("sessions"))
+                // The integration-test image has a test-harness main, not the
+                // editor's embedded service. Select Cargo's matching helper
+                // explicitly instead of inheriting a developer-only override.
+                .env("RODE_SESSION_HELPER", native::binary())
                 .current_dir(temporary.path())
                 .stdin(Stdio::null())
                 .output()
@@ -198,6 +207,11 @@ fn file_only_configuration_child() {
     )
     .unwrap();
     wait(&mut chat);
+    assert!(
+        chat.last_turn_succeeded,
+        "File-tool agent failed: {}: {:?}",
+        chat.status, chat.messages
+    );
     let calls = log(&root);
     let reply = |id| {
         calls
@@ -302,6 +316,7 @@ fn file_only_tools_protect_the_effective_project_codex_home() {
                 .env("RODE_FILE_ONLY_PROJECT", &root)
                 .env("RODE_FILE_ONLY_MANAGED", if managed { "1" } else { "0" })
                 .env("RODE_SESSION_DIR", temporary.path().join("sessions"))
+                .env("RODE_SESSION_HELPER", native::binary())
                 .current_dir(temporary.path())
                 .stdin(Stdio::null())
                 .output()
@@ -707,7 +722,7 @@ fn installed_codex_file_only_tools_work_without_shell_mcp_hooks_or_external_infe
     };
     let mut chat = Chat::default();
     chat.submit(
-        launch,
+        launch.clone(),
         "Edit a file without commands.".into(),
         Arc::new(|| {}),
     )
@@ -766,4 +781,30 @@ fn installed_codex_file_only_tools_work_without_shell_mcp_hooks_or_external_infe
             "Unexpected file-only tool: {tool}"
         );
     }
+    // The restricted feature table must still allow questions during a normal
+    // coding turn. It must not require enabling shell tools or Plan mode.
+    fs::write(temporary.path().join("question-mode"), "").unwrap();
+    chat.submit(launch, "Ask which tests to run.".into(), Arc::new(|| {}))
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(15);
+    while chat.prompts.is_empty() {
+        chat.poll();
+        assert!(
+            chat.busy && Instant::now() < until,
+            "No file-only question: {}: {:?}",
+            chat.status,
+            chat.messages
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    chat.prompts[0].questions[0].answer = "Let me run the tests".into();
+    chat.answer(chat.prompts[0].answers().unwrap()).unwrap();
+    wait(&mut chat);
+    assert!(chat.last_turn_succeeded, "{:?}", chat.messages);
+    assert!(
+        fs::read_to_string(temporary.path().join("request.json"))
+            .unwrap()
+            .contains("Let me run the tests")
+    );
+    assert!(!marker.exists());
 }

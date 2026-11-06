@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 pub enum Personality {
     /// Original dry, sardonic wording inspired by Jackson Lamb in Slow Horses.
     JacksonLamb,
+    /// Relentlessly critical presentation, without unsupported verdicts or policy changes.
+    Panne,
     /// Preserve the agent's own normal response style, including configured defaults.
     #[default]
     #[serde(other)]
@@ -27,18 +29,29 @@ pub enum Personality {
 // Pre-release prompts have one current definition per personality.
 const NORMAL: &str = include_str!("personality/default.txt");
 const LAMB: &str = include_str!("personality/lamb.txt");
+const PANNE: &str = include_str!("personality/panne.txt");
 const STYLE_OPEN: &str = "<rode_response_style";
 const STYLE_CLOSE: &str = "</rode_response_style>";
 
 impl Personality {
     /// Available reply styles, with the ordinary agent default first.
-    pub const ALL: [Self; 2] = [Self::Default, Self::JacksonLamb];
+    pub const ALL: [Self; 3] = [Self::Default, Self::JacksonLamb, Self::Panne];
+
+    /// Stable serialized identifier, also used to recognize generated history hints.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::JacksonLamb => "jackson_lamb",
+            Self::Panne => "panne",
+        }
+    }
 
     /// Full selector label.
     pub fn label(self) -> &'static str {
         match self {
             Self::Default => "Default",
             Self::JacksonLamb => "Jackson Lamb",
+            Self::Panne => "Panne",
         }
     }
 
@@ -47,6 +60,7 @@ impl Personality {
         match self {
             Self::Default => "Tone",
             Self::JacksonLamb => "Lamb",
+            Self::Panne => "Panne",
         }
     }
 
@@ -57,6 +71,9 @@ impl Personality {
             Self::JacksonLamb => {
                 "Abrasive, world-weary British wit; clipped, competent and darkly funny. No customer-service niceties."
             }
+            Self::Panne => {
+                "Relentlessly critical of your reasoning, pace and competitive readiness. Evidence-based criticism; response wording only."
+            }
         }
     }
 
@@ -66,6 +83,7 @@ impl Personality {
             Self::Default if !reset_default => None,
             Self::Default => Some(NORMAL),
             Self::JacksonLamb => Some(LAMB),
+            Self::Panne => Some(PANNE),
         }
     }
 }
@@ -115,10 +133,12 @@ fn style_start(text: &str, partial: bool) -> Option<usize> {
         // A backend may cut off metadata before the opening tag is complete.
         return partial.then_some(start);
     };
-    if !attributes
-        .split_whitespace()
-        .any(|attribute| matches!(attribute, "name=\"default\"" | "name=\"jackson_lamb\""))
-    {
+    if !attributes.split_whitespace().any(|attribute| {
+        attribute
+            .strip_prefix("name=\"")
+            .and_then(|name| name.strip_suffix('"'))
+            .is_some_and(|name| Personality::ALL.iter().any(|style| style.id() == name))
+    }) {
         return None;
     }
     match body.split_once(STYLE_CLOSE) {
@@ -157,9 +177,30 @@ mod tests {
     }
 
     #[test]
+    fn registered_styles_roundtrip_without_changing_execution_settings() {
+        let original = crate::Config::default();
+        for style in Personality::ALL {
+            assert_eq!(serde_json::to_value(style).unwrap(), style.id());
+            let mut config = original.clone();
+            config.personality = style;
+            let saved = serde_json::to_string(&config).unwrap();
+            let restored: crate::Config = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored.personality, style);
+            assert!(original.same_process(&restored));
+            assert_eq!(original.argv().unwrap(), restored.argv().unwrap());
+            let hint = style.hint(true).unwrap();
+            assert!(hint.starts_with(&format!("{STYLE_OPEN} name=\"{}\">", style.id())));
+            assert_eq!(
+                visible_text(&format!("Original task\n{hint}")),
+                "Original task"
+            );
+        }
+    }
+
+    #[test]
     fn replay_hides_generated_style_suffixes_and_preserves_literal_user_text() {
         assert_eq!(visible_text("task"), "task");
-        for hint in [NORMAL, LAMB] {
+        for hint in [NORMAL, LAMB, PANNE] {
             assert_eq!(visible_text(hint), "");
             assert_eq!(visible_text(&format!("task\n\n{hint}\n")), "task");
             let preview = format!("task{hint}");
@@ -178,7 +219,7 @@ mod tests {
 
     #[test]
     fn current_hints_keep_truncated_history_previews_clean() {
-        for hint in [NORMAL, LAMB] {
+        for hint in [NORMAL, LAMB, PANNE] {
             for (end, _) in hint.char_indices().skip("<rode_response_".len()) {
                 assert_eq!(
                     preview_text(&format!("user task\n\n{}", &hint[..end])),
@@ -186,11 +227,10 @@ mod tests {
                 );
             }
         }
-        for hint in [NORMAL, LAMB] {
+        for hint in [NORMAL, LAMB, PANNE] {
             assert!(!hint.contains("version="));
+            assert!(hint.len() < 2400, "Keep the per-turn reminder compact");
         }
-        let hint = Personality::JacksonLamb.hint(false).unwrap();
-        assert!(hint.len() < 2400, "Keep the per-turn reminder compact");
         assert!(Personality::Default.hint(false).is_none());
         assert_eq!(Personality::Default.hint(true), Some(NORMAL));
     }
@@ -201,6 +241,7 @@ mod tests {
             "name=\"jackson_lamb\"",
             "version=\"2\" name=\"jackson_lamb\"",
             "name=\"default\" version=\"1\"",
+            "name=\"panne\"",
         ] {
             let hint = format!("{STYLE_OPEN} {attributes}>\nOld instructions.\n{STYLE_CLOSE}");
             assert_eq!(visible_text(&hint), "");
@@ -230,7 +271,7 @@ mod tests {
         let mut chat = Chat::default();
         let mut view = chat.view();
         for (id, role, text) in [
-            ("prompt", Role::User, format!("Do the work.\n{LAMB}")),
+            ("prompt", Role::User, format!("Do the work.\n{PANNE}")),
             ("hint", Role::User, NORMAL.to_owned()),
             ("assistant", Role::Assistant, LAMB.to_owned()),
             ("tool", Role::Tool, LAMB.to_owned()),

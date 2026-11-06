@@ -16,18 +16,21 @@ use serde_json::Value;
 pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool) {
     let selected = config.personality;
     ui.add_enabled_ui(enabled, |ui| {
-        egui::containers::menu::MenuButton::from_button(
+        let (response, _) = egui::containers::menu::MenuButton::from_button(
             egui::Button::new(selected.button()).selected(selected != Personality::Default),
         ).ui(ui, |ui| {
             ui.set_max_width(270.);
             ui.strong("Response personality");
             for choice in Personality::ALL {
-                ui.selectable_value(&mut config.personality, choice, choice.label())
+                let response = ui.selectable_value(&mut config.personality, choice, choice.label())
                     .on_hover_text(choice.description());
+                crate::app::ui_probe::button(ui, &format!("agent-tone-choice-{}", choice.id()), &response);
             }
             ui.separator();
             ui.add(egui::Label::new("Reply-style hint. Model, tools, permissions and project settings stay unchanged. Applies to the next message.").wrap());
-        }).0.on_hover_text(format!("Response personality: {}\n{}", selected.label(), selected.description()));
+        });
+        let response = response.on_hover_text(format!("Response personality: {}\n{}", selected.label(), selected.description()));
+        crate::app::ui_probe::button(ui, "agent-tone", &response);
     });
 }
 

@@ -10,8 +10,17 @@ Use the **Source control** activity icon, **View → Source control**, or **Ctrl
 - Fetch, fast-forward-only pull, push/upstream setup, remotes, tags, and submodule initialization/update.
 - Worktree listing, creation with new or existing branches, opening, removal, and metadata pruning.
 - Repository initialization and cloning into an empty selected project directory.
+- Commit name/email configuration in the **Settings** tab, for this repository or your account on the project host.
+
+Open **Git → Settings** to set the name and email used for future commits. **This repository** is selected by default; **Global on this host** configures all repositories for your account on the computer hosting the project, including an SSH host. The form shows Git's configured defaults and fills repository fields from inherited values when needed. **Save identity** changes Git configuration without committing, changing the index or clearing your commit message. A missing-identity commit error offers **Configure Git identity** directly and remains visible across automatic status refreshes.
+
+**Use inherited identity** removes the name/email entries from the selected scope. Other Git scopes, includes, worktree configuration and author/committer environment overrides still follow [Git's identity rules](https://git-scm.com/docs/git-config#Documentation/git-config.txt-username). These fields configure commit attribution; authentication credentials and existing commits are separate. Git writes the two keys separately, and a partial save reports which step failed while retaining your draft for retry.
+
+Settings requests run through the same project-host worker and sandbox as other Git actions. Global configuration is normally shared read-only in a sandbox; saving there needs an explicit write grant to the Git configuration file. Repository scope is usually suitable when only the current project needs an identity. A failed save never retries outside the sandbox.
 
 Changed files use single rows with aligned actions beside the filename. The list fills the pane and keeps its width while scrolling. In narrow panes, **Diff** and **Stage / Mark resolved** remain beside each file; **More** contains **Staged diff**, **Unstage** and **Discard**. Unavailable actions are disabled, and hovering a shortened filename shows its full path.
+
+**History** shows the latest 100 commits in uniform rows, with the subject above the short hash, author and date. Long text is shortened with full metadata on hover. Filter the loaded commits by message, author, hash or date. Click a subject or **Details** for the commit message, file summary and patch. **More** contains hash copying, cherry-pick and confirmed revert; these actions keep the selected commit's immutable ID even when the list is filtered. The list renders only visible rows and keeps action columns aligned in compact panes.
 
 Actions follow the loaded index and working-tree status. **Stage** is available for unstaged/untracked changes; **Unstage** and **Staged diff** require resolved staged changes. A partially staged file offers both sides. **Diff** requires working-tree changes, and **Discard** is limited to tracked working-tree modifications, deletions or type changes. Conflicts offer **Mark resolved** after editing/saving; staged-only actions and Discard remain unavailable until resolution. **Stage all** and **Unstage all** follow the same rules. Actions wait for an in-flight Git operation and its status refresh to finish, and disabled controls explain their requirements on hover.
 
