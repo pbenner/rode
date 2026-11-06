@@ -100,6 +100,61 @@ def rendered_pass():
     return json.loads((base / "ui-state.json").read_text())["pass"]
 
 
+def click_control(name):
+    """Click a named native widget once, after its enabled geometry is rendered."""
+    click_button(window, process, ARTIFACTS / "chat.log", base / "ui-state.json", name)
+
+
+def controls_idle():
+    """Close residual popups and wait for that input's fresh idle frame."""
+    before = rendered_pass()
+    key("Escape")
+    control("agent-idle", after_pass=before)
+
+
+def open_controls(name):
+    """Wait beyond preference saving and request receipt for completed host settings."""
+    controls_idle()
+    click_control(name)
+
+
+def select_acp_control(
+    preferences, option, value, *, field="acp_options", permissions=False, captures=()
+):
+    """Keep native selection, saved preference, backend request and idle acknowledgement distinct."""
+
+    def matches(actual):
+        # Preserve strict boolean checks: Python considers True == 1.
+        return actual is value if isinstance(value, bool) else actual == value
+
+    previous = len(rpc(root))
+    open_controls("agent-access-menu" if permissions else "agent-model-menu")
+    if captures:
+        screenshot(window, captures[0])
+    click_control(f"agent-acp-option-{option}")
+    if not isinstance(value, bool):
+        if len(captures) > 1:
+            screenshot(window, captures[1])
+        click_control(f"agent-acp-choice-{option}-{value}")
+    wait_for(
+        lambda: matches(agent_preferences(preferences).get(field, {}).get(option)),
+        f"{field} {option} selection was not saved",
+    )
+    wait_for(
+        lambda: any(
+            call.get("method") == "session/set_config_option"
+            and call["params"].get("configId") == option
+            and matches(call["params"].get("value"))
+            and (not isinstance(value, bool) or call["params"].get("type") == "boolean")
+            for call in rpc(root)[previous:]
+        ),
+        f"{field} {option} selection did not reach the agent",
+    )
+    # The peer can have logged this request while its reply is still pending.
+    # A fresh idle frame includes both host queue and provider acknowledgements.
+    controls_idle()
+
+
 def composer_start():
     """Wait for the native editor to place an unselected caret at character zero."""
     before = rendered_pass()
@@ -387,7 +442,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             long_composer(root, window, process, base / "ui-state.json", prompt)
             # Discover and select models/efforts before the first prompt. The
             # temporary catalog connection must never create a conversation.
-            click(1090, 752)
+            open_controls("agent-model-menu")
             wait_for(
                 lambda: sum(m.get("method") == "model/list" for m in rpc(root)) == 2,
                 "A new chat did not load the complete model catalog",
@@ -396,15 +451,15 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert all(
                 m.get("method") in ("initialize", "initialized", "model/list") for m in rpc(root)
             )
-            click(1090, 633)
+            click_control("agent-model-choice-fixture-deep")
             wait_for(
                 lambda: agent_preferences(preferences).get("model") == "fixture-deep",
                 "A model could not be selected before the first message",
             )
             key("Escape")
-            click(1090, 752)
-            click(1075, 693)
-            click(960, 744)
+            open_controls("agent-model-menu")
+            click_control("agent-reasoning-menu")
+            click_control("agent-reasoning-high")
             wait_for(
                 lambda: agent_preferences(preferences).get("reasoning_effort") == "high",
                 "Reasoning effort could not be selected before the first message",
@@ -473,27 +528,27 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             screenshot(window, "conversation-phosphor.png")
             theme("carbon")
             screenshot(window, "conversation-carbon.png")
-            click(1090, 752)
+            open_controls("agent-model-menu")
             screenshot(window, "codex-model-controls.png")
-            click(1090, 633)  # Advertised Fixture Deep model, not a hard-coded product catalog.
+            click_control("agent-model-choice-fixture-deep")
             wait_for(
                 lambda: agent_preferences(preferences).get("model") == "fixture-deep",
                 "Selected model was not persisted",
             )
             key("Escape")
             calls_before_effort = len(rpc(root))
-            for effort, row in (("high", 744), ("low", 719), ("high", 744)):
-                click(1090, 752)
-                click(1075, 693)
+            for effort in ("high", "low", "high"):
+                open_controls("agent-model-menu")
+                click_control("agent-reasoning-menu")
                 screenshot(window, f"codex-effort-{effort}.png")
-                click(960, row)
+                click_control(f"agent-reasoning-{effort}")
                 wait_for(
                     lambda: agent_preferences(preferences).get("reasoning_effort") == effort,
                     "Reasoning selector did not save " + effort,
                 )
                 key("Escape")
             assert len(rpc(root)) == calls_before_effort, "Effort selection started a turn"
-            click(1280, 752)
+            open_controls("agent-access-menu")
             screenshot(window, "codex-access-controls.png")
             key("Escape")
             send(root, "approve", idle=False)
@@ -600,6 +655,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             x11.XFlush(display)
             time.sleep(0.3)
             select_provider(preferences, "acp")
+            (root / "slow-controls").touch()
             header_click(1280, 94)
             text("./agent.py")
             header_click(1213, 0)
@@ -610,60 +666,25 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert len(rpc(root)) == calls_before_tone, "Tone configured the idle ACP agent"
             select_personality(preferences, "jackson_lamb")
             assert len(rpc(root)) == calls_before_tone
-            click(1090, 752)
-            screenshot(window, "acp-model-controls.png")
-            click(1000, 645)
-            screenshot(window, "acp-model-submenu.png")
-            click(820, 670)
-            wait_for(
-                lambda: (
-                    agent_preferences(preferences).get("acp_options", {}).get("model")
-                    == "fixture-deep"
-                ),
-                "ACP model submenu did not save its selection",
+            select_acp_control(
+                preferences,
+                "model",
+                "fixture-deep",
+                captures=("acp-model-controls.png", "acp-model-submenu.png"),
             )
-            key("Escape")
-            click(1090, 752)
-            click(1000, 693)
-            screenshot(window, "acp-effort-submenu.png")
-            click(820, 718)
-            wait_for(
-                lambda: (
-                    agent_preferences(preferences).get("acp_options", {}).get("effort") == "high"
-                ),
-                "ACP reasoning submenu did not save its selection",
+            select_acp_control(
+                preferences,
+                "effort",
+                "high",
+                captures=("acp-effort-controls.png", "acp-effort-submenu.png"),
             )
-            wait_for(
-                lambda: any(
-                    m.get("method") == "session/set_config_option"
-                    and m["params"].get("configId") == "effort"
-                    and m["params"].get("value") == "high"
-                    for m in rpc(root)
-                ),
-                "ACP reasoning selection did not reach the agent",
+            select_acp_control(
+                preferences,
+                "automatic",
+                True,
+                permissions=True,
+                captures=("acp-permission-controls.png",),
             )
-            key("Escape")
-            click(1300, 752)
-            screenshot(window, "acp-permission-controls.png")
-            click_button(
-                window, process, log.name, base / "ui-state.json", "agent-acp-option-automatic"
-            )
-            wait_for(
-                lambda: (
-                    agent_preferences(preferences).get("acp_options", {}).get("automatic") is True
-                ),
-                "ACP option was not saved",
-            )
-            wait_for(
-                lambda: any(
-                    m.get("method") == "session/set_config_option"
-                    and m["params"].get("configId") == "automatic"
-                    and m["params"].get("type") == "boolean"
-                    for m in rpc(root)
-                ),
-                "ACP option was not sent to the running agent",
-            )
-            key("Escape")
             x11.XResizeWindow(display, window, 850, 560)
             x11.XFlush(display)
             time.sleep(0.4)
@@ -693,24 +714,14 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             initialized = next(m for m in reversed(rpc(root)) if m.get("method") == "initialize")
             assert initialized["params"]["protocolVersion"] == 1
             assert agent_preferences(preferences)["acp_options"] == saved_acp
-            click(1090, 752)
-            click(1000, 645)
-            click(820, 670)
-            wait_for(
-                lambda: (
-                    agent_preferences(preferences).get("claude_options", {}).get("model")
-                    == "fixture-deep"
-                ),
-                "Claude model control did not save its separate selection",
-            )
+            select_acp_control(preferences, "model", "fixture-deep", field="claude_options")
             assert agent_preferences(preferences)["acp_options"] == saved_acp
-            key("Escape")
             screenshot(window, "claude-provider.png")
             # The native permission selectors persist choices and affect the
             # next Codex turn while the existing outer sandbox remains active.
             select_provider(preferences, "codex")
             header_click(1213, 0)  # Hide the automatically opened provider settings.
-            click(1280, 752)
+            open_controls("agent-access-menu")
             click_button(
                 window, process, log.name, base / "ui-state.json", "agent-approval-Never ask"
             )
@@ -718,7 +729,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 lambda: agent_preferences(preferences).get("approval") == "never",
                 "Approval policy was not persisted",
             )
-            click(1280, 752)  # Selecting a policy closes the native menu.
+            open_controls("agent-access-menu")  # Selecting a policy closes the native menu.
             sandboxed = "[Sandbox]" in subprocess.check_output(
                 ["xwininfo", "-id", hex(window)], text=True
             )

@@ -1,5 +1,6 @@
 //! Shared project services, composed with persistent session control.
 use anyhow::Result;
+pub use rode_host_core::project::git_auth;
 pub use rode_host_core::project::{
     Analysis, Cpu, Diagnostic, Environment, Environments, GitFile, Gpu, KernelSpec, Monitor,
     Output, Process, Runtime, StashAction, environment_variables, hunk_patches, parse_nvidia,

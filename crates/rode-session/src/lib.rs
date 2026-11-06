@@ -1776,6 +1776,9 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
 /// Entry point shared by the standalone headless helper and the GUI binary's
 /// local fallback. No windowing code is linked into rode-sessiond.
 pub fn cli(args: &[String]) -> Result<()> {
+    if args.first().is_some_and(|s| s == "--git-credential") {
+        return rode_host_core::project::git_auth::helper(&args[1..]);
+    }
     if args.first().is_some_and(|s| s == "--landlock-launch") {
         return rode_host_core::landlock::launch(&args[1..]);
     }

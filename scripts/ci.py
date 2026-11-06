@@ -57,6 +57,7 @@ CONTEXT_ENV = (
     "RODE_TEST_SANDBOX_BACKEND",
     "RODE_PROJECT_UI_CASE",
     "RODE_GIT_IDENTITY_UI_REMOTE",
+    "RODE_GIT_AUTH_UI_REMOTE",
     "RODE_SSH_RUN_TRANSPORT",
     "RODE_SSH_TEST_FILTER",
     "RODE_SSH_TEST_NO_PYTHON",
@@ -99,6 +100,7 @@ SUITES = {
         ui("navigation"),
         ui("explorer"),
         ui("git-identity"),
+        ui("git-auth"),
         ui("shortcut-styles"),
         ui("terminal-keys"),
         ui("multiprocess"),
@@ -139,6 +141,7 @@ SUITES = {
         ui("git-identity", RODE_GIT_IDENTITY_UI_REMOTE="1"),
         ui("project", RODE_PROJECT_UI_CASE="ssh"),
         ui("explorer", RODE_EXPLORER_UI_REMOTE="1"),
+        ui("git-auth", RODE_GIT_AUTH_UI_REMOTE="1"),
         ui("large-files", RODE_LARGE_FILES_UI_REMOTE="1"),
     ],
     "tools": [

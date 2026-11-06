@@ -498,6 +498,11 @@ try:
             valid = next(option for option in controls() if option["id"] == name)
             if "--wait-controls" in sys.argv:
                 continue
+            # Receipt in agent-rpc.jsonl precedes this deliberately delayed reply.
+            # Native UI fixtures must wait for rendered readiness before clicking
+            # another selector, rather than treating the request log as an ack.
+            if (root / "slow-controls").exists():
+                time.sleep(0.6)
             if valid["type"] == "boolean":
                 assert params["type"] == "boolean" and isinstance(params["value"], bool)
             else:

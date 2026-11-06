@@ -457,6 +457,7 @@ impl EditorApp {
                 } else {
                     self.workbench.git.git_busy = false;
                     self.workbench.git.committing = false;
+                    self.workbench.git.clear_auth();
                 }
             }
         }

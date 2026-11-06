@@ -4,6 +4,7 @@
 //! buffers before worktree/index/history mutations, and destructive actions require explicit
 //! choices. Render from cached results rather than running Git during layout.
 use super::*;
+mod auth;
 mod history;
 pub(super) mod identity;
 mod rows;
@@ -57,6 +58,7 @@ pub(super) struct State {
     pub(super) clone_url: String,
     identity: identity::State,
     history: history::State,
+    auth: auth::State,
     pub(super) confirm: Option<(String, Mutation)>,
 }
 impl Default for State {
@@ -88,8 +90,15 @@ impl Default for State {
             clone_url: String::new(),
             identity: Default::default(),
             history: Default::default(),
+            auth: Default::default(),
             confirm: None,
         }
+    }
+}
+impl State {
+    /// Discard pending secrets when Git is disabled, including late completions.
+    pub(super) fn clear_auth(&mut self) {
+        self.auth = Default::default();
     }
 }
 
@@ -115,13 +124,12 @@ impl EditorApp {
                 ("Pull", strings(&["pull", "--ff-only"])),
                 ("Push", strings(&["push"])),
             ] {
-                if ui
-                    .add_enabled(
-                        !self.workbench.git.git_busy && !self.workbench.git.git_root.is_empty(),
-                        egui::Button::new(label),
-                    )
-                    .clicked()
-                {
+                let button = ui.add_enabled(
+                    !self.workbench.git.git_busy && !self.workbench.git.git_root.is_empty(),
+                    egui::Button::new(label),
+                );
+                ui_probe::button(ui, &format!("git-network-{label}"), &button);
+                if button.clicked() {
                     self.git_mutate(args, label, ctx);
                 }
             }
@@ -338,7 +346,7 @@ impl EditorApp {
                 );
             }
         });
-        ui.label(RichText::new("Network commands use existing credentials and stop if input is required. Use Git terminal for interactive prompts.").small().color(palette.muted));
+        ui.label(RichText::new("HTTPS authentication opens a one-operation credential prompt. Use Git terminal for other interactive authentication.").small().color(palette.muted));
     }
     /// Render bounded working-tree/index rows and defer file-specific actions until selection completes.
     pub(in crate::app) fn git_changes_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -724,6 +732,9 @@ impl EditorApp {
     }
     /// Render cached Git diff/output and confirmation windows belonging to the current tool viewport.
     pub(in crate::app) fn workbench_windows(&mut self, ctx: &egui::Context) {
+        if !self.feature(crate::extensions::Feature::Git) {
+            self.workbench.git.clear_auth();
+        }
         if ctx.viewport_id() != self.tool_viewport(workspace::ToolTab::Panel(Panel::Git)) {
             return;
         }
@@ -874,6 +885,7 @@ impl EditorApp {
                     });
                 });
         }
+        self.git_auth_dialog(ctx);
     }
     /// Serialize a literal-argument Git request against the discovered repository root
     /// and return its captured completion intent through the project worker.
@@ -882,6 +894,18 @@ impl EditorApp {
         args: Vec<String>,
         job: GitJob,
         input: Option<String>,
+        ctx: &egui::Context,
+    ) {
+        self.git_command_authenticated(args, job, input, vec![], ctx);
+    }
+
+    /// Capture an explicit retry; secrets travel in the request body, never argv or preferences.
+    fn git_command_authenticated(
+        &mut self,
+        args: Vec<String>,
+        job: GitJob,
+        input: Option<String>,
+        credentials: Vec<project::git_auth::Credentials>,
         ctx: &egui::Context,
     ) {
         if self.workbench.git.git_busy || !self.project_ready() {
@@ -900,11 +924,20 @@ impl EditorApp {
         } else {
             self.workbench.git.git_root.clone()
         };
-        self.dispatch_tool(
-            project::Request::Git { root, args, input },
-            ToolJob::Git(job),
-            ctx,
-        );
+        self.workbench
+            .git
+            .auth
+            .begin(&args, &job, &credentials, input.is_none());
+        let request = if credentials.is_empty() {
+            project::Request::Git { root, args, input }
+        } else {
+            project::Request::GitAuthenticated {
+                root,
+                args,
+                credentials,
+            }
+        };
+        self.dispatch_tool(request, ToolJob::Git(job), ctx);
     }
     /// Discover the repository root first, then refresh bounded NUL-delimited status metadata.
     pub(in crate::app) fn refresh_git(&mut self, ctx: &egui::Context) {
@@ -1077,9 +1110,11 @@ impl EditorApp {
         self.workbench.git.git_busy = false;
         self.workbench.git.committing = false;
         self.workbench.git.git_last = Some(Instant::now());
-        let output = match result {
-            Ok(project::Response::Command(output)) => output,
+        let (output, challenge) = match result {
+            Ok(project::Response::Command(output)) => (output, None),
+            Ok(project::Response::GitAuthenticated(reply)) => (reply.output, reply.challenge),
             Err(error) => {
+                self.workbench.git.auth.finish(None, ctx);
                 self.workbench.git.git_error = match &job {
                     GitJob::Identity(job) => self.workbench.git.identity.failure(job, &error),
                     _ => error,
@@ -1087,10 +1122,15 @@ impl EditorApp {
                 return;
             }
             _ => {
+                self.workbench.git.auth.finish(None, ctx);
                 self.workbench.git.git_error = "Invalid Git response".into();
                 return;
             }
         };
+        let challenge = (!output.success())
+            .then(|| challenge.or_else(|| project::git_auth::challenge(&output.stderr)))
+            .flatten();
+        self.workbench.git.auth.finish(challenge, ctx);
         if let GitJob::Identity(job) = job {
             self.git_identity_reply(job, output, ctx);
             return;
@@ -1103,7 +1143,8 @@ impl EditorApp {
             self.workbench.git.git_error = (output.stderr + &output.stdout).trim().into();
             if matches!(job, GitJob::Mutate { .. }) {
                 self.workbench.git.git_output = self.workbench.git.git_error.clone();
-                self.workbench.git.show_output = !identity::missing(&self.workbench.git.git_error);
+                self.workbench.git.show_output = !identity::missing(&self.workbench.git.git_error)
+                    && !self.workbench.git.auth.open();
                 self.reload_clean_documents(ctx);
                 self.refresh_git(ctx);
             }

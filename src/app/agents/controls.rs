@@ -72,7 +72,7 @@ pub(super) fn buttons(
         config.model()
     };
     let label = format!("Model: {model}");
-    menu(ui, &label, width, |ui| {
+    menu(ui, "agent-model-menu", &label, width, |ui| {
         ui.set_min_width(260.);
         ui.set_max_width(360.);
         ui.label(egui::RichText::new("Model and reasoning").strong());
@@ -102,14 +102,18 @@ pub(super) fn buttons(
                         .max_height(180.)
                         .show(ui, |ui| {
                             for model in models {
-                                if ui
+                                let response = ui
                                     .selectable_label(
                                         config.model == model.value.id,
                                         &model.value.name,
                                     )
-                                    .on_hover_text(&model.value.description)
-                                    .clicked()
-                                {
+                                    .on_hover_text(&model.value.description);
+                                crate::app::ui_probe::button(
+                                    ui,
+                                    &format!("agent-model-choice-{}", model.value.id),
+                                    &response,
+                                );
+                                if response.clicked() {
                                     config.model.clone_from(&model.value.id);
                                 }
                             }
@@ -159,7 +163,7 @@ pub(super) fn buttons(
                 } else {
                     config.reasoning_effort.clone()
                 };
-                choices(ui, selected, |ui| {
+                choices(ui, "agent-reasoning-menu", selected, |ui| {
                     ui.selectable_value(&mut config.reasoning_effort, String::new(), "Default");
                     let model = models
                         .iter()
@@ -173,12 +177,18 @@ pub(super) fn buttons(
                         });
                     if let Some(model) = model {
                         for effort in &model.efforts {
-                            ui.selectable_value(
-                                &mut config.reasoning_effort,
-                                effort.id.clone(),
-                                &effort.name,
-                            )
-                            .on_hover_text(&effort.description);
+                            let response = ui
+                                .selectable_value(
+                                    &mut config.reasoning_effort,
+                                    effort.id.clone(),
+                                    &effort.name,
+                                )
+                                .on_hover_text(&effort.description);
+                            crate::app::ui_probe::button(
+                                ui,
+                                &format!("agent-reasoning-{}", effort.id),
+                                &response,
+                            );
                         }
                     }
                 });
@@ -210,7 +220,7 @@ pub(super) fn buttons(
     } else {
         format!("Access: {}", access.label())
     };
-    menu(ui, &label, width, |ui| {
+    menu(ui, "agent-access-menu", &label, width, |ui| {
         ui.set_min_width(260.);
         ui.set_max_width(360.);
         ui.label(egui::RichText::new("Agent permissions").strong());
@@ -339,7 +349,7 @@ fn codex_access(
     }
 }
 
-fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+fn menu(ui: &mut egui::Ui, name: &str, label: &str, width: f32, add: impl FnOnce(&mut egui::Ui)) {
     let height = crate::app::layout::control_height(ui);
     ui.allocate_ui_with_layout(
         egui::vec2(width, height),
@@ -353,6 +363,7 @@ fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::
             .ui(ui, add)
             .0
             .on_hover_text(label);
+            crate::app::ui_probe::button(ui, name, &response);
             crate::app::ui_probe::button(ui, label, &response);
         },
     );
@@ -360,11 +371,14 @@ fn menu(ui: &mut egui::Ui, label: &str, width: f32, add: impl FnOnce(&mut egui::
 
 /// Keep large backend-defined lists scrollable without replacing their parent
 /// popup. A bounded initial width leaves room for the editor on small displays.
-fn choices(ui: &mut egui::Ui, label: String, add: impl FnOnce(&mut egui::Ui)) {
-    egui::containers::menu::SubMenuButton::new(label).ui(ui, |ui| {
-        ui.set_width(200.);
-        egui::ScrollArea::vertical().max_height(230.).show(ui, add);
-    });
+fn choices(ui: &mut egui::Ui, name: &str, label: String, add: impl FnOnce(&mut egui::Ui)) {
+    let response = egui::containers::menu::SubMenuButton::new(label)
+        .ui(ui, |ui| {
+            ui.set_width(200.);
+            egui::ScrollArea::vertical().max_height(230.).show(ui, add);
+        })
+        .0;
+    crate::app::ui_probe::button(ui, name, &response);
 }
 
 fn acp(ui: &mut egui::Ui, config: &mut Config, chat: &Chat, permissions: bool) {
@@ -419,12 +433,23 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
             .find(|o| o.id == selected)
             .map(|o| o.name.as_str())
             .unwrap_or(&selected);
-        choices(ui, name.to_owned(), |ui| {
-            for item in &control.options {
-                ui.selectable_value(&mut selected, item.id.clone(), &item.name)
-                    .on_hover_text(&item.description);
-            }
-        });
+        choices(
+            ui,
+            &format!("agent-acp-option-{}", control.id),
+            name.to_owned(),
+            |ui| {
+                for item in &control.options {
+                    let response = ui
+                        .selectable_value(&mut selected, item.id.clone(), &item.name)
+                        .on_hover_text(&item.description);
+                    crate::app::ui_probe::button(
+                        ui,
+                        &format!("agent-acp-choice-{}-{}", control.id, item.id),
+                        &response,
+                    );
+                }
+            },
+        );
         if value.as_str() != Some(selected.as_str()) {
             config
                 .acp_options_mut()

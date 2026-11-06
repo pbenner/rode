@@ -17,6 +17,9 @@ case "$suite" in
     ssh|remote|runtimes) packages+=(openssh-server) ;;
 esac
 case "$suite" in
+    workspace|ssh) packages+=(openssl) ;; # HTTPS Git authentication fixtures.
+esac
+case "$suite" in
     tools|runtimes)
         packages+=(clang-format shfmt)
         # mise-action provisions Go before this script. Do not fall back to

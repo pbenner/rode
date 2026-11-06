@@ -15,6 +15,7 @@ pub const MAX_EXECUTABLE: u64 = 24 * 1024 * 1024;
 pub const CAPABILITIES: &[&str] = &[
     "files",
     "project_tools",
+    "git_memory_auth",
     "contexts",
     "sessions",
     "native_landlock",

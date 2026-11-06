@@ -15,6 +15,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+pub mod git_auth;
 mod stash;
 #[cfg(test)]
 mod tests;
@@ -99,6 +100,15 @@ pub enum Request<S = serde_json::Value, H = serde_json::Value> {
         /// Optional UTF-8 stdin, such as a patch or commit message.
         input: Option<String>,
     },
+    /// Retry an explicit HTTPS operation with credentials retained only in memory.
+    GitAuthenticated {
+        /// Repository working directory on the project host.
+        root: String,
+        /// Original literal network command arguments.
+        args: Vec<String>,
+        /// Per-origin credentials for this operation; never a Git configuration value.
+        credentials: Vec<git_auth::Credentials>,
+    },
     /// Act on the exact stash object displayed by the UI, checking its reflog
     /// identity under Git's locks before removing an entry.
     GitStash {
@@ -171,6 +181,8 @@ pub enum Response<S = serde_json::Value> {
     Slurm(crate::slurm::Snapshot),
     /// Explicit command output, including cancellation commands.
     Command(Output),
+    /// Sanitized command result from an operation-scoped HTTPS authentication retry.
+    GitAuthenticated(git_auth::Reply),
     /// Host utilization/capacity sample.
     Monitor(Monitor),
     /// Python environment discovery and interpreter information.
@@ -486,6 +498,15 @@ pub fn local<S, H, R>(request: &Request<S, H>) -> Result<Response<R>> {
                 Duration::from_secs(120),
             )?))
         }
+        Request::GitAuthenticated {
+            root,
+            args,
+            credentials,
+        } => Ok(Response::GitAuthenticated(git_auth::execute(
+            &crate::files::expand_home(root),
+            args,
+            credentials,
+        )?)),
         Request::GitStash {
             root,
             action,
