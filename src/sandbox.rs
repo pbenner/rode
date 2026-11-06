@@ -100,7 +100,7 @@ impl PlanExt for Plan {
             command.args(&args[1..]);
             command
         };
-        let output = crate::ssh::run_bounded(
+        let output = rode_host_core::command::run_bounded_limited(
             command,
             serde_json::to_vec(request)?,
             Duration::from_secs(if matches!(request, crate::files::Request::Tool { .. }) {
@@ -108,6 +108,11 @@ impl PlanExt for Plan {
             } else {
                 45
             }),
+            if request.transfers_document() {
+                usize::MAX
+            } else {
+                64 * 1024 * 1024
+            },
         )?;
         serde_json::from_slice(&output).context("Invalid sandbox file response")
     }

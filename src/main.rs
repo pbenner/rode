@@ -121,17 +121,8 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if args.as_slice() == ["--file-helper"] {
-        use std::io::Read;
         let result = (|| -> anyhow::Result<()> {
-            let mut input = Vec::new();
-            std::io::stdin()
-                .take(64 * 1024 * 1024 + 1)
-                .read_to_end(&mut input)?;
-            anyhow::ensure!(
-                input.len() <= 64 * 1024 * 1024,
-                "File request exceeds its limit"
-            );
-            let request = serde_json::from_slice(&input)?;
+            let request = serde_json::from_reader(std::io::stdin().lock())?;
             let response = if let rode::files::Request::Prepare { path, sandbox } = &request {
                 let plan = rode::sandbox::prepare_native(path, sandbox)?;
                 let mut response = rode::files::local(&rode::files::Request::List {

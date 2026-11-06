@@ -4,7 +4,7 @@
 //!
 //! Retain raw JSON alongside the native cell model so editing supported fields
 //! does not discard metadata or output types produced by other notebook tools.
-//! This costs some duplicate in-memory state, bounded by document/output limits,
+//! This costs some duplicate in-memory state, with separate cell/execution limits,
 //! and requires serialization to take cells from their current edited models.
 //! Stable cell IDs and source versions let outputs follow moved cells while
 //! rejecting results for source that changed during execution. A separately
@@ -19,8 +19,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-/// Maximum serialized notebook size in bytes.
-pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum retained cells in one notebook.
 pub const MAX_CELLS: usize = 1024;
 /// Maximum source size per cell in bytes.
@@ -141,10 +139,9 @@ pub fn multiline(value: &Value) -> Result<String> {
     }
 }
 impl Notebook {
-    /// Parse bounded nbformat 4 JSON, validating cell/source/output limits without launching a
+    /// Parse in-memory nbformat 4 JSON, validating cell/source structure without launching a
     /// kernel.
     pub fn parse(text: &str) -> Result<Self> {
-        ensure!(text.len() <= MAX_BYTES, "Notebook exceeds 8 MiB.");
         let mut data: Value = serde_json::from_str(text).context("Invalid notebook JSON")?;
         ensure!(
             data["nbformat"].as_u64() == Some(4),
@@ -190,17 +187,12 @@ impl Notebook {
         }
         Ok(Self { data, cells })
     }
-    /// Serialize current cell JSON while preserving unknown fields; reject results above the
-    /// document limit.
+    /// Serialize current cell JSON while preserving unknown fields, without a file-byte ceiling.
     pub fn serialize(&self) -> Result<String> {
         let mut data = self.data.clone();
         data["cells"] = Value::Array(self.cells.iter().map(|c| c.data.clone()).collect());
         let mut text = serde_json::to_string_pretty(&data)?;
         text.push('\n');
-        ensure!(
-            text.len() <= MAX_BYTES,
-            "Notebook exceeds 8 MiB. The change was not applied; clear outputs or reduce the notebook first."
-        );
         Ok(text)
     }
     /// Return the saved kernelspec name, defaulting to `python3` when absent.

@@ -103,15 +103,14 @@ fn binary_transport_matches_local_and_python_and_enforces_limits() {
     );
     fs::File::create(&path)
         .unwrap()
-        .set_len(images::MAX_ENCODED as u64 + 1)
+        .set_len(32 * 1024 * 1024 + 1)
         .unwrap();
-    assert!(
-        files::local(&request)
-            .unwrap_err()
-            .to_string()
-            .contains("32 MiB")
-    );
-    assert!(peer(&request).unwrap_err().to_string().contains("32 MiB"));
+    for response in [files::local(&request).unwrap(), peer(&request).unwrap()] {
+        assert_eq!(
+            STANDARD.decode(response.image.unwrap()).unwrap().len(),
+            32 * 1024 * 1024 + 1
+        );
+    }
     let svg = root.path().join("source.svg");
     fs::write(&svg, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
     assert!(
@@ -214,4 +213,21 @@ fn active_sandbox_image_reads_cannot_escape_through_paths_or_symlinks() {
     } else {
         eprintln!("Sandbox unavailable: {}", plan.reason);
     }
+}
+
+#[test]
+fn encoded_images_larger_than_32_mib_decode_within_the_pixel_budget() {
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(3500, 3300, image::Rgb([30, 90, 150]))
+        .write_to(&mut encoded, ImageFormat::Bmp)
+        .unwrap();
+    let encoded = encoded.into_inner();
+    assert!(encoded.len() > 32 * 1024 * 1024);
+    let budget = Arc::new(Budget::default());
+    let preview = images::decode_bytes(&encoded, "large.bmp", &budget, 256).unwrap();
+    assert_eq!(preview.original, [3500, 3300]);
+    assert_eq!(preview.encoded_bytes, encoded.len());
+    assert!(preview.pixels.size.iter().all(|size| *size <= 256));
+    drop(preview);
+    assert_eq!(budget.used(), 0);
 }

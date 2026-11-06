@@ -197,16 +197,16 @@ fn explorer_symlinks_are_copied_renamed_and_removed_without_touching_targets() {
 }
 
 #[test]
-fn explorer_copy_limits_leave_the_destination_unpublished_and_remove_staging() {
+fn explorer_copy_traversal_limits_leave_the_destination_unpublished_and_remove_staging() {
     for run in [files::local, headless] {
         let base = TempDir::new().unwrap();
         let source = base.path().join("source");
         fs::create_dir(&source).unwrap();
-        let big = source.join("too-large");
-        fs::File::create(&big)
-            .unwrap()
-            .set_len(256 * 1024 * 1024 + 1)
-            .unwrap();
+        let mut nested = source.clone();
+        for _ in 0..66 {
+            nested = nested.join("nested");
+            fs::create_dir(&nested).unwrap();
+        }
         let destination = base.path().join("destination");
         let error = mutate(
             run,
@@ -216,7 +216,7 @@ fn explorer_copy_limits_leave_the_destination_unpublished_and_remove_staging() {
             },
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("256 MiB"));
+        assert!(format!("{error:#}").contains("64-level"));
         assert!(!destination.exists());
         assert_eq!(fs::read_dir(base.path()).unwrap().count(), 1);
     }
@@ -350,5 +350,36 @@ fn explorer_mutations_obey_project_and_read_only_sandbox_grants() {
         );
         assert!(folder.is_dir());
         assert!(!base.path().join("denied").exists());
+    }
+}
+
+#[test]
+fn explorer_streams_file_copies_larger_than_the_previous_256_mib_cap() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    for run in [files::local, headless] {
+        let base = TempDir::new().unwrap();
+        let source = base.path().join("large.bin");
+        let destination = base.path().join("copy.bin");
+        let length = 256 * 1024 * 1024 + 1;
+        let mut file = fs::File::create(&source).unwrap();
+        file.set_len(length).unwrap();
+        file.seek(SeekFrom::End(-1)).unwrap();
+        file.write_all(&[0x71]).unwrap();
+        drop(file);
+        mutate(
+            run,
+            Mutation::Copy {
+                path: source.to_string_lossy().into(),
+                destination: destination.to_string_lossy().into(),
+            },
+        )
+        .unwrap();
+        let mut copied = fs::File::open(&destination).unwrap();
+        assert_eq!(copied.metadata().unwrap().len(), length);
+        copied.seek(SeekFrom::End(-1)).unwrap();
+        let mut tail = [0];
+        copied.read_exact(&mut tail).unwrap();
+        assert_eq!(tail, [0x71]);
+        assert_eq!(fs::read_dir(base.path()).unwrap().count(), 2);
     }
 }

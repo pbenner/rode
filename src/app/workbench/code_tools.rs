@@ -297,6 +297,11 @@ impl EditorApp {
         if doc.saving {
             return true;
         }
+        // The tool contract is narrower than document I/O. Let the ordinary
+        // revision-checked save handle large buffers without a rejected tool RPC.
+        if doc.text.len() as u64 > rode_host_core::files::MAX_TOOL_BYTES {
+            return false;
+        }
         if self.workbench.code_tools.checking.contains(&id) {
             // A live diagnostic check never delays a save. The next check will
             // observe the saved version; formatting gets its own job.
@@ -387,6 +392,11 @@ impl EditorApp {
                 "Image and PDF previews are read-only; code tools apply to text files.",
                 false,
             );
+            return;
+        }
+        if manual && save.is_none() && doc.text.len() as u64 > rode_host_core::files::MAX_TOOL_BYTES
+        {
+            self.notify("Code tools accept buffers up to 8 MiB. This file remains editable and can be saved normally.", false);
             return;
         }
         if save.is_some() {
@@ -487,5 +497,87 @@ impl EditorApp {
             .filter(|i| i.version == doc.edit_version)
             .map(|i| i.items.clone())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn large_source_saves_skip_tool_requests_and_keep_file_conflict_protection() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root
+            .path()
+            .join("large.json")
+            .to_string_lossy()
+            .into_owned();
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.workspace = Some(Workspace {
+            root: root.path().to_string_lossy().into(),
+            remote: None,
+            connected: true,
+            ready: true,
+            plan: Default::default(),
+            sandbox_options: Default::default(),
+        });
+        app.extensions.registry.set_enabled("rode.languages", true);
+        app.workbench.prefs.format_on_save = true;
+        app.workbench.prefs.check_on_save = true;
+        app.new_file();
+        let id = app.documents[0].id;
+        let text = format!(
+            "{{\"value\":\"{}\"}}",
+            "x".repeat(rode_host_core::files::MAX_TOOL_BYTES as usize + 1)
+        );
+        app.documents[0].text = text.clone();
+        app.documents[0].modified = true;
+        app.save_document(id, path.clone(), false, &ctx);
+        assert!(
+            app.workbench.code_tools.checking.is_empty(),
+            "Large buffers must not be sent to bounded automatic tools"
+        );
+        let wait = |app: &mut EditorApp| {
+            let until = Instant::now() + Duration::from_secs(10);
+            while app.documents[0].saving {
+                app.poll(&ctx);
+                assert!(Instant::now() < until, "Large source save did not finish");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait(&mut app);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert!(!app.documents[0].dirty());
+        assert!(app.workbench.code_tools.tool_error.is_empty());
+        app.analyze_document(id, path.clone(), None, true, false, true, &ctx);
+        assert!(
+            app.workbench.code_tools.checking.is_empty(),
+            "Oversized manual requests must be rejected before copying/transferring their source"
+        );
+        assert!(!app.documents[0].saving);
+
+        // The worker must return its exact submitted snapshot even if the
+        // editable document changes before its acknowledgement is processed.
+        app.documents[0].text.push('\n');
+        app.documents[0].modified = true;
+        app.documents[0].edit_version += 1;
+        app.save_document(id, path.clone(), false, &ctx);
+        app.documents[0].text.push('\n');
+        app.documents[0].edit_version += 1;
+        wait(&mut app);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{text}\n"));
+        assert_eq!(app.documents[0].saved_text, format!("{text}\n"));
+        assert_eq!(app.documents[0].text, format!("{text}\n\n"));
+        assert!(app.documents[0].dirty());
+
+        // Bypassing formatting must still preserve the saved revision guard.
+        std::fs::write(&path, "external change").unwrap();
+        app.save_document(id, path.clone(), false, &ctx);
+        wait(&mut app);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change");
+        assert_eq!(app.documents[0].text, format!("{text}\n\n"));
+        assert!(app.documents[0].dirty());
     }
 }

@@ -58,6 +58,26 @@ pub(super) fn resolve_startup_path(
 }
 
 impl EditorApp {
+    /// Capture one submitted source snapshot for both host I/O and the save acknowledgement.
+    pub(super) fn dispatch_text_save(
+        &mut self,
+        id: u64,
+        path: String,
+        text: String,
+        expected: Option<String>,
+        ctx: &egui::Context,
+    ) {
+        self.dispatch(
+            Request::Write {
+                path,
+                text: String::new(),
+                expected,
+            },
+            Job::Save { id, text },
+            ctx,
+        );
+    }
+
     /// Capture host, plan, generation and resource guards before spawning blocking work. The
     /// raw-host exceptions are preparation/discovery and explicit desktop attachment selection;
     /// project-host file pickers retain active project restrictions.
@@ -187,9 +207,20 @@ impl EditorApp {
                 }
                 (request, _) => request,
             };
+            // The submitted source has one owner: move it into the request for
+            // I/O, then back into the job for acknowledgement. Do not retain a
+            // second file-sized String merely to carry it through the worker.
+            if let (Request::Write { text, .. }, Job::Save { text: snapshot, .. }) =
+                (&mut request, &mut job)
+            {
+                std::mem::swap(text, snapshot);
+            }
             let _image_io = matches!(
                 &request,
-                Request::ReadImage { .. } | Request::ReadBinary { .. } | Request::ReadHex { .. }
+                Request::ReadImage { .. }
+                    | Request::ReadBinary { .. }
+                    | Request::ReadHex { .. }
+                    | Request::ReadAttachment { .. }
             )
             .then(|| image_budget.io.lock().unwrap_or_else(|e| e.into_inner()));
             let execute = |request: &Request| match &remote {
@@ -318,6 +349,11 @@ impl EditorApp {
                     Ok(response)
                 })
                 .map_err(|e| format!("{e:#}"));
+            if let (Request::Write { text, .. }, Job::Save { text: snapshot, .. }) =
+                (&mut request, &mut job)
+            {
+                std::mem::swap(text, snapshot);
+            }
             let _ = tx.send(Event::Done {
                 generation,
                 job,

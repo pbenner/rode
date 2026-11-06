@@ -15,9 +15,9 @@ Save, Save As, formatting, fixes, and run commands do not write or execute PDF c
 
 ## Resource limits
 
-- PDF files: up to **32 MiB** and **10,000 pages**.
+- PDF source files have no fixed byte-size ceiling; they are loaded into memory and support up to **10,000 pages**.
 - Page raster: up to **2048 pixels on the longer side**, or the GPU's smaller limit. **100%** means one rendered pixel per logical screen point; zooming further enlarges that raster.
-- Retained PDF source bytes and all image/PDF preview pixels share the **128 MiB preview budget** per RODE process. Close another preview if the budget is full. Closing tabs releases their source data and textures.
+- Image/PDF raster pixels share the **128 MiB preview budget** per RODE process. PDF source snapshots are accounted separately and depend on available RAM, so they do not consume this pixel budget. Close another preview if the budget is full. Closing tabs releases their source data and textures.
 - Transfer, renderer output and decoding buffers add temporary memory. Each renderer process has a **1 GiB address-space limit**, bounded stdout/stderr, and a **20-second timeout**. Work runs off the UI thread; page rendering shares the existing serialized preview worker path.
 
 Malformed/oversized documents and renderer failures produce an error while keeping existing editor buffers intact. Poppler runs only when opening/reloading a PDF or changing its displayed page. No browser, remote PDF service, network image loader, or always-running renderer is required.

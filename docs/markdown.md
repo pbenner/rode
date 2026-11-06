@@ -14,6 +14,6 @@ Relative file links and images resolve from the Markdown file's directory **on t
 
 Supported raster images display inline using the [image preview formats and decoding limits](images.md); animated images show their first frame. External image URLs, embedded data URLs, and SVG images are not loaded automatically. Their alt text remains visible with an image notice. **Reload images** refreshes files after an external change. Changing projects, sandbox rules, or SSH sessions invalidates old image requests and cached textures.
 
-To keep preview work bounded, a document may contain at most **256 KiB** of source, **12,000 parser events**, **64 nesting levels**, and **16 distinct inline raster images**. Images share the application's existing **128 MiB pixel budget**. Documents above the preview limits remain editable under the normal 8 MiB text limit. Closing a tab releases its image textures and cancels queued image reads.
+To keep preview work bounded, a document may contain at most **256 KiB** of source, **12,000 parser events**, **64 nesting levels**, and **16 distinct inline raster images**. Images share the application's existing **128 MiB pixel budget**. Documents above the preview limits remain editable as ordinary text without a fixed byte-size ceiling. Closing a tab releases its image textures and cancels queued image reads.
 
 For Markdown slide decks, see [Marp presentations](marp.md), with an installed project-host renderer, native slides and HTML/PDF/PowerPoint exports.

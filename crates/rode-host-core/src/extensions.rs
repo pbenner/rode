@@ -551,7 +551,7 @@ impl Reply {
         ensure!(
             self.text
                 .as_ref()
-                .is_none_or(|s| s.len() <= crate::files::MAX_FILE_BYTES as usize)
+                .is_none_or(|s| s.len() <= crate::files::MAX_TOOL_BYTES as usize)
                 && self.output.len() <= 1024 * 1024
                 && self.diagnostics.len() <= 4096,
             "Adapter response exceeds limits."
@@ -567,7 +567,7 @@ impl Reply {
                 && d.end_column > 0
                 && [d.row, d.column, d.end_row, d.end_column]
                     .iter()
-                    .all(|&n| n <= crate::files::MAX_FILE_BYTES as usize + 1)
+                    .all(|&n| n <= crate::files::MAX_TOOL_BYTES as usize + 1)
                 && (d.end_row != d.row || d.end_column >= d.column)
                 && d.message.len() <= 8192
                 && d.code.len() <= 128
@@ -592,7 +592,7 @@ pub fn run_cancellable(
     use std::{process::Command, time::Duration};
     ensure!(
         invocation.api == API_VERSION
-            && invocation.text.len() <= crate::files::MAX_FILE_BYTES as usize,
+            && invocation.text.len() <= crate::files::MAX_TOOL_BYTES as usize,
         "Invalid adapter request."
     );
     let root = crate::files::expand_home(root).canonicalize()?;

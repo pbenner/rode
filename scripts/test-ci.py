@@ -89,6 +89,7 @@ class SelectionTests(unittest.TestCase):
             "slurm",
             "slurm-notebooks",
             "binary",
+            "large-files",
             "notebooks",
             "layout",
             "languages",

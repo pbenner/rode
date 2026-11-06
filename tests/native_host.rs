@@ -530,7 +530,7 @@ impl Gateway {
             assert_eq!(&magic, framing::MAGIC);
             let hello: wire::Hello = framing::read(&mut output).unwrap().unwrap();
             ready.send(hello).unwrap();
-            while let Ok(Some(reply)) = framing::read(&mut output) {
+            while let Ok(Some(reply)) = framing::read_document(&mut output) {
                 if send.send(reply).is_err() {
                     break;
                 }
@@ -567,7 +567,7 @@ impl Gateway {
     }
     fn send(&mut self, operation: Operation) -> u64 {
         self.id += 1;
-        framing::write(
+        framing::write_document(
             self.input.as_mut().unwrap(),
             &wire::Request {
                 id: self.id,
@@ -578,8 +578,15 @@ impl Gateway {
         self.id
     }
     fn call(&mut self, operation: Operation) -> Result<Response, String> {
+        self.call_with_timeout(operation, Duration::from_secs(20))
+    }
+    fn call_with_timeout(
+        &mut self,
+        operation: Operation,
+        timeout: Duration,
+    ) -> Result<Response, String> {
         let id = self.send(operation);
-        let reply = self.replies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let reply = self.replies.recv_timeout(timeout).unwrap();
         assert_eq!(reply.id, id);
         reply.result
     }
@@ -877,4 +884,49 @@ fn native_gateway_cancels_owned_commands_on_input_loss() {
         assert!(Instant::now() < until, "Owned adapter survived gateway EOF");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn document_transfers_exceed_the_control_message_limit_without_losing_revision_checks() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let Some(helper) = helper() else { return };
+    let mut gateway = Gateway::start(&helper);
+    let root = tempfile::tempdir().unwrap();
+    let plan = gateway.prepare(root.path(), Default::default());
+    let path = root.path().join("large.bin").to_string_lossy().into_owned();
+    // Base64 exceeds 64 MiB, exercising both directions and the worker's input
+    // line without a larger physical frame or an unbounded request queue.
+    let bytes = vec![0x93; 49 * 1024 * 1024];
+    let revision = files::digest(&bytes);
+    let mut run = |request| match gateway.call_with_timeout(
+        Operation::Run {
+            context: plan.host_context.clone(),
+            request,
+        },
+        Duration::from_secs(160),
+    )? {
+        Response::Completed { response } => Ok(response),
+        _ => Err(String::from("Expected a completed file operation")),
+    };
+    let saved = run(FileRequest::WriteBinary {
+        path: path.clone(),
+        data: STANDARD.encode(&bytes),
+        expected: None,
+    })
+    .unwrap();
+    assert_eq!(saved.file.revision, revision);
+    let read = run(FileRequest::ReadHex { path: path.clone() }).unwrap();
+    assert_eq!(read.file.revision, revision);
+    assert_eq!(STANDARD.decode(read.file.binary.unwrap()).unwrap(), bytes);
+    assert!(
+        run(FileRequest::WriteBinary {
+            path: path.clone(),
+            data: STANDARD.encode([0]),
+            expected: Some("stale".into())
+        })
+        .unwrap_err()
+        .contains("conflict")
+    );
+    assert_eq!(fs::metadata(&path).unwrap().len(), bytes.len() as u64);
+    gateway.close();
 }

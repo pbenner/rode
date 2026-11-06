@@ -7,7 +7,7 @@ mod native_peer;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use rode::{
     files::{self, Request},
-    images::{self, Budget},
+    images::Budget,
     pdf, sandbox,
 };
 use std::{
@@ -88,7 +88,7 @@ fn pdf_pages_render_with_distinct_content_and_release_the_shared_budget() {
     assert_eq!(last.page, 2);
 }
 #[test]
-fn binary_pdf_transports_match_and_reject_oversized_or_nonregular_files() {
+fn binary_pdf_transports_match_without_a_source_size_cap_and_reject_nonregular_files() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("quoted ' PDF 🦀.PDF");
     fs::write(&path, FIXTURE).unwrap();
@@ -103,10 +103,14 @@ fn binary_pdf_transports_match_and_reject_oversized_or_nonregular_files() {
     }
     fs::File::create(&path)
         .unwrap()
-        .set_len(images::MAX_ENCODED as u64 + 1)
+        .set_len(32 * 1024 * 1024 + 1)
         .unwrap();
-    assert!(files::local(&request).is_err());
-    assert!(peer(&request).is_err());
+    for response in [files::local(&request).unwrap(), peer(&request).unwrap()] {
+        assert_eq!(
+            STANDARD.decode(response.binary.unwrap()).unwrap().len(),
+            32 * 1024 * 1024 + 1
+        );
+    }
     let dir = Request::ReadBinary {
         path: root.path().to_string_lossy().into(),
     };
@@ -121,7 +125,7 @@ fn invalid_pdf_data_does_not_retain_resources() {
     for bytes in [
         b"not a PDF".to_vec(),
         b"%PDF-1.4\ncorrupt\n".to_vec(),
-        vec![0; images::MAX_ENCODED + 1],
+        vec![0; 32 * 1024 * 1024 + 1],
     ] {
         assert!(pdf::load_bytes(bytes, 1, &budget, 512).is_err());
         assert_eq!(budget.used(), 0);

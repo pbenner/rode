@@ -90,6 +90,7 @@ SUITES = {
     "remote-smoke": [
         ui("project", RODE_PROJECT_UI_CASE="ssh"),
         ui("explorer", RODE_EXPLORER_UI_REMOTE="1"),
+        ui("large-files", RODE_LARGE_FILES_UI_REMOTE="1"),
     ],
     "tools": [
         ui("mise"),
@@ -103,6 +104,7 @@ SUITES = {
     ],
     "documents": [
         ui("binary"),
+        ui("large-files"),
         ui("workbench", RODE_WORKBENCH_UI_CASE="local"),
         ui("images", RODE_IMAGES_UI_CASE="local"),
         ui("markdown", RODE_MARKDOWN_UI_CASE="local"),

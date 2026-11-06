@@ -890,18 +890,7 @@ impl EditorApp {
                     }
                 }
                 if let Some(expected) = save {
-                    self.dispatch(
-                        Request::Write {
-                            path,
-                            text: text_to_save.clone(),
-                            expected,
-                        },
-                        Job::Save {
-                            id,
-                            text: text_to_save,
-                        },
-                        ctx,
-                    );
+                    self.dispatch_text_save(id, path, text_to_save, expected, ctx);
                 }
             }
             ToolJob::Git(job) => {

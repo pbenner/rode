@@ -105,17 +105,13 @@ pub fn load_cancellable(
     cancel: &AtomicBool,
 ) -> Result<Loaded> {
     ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
-    ensure!(
-        encoded.len() <= images::MAX_ENCODED.div_ceil(3) * 4,
-        "PDF file exceeds 32 MiB."
-    );
     let bytes = STANDARD
         .decode(encoded)
         .context("Invalid PDF data from the file helper")?;
     load_bytes_cancellable(bytes, page, budget, texture_limit, cancel)
 }
 
-/// Load owned PDF bytes and rasterize one page under input/pixel/retained-memory limits.
+/// Retain owned PDF source bytes and rasterize one page under decoded-pixel limits.
 pub fn load_bytes(
     bytes: Vec<u8>,
     page: usize,
@@ -134,16 +130,12 @@ fn load_bytes_cancellable(
 ) -> Result<Loaded> {
     ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
     ensure!(
-        bytes.len() <= images::MAX_ENCODED,
-        "PDF file exceeds 32 MiB."
-    );
-    ensure!(
         bytes[..bytes.len().min(1024)]
             .windows(5)
             .any(|bytes| bytes == b"%PDF-"),
         "Cannot open PDF: missing PDF header."
     );
-    let lease = budget.reserve(bytes.len())?;
+    let lease = budget.reserve_source(bytes.len())?;
     let bytes: Arc<[u8]> = bytes.into();
     let info = run("pdfinfo", &["-".into()], bytes.clone(), 64 * 1024, cancel)?;
     let info = std::str::from_utf8(&info).context("PDF metadata is not UTF-8")?;
@@ -200,7 +192,7 @@ impl Source {
                 "-".into(),
             ],
             self.bytes.clone(),
-            images::MAX_ENCODED,
+            32 * 1024 * 1024, // Rendered-page PNG output bound, independent of source file size.
             cancel,
         )?;
         ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");

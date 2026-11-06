@@ -1,8 +1,6 @@
 //! Filesystem wire values; decoded images, notebooks and UI state never cross this boundary.
 use serde::{Deserialize, Serialize};
 
-/// Maximum text/hex file size in bytes; image/PDF transport has its own limit.
-pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum retained entries in one nonrecursive directory listing.
 pub const MAX_ENTRIES: usize = 10_000;
 
@@ -75,12 +73,12 @@ pub enum Request<T = serde_json::Value, S = serde_json::Value> {
         /// Directory path on the chosen host.
         path: String,
     },
-    /// Read bounded bytes, returning UTF-8 text or base64 binary according to content.
+    /// Read regular-file bytes, returning UTF-8 text or base64 binary according to content.
     ReadAuto {
         /// Source file path on the chosen host.
         path: String,
     },
-    /// Read bounded bytes explicitly as hex-editor data.
+    /// Read regular-file bytes explicitly as hex-editor data.
     ReadHex {
         /// Source file path on the chosen host.
         path: String,
@@ -109,6 +107,11 @@ pub enum Request<T = serde_json::Value, S = serde_json::Value> {
         /// Preview source path on the chosen host.
         path: String,
     },
+    /// Read an agent attachment under its independent protocol payload bound.
+    ReadAttachment {
+        /// Attachment source path on the chosen host.
+        path: String,
+    },
     /// Atomically save UTF-8 source using the same conflict rules as binary saves.
     Write {
         /// Destination path on the chosen host.
@@ -120,8 +123,25 @@ pub enum Request<T = serde_json::Value, S = serde_json::Value> {
     },
 }
 
-/// Bounded encoded preview limit, independent of desktop decoders.
-pub const MAX_PREVIEW_BYTES: usize = 32 * 1024 * 1024;
+impl<T, S> Request<T, S> {
+    /// Whether the reply/input can carry a whole ordinary document. Tool/control
+    /// and agent-attachment contracts keep their separate message bounds.
+    pub fn transfers_document(&self) -> bool {
+        matches!(
+            self,
+            Self::ReadAuto { .. }
+                | Self::ReadHex { .. }
+                | Self::Read { .. }
+                | Self::ReadImage { .. }
+                | Self::ReadBinary { .. }
+                | Self::Write { .. }
+                | Self::WriteBinary { .. }
+        )
+    }
+}
+
+/// Agent attachment transfer bound; ordinary document reads have no byte cap.
+pub const MAX_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
 
 /// Transport-only result of a filesystem operation.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

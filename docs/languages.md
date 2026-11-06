@@ -24,7 +24,7 @@ Install the listed tools on the computer where the project runs. Project-local `
 
 Formatters read the current buffer through stdin and return text; they do not write source files. Project configuration such as `.prettierrc`, `.clang-format`, `.editorconfig`, and Ruff settings is respected by the corresponding tool. Parser checks do not report type errors, compiler errors, or missing imports outside Ruff's checks. Ignored files follow the tool's ignore rules. There is no LSP, completion, or go-to-definition in this release.
 
-Live checks debounce for 900 ms, cover only the active buffer up to 512 KiB, and stop retrying an unavailable tool until a manual retry or settings change. Manual/save tools use the 8 MiB text limit. Outdated results are discarded. Missing tools or syntax errors preserve the submitted text and allow saving. A missing tool for one language does not disable other languages' checks.
+Live checks debounce for 900 ms, cover only the active buffer up to 512 KiB, and stop retrying an unavailable tool until a manual retry or settings change. Manual tools retain their own 8 MiB input limit; larger buffers skip automatic save hooks and use ordinary revision-checked saving. File opening and saving have no fixed byte-size ceiling. Outdated results are discarded. Missing tools or syntax errors preserve the submitted text and allow saving. A missing tool for one language does not disable other languages' checks.
 
 ## Run and build
 

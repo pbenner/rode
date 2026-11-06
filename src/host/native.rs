@@ -2,7 +2,7 @@
 use crate::{files, sandbox, ssh};
 use anyhow::{Context, Result, bail, ensure};
 use rode_host_protocol::{self as wire, framing};
-use rode_session::host::{Operation, Response};
+use rode_session::host::Response;
 use std::{
     collections::HashMap,
     io::{Read, Write},
@@ -16,6 +16,11 @@ use std::{
 };
 
 mod helper;
+
+// Serialization is synchronous, so the generic wire envelope can borrow large
+// file payloads instead of cloning them for the duration of an RPC.
+type Operation<'a> =
+    wire::Operation<&'a files::Request, &'a sandbox::Options, &'a crate::environment::Settings>;
 
 type PendingReply = Result<Response, String>;
 struct Pending {
@@ -192,7 +197,9 @@ impl Client {
             let ok = handshake.is_ok();
             let _ = hello_tx.send(handshake.map_err(|e| format!("{e:#}")));
             if ok {
-                while let Ok(Some(reply)) = framing::read::<wire::Reply<Response>>(&mut output) {
+                while let Ok(Some(reply)) =
+                    framing::read_document::<wire::Reply<Response>>(&mut output)
+                {
                     if let Ok(mut pending) = reader.pending.lock() {
                         if let Some(call) = pending.calls.remove(&reply.id) {
                             let _ = call.try_send(reply.result);
@@ -274,7 +281,7 @@ impl Client {
             let _ = child.wait();
         }
     }
-    fn call(&self, operation: Operation) -> Result<Response> {
+    fn call(&self, operation: Operation<'_>) -> Result<Response> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::sync_channel(1);
         {
@@ -301,7 +308,7 @@ impl Client {
                 .input
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Host writer lock failed"))?;
-            framing::write(
+            framing::write_document(
                 &mut DeadlineWriter::new(&mut input, Duration::from_secs(45))?,
                 &wire::Request { id, operation },
             )?;
@@ -331,7 +338,7 @@ impl Client {
             );
             Operation::Prepare {
                 path: path.clone(),
-                options: sandbox.clone(),
+                options: sandbox,
             }
         } else {
             let context = plan
@@ -353,7 +360,7 @@ impl Client {
                     }
                     let Response::Derived { context } = self.call(Operation::Derive {
                         context: base.clone(),
-                        environment: plan.environment.clone(),
+                        environment: &plan.environment,
                     })?
                     else {
                         bail!("Invalid derived host context response")
@@ -362,10 +369,7 @@ impl Client {
                     Ok(context)
                 })
                 .transpose()?;
-            Operation::Run {
-                context,
-                request: request.clone(),
-            }
+            Operation::Run { context, request }
         };
         match self.call(operation)? {
             Response::Prepared { response } | Response::Completed { response } => {

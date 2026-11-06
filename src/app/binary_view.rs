@@ -1,10 +1,19 @@
-//! Virtualized hex editing and static binary inspection from bounded snapshots.
+//! Virtualized hex editing and static binary inspection from in-memory snapshots.
 //!
-//! Immutable snapshots and a shared budget cover worker analysis and save copies. Cache
+//! Shared snapshot leases account for worker analysis and save copies. Cache
 //! dirty/disassembly state between edits, render visible rows only, and reject results for
 //! obsolete buffer versions or decoder parameters.
 use super::*;
 use crate::binary::{self, Buffer, Report};
+
+// Keep scroll geometry below f32 precision limits. Paging the display does not
+// truncate the in-memory file; Go/search/table selection can reach every byte.
+const HEX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
+
+fn hex_window(offset: usize, length: usize) -> std::ops::Range<usize> {
+    let start = offset.min(length.saturating_sub(1)) / HEX_WINDOW_BYTES * HEX_WINDOW_BYTES;
+    start..start.saturating_add(HEX_WINDOW_BYTES).min(length)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 /// Selected static inspection mode; switching views never executes the inspected binary.
@@ -54,7 +63,7 @@ pub(super) struct HexView {
     analysis_serial: u64,
 }
 impl HexView {
-    /// Initialize byte editing and inspection from a bounded loaded snapshot without executing it.
+    /// Initialize byte editing and inspection from a shared snapshot without executing it.
     pub fn new(loaded: binary::Loaded) -> Self {
         let bits = if loaded.report.bits == 32 { 32 } else { 64 };
         Self {
@@ -84,11 +93,11 @@ impl HexView {
         }
     }
     fn select(&mut self, offset: usize) {
-        self.offset = offset.min(self.buffer.bytes.len().saturating_sub(1));
+        self.offset = offset.min(self.buffer.bytes().len().saturating_sub(1));
         self.offset_text = format!("{:X}", self.offset);
         self.patch = self
             .buffer
-            .bytes
+            .bytes()
             .get(self.offset)
             .map(|b| format!("{b:02X}"))
             .unwrap_or_default();
@@ -100,7 +109,7 @@ impl HexView {
         if self.worker.is_some() {
             return;
         }
-        let bytes = self.buffer.bytes.clone();
+        let bytes = self.buffer.bytes().clone();
         let lease = self._lease.clone();
         let offset = self.offset;
         let bits = self.bits;
@@ -210,7 +219,7 @@ impl EditorApp {
         let Some(view) = &doc.hex else {
             return;
         };
-        let bytes = view.buffer.bytes.clone();
+        let bytes = view.buffer.bytes().clone();
         let lease = view._lease.clone();
         let expected = if save_as && doc.path.as_deref() != Some(&path) {
             None
@@ -279,7 +288,11 @@ impl EditorApp {
             }
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label(palette.tag(format!("{} BYTES", view.buffer.bytes.len())));
+            let ready = ui.label(palette.tag(format!("{} BYTES", view.buffer.bytes().len())));
+            ui_probe::button(ui, "hex-ready", &ready);
+            if !doc.modified && !doc.saving {
+                ui_probe::button(ui, "hex-saved", &ready);
+            }
             for (mode, name) in [
                 (View::Hex, "Hex"),
                 (View::Overview, "Overview"),
@@ -303,11 +316,12 @@ impl EditorApp {
                     .desired_width(90.)
                     .char_limit(16),
             );
-            if ui.button("Go").clicked()
-                || (jump.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
-            {
+            ui_probe::button(ui, "hex-offset", &jump);
+            let go = ui.button("Go");
+            ui_probe::button(ui, "hex-go", &go);
+            if go.clicked() || (jump.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
                 match usize::from_str_radix(view.offset_text.trim().trim_start_matches("0x"), 16) {
-                    Ok(offset) if offset < view.buffer.bytes.len() => {
+                    Ok(offset) if offset < view.buffer.bytes().len() => {
                         view.select(offset);
                         view.mode = View::Hex;
                         view.error.clear();
@@ -339,15 +353,19 @@ impl EditorApp {
         });
         if view.mode == View::Hex {
             ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut view.editing, "Edit bytes");
+                let edit = ui.checkbox(&mut view.editing, "Edit bytes");
+                ui_probe::button(ui, "hex-edit", &edit);
                 ui.add_enabled_ui(view.editing, |ui| {
-                    ui.add(
+                    let patch = ui.add(
                         egui::TextEdit::singleline(&mut view.patch)
                             .desired_width(150.)
                             .hint_text("90 90 C3")
                             .char_limit(12288),
                     );
-                    if ui.button("Overwrite").clicked() {
+                    ui_probe::button(ui, "hex-patch", &patch);
+                    let overwrite = ui.button("Overwrite");
+                    ui_probe::button(ui, "hex-overwrite", &overwrite);
+                    if overwrite.clicked() {
                         match binary::parse_hex(&view.patch)
                             .and_then(|bytes| view.buffer.patch(view.offset, bytes))
                         {
@@ -368,7 +386,7 @@ impl EditorApp {
                     }
                 });
                 if ui.button("Copy byte").clicked()
-                    && let Some(byte) = view.buffer.bytes.get(view.offset)
+                    && let Some(byte) = view.buffer.bytes().get(view.offset)
                 {
                     ctx.copy_text(format!("{byte:02X}"));
                 }
@@ -402,7 +420,7 @@ impl EditorApp {
                     }
                 }
                 ui.checkbox(&mut view.little, "Little endian");
-                let remaining = &view.buffer.bytes[view.offset.min(view.buffer.bytes.len())..];
+                let remaining = &view.buffer.bytes()[view.offset.min(view.buffer.bytes().len())..];
                 if let Some(&byte) = remaining.first() {
                     ui.monospace(format!("u8 {byte} / i8 {}", byte as i8));
                 }
@@ -444,9 +462,35 @@ impl EditorApp {
         if !view.error.is_empty() {
             ui.colored_label(palette.error, &view.error);
         }
+        let mut grid_rect = egui::Rect::NOTHING;
         let columns = if ui.available_width() < 650. { 8 } else { 16 };
         let font = FontId::monospace(13.);
         if view.mode == View::Hex {
+            if view.buffer.bytes().len() > HEX_WINDOW_BYTES {
+                ui.horizontal_wrapped(|ui| {
+                    let range = hex_window(view.offset, view.buffer.bytes().len());
+                    let previous =
+                        ui.add_enabled(range.start > 0, egui::Button::new("Previous page"));
+                    ui_probe::button(ui, "hex-previous-page", &previous);
+                    if previous.clicked() {
+                        view.select(range.start - HEX_WINDOW_BYTES);
+                    }
+                    let next = ui.add_enabled(
+                        range.end < view.buffer.bytes().len(),
+                        egui::Button::new("Next page"),
+                    );
+                    ui_probe::button(ui, "hex-next-page", &next);
+                    if next.clicked() {
+                        view.select(range.end);
+                    }
+                    ui.small(format!(
+                        "Page {} / {} · use Offset or Find to jump anywhere",
+                        view.offset / HEX_WINDOW_BYTES + 1,
+                        view.buffer.bytes().len().div_ceil(HEX_WINDOW_BYTES)
+                    ));
+                });
+            }
+            let window = hex_window(view.offset, view.buffer.bytes().len());
             let cols = columns;
             ui.monospace(if cols == 16 {
                 "OFFSET     00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F   ASCII"
@@ -455,25 +499,30 @@ impl EditorApp {
             });
             ui.spacing_mut().item_spacing.y = 0.;
             let row_height = 22.;
+            // Horizontal layouts reserve the parent's interaction height before
+            // rendering their children. Set the compact data-cell style here
+            // so actual rows and the virtualized scroll stride agree in every theme.
+            ui.spacing_mut().interact_size = egui::vec2(23., row_height);
+            ui.spacing_mut().button_padding = egui::vec2(2., 2.);
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let mut scroll = egui::ScrollArea::both()
-                .id_salt(("hex-scroll", id))
+                .id_salt(("hex-scroll", id, window.start))
                 .auto_shrink([false, false]);
             if view.reveal {
-                scroll = scroll.vertical_scroll_offset((view.offset / cols) as f32 * row_height);
+                scroll = scroll.vertical_scroll_offset(
+                    ((view.offset - window.start) / cols) as f32 * row_height,
+                );
                 view.reveal = false;
             }
-            scroll.show_rows(
-                ui,
-                row_height,
-                view.buffer.bytes.len().div_ceil(cols),
-                |ui, range| {
+            let grid =
+                scroll.show_rows(ui, row_height, window.len().div_ceil(cols), |ui, range| {
                     for row in range {
-                        let start = row * cols;
-                        let end = (start + cols).min(view.buffer.bytes.len());
+                        let start = window.start + row * cols;
+                        let end = (start + cols).min(view.buffer.bytes().len());
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.;
                             ui.add_sized(
-                                [77., 20.],
+                                [77., row_height],
                                 egui::Label::new(
                                     RichText::new(format!("{start:08X}"))
                                         .font(font.clone())
@@ -481,31 +530,36 @@ impl EditorApp {
                                 ),
                             );
                             for offset in start..end {
-                                let byte = view.buffer.bytes[offset];
-                                let changed = view.buffer.saved.get(offset) != Some(&byte);
-                                if ui
-                                    .add_sized(
-                                        [23., 20.],
-                                        egui::Button::new(
-                                            RichText::new(format!("{byte:02X}"))
-                                                .font(font.clone())
-                                                .color(if changed {
-                                                    palette.accent
-                                                } else {
-                                                    palette.text
-                                                }),
-                                        )
-                                        .selected(offset == view.offset)
-                                        .frame(offset == view.offset),
+                                let byte = view.buffer.bytes()[offset];
+                                let changed = view.buffer.saved().get(offset) != Some(&byte);
+                                let byte_button = ui.add_sized(
+                                    [23., row_height],
+                                    egui::Button::new(
+                                        RichText::new(format!("{byte:02X}"))
+                                            .font(font.clone())
+                                            .color(if changed {
+                                                palette.accent
+                                            } else {
+                                                palette.text
+                                            }),
                                     )
-                                    .clicked()
-                                {
+                                    .selected(offset == view.offset)
+                                    .frame(offset == view.offset),
+                                );
+                                if offset == view.offset {
+                                    ui_probe::button(
+                                        ui,
+                                        &format!("hex-byte:{offset}"),
+                                        &byte_button,
+                                    );
+                                }
+                                if byte_button.clicked() {
                                     view.select(offset);
                                     view.reveal = false;
                                     focus_grid = true;
                                 }
                             }
-                            let ascii: String = view.buffer.bytes[start..end]
+                            let ascii: String = view.buffer.bytes()[start..end]
                                 .iter()
                                 .map(|b| {
                                     if b.is_ascii_graphic() || *b == b' ' {
@@ -518,8 +572,8 @@ impl EditorApp {
                             ui.monospace(ascii);
                         });
                     }
-                },
-            );
+                });
+            grid_rect = grid.inner_rect;
         } else if view.mode == View::Overview {
             egui::ScrollArea::vertical().show(ui,|ui| {
                 let r=&view.report;
@@ -629,11 +683,8 @@ impl EditorApp {
             }
         }
         let focus_id = egui::Id::new(("hex", id));
-        let response = ui.interact(
-            egui::Rect::NOTHING,
-            focus_id,
-            Sense::focusable_noninteractive(),
-        );
+        let response = ui.interact(grid_rect, focus_id, Sense::focusable_noninteractive());
+        ui_probe::button(ui, "hex-grid", &response);
         if focus_grid {
             ctx.memory_mut(|m| m.request_focus(focus_id));
         }
@@ -666,7 +717,7 @@ impl EditorApp {
                     target = 0;
                 }
                 if i.consume_key(egui::Modifiers::NONE, Key::End) {
-                    target = view.buffer.bytes.len().saturating_sub(1);
+                    target = view.buffer.bytes().len().saturating_sub(1);
                 }
             });
             if target != view.offset {
@@ -715,7 +766,12 @@ impl EditorApp {
                 view.version += 1;
             }
         }
+        if view.reveal {
+            ctx.request_repaint();
+        }
         if initial_version != view.version {
+            // Keyboard edits happen after the grid/header were rendered.
+            ctx.request_repaint();
             doc.modified = view.buffer.dirty();
             doc.edit_version = doc.edit_version.wrapping_add(1);
         }
@@ -746,6 +802,78 @@ mod tests {
     use base64::{Engine, engine::general_purpose::STANDARD};
 
     #[test]
+    fn a_large_files_last_requested_row_stays_fully_visible_across_repaints_and_themes() {
+        for theme in ["carbon", "studio-neutral", "studio-hacker"] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            crate::theme::install(&ctx, crate::theme::Theme::builtin(theme).unwrap().palette);
+            app.new_file();
+            let length = HEX_WINDOW_BYTES + 1024 * 1024;
+            let bytes = Arc::new(vec![0; length]);
+            let loaded = binary::Loaded {
+                bytes,
+                report: Arc::new(Report::default()),
+                lease: Arc::new(app.image_budget.reserve_source(length).unwrap()),
+            };
+            let mut view = HexView::new(loaded);
+            view.select(length - 1);
+            app.documents[0].hex = Some(view);
+            for frame in 0..5 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1380., 900.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            app.hex_ui(ui, ctx);
+                        });
+                    },
+                );
+                if frame >= 2 {
+                    let label = format!("{:08X}", (length - 1) / 16 * 16);
+                    assert!(
+                        output.shapes.iter().any(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                text.galley.job.text == label
+                                    && shape.clip_rect.contains_rect(egui::Rect::from_min_size(
+                                        text.pos,
+                                        text.galley.size(),
+                                    ))
+                            } else {
+                                false
+                            }
+                        }),
+                        "{theme}: the selected final row must remain fully visible after frame {frame}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn large_hex_offsets_keep_scroll_geometry_precise_and_cover_the_file_tail() {
+        assert_eq!(hex_window(0, 0), 0..0);
+        for length in [
+            1,
+            HEX_WINDOW_BYTES,
+            HEX_WINDOW_BYTES + 1,
+            1024 * 1024 * 1024 + 17,
+            usize::MAX,
+        ] {
+            let range = hex_window(usize::MAX, length);
+            assert!(range.contains(&(length - 1)));
+            assert_eq!(range.end, length);
+            assert!(range.len() <= HEX_WINDOW_BYTES);
+            assert!((range.len().div_ceil(8) as f32 * 22.) < (1 << 24) as f32);
+        }
+    }
+
+    #[test]
     fn disassembly_results_match_the_offset_mode_and_buffer_version() {
         let budget = Arc::new(crate::images::Budget::default());
         let loaded = binary::Loaded::decode(&STANDARD.encode([0x90, 0xc3]), &budget).unwrap();
@@ -756,7 +884,7 @@ mod tests {
             offset: 0,
             bits: view.bits,
         };
-        let instructions = binary::disassemble(&view.buffer.bytes, 0, 0, view.bits).unwrap();
+        let instructions = binary::disassemble(view.buffer.bytes(), 0, 0, view.bits).unwrap();
         view.offset = 1;
         view.complete_analysis((key, report.clone(), instructions.clone()));
         assert!(view.instructions.is_empty());
@@ -796,18 +924,18 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        let bytes = Arc::new(vec![0; binary::MAX_BYTES]);
+        let bytes = Arc::new(vec![0; 64 * 1024 * 1024]);
         let loaded = binary::Loaded {
             report: Arc::new(binary::inspect(&bytes)),
             lease: Arc::new(
                 app.image_budget
-                    .reserve(bytes.len() * 4 + 5 * 1024 * 1024)
+                    .reserve_source(bytes.len() * 4 + 5 * 1024 * 1024)
                     .unwrap(),
             ),
             bytes,
         };
         let mut view = HexView::new(loaded);
-        view.buffer.patch(binary::MAX_BYTES - 1, vec![1]).unwrap();
+        view.buffer.patch(64 * 1024 * 1024 - 1, vec![1]).unwrap();
         view.version = 1;
         app.documents[0].hex = Some(view);
         app.documents[0].modified = true;
@@ -830,7 +958,7 @@ mod tests {
         }
         sample.sort_by(f64::total_cmp);
         println!(
-            "Hex 8 MiB unchanged frame: median {:.3} ms, p95 {:.3} ms (100 warmed frames)",
+            "Hex 64 MiB unchanged frame: median {:.3} ms, p95 {:.3} ms (100 warmed frames)",
             sample[50], sample[95]
         );
         assert!(app.documents[0].dirty());
@@ -847,7 +975,7 @@ mod tests {
         let view = app.documents[0].hex.as_ref().unwrap();
         let job = Job::SaveBinary {
             id: app.documents[0].id,
-            bytes: view.buffer.bytes.clone(),
+            bytes: view.buffer.bytes().clone(),
             _lease: view._lease.clone(),
         };
         app.documents.clear();
@@ -911,7 +1039,10 @@ mod tests {
         );
         frame(&mut app, vec![button(false)]);
         frame(&mut app, vec![egui::Event::Text("cc".into())]);
-        assert_eq!(app.documents[0].hex.as_ref().unwrap().buffer.bytes[0], 0xcc);
+        assert_eq!(
+            app.documents[0].hex.as_ref().unwrap().buffer.bytes()[0],
+            0xcc
+        );
         let arrow = egui::Event::Key {
             key: Key::ArrowRight,
             physical_key: None,
@@ -921,7 +1052,10 @@ mod tests {
         };
         frame(&mut app, vec![arrow]);
         frame(&mut app, vec![egui::Event::Text("dd".into())]);
-        assert_eq!(app.documents[0].hex.as_ref().unwrap().buffer.bytes[2], 0xdd);
+        assert_eq!(
+            app.documents[0].hex.as_ref().unwrap().buffer.bytes()[2],
+            0xdd
+        );
     }
     #[test]
     fn binary_save_acknowledgements_and_disabling_preserve_newer_byte_edits() {
@@ -935,7 +1069,7 @@ mod tests {
         app.documents[0].hex = Some(HexView::new(loaded));
         let hex = app.documents[0].hex.as_mut().unwrap();
         hex.buffer.patch(1, vec![9]).unwrap();
-        let submitted = hex.buffer.bytes.clone();
+        let submitted = hex.buffer.bytes().clone();
         hex.buffer.patch(2, vec![8]).unwrap();
         app.documents[0].modified = true;
         app.tx
@@ -961,7 +1095,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .buffer
-                .bytes
+                .bytes()
                 .as_slice(),
             [0, 9, 8, 255]
         );

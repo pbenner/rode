@@ -532,7 +532,7 @@ pub fn local<S, H, R>(request: &Request<S, H>) -> Result<Response<R>> {
             check,
             fix,
         } => {
-            if text.len() as u64 > crate::files::MAX_FILE_BYTES {
+            if text.len() as u64 > crate::files::MAX_TOOL_BYTES {
                 bail!("Buffer exceeds the tool limit.");
             }
             Ok(Response::Analysis(analyze(

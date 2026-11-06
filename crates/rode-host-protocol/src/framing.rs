@@ -2,13 +2,16 @@
 use serde::{Serialize, de::DeserializeOwned};
 use std::io::{self, Read, Write};
 
+mod stream;
+pub use stream::{read_document, read_json_line, write_document};
+
 /// Independent of the persistent-session protocol.
 pub const VERSION: u32 = 1;
 /// Reject shell banners and incompatible peers before interpreting any request.
 pub const MAGIC: &[u8; 12] = b"RODE-HOST\0\0\x01";
 /// Physical frames are small enough to bound individual transport allocations.
 pub const CHUNK: usize = 64 * 1024;
-/// Includes base64 encoding of the existing 32 MiB preview limit.
+/// Limit for control messages; document transfers use the streaming entry points.
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
 struct Bounded(Vec<u8>);

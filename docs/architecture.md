@@ -311,13 +311,15 @@ Host wire version 1 is separate from session protocol 13 and helper API revision
 Maintain `rode_host_protocol::helper::API` for incompatible changes to helper CLI arguments, shared request/response DTOs, or auxiliary streams not already versioned by the host/session protocols. Additive capabilities may be advertised without breaking old clients; update the required set when the desktop depends on them. Bump the metadata format for incompatible discovery-schema changes. Keep metadata side-effect-free and repeat it in the handshake; do not substitute package-version comparisons for these contracts.
 
 - Each physical frame is a big-endian 32-bit length plus at most 64 KiB of data. A zero length ends the message. Lengths are checked before allocation.
-- JSON envelopes are capped at 64 MiB to retain existing base64 file/image/PDF payload contracts. Existing text/decoded-image limits still apply. Version 1 does not introduce a separate binary payload protocol or structured error taxonomy.
+- The bounded `framing::read/write` entry points retain a 64 MiB control-envelope limit. The authenticated host RPC channel uses `read_document/write_document` with the same wire format, 64 KiB physical frames, streaming JSON serialization/deserialization and no whole-file byte ceiling. The `large_document_transfer` helper capability prevents reuse of an older capped helper. Tool/attachment/decoded-raster contracts retain their independent limits; document snapshots are accounted outside the raster pixel budget. Version 1 still uses JSON/base64 file payloads rather than a separate binary payload protocol.
 - The desktop allows four pending calls; the gateway has four workers and four queued requests. Replies carry request IDs and may arrive out of order. A worker handles one operation, then exits.
 - RPC writes have a 45-second deadline and responses a 160-second deadline. Gateway input EOF cancels owned transient commands. Process/build streams keep their existing narrower operation limits and cancellation paths.
 - Terminal and long-lived process streams use separate channels on the same master. They retain their own bounded queues and cannot be blocked behind a bulk RPC response. Host OpenSSH channel limits still apply.
 - Lost acknowledgements are uncertain outcomes. RODE does not replay a save, Git mutation, deployment or session creation after channel loss. Revision checks and explicit reconnect/reattach provide recovery; there is no exactly-once guarantee across gateway restarts.
 
-The implementation uses existing threads and bounded channels, with no new async runtime. Memory remains bounded, but multiple maximum-sized JSON replies can still consume substantial memory; the message cap is a compatibility ceiling, not an idle allocation or a performance claim.
+The implementation uses existing threads and bounded channels, with no new async runtime. Physical transport buffers and pending-call counts remain bounded. Document fields and editor snapshots are loaded into RAM, so their sizes and concurrent copies determine peak memory use; document messages have no whole-file byte ceiling.
+
+A text save passes one submitted snapshot between its worker request and acknowledgement instead of retaining a duplicate in each. The editable document stays independent so typing during I/O remains unsaved. Native RPC envelopes borrow their file payload during synchronous serialization; they do not clone the whole document to submit an operation.
 
 ### Deployment and lifetime
 

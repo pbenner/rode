@@ -104,7 +104,19 @@ fn execution_results_are_version_checked_and_output_limits_roll_back_atomically(
     ] {
         assert!(Notebook::parse(invalid).is_err());
     }
-    assert!(Notebook::parse(&" ".repeat(notebook::MAX_BYTES + 1)).is_err());
+    let large = serde_json::json!({"nbformat":4,"nbformat_minor":5,"metadata":{"retained":"x".repeat(8 * 1024 * 1024 + 1)},"cells":[]});
+    let large = Notebook::parse(&large.to_string())
+        .unwrap()
+        .serialize()
+        .unwrap();
+    assert!(large.len() > 8 * 1024 * 1024);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&large).unwrap()["metadata"]["retained"]
+            .as_str()
+            .unwrap()
+            .len(),
+        8 * 1024 * 1024 + 1
+    );
 }
 #[test]
 fn installed_python_kernel_keeps_state_streams_errors_and_real_png_outputs() {

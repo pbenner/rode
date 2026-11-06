@@ -7,6 +7,8 @@ mod explorer;
 mod fixture_process;
 #[path = "ssh_roundtrip/installed_helpers.rs"]
 mod installed_helpers;
+#[path = "ssh_roundtrip/large_files.rs"]
+mod large_files;
 
 use rode::{
     files::Request,

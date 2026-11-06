@@ -43,7 +43,7 @@ fn byte_patches_undo_search_and_inflight_saves_preserve_arbitrary_data() {
     let mut buffer = Buffer::new(bytes.clone());
     assert!(!buffer.dirty());
     buffer.patch(1, vec![0x90, 0x90]).unwrap();
-    let submitted = buffer.bytes.clone();
+    let submitted = buffer.bytes().clone();
     buffer.patch(3, vec![0xcc]).unwrap();
     buffer.acknowledge(submitted);
     assert!(buffer.dirty());
@@ -52,10 +52,10 @@ fn byte_patches_undo_search_and_inflight_saves_preserve_arbitrary_data() {
     buffer.undo();
     assert!(!buffer.dirty());
     buffer.undo();
-    assert_eq!(buffer.bytes, bytes);
+    assert_eq!(buffer.bytes(), &bytes);
     buffer.redo();
     buffer.redo();
-    assert_eq!(buffer.bytes[3], 0xcc);
+    assert_eq!(buffer.bytes()[3], 0xcc);
     assert!(buffer.patch(5, vec![1, 2]).is_err());
     assert!(buffer.patch(usize::MAX, vec![1]).is_err());
     assert_eq!(binary::parse_hex("00 ff\n80").unwrap(), [0, 255, 128]);
@@ -110,10 +110,14 @@ fn binary_local_and_python_saves_match_and_detect_conflicts_without_corrupting_b
     }
     fs::File::create(&path)
         .unwrap()
-        .set_len(binary::MAX_BYTES as u64 + 1)
+        .set_len(40 * 1024 * 1024 + 1)
         .unwrap();
-    assert!(files::local(&request).is_err());
-    assert!(peer(&request).is_err());
+    for response in [files::local(&request).unwrap(), peer(&request).unwrap()] {
+        let loaded =
+            binary::Loaded::decode(&response.binary.unwrap(), &Arc::new(Budget::default()))
+                .unwrap();
+        assert_eq!(loaded.bytes.len(), 40 * 1024 * 1024 + 1);
+    }
 }
 #[test]
 fn native_x86_decode_maps_addresses_and_never_launches_inspected_code() {
@@ -306,4 +310,83 @@ fn pe_and_macho_headers_use_native_parsers() {
     let report = binary::inspect(&mach);
     assert_eq!(report.format, "MachO");
     assert_eq!(report.sections[0].offset, Some(256));
+}
+
+#[test]
+fn dirty_tracking_matches_full_comparison_across_overlapping_edits_and_old_save_acknowledgements() {
+    let mut buffer = Buffer::new(Arc::new(vec![0; 128]));
+    let mut older = buffer.bytes().clone();
+    for index in 0..600 {
+        let offset = index * 17 % 124;
+        match index % 6 {
+            0 => {
+                older = buffer.bytes().clone();
+                buffer.patch(offset, vec![index as u8; 4]).unwrap();
+            }
+            1 => {
+                buffer.patch(offset, vec![0; 4]).unwrap();
+            }
+            2 => buffer.undo(),
+            3 => buffer.redo(),
+            4 => buffer.acknowledge(older.clone()),
+            _ => buffer.acknowledge(buffer.bytes().clone()),
+        }
+        assert_eq!(
+            buffer.dirty(),
+            buffer.bytes() != buffer.saved(),
+            "step {index}"
+        );
+    }
+}
+
+#[test]
+fn wrapped_search_matches_offset_order_for_overlapping_patterns_and_every_start() {
+    for length in 0..=8 {
+        for bits in 0..1usize << length {
+            let bytes: Vec<u8> = (0..length).map(|i| ((bits >> i) & 1) as u8).collect();
+            let buffer = Buffer::new(Arc::new(bytes.clone()));
+            assert_eq!(buffer.find(&[], 0), None);
+            for width in 1..=5 {
+                for pattern in 0..1usize << width {
+                    let needle: Vec<u8> = (0..width).map(|i| ((pattern >> i) & 1) as u8).collect();
+                    let offsets: Vec<usize> = bytes
+                        .windows(width)
+                        .enumerate()
+                        .filter_map(|(i, window)| (window == needle).then_some(i))
+                        .collect();
+                    for from in (0..=length + 1).chain([usize::MAX]) {
+                        let expected = offsets
+                            .iter()
+                            .copied()
+                            .find(|&i| i >= from)
+                            .or_else(|| offsets.first().copied());
+                        assert_eq!(
+                            buffer.find(&needle, from),
+                            expected,
+                            "bytes {bytes:?}, needle {needle:?}, from {from}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn capped_string_reports_still_hash_and_measure_entropy_for_the_entire_file() {
+    let mut bytes = b"abcd\0".repeat(binary::MAX_ROWS);
+    bytes.extend([0; 4096]);
+    let first = binary::inspect(&bytes);
+    bytes.extend(b"unretained tail");
+    let second = binary::inspect(&bytes);
+    assert_eq!(first.strings.len(), binary::MAX_ROWS);
+    assert_eq!(second.strings.len(), binary::MAX_ROWS);
+    assert_eq!(
+        second.strings.last().unwrap().offset,
+        (binary::MAX_ROWS - 1) * 5
+    );
+    assert_eq!(second.strings.last().unwrap().text, "abcd");
+    assert_eq!(second.sha256, files::digest(&bytes));
+    assert_ne!(first.sha256, second.sha256);
+    assert_ne!(first.entropy, second.entropy);
 }

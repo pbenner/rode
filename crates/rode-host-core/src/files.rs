@@ -1,4 +1,4 @@
-//! Bounded file operations shared by the local and remote workspace backends.
+//! Native file operations shared by the local and remote workspace backends.
 //!
 //! # Design decisions
 //!
@@ -20,16 +20,17 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 mod mutations;
 
-pub use rode_host_protocol::files::{
-    Entry, MAX_ENTRIES, MAX_FILE_BYTES, MAX_PREVIEW_BYTES, Response,
-};
+/// Independent source/input bound for formatter and extension tool execution.
+pub const MAX_TOOL_BYTES: u64 = 8 * 1024 * 1024;
+
+pub use rode_host_protocol::files::{Entry, MAX_ATTACHMENT_BYTES, MAX_ENTRIES, Response};
 /// Concrete shared file envelope for headless service callers.
 pub type Request =
     rode_host_protocol::files::Request<crate::project::Request, crate::sandbox::Options>;
@@ -53,7 +54,7 @@ pub fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Execute a blocking, bounded host file request. Resolves symlinks before saving, locks
+/// Execute a blocking host file request. Resolves symlinks before saving, locks
 /// cooperating writers, compares revisions, and publishes through a neighboring temporary
 /// inode. Call off the UI thread or inside the prepared helper boundary.
 pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
@@ -68,6 +69,7 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
         | Envelope::Read { path }
         | Envelope::ReadImage { path }
         | Envelope::ReadBinary { path }
+        | Envelope::ReadAttachment { path }
         | Envelope::Write { path, .. } => expand_home(path),
         Envelope::Prepare { .. } | Envelope::Tool { .. } | Envelope::Mutate { .. } => {
             bail!("Not a filesystem operation")
@@ -116,19 +118,21 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
         }
         Envelope::ReadAuto { .. } | Envelope::ReadHex { .. } => {
             use base64::{Engine, engine::general_purpose::STANDARD};
-            let bytes = read_bounded(&path)?;
+            let bytes = read_document(&path)?;
             response.revision = digest(&bytes);
-            if !matches!(request, Envelope::ReadHex { .. })
-                && !bytes.contains(&0)
-                && std::str::from_utf8(&bytes).is_ok()
-            {
-                response.text = String::from_utf8(bytes)?;
-            } else {
+            if matches!(request, Envelope::ReadHex { .. }) || bytes.contains(&0) {
                 response.binary = Some(STANDARD.encode(bytes));
+            } else {
+                // Take ownership on success and recover the same allocation for
+                // binary data on failure; validate UTF-8 only once.
+                match String::from_utf8(bytes) {
+                    Ok(text) => response.text = text,
+                    Err(error) => response.binary = Some(STANDARD.encode(error.into_bytes())),
+                }
             }
         }
         Envelope::Read { .. } => {
-            let bytes = read_bounded(&path)?;
+            let bytes = read_document(&path)?;
             if bytes.contains(&0) {
                 bail!("Binary files cannot be edited.");
             }
@@ -136,12 +140,9 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
             response.text =
                 String::from_utf8(bytes).context("Only UTF-8 text files are supported")?;
         }
-        Envelope::ReadImage { .. } | Envelope::ReadBinary { .. } => {
-            let kind = if matches!(request, Envelope::ReadBinary { .. }) {
-                "Preview"
-            } else {
-                "Image"
-            };
+        Envelope::ReadImage { .. }
+        | Envelope::ReadBinary { .. }
+        | Envelope::ReadAttachment { .. } => {
             use base64::{Engine, engine::general_purpose::STANDARD};
             use std::io::Read;
             anyhow::ensure!(
@@ -154,19 +155,27 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
                 metadata.is_file(),
                 "Only regular image files can be opened."
             );
-            anyhow::ensure!(
-                metadata.len() <= MAX_PREVIEW_BYTES as u64,
-                "{kind} file exceeds 32 MiB."
-            );
             let mut bytes = Vec::new();
-            file.take(MAX_PREVIEW_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)?;
-            anyhow::ensure!(
-                bytes.len() <= MAX_PREVIEW_BYTES,
-                "{kind} file exceeds 32 MiB."
-            );
+            if matches!(request, Envelope::ReadAttachment { .. }) {
+                anyhow::ensure!(
+                    metadata.len() <= MAX_ATTACHMENT_BYTES as u64,
+                    "Attachment exceeds 32 MiB."
+                );
+                file.take(MAX_ATTACHMENT_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)?;
+                anyhow::ensure!(
+                    bytes.len() <= MAX_ATTACHMENT_BYTES,
+                    "Attachment exceeds 32 MiB."
+                );
+            } else {
+                let mut file = file;
+                file.read_to_end(&mut bytes)?;
+            }
             response.revision = digest(&bytes);
-            if matches!(request, Envelope::ReadBinary { .. }) {
+            if matches!(
+                request,
+                Envelope::ReadBinary { .. } | Envelope::ReadAttachment { .. }
+            ) {
                 response.binary = Some(STANDARD.encode(bytes));
             } else {
                 response.image = Some(STANDARD.encode(bytes));
@@ -175,23 +184,17 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
         Envelope::Write { expected, .. } | Envelope::WriteBinary { expected, .. } => {
             use base64::{Engine, engine::general_purpose::STANDARD};
             let content = match request {
-                Envelope::Write { text, .. } => text.as_bytes().to_vec(),
-                Envelope::WriteBinary { data, .. } => {
-                    anyhow::ensure!(
-                        data.len() <= (MAX_FILE_BYTES as usize).div_ceil(3) * 4,
-                        "Binary file exceeds 8 MiB."
-                    );
-                    STANDARD.decode(data).context("Invalid binary save data")?
-                }
+                Envelope::Write { text, .. } => std::borrow::Cow::Borrowed(text.as_bytes()),
+                Envelope::WriteBinary { data, .. } => std::borrow::Cow::Owned(
+                    STANDARD.decode(data).context("Invalid binary save data")?,
+                ),
                 _ => unreachable!(),
             };
-            if content.len() as u64 > MAX_FILE_BYTES {
-                bail!("File exceeds the 8 MiB editing limit.");
-            }
             let existing = crate::locking::lock_existing(&path)?;
             let permissions = if let Some(file) = &existing {
-                let bytes = read_bounded(&path)?;
-                if expected.as_deref() != Some(digest(&bytes).as_str()) {
+                if expected.is_none()
+                    || expected.as_deref() != Some(digest_open_file(file)?.as_str())
+                {
                     bail!(
                         "Save conflict: this file changed on disk. Your edits are still open; use Save As to keep a separate copy, or close and reopen to load the disk version."
                     );
@@ -212,17 +215,33 @@ pub fn dispatch<T, S>(request: &Envelope<T, S>) -> Result<Response> {
     Ok(response)
 }
 
-fn read_bounded(path: &Path) -> Result<Vec<u8>> {
+/// Hash the locked saved baseline incrementally instead of allocating another
+/// file-sized snapshot merely to detect a conflict during a large save.
+fn digest_open_file(mut file: &fs::File) -> Result<String> {
+    let mut hash = Sha256::new();
+    let mut block = [0; 64 * 1024];
+    loop {
+        let count = match file.read(&mut block) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            break;
+        }
+        hash.update(&block[..count]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn read_document(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     let file = crate::locking::open_regular(path, false)?;
     if !file.metadata()?.is_file() {
         bail!("Only regular files can be edited.");
     }
     let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        bail!("File exceeds the 8 MiB editing limit.");
-    }
+    let mut file = file;
+    file.read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
@@ -289,6 +308,33 @@ pub fn local(request: &Request) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_reads_classify_text_without_losing_invalid_utf8_or_nul_bytes() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("content");
+        for bytes in [
+            b"".as_slice(),
+            "UTF-8 \u{1f980}\n".as_bytes(),
+            b"invalid \xff UTF-8",
+            b"text\0with nul",
+        ] {
+            fs::write(&path, bytes).unwrap();
+            let response = local(&Request::ReadAuto {
+                path: path.to_string_lossy().into(),
+            })
+            .unwrap();
+            assert_eq!(response.revision, digest(bytes));
+            if let Some(encoded) = response.binary {
+                assert!(bytes.contains(&0) || std::str::from_utf8(bytes).is_err());
+                assert_eq!(STANDARD.decode(encoded).unwrap(), bytes);
+            } else {
+                assert!(!bytes.contains(&0));
+                assert_eq!(response.text.as_bytes(), bytes);
+            }
+        }
+    }
 
     #[test]
     fn a_temporary_name_collision_does_not_remove_existing_files() {

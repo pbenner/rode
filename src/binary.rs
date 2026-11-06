@@ -1,12 +1,10 @@
-//! Bounded binary snapshots, reversible byte patches and static analysis.
+//! In-memory binary snapshots, reversible byte patches and bounded static reports.
 //! The inspected program is never launched; parsing and decoding need no host tools.
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use object::{Object, ObjectSection, ObjectSymbol};
 use std::{collections::VecDeque, sync::Arc};
 
-/// Maximum hex-editor input size in bytes.
-pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum retained rows for bounded metadata/string tables.
 pub const MAX_ROWS: usize = 4096;
 const HISTORY_BYTES: usize = 1024 * 1024;
@@ -95,15 +93,27 @@ pub struct Loaded {
     pub lease: Arc<crate::images::Lease>,
 }
 impl Loaded {
-    /// Decode base64, enforce input/memory budgets and inspect the snapshot on a worker.
+    /// Decode base64 with fallible allocation, account for source snapshots and inspect on a worker.
     pub fn decode(encoded: &str, budget: &Arc<crate::images::Budget>) -> Result<Self> {
-        ensure!(
-            encoded.len() <= MAX_BYTES.div_ceil(3) * 4,
-            "Hex files exceed 8 MiB."
-        );
-        let bytes = STANDARD.decode(encoded).context("Invalid binary data")?;
-        ensure!(bytes.len() <= MAX_BYTES, "Hex files exceed 8 MiB.");
-        let lease = Arc::new(budget.reserve(bytes.len() * 4 + 5 * 1024 * 1024)?);
+        let capacity = encoded
+            .len()
+            .checked_div(4)
+            .and_then(|n| n.checked_add(1))
+            .and_then(|n| n.checked_mul(3))
+            .context("Binary data exceeds the available address space")?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .context("Not enough memory to open this binary file")?;
+        STANDARD
+            .decode_vec(encoded, &mut bytes)
+            .context("Invalid binary data")?;
+        let reserved = bytes
+            .len()
+            .checked_mul(4)
+            .and_then(|n| n.checked_add(5 * 1024 * 1024))
+            .context("Binary data exceeds the available address space")?;
+        let lease = Arc::new(budget.reserve_source(reserved)?);
         let report = Arc::new(inspect(&bytes));
         Ok(Self {
             bytes: Arc::new(bytes),
@@ -121,8 +131,7 @@ fn label(value: &str) -> String {
         .collect()
 }
 
-/// Inspect bytes without executing them; callers bound input size, while this function bounds
-/// retained report tables.
+/// Inspect in-memory bytes without executing them, retaining bounded report tables.
 pub fn inspect(bytes: &[u8]) -> Report {
     let mut counts = [0usize; 256];
     for &byte in bytes {
@@ -147,11 +156,14 @@ pub fn inspect(bytes: &[u8]) -> Report {
         if end < bytes.len() && (bytes[end].is_ascii_graphic() || bytes[end] == b' ') {
             continue;
         }
-        if end - start >= 4 && report.strings.len() < MAX_ROWS {
+        if end - start >= 4 {
             report.strings.push(FoundString {
                 offset: start,
                 text: String::from_utf8_lossy(&bytes[start..end.min(start + 256)]).into_owned(),
             });
+            if report.strings.len() == MAX_ROWS {
+                break;
+            }
         }
         start = end + 1;
     }
@@ -314,13 +326,13 @@ struct Patch {
 }
 /// Editable byte snapshot with bounded undo/redo and a separately acknowledged save baseline.
 pub struct Buffer {
-    /// Current shared byte snapshot; mutation uses copy-on-write.
-    pub bytes: Arc<Vec<u8>>,
-    /// Most recently acknowledged saved snapshot, which may differ from the current bytes.
-    pub saved: Arc<Vec<u8>>,
+    // Keep snapshots private so every mutation updates changed_bytes as well.
+    bytes: Arc<Vec<u8>>,
+    saved: Arc<Vec<u8>>,
     undo: VecDeque<Patch>,
     redo: Vec<Patch>,
     history_bytes: usize,
+    changed_bytes: usize,
 }
 impl Buffer {
     /// Create a clean buffer from loaded bytes.
@@ -331,11 +343,21 @@ impl Buffer {
             undo: VecDeque::new(),
             redo: vec![],
             history_bytes: 0,
+            changed_bytes: 0,
         }
+    }
+    /// Borrow the current immutable snapshot; clone the Arc to retain it for a worker/save.
+    /// Byte edits must use `patch`, `undo` or `redo` to keep dirty tracking consistent.
+    pub fn bytes(&self) -> &Arc<Vec<u8>> {
+        &self.bytes
+    }
+    /// Borrow the last acknowledged immutable save baseline for highlighting/comparison.
+    pub fn saved(&self) -> &Arc<Vec<u8>> {
+        &self.saved
     }
     /// Return whether current bytes differ from the acknowledged baseline.
     pub fn dirty(&self) -> bool {
-        self.bytes != self.saved
+        self.changed_bytes != 0
     }
     /// Overwrite an in-bounds byte range without changing file length; record bounded
     /// reversible history.
@@ -363,14 +385,13 @@ impl Buffer {
                 self.history_bytes -= patch.before.len() * 2;
             }
         }
-        Arc::make_mut(&mut self.bytes)[offset..end].copy_from_slice(&replacement);
+        self.replace(offset, &replacement);
         Ok(())
     }
     /// Undo the latest retained patch, if any.
     pub fn undo(&mut self) {
         if let Some(patch) = self.undo.pop_back() {
-            Arc::make_mut(&mut self.bytes)[patch.offset..patch.offset + patch.before.len()]
-                .copy_from_slice(&patch.before);
+            self.replace(patch.offset, &patch.before);
             self.history_bytes -= patch.before.len() * 2;
             self.redo.push(patch);
         }
@@ -378,17 +399,46 @@ impl Buffer {
     /// Redo the latest undone patch, if any.
     pub fn redo(&mut self) {
         if let Some(patch) = self.redo.pop() {
-            Arc::make_mut(&mut self.bytes)[patch.offset..patch.offset + patch.after.len()]
-                .copy_from_slice(&patch.after);
+            self.replace(patch.offset, &patch.after);
             self.history_bytes += patch.before.len() * 2;
             self.undo.push_back(patch);
         }
     }
+    /// Keep dirty checks constant-time even when a large file differs only at
+    /// its last byte. Editing compares only the overwritten range to the baseline.
+    fn replace(&mut self, offset: usize, replacement: &[u8]) {
+        let end = offset + replacement.len();
+        let before = self.bytes[offset..end]
+            .iter()
+            .enumerate()
+            .filter(|(i, value)| self.saved.get(offset + i) != Some(value))
+            .count();
+        let after = replacement
+            .iter()
+            .enumerate()
+            .filter(|(i, value)| self.saved.get(offset + i) != Some(value))
+            .count();
+        self.changed_bytes = self.changed_bytes - before + after;
+        Arc::make_mut(&mut self.bytes)[offset..end].copy_from_slice(replacement);
+    }
     /// Record the exact submitted snapshot as saved, preserving edits made while saving.
+    /// A new baseline is compared once, rather than on every rendered frame.
     pub fn acknowledge(&mut self, bytes: Arc<Vec<u8>>) {
+        self.changed_bytes = if Arc::ptr_eq(&self.bytes, &bytes) {
+            0
+        } else {
+            self.bytes.len().abs_diff(bytes.len())
+                + self
+                    .bytes
+                    .iter()
+                    .zip(bytes.iter())
+                    .filter(|(a, b)| a != b)
+                    .count()
+        };
         self.saved = bytes;
     }
     /// Find bytes from a file offset, wrapping once to the start; returns a byte offset.
+    /// Search the suffix first so repeated matches near the tail do not rescan the prefix.
     pub fn find(&self, needle: &[u8], from: usize) -> Option<usize> {
         if needle.is_empty() || needle.len() > self.bytes.len() {
             return None;
@@ -405,24 +455,31 @@ impl Buffer {
             }
             prefix[i] = matched;
         }
-        matched = 0;
-        let mut wrapped = None;
-        for (i, &byte) in self.bytes.iter().enumerate() {
-            while matched > 0 && byte != needle[matched] {
-                matched = prefix[matched - 1];
-            }
-            if byte == needle[matched] {
-                matched += 1;
-            }
-            if matched == needle.len() {
-                let offset = i + 1 - needle.len();
-                if offset >= from {
-                    return Some(offset);
+        let search = |range: std::ops::Range<usize>| {
+            let mut matched = 0;
+            for (i, &byte) in self.bytes[range.clone()].iter().enumerate() {
+                while matched > 0 && byte != needle[matched] {
+                    matched = prefix[matched - 1];
                 }
-                wrapped.get_or_insert(offset);
-                matched = prefix[matched - 1];
+                if byte == needle[matched] {
+                    matched += 1;
+                }
+                if matched == needle.len() {
+                    return Some(range.start + i + 1 - needle.len());
+                }
             }
+            None
+        };
+        let from = from.min(self.bytes.len());
+        if let Some(offset) = search(from..self.bytes.len()) {
+            return Some(offset);
         }
-        wrapped
+        if from == 0 {
+            return None;
+        }
+        // Include matches that start before `from` and end after it. Wrapping
+        // orders match offsets; it does not join the file's end to its beginning.
+        let end = from.saturating_add(needle.len() - 1).min(self.bytes.len());
+        search(0..end)
     }
 }

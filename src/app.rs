@@ -1409,15 +1409,7 @@ impl EditorApp {
         };
         let text = doc.text.clone();
         doc.saving = true;
-        self.dispatch(
-            Request::Write {
-                path,
-                text: text.clone(),
-                expected,
-            },
-            Job::Save { id, text },
-            ctx,
-        );
+        self.dispatch_text_save(id, path, text, expected, ctx);
     }
 
     /// Select or hide the terminal surface, lazily creating a shell only when none is owned or starting.

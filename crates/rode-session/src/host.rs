@@ -5,7 +5,7 @@ use rode_host_protocol::{self as wire, framing};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io::{BufRead, Read, Write},
+    io::{Read, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -129,15 +129,7 @@ fn local(request: &FileRequest, cancelled: &AtomicBool) -> Result<FileResponse> 
 /// One-shot host request for explicitly launched local helpers. Gateway workers
 /// keep their narrower admission checks and captured policy independently.
 pub fn file_request() -> Result<()> {
-    let mut bytes = Vec::new();
-    std::io::stdin()
-        .take(framing::MAX_MESSAGE as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        bytes.len() <= framing::MAX_MESSAGE,
-        "File request exceeds its limit"
-    );
-    let request: FileRequest = serde_json::from_slice(&bytes)?;
+    let request: FileRequest = serde_json::from_reader(std::io::stdin().lock())?;
     let response = if let FileRequest::Prepare {
         path,
         sandbox: options,
@@ -162,16 +154,7 @@ pub fn file_request() -> Result<()> {
 /// The trailing input channel is a lifetime lease, not another source of requests.
 pub fn worker() -> Result<()> {
     let mut input = std::io::BufReader::new(std::io::stdin());
-    let mut bytes = Vec::new();
-    input
-        .by_ref()
-        .take(framing::MAX_MESSAGE as u64 + 1)
-        .read_until(b'\n', &mut bytes)?;
-    ensure!(
-        bytes.len() <= framing::MAX_MESSAGE && bytes.last() == Some(&b'\n'),
-        "Invalid worker request"
-    );
-    let request: FileRequest = serde_json::from_slice(&bytes)?;
+    let request: FileRequest = framing::read_json_line(&mut input)?;
     ensure!(
         !matches!(
             request,
@@ -304,6 +287,11 @@ impl Gateway {
                     plan.environment.mise = false;
                 }
                 let (command, _lease) = plan.coordinator_command("--host-worker")?;
+                let output_limit = if request.transfers_document() {
+                    u64::MAX - 1
+                } else {
+                    framing::MAX_MESSAGE as u64
+                };
                 let mut input = serde_json::to_vec(&request)?;
                 input.push(b'\n');
                 let output = project::run_controlled_limited(
@@ -312,7 +300,7 @@ impl Gateway {
                     Duration::from_secs(150),
                     &self.cancelled,
                     true,
-                    framing::MAX_MESSAGE as u64,
+                    output_limit,
                     Duration::ZERO,
                 )?
                 .checked()?;
@@ -412,7 +400,7 @@ pub fn serve() -> Result<()> {
                             cancelled: &gateway.cancelled,
                             until: Instant::now() + Duration::from_secs(45),
                         };
-                        if framing::write(
+                        if framing::write_document(
                             &mut writer,
                             &wire::Reply {
                                 id: request.id,
@@ -428,7 +416,9 @@ pub fn serve() -> Result<()> {
             });
         }
         let result = (|| {
-            while let Some(request) = framing::read::<wire::Request<Operation>>(&mut stdin)? {
+            while let Some(request) =
+                framing::read_document::<wire::Request<Operation>>(&mut stdin)?
+            {
                 ensure!(
                     !gateway.cancelled.load(Ordering::Acquire),
                     "Host output channel closed"

@@ -229,6 +229,17 @@ fn missing_notebook_dependencies_report_the_interpreter_and_install_command() {
     assert!(!state.info.busy);
 }
 
+/// Publish a test completion signal only after its payload is written and closed.
+/// The kernel runs asynchronously after detachment, so existence alone must be safe.
+fn publish_python_marker(path: &std::path::Path, value: &str) -> String {
+    let pending = path.with_extension("pending");
+    format!(
+        "__import__('pathlib').Path({0:?}).write_text({value})\n__import__('os').replace({0:?}, {1:?})",
+        pending.to_string_lossy(),
+        path.to_string_lossy()
+    )
+}
+
 #[test]
 fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattachment() {
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
@@ -267,8 +278,8 @@ fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattach
             cell: "second".into(),
             version: 0,
             code: format!(
-                "counter+=1\nprint(counter)\nopen({:?},'w').write(str(counter))",
-                marker.to_string_lossy()
+                "counter+=1\nprint(counter)\n{}",
+                publish_python_marker(&marker, "str(counter)")
             ),
         },
     ];
@@ -352,8 +363,8 @@ fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattach
                 if index == 0 { "time.sleep(0.3)\n" } else { "" },
                 if index == 39 {
                     format!(
-                        "print(counter)\nopen({:?},'w').write(str(counter))",
-                        marker.to_string_lossy()
+                        "print(counter)\n{}",
+                        publish_python_marker(&marker, "str(counter)")
                     )
                 } else {
                     String::new()

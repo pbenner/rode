@@ -8,10 +8,10 @@
 //! browser/viewer runtime; this provides bounded static previews rather than a
 //! general image-editing or animation subsystem.
 //!
-//! RAII leases count retained worker/tab snapshots, not only visible textures.
-//! A reload can overlap the old preview, transfer bytes and new pixels, so a
-//! per-image limit alone would not bound total memory. Serializing transfer and
-//! decode also bounds temporary peaks, at the cost of parallel preview loading.
+//! RAII leases bound retained decoded pixels and separately account for document
+//! snapshots. A reload can overlap the old preview, transfer bytes and new pixels.
+//! Serializing transfer/decode reduces overlapping temporary buffers; source
+//! file bytes have no fixed ceiling and still need sufficient RAM.
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use eframe::egui::ColorImage;
@@ -25,8 +25,6 @@ use std::{
     },
 };
 
-/// Maximum encoded image/preview input size in bytes.
-pub const MAX_ENCODED: usize = 32 * 1024 * 1024;
 /// Maximum decoded image allocation in bytes.
 pub const MAX_DECODED: usize = 64 * 1024 * 1024;
 /// Shared retained-preview allocation budget in bytes.
@@ -38,6 +36,7 @@ pub const MAX_DIMENSION: u32 = 16_384;
 #[derive(Debug, Default)]
 pub struct Budget {
     used: AtomicUsize,
+    sources: AtomicUsize,
     /// Serialize byte transfer/decode, including temporary transport buffers.
     pub io: Mutex<()>,
 }
@@ -60,11 +59,29 @@ impl Budget {
         Ok(Lease {
             budget: self.clone(),
             bytes,
+            source: false,
+        })
+    }
+    /// Track in-memory document snapshots independently of the pixel budget.
+    /// Whole-file editing has no byte ceiling; available address space/RAM is
+    /// the practical bound, while raster decoding retains its allocation limits.
+    pub(crate) fn reserve_source(self: &Arc<Self>, bytes: usize) -> Result<Lease> {
+        self.sources
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes)
+            })
+            .map_err(|_| anyhow::anyhow!("Document memory accounting overflow"))?;
+        Ok(Lease {
+            budget: self.clone(),
+            bytes,
+            source: true,
         })
     }
     /// Return currently reserved bytes, including shared reservations retained by workers/tabs.
     pub fn used(&self) -> usize {
-        self.used.load(Ordering::Acquire)
+        self.used
+            .load(Ordering::Acquire)
+            .saturating_add(self.sources.load(Ordering::Acquire))
     }
 }
 /// RAII preview reservation; dropping the final owning lease returns its bytes to the budget.
@@ -72,10 +89,16 @@ impl Budget {
 pub struct Lease {
     budget: Arc<Budget>,
     bytes: usize,
+    source: bool,
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
+        let counter = if self.source {
+            &self.budget.sources
+        } else {
+            &self.budget.used
+        };
+        counter.fetch_sub(self.bytes, Ordering::AcqRel);
     }
 }
 
@@ -116,17 +139,13 @@ pub fn format_for(path: &str) -> Option<ImageFormat> {
     }
 }
 
-/// Decode bounded standard base64 image data on a worker under the shared memory budget.
+/// Decode base64 image data on a worker under the shared decoded-pixel budget.
 pub fn decode(
     encoded: &str,
     path: &str,
     budget: &Arc<Budget>,
     texture_limit: usize,
 ) -> Result<Decoded> {
-    ensure!(
-        encoded.len() <= MAX_ENCODED.div_ceil(3) * 4,
-        "Image file exceeds 32 MiB."
-    );
     let bytes = STANDARD
         .decode(encoded)
         .context("Invalid image data from the file helper")?;
@@ -141,7 +160,6 @@ pub fn decode_bytes(
     budget: &Arc<Budget>,
     texture_limit: usize,
 ) -> Result<Decoded> {
-    ensure!(bytes.len() <= MAX_ENCODED, "Image file exceeds 32 MiB.");
     let mut reader = ImageReader::new(Cursor::new(bytes));
     if let Some(format) = format_for(path) {
         reader.set_format(format);
@@ -199,6 +217,19 @@ pub fn decode_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn document_sources_do_not_consume_the_raster_pixel_budget() {
+        let budget = Arc::new(Budget::default());
+        let source = budget.reserve_source(MAX_RETAINED * 4).unwrap();
+        let pixels = budget.reserve(MAX_RETAINED).unwrap();
+        assert_eq!(budget.used(), MAX_RETAINED * 5);
+        assert!(budget.reserve(1).is_err());
+        drop(pixels);
+        assert!(budget.reserve(1).is_ok());
+        drop(source);
+        assert_eq!(budget.used(), 0);
+    }
+
     #[test]
     fn concurrent_reservations_are_bounded_and_released() {
         let budget = Arc::new(Budget::default());

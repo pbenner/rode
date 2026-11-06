@@ -1,17 +1,16 @@
 //! Native explorer mutations. Rename/publication never overwrite an existing
-//! destination. Copies are staged beside their destination, bounded, and do not
-//! traverse symlinks or special files. The caller owns the sandbox boundary.
+//! destination. Copies stage beside their destination and stream regular-file
+//! contents. Traversal is bounded; symlinks are retained and special files are
+//! rejected. The caller owns the sandbox boundary.
 use super::{Response, expand_home};
 use anyhow::{Context, Result, bail, ensure};
 use rode_host_protocol::files::Mutation;
 use std::{
     fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 
 const COPY_ENTRIES: usize = 10_000;
-const COPY_BYTES: u64 = 256 * 1024 * 1024;
 const COPY_DEPTH: usize = 64;
 
 /// Resolve the parent only: canonicalizing the leaf would rename/delete a
@@ -64,7 +63,6 @@ fn rename_new(source: &Path, destination: &Path) -> Result<()> {
 #[derive(Default)]
 struct Budget {
     entries: usize,
-    bytes: u64,
 }
 
 fn copy_entry(source: &Path, destination: &Path, budget: &mut Budget, depth: usize) -> Result<()> {
@@ -92,20 +90,13 @@ fn copy_entry(source: &Path, destination: &Path, budget: &mut Budget, depth: usi
         }
         fs::set_permissions(destination, metadata.permissions())?;
     } else if metadata.is_file() {
-        let source = crate::locking::open_regular(source, false)?;
+        let mut source = crate::locking::open_regular(source, false)?;
         let metadata = source.metadata()?;
-        let remaining = COPY_BYTES.saturating_sub(budget.bytes);
-        ensure!(
-            metadata.len() <= remaining,
-            "Copy exceeds the 256 MiB limit"
-        );
         let mut output = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(destination)?;
-        let copied = std::io::copy(&mut source.take(remaining + 1), &mut output)?;
-        ensure!(copied <= remaining, "Copy exceeds the 256 MiB limit");
-        budget.bytes += copied;
+        std::io::copy(&mut source, &mut output)?;
         output.set_permissions(metadata.permissions())?;
     } else {
         bail!("Only regular files, folders and symbolic links can be copied");

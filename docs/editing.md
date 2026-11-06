@@ -13,7 +13,7 @@ Right-click a file, folder, or the project name in the explorer to open its menu
 
 Names retained by an open editor cannot be reused by creating, renaming or duplicating an entry. Save that buffer under another name or close its tab first.
 
-Operations use the prepared project's actual filesystem policy. Mutation controls are disabled for active read-only projects, during project or sandbox-policy preparation, while files are being opened or saved, and while another explorer mutation is pending. Folder duplication is limited to 10,000 entries, 64 directory levels and 256 MiB; unsupported special files cause a visible error, and incomplete copies are not published.
+Operations use the prepared project's actual filesystem policy. Mutation controls are disabled for active read-only projects, during project or sandbox-policy preparation, while files are being opened or saved, and while another explorer mutation is pending. Duplication streams file contents without a byte-size ceiling; folder traversal remains limited to 10,000 entries and 64 directory levels; unsupported special files cause a visible error, and incomplete copies are not published.
 
 ## Editing features
 
@@ -175,6 +175,6 @@ The settings table lists the remaining pane/file commands. By default, `Ctrl+W` 
 
 Saves check the original SHA-256 revision, write a temporary file beside the destination, preserve existing permissions, and rename it into place. Symlinks are followed so the link itself is preserved. A detected external change produces a conflict and keeps your edits open. Save As refuses to silently overwrite an unrelated existing file. To resolve a conflict, save a separate copy or close/reopen the tab to load the disk version. RODE writers serialize revision checks and replacement with advisory locks, including local/SSH writers sharing a file; only one save based on the same old revision can succeed. For other programs, revision checks remain best effort. See [configuration and multiple windows](configuration.md). Unsaved buffers remain in memory and do not survive a crash.
 
-This is a working first version, with deliberate limits: UTF-8 text files up to 8 MiB, image previews up to 32 MiB with bounded decoded pixels, 10,000 entries per directory, and one workspace per window. It does not yet include an LSP client, recursive project search, remote filesystem watching, or a complete terminal emulator feature set. The editor buffer uses egui's text editor; it is not a streaming editor for huge files. No VS Code performance comparison is claimed.
+Ordinary text, hex, image/PDF source and notebook files have no fixed byte-size ceiling. They are loaded into memory, so available RAM/address space is the practical bound. Decoded raster pixels, tool payloads, directory listings (10,000 entries), and one workspace per window retain their separate limits. It does not yet include an LSP client, recursive project search, remote filesystem watching, or a complete terminal emulator feature set. The editor buffer uses egui's text editor; it is not a streaming editor for huge files. No VS Code performance comparison is claimed.
 
 For binary files and explicit byte editing, see [Hex and binary analysis](binary.md). Optional modules and tool adapters are managed through [Extensions](extensions.md).

@@ -127,7 +127,7 @@ impl EditorApp {
         }
         let token = self.agents.files.begin();
         self.dispatch(
-            Request::ReadBinary { path },
+            Request::ReadAttachment { path },
             Job::AgentAttachment { token, local },
             ctx,
         );
@@ -143,7 +143,7 @@ pub(in crate::app) fn prepare(
 ) -> anyhow::Result<Attachment> {
     anyhow::ensure!(!cancel.load(Ordering::Acquire), "Attachment cancelled.");
     anyhow::ensure!(
-        encoded.len() <= crate::images::MAX_ENCODED.div_ceil(3) * 4,
+        encoded.len() <= rode_host_protocol::files::MAX_ATTACHMENT_BYTES.div_ceil(3) * 4,
         "Attachment exceeds 32 MiB."
     );
     let bytes = STANDARD.decode(encoded)?;

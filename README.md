@@ -37,4 +37,4 @@ Debian/Ubuntu packages are built for release version tags or manually through **
 
 [Documentation](https://pbenner.github.io/rode/) · [Setup](docs/getting-started.md) · [Agent setup](docs/agents.md) · [Development and hooks](docs/development.md) · [Source architecture](docs/architecture.md)
 
-MIT licensed; bundled dependencies retain their [own licenses](docs/licensing.md). Text/hex editing up to 8 MiB and [image previews](docs/images.md) up to 32 MiB; no LSP.
+MIT licensed; bundled dependencies retain their [own licenses](docs/licensing.md). In-memory text/hex editing without a fixed file-size ceiling, and [image previews](docs/images.md) with bounded decoded pixels; no LSP.

@@ -84,11 +84,17 @@ fn exercise(run: impl Fn(&Request) -> anyhow::Result<files::Response>) {
     assert!(run(&Request::Read { path: path.clone() }).is_err());
     fs::write(&path, [0xff, 0xfe]).unwrap();
     assert!(run(&Request::Read { path: path.clone() }).is_err());
-    fs::File::create(&path)
-        .unwrap()
-        .set_len(files::MAX_FILE_BYTES + 1)
-        .unwrap();
-    assert!(run(&Request::Read { path }).is_err());
+    let large = "x".repeat(8 * 1024 * 1024 + 1);
+    fs::write(&path, &large).unwrap();
+    let read = run(&Request::Read { path: path.clone() }).unwrap();
+    assert_eq!(read.text, large);
+    run(&Request::Write {
+        path: path.clone(),
+        text: large.clone(),
+        expected: Some(read.revision),
+    })
+    .unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().len(), large.len() as u64);
 }
 
 #[test]
@@ -272,4 +278,62 @@ fn real_pty_runs_and_parses_ansi_output() {
     }
     assert!(terminal.contents().contains("RODE_PTY_OK"));
     assert!(!terminal.contents().contains("\x1b"));
+}
+
+#[test]
+fn active_sandbox_file_transfers_can_exceed_the_old_message_limit() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use rode::sandbox::{Backend, Options, PlanExt as _};
+    for backend in [Backend::Bwrap, Backend::Landlock] {
+        let base = TempDir::new().unwrap();
+        let plan = native_peer::prepare(
+            base.path().to_str().unwrap(),
+            &Options {
+                enabled: true,
+                backend,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if !plan.active {
+            let required = match backend {
+                Backend::Bwrap => "RODE_TEST_REQUIRE_SANDBOX",
+                Backend::Landlock => "RODE_TEST_REQUIRE_LANDLOCK",
+            };
+            assert_ne!(
+                std::env::var(required).as_deref(),
+                Ok("1"),
+                "{}",
+                plan.reason
+            );
+            eprintln!("Large-file sandbox unavailable: {}", plan.reason);
+            continue;
+        }
+        let path = base.path().join("large.bin").to_string_lossy().into_owned();
+        let bytes = vec![0x97; 49 * 1024 * 1024];
+        let revision = files::digest(&bytes);
+        let data = STANDARD.encode(&bytes);
+        drop(bytes);
+        let run = |request| {
+            plan.local_request_with_helper(&request, std::path::Path::new(native_peer::binary()))
+        };
+        let saved = run(Request::WriteBinary {
+            path: path.clone(),
+            data: data.clone(),
+            expected: None,
+        })
+        .unwrap();
+        assert_eq!(saved.revision, revision);
+        let read = run(Request::ReadHex { path: path.clone() }).unwrap();
+        assert_eq!(read.revision, revision);
+        assert_eq!(read.binary.unwrap(), data);
+        assert!(
+            run(Request::WriteBinary {
+                path,
+                data: STANDARD.encode([0]),
+                expected: Some("stale".into())
+            })
+            .is_err()
+        );
+    }
 }

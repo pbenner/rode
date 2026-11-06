@@ -19,7 +19,7 @@ RODE combines a familiar editor layout with a real terminal, configurable dark t
 
 [Get started](getting-started.md) · [Connect over SSH](remote.md) · [Keyboard shortcuts](editing.md)
 
-Linux is the validated desktop platform. Remote file access requires a POSIX shell and Python 3. The current version edits UTF-8 files up to 8 MiB and previews raster images up to 32 MiB with bounded decoded pixels; general language servers and crash recovery are outside the current feature set.
+Linux is the validated desktop platform. Remote file access uses the native helper over OpenSSH. Text/hex and image/PDF source files have no fixed byte-size ceiling and are loaded into available memory; raster decoding remains bounded by pixel allocations; general language servers and crash recovery are outside the current feature set.
 
 For interactive GPU work, use [Slurm beside Persist](slurm.md) to request resources, follow pending/active status and open an allocated shell; persist/reattach it or explicitly release the job.
 
