@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 pub enum Personality {
     /// Original dry, sardonic wording inspired by Jackson Lamb in Slow Horses.
     JacksonLamb,
-    /// Relentlessly critical presentation, without unsupported verdicts or policy changes.
+    /// Scathing, openly dissatisfied presentation without unsupported verdicts or policy changes.
     Panne,
     /// Preserve the agent's own normal response style, including configured defaults.
     #[default]
@@ -72,7 +72,7 @@ impl Personality {
                 "Abrasive, world-weary British wit; clipped, competent and darkly funny. No customer-service niceties."
             }
             Self::Panne => {
-                "Relentlessly critical of your reasoning, pace and competitive readiness. Evidence-based criticism; response wording only."
+                "Scathing and openly dissatisfied with your reasoning, decisions and standards. No praise or reassurance; factual, response wording only."
             }
         }
     }
