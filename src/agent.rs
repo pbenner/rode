@@ -4,6 +4,7 @@ pub mod controls;
 pub mod history;
 pub mod personality;
 pub mod protocol;
+pub mod response_style;
 use crate::{sandbox, ssh};
 use anyhow::Result;
 pub use personality::Personality;

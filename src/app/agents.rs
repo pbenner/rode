@@ -137,6 +137,14 @@ impl Agents {
             let Some(operation) = self.queue.command().cloned() else {
                 break;
             };
+            if agent::response_style::requires_confirmation(&operation)
+                && self
+                    .chat
+                    .response_style_status(self.config.personality)
+                    .is_some()
+            {
+                break;
+            }
             match self.chat.queue_action(operation) {
                 Ok(()) => self.queue.command_sent(),
                 Err(error) => {
@@ -530,6 +538,7 @@ impl EditorApp {
         let mut running = false;
         let mut save = false;
         let mut answer = None;
+        let mut use_host_tone = None;
         let mut history_action = history::Action::default();
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
         let agents = &mut self.agents;
@@ -616,6 +625,18 @@ impl EditorApp {
                 if ui.add_enabled(!offline, egui::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
+            if let Some(status) = agents.chat.response_style_status(agents.config.personality) {
+                let mismatch = matches!(status, agent::response_style::Status::Mismatch { .. });
+                let response = ui.add(egui::Label::new(RichText::new(status.message())
+                    .small().color(if mismatch { palette.error } else { palette.muted })).wrap().selectable(true));
+                ui_probe::button(ui, if mismatch { "agent-tone-mismatch" } else { "agent-tone-pending" }, &response);
+                if let agent::response_style::Status::Mismatch { applied, .. } = status {
+                    let accept = ui.add_enabled(!agents.chat.busy && !offline && !modal,
+                        egui::Button::new(format!("Use {} tone", applied.label())));
+                    ui_probe::button(ui, "agent-tone-use-host", &accept);
+                    if accept.clicked() { use_host_tone = Some(applied); }
+                }
+            }
             if answering {
                 let action = questions::show(ui, agents.chat.prompts.front_mut().unwrap(), !offline && !modal, palette);
                 answer = action.answer;
@@ -689,7 +710,14 @@ impl EditorApp {
                 ui.set_clip_rect(ui.clip_rect().intersect(queue_rect.expand(paint_margin)));
                 agents.queue.ui(
                     ui,
-                    !offline && !modal && !agents.history_open && agents.chat.queue_capacity(),
+                    !offline
+                        && !modal
+                        && !agents.history_open
+                        && agents.chat.queue_capacity()
+                        && agents
+                            .chat
+                            .response_style_status(agents.config.personality)
+                            .is_none(),
                     !agents.chat.recoverable(),
                 );
                 agents.flush_queue();
@@ -742,6 +770,10 @@ impl EditorApp {
                 }
             }
             ui_probe::button(ui, "agent-composer", &response);
+            if agents.config.personality == before.personality
+                && agents.chat.response_style_status(agents.config.personality).is_none() {
+                ui_probe::button(ui, "agent-tone-ready", &response);
+            }
             if at_start {
                 ui_probe::button(ui, "agent-composer-at-start", &response);
             }
@@ -766,6 +798,7 @@ impl EditorApp {
                                 && !installing
                                 && !agents.chat.stopping()
                                 && !agents.chat.recoverable()
+                                && agents.chat.response_style_status(agents.config.personality).is_none()
                                 && agents.queue.can_push()
                                 && agents.chat.queue_capacity()
                                 && !agents.history_open
@@ -829,6 +862,9 @@ impl EditorApp {
                     );
             });
         });
+        if let Some(style) = use_host_tone {
+            agents.config.personality = style;
+        }
         if agents.config != before {
             if !before.same_process(&agents.config) {
                 agents.runtime.reset();
@@ -845,11 +881,14 @@ impl EditorApp {
             // revalidate unrelated ACP controls before there is another task.
             let mut execution_before = before;
             execution_before.personality = agents.config.personality;
-            if (agents.chat.automatic_queue() || execution_before != agents.config)
+            let style_only = execution_before == agents.config;
+            if (agents.chat.native_id().is_some() || !style_only)
                 && let Err(error) = agents.chat.configure_idle(&agents.config)
             {
                 agents.queue.pause();
-                agents.chat.disconnect();
+                if !style_only {
+                    agents.chat.disconnect();
+                }
                 agents
                     .chat
                     .notice(&format!("Agent control was not applied: {error}"));
@@ -969,6 +1008,14 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Agents) {
             return;
         }
+        if let Some(status) = self
+            .agents
+            .chat
+            .response_style_status(self.agents.config.personality)
+        {
+            self.agents.chat.notice(&status.message());
+            return;
+        }
         if self.agents.files.pending
             || self.agents.attaching
             || self
@@ -1045,6 +1092,11 @@ impl EditorApp {
             return;
         }
         if self.agents.chat.busy
+            || self
+                .agents
+                .chat
+                .response_style_status(self.agents.config.personality)
+                .is_some()
             || self.agents.chat.queue_pending()
             || self.agents.queue.command().is_some()
             || self.agents.attaching

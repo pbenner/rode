@@ -1123,12 +1123,22 @@ fn project_mount_namespace_cannot_control_an_exposed_host_service_socket() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
         Err(error) => panic!("{error}"),
     };
-    child
+    if let Err(error) = child
         .stdin
         .take()
         .unwrap()
         .write_all(br#"{"action":"list"}"#)
-        .unwrap();
+    {
+        // The sandbox/client can reject before consuming stdin. Its explicit
+        // failure and diagnostic below remain mandatory; EPIPE alone is not proof.
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+            ),
+            "{error}"
+        );
+    }
     let output = child.wait_with_output().unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
@@ -1187,44 +1197,7 @@ fn landlock_cannot_use_the_host_service_as_an_unsandboxed_process_broker() {
                 "/usr/bin/python3",
                 "-I",
                 "-c",
-                r#"
-import os, socket, struct, sys
-def read_frame(client):
-    def read_exact(size):
-        result = b''
-        while len(result) < size:
-            chunk = client.recv(size-len(result))
-            assert chunk
-            result += chunk
-        return result
-    return read_exact(struct.unpack('>I', read_exact(4))[0])
-reference = os.path.join(os.path.dirname(sys.argv[1]), 'control.capability')
-if sys.argv[2] == 'true':
-    # The named file contains only a reference; the host's ptrace-protected
-    # descriptor must remain inaccessible even with an explicit path grant.
-    reference = open(reference).read()
-try: open(reference, 'rb').read()
-except PermissionError: pass
-else: raise AssertionError('Landlock read host control capability')
-metadata = os.stat(os.path.dirname(sys.argv[1]))
-address = '\0rode-session-auth-%s-%s-%s' % (metadata.st_uid, metadata.st_dev, metadata.st_ino)
-with socket.socket(socket.AF_UNIX) as client:
-    client.settimeout(5)
-    try: client.connect(address)
-    except PermissionError: pass # ABI 6 blocks the connection itself.
-    else: # ABI 4/5 rely on the ptrace-protected capability.
-        data = b'A' + b'0' * 32
-        client.sendall(struct.pack('>I', len(data)) + data)
-        reply = read_frame(client)
-        assert b'authentication failed' in reply, reply
-with socket.socket(socket.AF_UNIX) as client:
-    client.settimeout(5)
-    client.connect(sys.argv[1])
-    data = b'J{"action":"list"}'
-    client.sendall(struct.pack('>I', len(data)) + data)
-    reply = read_frame(client)
-    assert b'outside the project sandbox' in reply, reply
-"#,
+                include_str!("fixtures/control_rejection.py"),
             ])
             .arg(fixture.runtime.join("socket"))
             .arg(if expose_runtime { "true" } else { "false" });
@@ -1236,6 +1209,92 @@ with socket.socket(socket.AF_UNIX) as client:
         );
         assert_eq!(fixture.direct_list().len(), 1);
     }
+}
+
+#[test]
+fn control_rejection_probe_requires_a_complete_denial_even_after_an_early_close() {
+    let result = Command::new("python3")
+        .args([
+            "-I",
+            "-c",
+            r#"
+import errno, json, socket, struct, sys, threading
+namespace = {'__name__': 'control_rejection_fixture'}
+exec(sys.argv[1], namespace)
+probe = namespace['assert_rejected']
+read_frame = namespace['read_frame']
+expected = 'outside the project sandbox'
+request = b'J{"action":"list"}'
+def frame(data, kind=b'J'):
+    body = kind + json.dumps(data).encode()
+    return struct.pack('>I', len(body)) + body
+denial = frame({'kind':'error', 'data':expected})
+
+class WriteFailure:
+    def __init__(self, client, failure):
+        self.client, self.failure = client, failure
+    def sendall(self, _data):
+        raise self.failure
+    def recv(self, size):
+        return self.client.recv(size)
+
+# Force the peer to send its denial and close before the client writes.
+# No scheduler timing, retries or sleeps are needed to reproduce EPIPE.
+for failure in [None, ConnectionResetError(errno.ECONNRESET, 'fixture reset')]:
+    client, peer = socket.socketpair()
+    with client, peer:
+        client.settimeout(5)
+        peer.sendall(denial)
+        peer.close()
+        probe(client if failure is None else WriteFailure(client, failure), request, expected)
+
+# Also require the ordinary send-before-rejection path to keep working.
+client, peer = socket.socketpair()
+def reject_after_request():
+    with peer:
+        peer.settimeout(5)
+        assert read_frame(peer) == request
+        peer.sendall(denial)
+thread = threading.Thread(target=reject_after_request)
+thread.start()
+with client:
+    client.settimeout(5)
+    probe(client, request, expected)
+thread.join(timeout=5)
+assert not thread.is_alive()
+
+# A disconnect, partial frame, success, wrong message or unrelated I/O error
+# must still fail, even if an early write-side close accompanies it.
+for payload, failure in [
+    (b'', None), (denial[:3], None), (denial[:-1], None),
+    (struct.pack('>I', 0), None),
+    (struct.pack('>I', 4 * 1024 * 1024 + 1), None),
+    (frame({'kind':'sessions','data':[{'name':expected}]}), None),
+    (frame({'kind':'error','data':'unrelated error'}), None),
+    (frame({'kind':'error','data':expected}, b'O'), None),
+    (denial, OSError(errno.EIO, 'fixture I/O error')),
+]:
+    client, peer = socket.socketpair()
+    with client, peer:
+        client.settimeout(5)
+        peer.sendall(payload)
+        peer.close()
+        try:
+            probe(client if failure is None else WriteFailure(client, failure), request, expected)
+        except (AssertionError, OSError, ValueError):
+            pass
+        else:
+            raise AssertionError('Probe accepted missing or invalid denial')
+"#,
+        ])
+        .arg(include_str!("fixtures/control_rejection.py"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }
 
 #[test]
@@ -1266,10 +1325,20 @@ fn host_control_rejects_missing_and_incorrect_authentication_before_requests() {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
-        stream
+        if let Err(error) = stream
             .write_all(&(bytes.len() as u32).to_be_bytes())
-            .unwrap();
-        stream.write_all(&bytes).unwrap();
+            .and_then(|()| stream.write_all(&bytes))
+        {
+            // A bad length can be rejected before the body write. Still
+            // require the typed authentication error from this same socket.
+            assert!(
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                ),
+                "{error}"
+            );
+        }
         let (kind, bytes) = rode_session::read_stream(&mut stream).unwrap();
         assert_eq!(kind, b'J');
         let response = serde_json::from_slice::<Response>(&bytes)

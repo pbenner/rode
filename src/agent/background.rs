@@ -46,6 +46,11 @@ struct QueueRequest {
     operation: rode_agent_core::queue::Action,
     sent: Option<std::time::Instant>,
 }
+impl QueueRequest {
+    fn needs_confirmed_style(&self) -> bool {
+        super::response_style::requires_confirmation(&self.operation)
+    }
+}
 /// One controlling attachment. Only an explicit message or History creates a
 /// controller; setting persistence before Send creates no process.
 pub struct Client {
@@ -62,6 +67,10 @@ pub struct Client {
     desired: bool,
     persistence_pending: Option<bool>,
     queue_requests: VecDeque<QueueRequest>,
+    /// Retain the user's request separately from an older host's fallback value.
+    requested_style: super::Personality,
+    /// Reattachments adopt their first saved setting instead of the workspace default.
+    adopt_style: bool,
     /// A requested explicit End is distinct from detaching a persistent view.
     pub ending: bool,
     closed: bool,
@@ -192,6 +201,8 @@ impl Client {
     ) -> Self {
         let (_, ready) = mpsc::channel();
         Self {
+            requested_style: launch.config.personality,
+            adopt_style: false,
             launch,
             ready,
             preparing: Arc::new(Preparing {
@@ -218,6 +229,7 @@ impl Client {
             info.persistent,
             wake.clone(),
         );
+        client.adopt_style = true;
         let (tx, rx) = mpsc::channel();
         client.ready = rx;
         let preparing = client.preparing.clone();
@@ -291,22 +303,7 @@ impl Client {
                         .and_then(|update| update.apply(self.state.as_ref()))
                     {
                         Ok(state) => {
-                            if self
-                                .queue_requests
-                                .front()
-                                .is_some_and(|r| r.id == state.queue.acknowledged)
-                            {
-                                self.queue_requests.pop_front();
-                            }
-                            self.launch.config = state.chat.config.clone();
-                            if self.persistence_pending == Some(state.info.persistent) {
-                                self.persistence_pending = None;
-                            }
-                            self.desired = state.info.persistent;
-                            if !state.info.alive {
-                                self.closed = true;
-                            }
-                            self.state = Some(state.clone());
+                            self.accept_state(state.clone());
                             update = Some(state);
                         }
                         Err(error) => {
@@ -333,7 +330,11 @@ impl Client {
             }) {
                 self.error = Some("Queued prompt changes were not acknowledged. Reattach the agent before closing Rode.".into());
                 self.closed = true;
-            } else if let Some(request) = self.queue_requests.front().filter(|r| r.sent.is_none()) {
+            } else if let Some(request) = self
+                .queue_requests
+                .front()
+                .filter(|r| r.sent.is_none() && self.queue_request_ready(r))
+            {
                 let result = self.send(Command::Queue {
                     request: request.id.clone(),
                     operation: request.operation.clone(),
@@ -366,6 +367,9 @@ impl Client {
             !self.closed,
             "Agent view is disconnected; reattach from Running"
         );
+        if let Command::Submit { config, .. } = &action {
+            self.require_response_style(config.personality)?;
+        }
         self.bridge
             .as_ref()
             .context("Agent service is still preparing")?
@@ -377,6 +381,13 @@ impl Client {
             !self.closed,
             "Reattach the agent before changing its queue."
         );
+        if super::response_style::requires_confirmation(&operation) {
+            let selected = match &operation {
+                rode_agent_core::queue::Action::Dispatch { config, .. } => config.personality,
+                _ => self.requested_style,
+            };
+            self.require_response_style(selected)?;
+        }
         ensure!(
             self.state.as_ref().is_none_or(|s| s.info.supports_queue),
             "This agent uses an older Rode version without persistent queues. Start a new chat to use them."
@@ -391,12 +402,148 @@ impl Client {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        self.queue_requests.push_back(QueueRequest {
+        let correction = matches!(
+            operation,
+            rode_agent_core::queue::Action::Configure { .. }
+                | rode_agent_core::queue::Action::Pause { paused: true }
+        );
+        if let rode_agent_core::queue::Action::Configure { config }
+        | rode_agent_core::queue::Action::Recover { config, .. } = &operation
+        {
+            self.requested_style = config.personality;
+        }
+        let request = QueueRequest {
             id: format!("{}-{nanos}-{serial}", std::process::id()),
             operation,
             sent: None,
-        });
+        };
+        // Settings and safety pauses precede unsent prompts, so confirmation
+        // cannot deadlock behind held work. Preserve the order of settings and
+        // already-sent requests, and never discard a prompt's payload.
+        let index = if correction {
+            self.queue_requests
+                .iter()
+                .position(|r| r.sent.is_none() && r.needs_confirmed_style())
+                .unwrap_or(self.queue_requests.len())
+        } else {
+            self.queue_requests.len()
+        };
+        self.queue_requests.insert(index, request);
         Ok(())
+    }
+
+    fn accept_state(&mut self, state: State) {
+        if self.adopt_style {
+            self.requested_style = state.chat.config.personality;
+            self.adopt_style = false;
+        }
+        if self
+            .queue_requests
+            .front()
+            .is_some_and(|r| r.id == state.queue.acknowledged)
+        {
+            self.queue_requests.pop_front();
+        }
+        self.launch.config = state.chat.config.clone();
+        if self.persistence_pending == Some(state.info.persistent) {
+            self.persistence_pending = None;
+        }
+        self.desired = state.info.persistent;
+        if !state.info.alive {
+            self.closed = true;
+        }
+        self.state = Some(state);
+        // Stop future automatic dispatch, without cancelling an existing turn.
+        // Pausing is acknowledged through the same ordered queue as other edits.
+        if matches!(
+            self.response_style_status(self.requested_style),
+            Some(super::response_style::Status::Mismatch { .. })
+        ) && self.state.as_ref().is_some_and(|s| {
+            s.info.supports_queue
+                && !s.queue.paused
+                && (!s.queue.items.is_empty()
+                    || self.queue_requests.iter().any(|r| {
+                        matches!(r.operation, rode_agent_core::queue::Action::Push { .. })
+                    }))
+        }) && !self.queue_requests.iter().any(|r| {
+            matches!(
+                r.operation,
+                rode_agent_core::queue::Action::Pause { paused: true }
+            )
+        }) && let Err(error) =
+            self.queue_action(rode_agent_core::queue::Action::Pause { paused: true })
+        {
+            self.error = Some(format!(
+                "Cannot pause the agent queue after a tone mismatch: {error}"
+            ));
+        }
+    }
+
+    fn queue_request_ready(&self, request: &QueueRequest) -> bool {
+        !request.needs_confirmed_style()
+            || self.response_style_status(self.requested_style).is_none()
+            // Persist already-accepted prompts only after Pause is acknowledged.
+            // This cannot start model work, and avoids losing their payloads or
+            // blocking clean exit while a mismatched persistent view is held.
+            || (matches!(request.operation, rode_agent_core::queue::Action::Push { .. })
+                && self.state.as_ref().is_some_and(|s| s.queue.paused))
+    }
+
+    /// Report a pending or rejected tone without rewriting the user's preference.
+    pub fn response_style_status(
+        &self,
+        selected: super::Personality,
+    ) -> Option<super::response_style::Status> {
+        if self.closed {
+            return None;
+        }
+        let Some(state) = &self.state else {
+            return Some(super::response_style::Status::Pending(selected));
+        };
+        if selected != self.requested_style {
+            // A menu edit can render before its deferred Configure is queued.
+            // Do not flash a rejection for that unsent, brand-new selection.
+            return Some(super::response_style::Status::Pending(selected));
+        }
+        if self.queue_requests.iter().any(|r| {
+            matches!(
+                r.operation,
+                rode_agent_core::queue::Action::Configure { .. }
+                    | rode_agent_core::queue::Action::Recover { .. }
+            )
+        }) {
+            return Some(super::response_style::Status::Pending(selected));
+        }
+        (state.chat.config.personality != selected).then_some(
+            super::response_style::Status::Mismatch {
+                selected,
+                applied: state.chat.config.personality,
+            },
+        )
+    }
+
+    fn require_response_style(&self, selected: super::Personality) -> Result<()> {
+        if let Some(status) = self.response_style_status(selected) {
+            anyhow::bail!("{}", status.message());
+        }
+        Ok(())
+    }
+
+    /// Use correlated settings acknowledgements when the host advertises them.
+    pub fn configure(&mut self, config: &Config) -> Result<()> {
+        if self.state.as_ref().is_some_and(|s| s.info.automatic_queue) {
+            self.queue_action(rode_agent_core::queue::Action::Configure {
+                config: Box::new(config.clone()),
+            })
+        } else {
+            // Manual queues predate Queue::Configure. Keep their legacy command
+            // path without inferring support for a new style from serialization.
+            self.requested_style = config.personality;
+            self.require_response_style(config.personality)?;
+            self.send(Command::Configure {
+                config: config.clone(),
+            })
+        }
     }
     /// Queue controls reserve room for automatic Stop/failure pause operations.
     pub fn queue_capacity(&self) -> bool {
@@ -478,3 +625,6 @@ impl Drop for Client {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

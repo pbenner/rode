@@ -182,6 +182,11 @@ def select_personality(preferences, value, capture=False):
         lambda: agent_preferences(preferences).get("personality") == value,
         f"Personality choice {value!r} was not saved",
     )
+    # Saving a preference is independent of the host accepting it. Wait for
+    # the rendered readiness state before submitting the following prompt.
+    wait_for_button(
+        window, process, ARTIFACTS / "chat.log", base / "ui-state.json", "agent-tone-ready"
+    )
 
 
 def send(root, message, first=False, idle=True):

@@ -4,6 +4,85 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn mismatched_host_tones_show_the_actual_setting_and_keep_the_draft_and_queue() {
+    for (width, height) in [(650., 900.), (320., 650.)] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.agents.config.codex = "fixture-agent".into();
+        app.agents.config.personality = agent::Personality::Panne;
+        app.agents.chat =
+            Chat::test_style_view(agent::Personality::Panne, agent::Personality::Default);
+        app.agents.draft = "Keep this draft".into();
+        app.agents
+            .queue
+            .push("Keep this queued task".into())
+            .unwrap();
+        let head = app.agents.queue.head_id();
+        let mut render = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.agent_ui(ui, ctx));
+                },
+            )
+        };
+        render(vec![]);
+        let output = render(vec![]);
+        let (button, clip) = layout::tests::button_frame(&output, "Use Default tone");
+        assert!(clip.contains_rect(button));
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Tone not applied: Panne"))));
+        app.send_agent(&ctx);
+        assert_eq!(app.agents.config.personality, agent::Personality::Panne);
+        assert_eq!(app.agents.draft, "Keep this draft");
+        assert_eq!(app.agents.queue.head_id(), head);
+        assert!(!app.agents.chat.busy);
+        let target = button.center();
+        // Acceptance is explicit and still waits for a correlated reply; it
+        // must not send the held draft or resume the queue as a side effect.
+        for pressed in [true, false] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(target),
+                        egui::Event::PointerButton {
+                            pos: target,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.agent_ui(ui, ctx));
+                },
+            );
+        }
+        assert_eq!(app.agents.config.personality, agent::Personality::Default);
+        assert_eq!(app.agents.draft, "Keep this draft");
+        assert_eq!(app.agents.queue.head_id(), head);
+        assert!(matches!(
+            app.agents
+                .chat
+                .response_style_status(agent::Personality::Default),
+            Some(agent::response_style::Status::Pending(_))
+        ));
+    }
+}
+
+#[test]
 fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
     let mut agents = Agents::load(None);
     agents.draft = "unsent draft".into();

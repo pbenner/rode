@@ -30,6 +30,22 @@ impl std::ops::DerefMut for Chat {
     }
 }
 impl Chat {
+    #[cfg(test)]
+    pub(crate) fn test_style_view(
+        selected: super::Personality,
+        applied: super::Personality,
+    ) -> Self {
+        let client = Client::test_style_view(selected, applied);
+        let mut inner = rode_agent_core::protocol::Chat::default();
+        inner.apply_view(client.state.as_ref().unwrap().chat.clone());
+        Self {
+            inner,
+            native: Some(client),
+            managed: true,
+            desired: true,
+            persistence_error: None,
+        }
+    }
     /// Select the native controller before the first message; this starts no process.
     pub fn use_service(&mut self) {
         self.managed = true;
@@ -115,6 +131,15 @@ impl Chat {
     /// Whether the current controller can accept another queue edit.
     pub fn queue_capacity(&self) -> bool {
         self.native.as_ref().is_none_or(Client::queue_capacity)
+    }
+    /// The host must confirm the selected response style before another submission.
+    pub fn response_style_status(
+        &self,
+        selected: super::Personality,
+    ) -> Option<super::response_style::Status> {
+        self.native
+            .as_ref()
+            .and_then(|client| client.response_style_status(selected))
     }
     /// Older live agents remain usable, but cannot claim to retain a queue.
     pub fn supports_queue(&self) -> bool {
@@ -325,17 +350,10 @@ impl Chat {
     pub fn attached_config(&self) -> Option<&Config> {
         self.native.as_ref().and_then(Client::config)
     }
-    /// Apply idle ACP selectors using the same acknowledged backend policy.
+    /// Apply idle controls and response styles through the supported host protocol.
     pub fn configure_idle(&mut self, config: &Config) -> Result<()> {
-        if self.automatic_queue() {
-            return self.queue_action(rode_agent_core::queue::Action::Configure {
-                config: Box::new(config.clone()),
-            });
-        }
-        if let Some(client) = &self.native {
-            client.send(Command::Configure {
-                config: config.clone(),
-            })
+        if let Some(client) = &mut self.native {
+            client.configure(config)
         } else {
             self.inner.configure_idle(config)
         }
