@@ -234,6 +234,12 @@ def notices(binary):
                 if not path.is_file():
                     raise ValueError(f"Missing bundled font license: {path}")
                 candidates.append(path)
+        if package["name"] == "latex-rust":
+            for name in ["fonts/stix-two-math/OFL.txt", "data/dvipsnames.tsv"]:
+                path = source / name
+                if not path.is_file():
+                    raise ValueError(f"Missing bundled math asset notice: {path}")
+                candidates.append(path)
         sections.append(
             f"\n{package['name']} {package['version']} — {package.get('license') or 'see upstream license'}\n"
         )

@@ -77,5 +77,17 @@
         "source": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE"
       }
     ]
+  },
+  {
+    "packages": [
+      "latex-rust@2.1.1"
+    ],
+    "files": [
+      {
+        "file": "latex-rust-LPPL-1.3c.txt",
+        "sha256": "c1ae6e179a6d28bbd5c483fbacc744acc75e922d598281dc3390aab26126e163",
+        "source": "https://www.latex-project.org/lppl/lppl-1-3c.txt"
+      }
+    ]
   }
 ]

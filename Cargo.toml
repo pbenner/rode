@@ -27,6 +27,7 @@ eframe = { version = "0.33", default-features = false, features = ["default_font
 egui_extras = { version = "0.33", default-features = false, features = ["syntect"] }
 egui_commonmark = { version = "0.22", default-features = false, features = ["pulldown_cmark"] }
 pulldown-cmark = { version = "0.13.6", default-features = false }
+latex-rust = { version = "=2.1.1", features = ["png"] }
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

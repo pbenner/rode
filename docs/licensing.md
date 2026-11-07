@@ -37,6 +37,8 @@ The current [`epaint_default_fonts` dependency](https://github.com/emilk/egui/tr
 
 The Debian builder collects these files from the exact Cargo dependency source and includes them, unchanged, in `/usr/share/doc/rode/THIRD-PARTY-NOTICES.gz`. It fails if an expected font notice is missing. The package also contains this review as `ARTWORK-LICENSING.md`. RODE's MIT license does not replace those font terms. Standalone binary distributions must also ship the applicable dependency and font notices.
 
+Agent-chat maths uses `latex-rust`, whose Rust code is MIT OR Apache-2.0. It embeds STIX Two Math under SIL Open Font License 1.1 and a modified dvips colour table under LPPL 1.3c or later. The notice collector includes its `NOTICE`, complete `fonts/stix-two-math/OFL.txt` and attributed `data/dvipsnames.tsv` alongside the crate licenses. These assets retain their own terms.
+
 The collector covers the workspace's normal/build dependency graph for the build host, including license directories and REUSE copyright headers. Some published crates omit their upstream license files. For these, `packaging/licenses/` keeps unchanged texts from the exact upstream revision recorded in the crate, with package versions, source URLs and SHA-256 hashes in its manifest. Packaging verifies the hashes and requires a license text for every collected dependency; an SPDX declaration alone is insufficient. Collection runs offline. When updating dependencies, review any changed or missing notices before updating the snapshots. See [Debian packaging](packaging.md) for the validation command.
 
 `rode --syntax-licenses` and `rode --theme-licenses` print the separate acknowledgements for embedded grammars and syntax themes; they are not a complete font/dependency license listing.
