@@ -1438,14 +1438,27 @@ impl EditorApp {
         let project = self.session_plan();
         let ready = !self.session_busy() && self.project_ready();
         let height = layout::compact_control_height(ui);
+        let palette = self.themes.active().palette;
         ui.add_enabled_ui(ready, |ui| {
             let menu = egui::containers::menu::MenuButton::from_button(
                 egui::Button::new(label).small().min_size(egui::vec2(0., height))
             ).ui(ui, |ui| {
-                ui.label(&detail);
-                ui.label("Open a new shell in the selected mode. Existing shells keep running.");
-                for (sandboxed, title) in [(true, "New sandboxed terminal"), (false, "New unsandboxed terminal")] {
-                    let response = ui.add_enabled(!sandboxed || project.active, egui::Button::new(title));
+                ui.set_width(240.);
+                ui.label(RichText::new("Current terminal").small().color(palette.muted));
+                ui.add(egui::Label::new(RichText::new(&detail).strong()).wrap());
+                ui.separator();
+                ui.label(RichText::new("Open new terminal").small().color(palette.muted));
+                let unavailable = if project.requested {
+                    project.reason.as_str()
+                } else {
+                    "Enable a project sandbox in Settings to open sandboxed terminals."
+                };
+                for (sandboxed, title) in [(true, "Sandboxed"), (false, "Outside sandbox")] {
+                    let response = ui.add_enabled(
+                        !sandboxed || project.active,
+                        icons::IconButton::new(Icon::Terminal, title)
+                            .min_size(egui::vec2(ui.available_width(), 28.)),
+                    ).on_disabled_hover_text(unavailable);
                     super::ui_probe::button(ui, if sandboxed { "terminal-new-sandbox" } else { "terminal-new-host" }, &response);
                     if response.clicked() {
                         self.workbench.save_terminal_sandbox(sandboxed);
@@ -1453,8 +1466,16 @@ impl EditorApp {
                         ui.close();
                     }
                 }
+                ui.separator();
+                ui.add(egui::Label::new(RichText::new("Existing terminals keep running.").small().color(palette.muted)).wrap());
                 if !project.active {
-                    ui.label(if project.requested { project.reason.as_str() } else { "Enable a project sandbox in Settings to open sandboxed shells." });
+                    let hint = if project.requested {
+                        "Project sandbox unavailable."
+                    } else {
+                        "Enable sandbox in Settings."
+                    };
+                    ui.add(egui::Label::new(RichText::new(hint).small().color(palette.muted)).wrap())
+                        .on_hover_text(unavailable);
                 }
             });
             super::ui_probe::button(ui, "terminal-execution-mode", &menu.0);
