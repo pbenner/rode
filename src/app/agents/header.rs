@@ -37,19 +37,27 @@ pub(super) fn show(
         + 3. * ui.spacing().item_spacing.x
         + 2. * ui.visuals().clip_rect_margin;
     let width = ui.available_width();
-    if width >= reserved + 80. {
-        ui.horizontal(|ui| {
-            result.provider_changed = provider(ui, config, width - reserved, busy, queued);
-            actions(ui, config, busy, offline, new_chat_enabled, &mut result);
-        });
-    } else {
-        ui.horizontal(|ui| {
-            result.provider_changed = provider(ui, config, width, busy, queued);
-        });
-        ui.horizontal_wrapped(|ui| {
-            actions(ui, config, busy, offline, new_chat_enabled, &mut result)
-        });
-    }
+    // ComboBox also reserves space for its arrow. Give every header control the
+    // same complete height, including themed text, padding and pixel rounding.
+    let height = layout::control_height(ui)
+        .max(ui.spacing().icon_width + 2. * ui.spacing().button_padding.y)
+        .ceil();
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = height;
+        if width >= reserved + 80. {
+            ui.horizontal(|ui| {
+                result.provider_changed = provider(ui, config, width - reserved, busy, queued);
+                actions(ui, config, busy, offline, new_chat_enabled, &mut result);
+            });
+        } else {
+            ui.horizontal(|ui| {
+                result.provider_changed = provider(ui, config, width, busy, queued);
+            });
+            ui.horizontal_wrapped(|ui| {
+                actions(ui, config, busy, offline, new_chat_enabled, &mut result)
+            });
+        }
+    });
     result
 }
 
