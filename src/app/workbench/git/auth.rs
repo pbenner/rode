@@ -8,6 +8,8 @@ use project::git_auth::Credentials;
 pub(super) struct State {
     pending: Option<Attempt>,
     prompt: Option<Prompt>,
+    /// Distinguish new challenges without exposing entry values in fixture metadata.
+    generation: u64,
 }
 struct Attempt {
     args: Vec<String>,
@@ -15,6 +17,7 @@ struct Attempt {
     credentials: Vec<Credentials>,
 }
 struct Prompt {
+    generation: u64,
     attempt: Attempt,
     entry: Credentials,
     ctx: egui::Context,
@@ -54,10 +57,12 @@ impl State {
             return;
         };
         if let Some(origin) = challenge {
+            self.generation = self.generation.wrapping_add(1);
             attempt
                 .credentials
                 .retain(|credential| credential.origin != origin);
             self.prompt = Some(Prompt {
+                generation: self.generation,
                 attempt,
                 entry: Credentials {
                     origin,
@@ -84,7 +89,8 @@ impl EditorApp {
             .frame(layout::dialog_frame(&ctx.style(), palette))
             .show(ctx, |ui| {
                 ui.set_width(420_f32.min((ctx.content_rect().width() - 64.).max(1.)));
-                ui.heading("Git HTTPS authentication");
+                let heading = ui.heading("Git HTTPS authentication");
+                ui_probe::button(ui, &format!("git-auth-form:{}", prompt.generation), &heading);
                 ui.label("Credentials will be sent only to:");
                 ui.monospace(&prompt.entry.origin);
                 ui.label("Username");
@@ -154,6 +160,116 @@ mod tests {
         GitJob::Mutate {
             label: "Fetch".into(),
             clear_message: false,
+        }
+    }
+
+    #[test]
+    fn pointer_acknowledges_complete_credential_entry_even_when_input_is_batched() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        ui_probe::install_at(&ctx, path.clone());
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.workspace = Some(Workspace {
+            root: "/fixture".into(),
+            remote: None,
+            connected: true,
+            ready: true,
+            plan: Default::default(),
+            sandbox_options: Default::default(),
+        });
+        app.workbench
+            .git
+            .auth
+            .begin(&["fetch".into()], &job(), &[], true);
+        app.workbench
+            .git
+            .auth
+            .finish(Some("https://git.example.test".into()), &ctx);
+        let frame = |app: &mut EditorApp, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.git_auth_dialog(ctx),
+            );
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        for (field, parts, next) in [
+            (
+                "git-auth-username",
+                ["private-", "user"],
+                "git-auth-password",
+            ),
+            (
+                "git-auth-password",
+                ["private-", "password"],
+                "git-auth-submit",
+            ),
+        ] {
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(field)));
+            // The fixture first waits for an edit acknowledgement. A slow
+            // native frame may then batch the remaining text with the motion.
+            let state = frame(&mut app, vec![egui::Event::Text(parts[0].into())]);
+            let target = state["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|button| button["name"] == next)
+                .unwrap();
+            let rect: [f32; 4] = serde_json::from_value(target["rect"].clone()).unwrap();
+            let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
+            let state = frame(
+                &mut app,
+                vec![
+                    egui::Event::Text(parts[1].into()),
+                    egui::Event::PointerMoved(point),
+                ],
+            );
+            assert_eq!(
+                ctx.memory(|memory| memory.focused()),
+                Some(egui::Id::new(field))
+            );
+            assert!(
+                state["buttons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|button| button["name"] == next
+                        && button["enabled"] == true
+                        && button["hovered"] == true)
+            );
+            let snapshot = serde_json::to_string(&state).unwrap();
+            assert!(!snapshot.contains("private-"));
+        }
+        let prompt = app.workbench.git.auth.prompt.as_ref().unwrap();
+        assert_eq!(prompt.entry.username, "private-user");
+        assert_eq!(prompt.entry.password, "private-password");
+    }
+
+    #[test]
+    fn repeated_challenges_have_distinct_form_identities_and_empty_entries() {
+        let ctx = egui::Context::default();
+        let mut state = State::default();
+        let mut previous = 0;
+        for _ in 0..3 {
+            state.begin(&["fetch".into()], &job(), &[], true);
+            state.finish(Some("https://git.example.test".into()), &ctx);
+            let prompt = state.prompt.as_mut().unwrap();
+            assert_ne!(prompt.generation, previous);
+            assert!(prompt.entry.username.is_empty() && prompt.entry.password.is_empty());
+            previous = prompt.generation;
+            prompt.entry.username = "user".into();
+            prompt.entry.password = "password".into();
+            drop(state.prompt.take());
         }
     }
 

@@ -29,6 +29,7 @@ from ui_harness import (
     text,
     wait_for_button,
     wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
 )
 
@@ -246,13 +247,54 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
                 before = json.loads(state.read_text())["pass"]
                 text(value)
                 wait_for_button(window, process, log_path, state, name, changed_after=before)
+                # A first changed frame can precede the final queued characters.
+                # Moving to the next control acknowledges later native input
+                # without changing focus or publishing secret lengths/values.
+                # Tab could steal trailing text if a slow frame batches events.
+                next_control = {
+                    "git-auth-username": "git-auth-password",
+                    "git-auth-password": "git-auth-submit",
+                }[name]
+                wait_for_button(window, process, log_path, state, next_control, hovered=True)
+
+            def form(previous=None):
+                snapshot = wait_for_ui_state(
+                    process,
+                    log_path,
+                    state,
+                    lambda snapshot: any(
+                        button["name"].startswith("git-auth-form:")
+                        and button["enabled"]
+                        and button["name"] != previous
+                        for button in snapshot["buttons"]
+                    ),
+                    "A fresh authentication challenge did not become interactive",
+                    timeout=20,
+                )
+                return next(
+                    button["name"]
+                    for button in snapshot["buttons"]
+                    if button["name"].startswith("git-auth-form:") and button["enabled"]
+                )
 
             # Cancel discards both entries. A later operation must ask afresh.
             click("git-network-Fetch")
+            form()
             enter("git-auth-username", username)
             enter("git-auth-password", password)
             click("git-auth-cancel")
+            wait_for_ui_state(
+                process,
+                log_path,
+                state,
+                lambda snapshot: all(
+                    not button["name"].startswith("git-auth-form:")
+                    for button in snapshot["buttons"]
+                ),
+                "Cancelling authentication did not close the form",
+            )
             click("git-network-Fetch")
+            rejected_form = form()
             enter("git-auth-username", username)
             enter("git-auth-password", wrong_password)
             click("git-auth-submit")
@@ -261,11 +303,7 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
                 assert_running(process, log_path)
                 time.sleep(0.05)
             assert rejected, "Rejected credentials did not reach the HTTPS fixture"
-            before = json.loads(state.read_text())["pass"]
-            key("Tab")
-            wait_for_button(
-                window, process, log_path, state, "git-auth-username", after_pass=before
-            )
+            form(rejected_form)
             buttons = {item["name"]: item for item in json.loads(state.read_text())["buttons"]}
             assert not buttons["git-auth-submit"]["enabled"], (
                 "Rejected credential entries were retained in the form"
@@ -293,7 +331,7 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
                 time.sleep(0.05)
             else:
                 raise AssertionError(
-                    "Authenticated fetch did not update the remote tracking branch"
+                    f"Authenticated fetch did not update the remote tracking branch; accepted={len(accepted)}, rejected={len(rejected)}; layout={state.read_text()}"
                 )
             assert accepted
             git("branch", "--set-upstream-to", "origin/main", "main")
@@ -309,6 +347,7 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
             )
             expected_commit = git("rev-parse", "HEAD")
             click("git-network-Push")
+            form()
             enter("git-auth-username", username)
             enter("git-auth-password", password)
             click("git-auth-submit")

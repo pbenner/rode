@@ -14,9 +14,12 @@ use std::{
 struct Button {
     #[serde(skip)]
     id: Id,
+    #[serde(skip)]
+    layer: egui::LayerId,
     name: String,
     enabled: bool,
     focused: bool,
+    hovered: bool,
     // Retain the edit's pass across repaints so a polling fixture cannot miss it.
     changed_pass: Option<u64>,
     rect: [f32; 4],
@@ -39,7 +42,7 @@ pub(super) fn install(ctx: &egui::Context) {
     }
 }
 
-fn install_at(ctx: &egui::Context, path: PathBuf) {
+pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
     let probe = Probe::default();
     ctx.data_mut(|data| data.insert_temp(Id::new("native-ui-probe"), probe.clone()));
     let begin = probe.clone();
@@ -66,11 +69,13 @@ fn install_at(ctx: &egui::Context, path: PathBuf) {
                 .last_change
                 .retain(|id, _| buttons.iter().any(|button| button.id == *id));
             drop(controls);
-            // Resolve focus after every widget has had its turn: a later modal
-            // can take focus away from an editor registered earlier in the pass.
+            // Resolve focus and modal blocking after layout: a later modal can
+            // take focus away from an editor registered earlier in the pass.
             ctx.memory(|memory| {
                 for button in &mut buttons {
                     button.focused = memory.has_focus(button.id);
+                    button.enabled &= memory.allows_interaction(button.layer);
+                    button.hovered &= button.enabled;
                 }
             });
             let value = serde_json::json!({
@@ -127,9 +132,11 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
         let changed_pass = controls.last_change.get(&response.id).copied();
         controls.visible.push(Button {
             id: response.id,
+            layer: response.layer_id,
             name: name.into(),
-            enabled: response.enabled(),
+            enabled: response.enabled() && !ui.is_sizing_pass(),
             focused: false,
+            hovered: response.hovered() && ui.input(|input| input.pointer.hover_pos().is_some()),
             changed_pass,
             rect: [rect.left(), rect.top(), rect.right(), rect.bottom()],
         });
@@ -139,6 +146,72 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hover_acknowledges_real_pointer_input_and_is_cleared_when_it_leaves() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        let render = |events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let response = ui.button("Attach");
+                        button(ui, "attach", &response);
+                    });
+                },
+            );
+            serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+        };
+        render(vec![]);
+        let state = render(vec![]);
+        assert_eq!(state["buttons"][0]["hovered"], false);
+        let rect: [f32; 4] = serde_json::from_value(state["buttons"][0]["rect"].clone()).unwrap();
+        let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
+        let hovered = render(vec![egui::Event::PointerMoved(point)]);
+        assert_eq!(hovered["buttons"][0]["hovered"], true);
+        let left = render(vec![egui::Event::PointerGone]);
+        assert_eq!(left["buttons"][0]["hovered"], false);
+    }
+
+    #[test]
+    fn snapshots_do_not_advertise_controls_behind_a_later_modal_as_clickable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        for pass in 0..3 {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let response = ui.button("Fetch");
+                    button(ui, "background-fetch", &response);
+                });
+                egui::Modal::new(Id::new("credentials")).show(ctx, |ui| {
+                    let response = ui.button("Retry operation");
+                    button(ui, "modal-retry", &response);
+                });
+            });
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let background = state["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["name"] == "background-fetch")
+                .unwrap();
+            if pass > 0 {
+                assert_eq!(
+                    background["enabled"], false,
+                    "The modal blocks this control despite its widget enabled flag"
+                );
+            }
+        }
+    }
 
     #[test]
     fn reselecting_terminal_tab_keeps_shell_input_with_and_without_the_probe() {

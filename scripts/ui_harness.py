@@ -29,6 +29,7 @@ x11.XStringToKeysym.argtypes = [c.c_char_p]
 x11.XKeysymToKeycode.restype = c.c_uint
 x11.XKeysymToKeycode.argtypes = [c.c_void_p, c.c_ulong]
 x11.XSetInputFocus.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_ulong]
+x11.XRaiseWindow.argtypes = [c.c_void_p, c.c_ulong]
 x11.XFlush.argtypes = [c.c_void_p]
 xtest.XTestFakeKeyEvent.argtypes = [c.c_void_p, c.c_uint, c.c_int, c.c_ulong]
 xtest.XTestFakeMotionEvent.argtypes = [c.c_void_p, c.c_int, c.c_int, c.c_int, c.c_ulong]
@@ -97,9 +98,15 @@ def text(value):
         key(name, ("Shift_L",) if shift else ())
 
 
+def move_pointer(x, y):
+    """Move without activating anything, allowing the native hit test to acknowledge the target."""
+    xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
+    x11.XFlush(display)
+
+
 def click(x, y):
     """Click absolute display coordinates; UI tests use a known window size/position."""
-    xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
+    move_pointer(x, y)
     xtest.XTestFakeButtonEvent(display, 1, 1, 0)
     xtest.XTestFakeButtonEvent(display, 1, 0, 0)
     x11.XFlush(display)
@@ -131,6 +138,7 @@ def wait_for_button(
     focused=False,
     changed_after=None,
     after_pass=None,
+    hovered=False,
 ):
     """Wait for an enabled, visible registered control and resolve its current physical centre.
 
@@ -139,9 +147,13 @@ def wait_for_button(
     Optional focus/edit revision guards wait for dependent input to be processed,
     including when one busy native frame outlasts several keyboard shortcuts.
     after_pass also waits for cursor/selection changes that do not edit the buffer.
+    hovered moves the pointer and requires the native hit test to accept it before
+    returning. Follow moving controls without retrying any activating input.
     """
     deadline = time.monotonic() + timeout
     last = "No layout snapshot received"
+    pointer = None
+    pointer_pass = None
     while time.monotonic() < deadline:
         assert_running(process, log_path)
         try:
@@ -152,7 +164,7 @@ def wait_for_button(
         last = repr(state)
         if state.get("pid") == process.pid and (after_pass is None or state["pass"] > after_pass):
             for button in state["buttons"]:
-                if button["name"] != name or not button["enabled"]:
+                if button["name"] != name or (not button["enabled"] and not hovered):
                     continue
                 if focused and not button.get("focused", False):
                     continue
@@ -170,10 +182,22 @@ def wait_for_button(
                     break
                 left, top, right, bottom = button["rect"]
                 if right > left and bottom > top:
-                    return (
+                    point = (
                         round(x + (left + right) * scale / 2),
                         round(y + (top + bottom) * scale / 2),
                     )
+                    if hovered:
+                        if point != pointer:
+                            move_pointer(*point)
+                            pointer = point
+                            pointer_pass = state["pass"]
+                        if (
+                            state["pass"] <= pointer_pass
+                            or not button["enabled"]
+                            or not button.get("hovered", False)
+                        ):
+                            break
+                    return point
         time.sleep(0.05)
     raise AssertionError(
         f"No enabled {name!r} control within {timeout}s. Last layout: {last}. Log: {log_path}"
@@ -181,9 +205,9 @@ def wait_for_button(
 
 
 def click_button(window, process, log_path, state_path, name, timeout=20):
-    """Click once at the real control's current bounds after asynchronous readiness."""
+    """Click once after the real control acknowledges hover and input readiness."""
     focus_window(window)
-    point = wait_for_button(window, process, log_path, state_path, name, timeout)
+    point = wait_for_button(window, process, log_path, state_path, name, timeout, hovered=True)
     click(*point)
 
 
@@ -305,7 +329,7 @@ def wait_for_project(window, process, log_path, project, timeout=20):
 
 
 def focus_window(window, timeout=20):
-    """Focus only a mapped window; XSetInputFocus aborts Python on an unmapped X window."""
+    """Raise and focus a mapped window so another fixture view cannot intercept mouse input."""
     deadline = time.monotonic() + timeout
     environment = dict(os.environ, LC_ALL="C.UTF-8")
     state = "unknown"
@@ -320,6 +344,7 @@ def focus_window(window, timeout=20):
         mapped = re.search(r"Map State:\s*(\w+)", attributes.stdout)
         state = mapped[1] if attributes.returncode == 0 and mapped else "disappeared"
         if state == "IsViewable":
+            x11.XRaiseWindow(display, window)
             x11.XSetInputFocus(display, window, 1, 0)
             x11.XFlush(display)
             return

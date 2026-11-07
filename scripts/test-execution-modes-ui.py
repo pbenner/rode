@@ -31,6 +31,7 @@ from ui_harness import (
     text,
     wait_for_button,
     wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
 )
 
@@ -234,6 +235,21 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
             ]:
                 command("Terminal: Sessions and Slurm allocations")
                 click("session-attach:" + info["id"])
+                wait_for_ui_state(
+                    process,
+                    log_path,
+                    state_path,
+                    lambda state: (
+                        state.get("session_ids") is None
+                        and any(
+                            button["name"] == "terminal-input:" + info["id"]
+                            and button["enabled"]
+                            and button["focused"]
+                            for button in state["buttons"]
+                        )
+                    ),
+                    "Sessions did not close and focus the selected terminal " + info["id"],
+                )
                 assert shell_check(info, "retained-" + info["id"], expected) == pid
             screenshot(window, "terminal-modes.png")
 

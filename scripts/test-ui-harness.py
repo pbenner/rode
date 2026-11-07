@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from ui_harness import (
     click_button,
@@ -75,10 +75,15 @@ class WindowReadinessTests(unittest.TestCase):
             self.state("IsUnviewable"),
             self.state("IsViewable"),
         ]
-        with patch("ui_harness.x11.XSetInputFocus") as focus, patch("ui_harness.x11.XFlush"):
+        with (
+            patch("ui_harness.x11.XSetInputFocus") as focus,
+            patch("ui_harness.x11.XRaiseWindow") as raise_window,
+            patch("ui_harness.x11.XFlush"),
+        ):
             focus_window(0x123)
             self.assertEqual(self.query_attributes.call_count, 3)
             focus.assert_called_once()
+            raise_window.assert_called_once()
 
     def test_project_waits_past_initial_mapping_and_pending_preparation(self):
         for suffix in ("", " [Sandbox]"):
@@ -126,11 +131,19 @@ class ButtonReadinessTests(unittest.TestCase):
             "pass": 10,
             "size": [800, 600],
             "pixels_per_point": 1.5,
-            "buttons": [{"name": "Install Codex", "enabled": True, "rect": [10, 20, 110, 40]}],
+            "buttons": [
+                {
+                    "name": "Install Codex",
+                    "enabled": True,
+                    "hovered": True,
+                    "rect": [10, 20, 110, 40],
+                }
+            ],
         }
         self.read = patch("ui_harness.Path.read_text", return_value=json.dumps(self.state)).start()
         patch("ui_harness.time.sleep").start()
         patch("ui_harness.window_geometry", return_value=(100, 200, 1200, 900)).start()
+        self.move = patch("ui_harness.move_pointer").start()
         self.addCleanup(patch.stopall)
 
     def wait(self):
@@ -159,10 +172,73 @@ class ButtonReadinessTests(unittest.TestCase):
         self.assertEqual(self.read.call_count, 2)
 
     def test_click_uses_native_input_once_after_readiness(self):
+        self.read.side_effect = [json.dumps(self.state), json.dumps({**self.state, "pass": 11})]
         with patch("ui_harness.focus_window") as focus, patch("ui_harness.click") as click:
             click_button(0x123, self.process, "startup.log", "widgets.json", "Install Codex")
             focus.assert_called_once_with(0x123)
             click.assert_called_once_with(190, 245)
+
+    def test_click_waits_for_hover_acknowledgement_before_activating_once(self):
+        waiting = dict(self.state, buttons=[dict(self.state["buttons"][0], hovered=False)])
+        self.read.side_effect = [
+            json.dumps(waiting),
+            json.dumps(waiting),
+            json.dumps({**self.state, "pass": 11}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click.side_effect = lambda *_: self.assertEqual(self.read.call_count, 3)
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            self.move.assert_called_once_with(190, 245)
+            click.assert_called_once_with(190, 245)
+
+    def test_hover_follows_a_repositioned_control_without_retrying_clicks(self):
+        waiting = dict(self.state, buttons=[dict(self.state["buttons"][0], hovered=False)])
+        moved = dict(self.state, buttons=[dict(self.state["buttons"][0], rect=[30, 40, 130, 60])])
+        moving = {**moved, "buttons": [dict(moved["buttons"][0], hovered=False)], "pass": 11}
+        self.read.side_effect = [
+            json.dumps(waiting),
+            json.dumps(moving),
+            json.dumps({**moved, "pass": 12}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            self.assertEqual(self.move.call_args_list, [call(190, 245), call(220, 275)])
+            click.assert_called_once_with(220, 275)
+
+    def test_old_hover_is_not_an_acknowledgement_of_the_new_pointer_motion(self):
+        self.read.side_effect = [
+            json.dumps(self.state),
+            json.dumps(self.state),
+            json.dumps({**self.state, "pass": 11}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click.side_effect = lambda *_: self.assertEqual(self.read.call_count, 3)
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            click.assert_called_once_with(190, 245)
+
+    def test_modal_blocked_control_cannot_be_clicked_until_it_accepts_hover(self):
+        blocked = dict(self.state, buttons=[dict(self.state["buttons"][0], enabled=False)])
+        self.read.side_effect = [
+            json.dumps(blocked),
+            json.dumps({**blocked, "pass": 11}),
+            json.dumps({**self.state, "pass": 12}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click.side_effect = lambda *_: self.assertEqual(self.read.call_count, 3)
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            click.assert_called_once_with(190, 245)
+
+    def test_unacknowledged_hover_times_out_without_activating(self):
+        self.state["buttons"][0]["hovered"] = False
+        self.read.return_value = json.dumps(self.state)
+        with (
+            patch("ui_harness.focus_window"),
+            patch("ui_harness.click") as click,
+            patch("ui_harness.time.monotonic", side_effect=[0, 0, 21]),
+        ):
+            with self.assertRaisesRegex(AssertionError, "Install Codex"):
+                click_button(0x123, self.process, "log", "state", "Install Codex")
+            click.assert_not_called()
 
     def test_focused_control_waits_for_final_focus(self):
         focused = dict(self.state, buttons=[dict(self.state["buttons"][0], focused=True)])
@@ -218,21 +294,28 @@ class PaletteReadinessTests(unittest.TestCase):
         patch("ui_harness.time.sleep").start()
         patch("ui_harness.window_geometry", return_value=(0, 0, 800, 600)).start()
         patch("ui_harness.focus_window").start()
+        patch("ui_harness.move_pointer").start()
         self.key = patch("ui_harness.key").start()
         self.text = patch("ui_harness.text").start()
         self.click = patch("ui_harness.click").start()
         self.addCleanup(patch.stopall)
 
     @staticmethod
-    def state(*names, focused=True, pid=42):
+    def state(*names, focused=True, pid=42, render_pass=1):
         return json.dumps(
             {
                 "pid": pid,
-                "pass": 1,
+                "pass": render_pass,
                 "size": [800, 600],
                 "pixels_per_point": 1,
                 "buttons": [
-                    {"name": name, "enabled": True, "focused": focused, "rect": [10, 20, 110, 40]}
+                    {
+                        "name": name,
+                        "enabled": True,
+                        "hovered": True,
+                        "focused": focused,
+                        "rect": [10, 20, 110, 40],
+                    }
                     for name in names
                 ],
             }
@@ -249,13 +332,14 @@ class PaletteReadinessTests(unittest.TestCase):
             self.state(input_name),  # An unprocessed or partial query is not an acknowledgement.
             self.state(input_name, "command-match:New file"),
             self.state(input_name, "command-match:Terminal: New terminal"),
+            self.state(input_name, "command-match:Terminal: New terminal", render_pass=2),
             self.state(input_name),  # Click is queued; do not start the next operation yet.
             self.state(),
         ]
         self.text.side_effect = lambda _: self.assertEqual(self.read.call_count, 2)
-        self.click.side_effect = lambda *_: self.assertEqual(self.read.call_count, 5)
+        self.click.side_effect = lambda *_: self.assertEqual(self.read.call_count, 6)
         self.command()
-        self.assertEqual(self.read.call_count, 7)
+        self.assertEqual(self.read.call_count, 8)
         self.key.assert_called_once_with("p", ("Control_L", "Shift_L"))
         self.text.assert_called_once_with("Terminal: New terminal")
         self.click.assert_called_once_with(60, 30)
