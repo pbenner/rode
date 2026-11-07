@@ -1,7 +1,7 @@
 //! Opt-in, read-only geometry for native UI fixtures. Normal startup installs no
 //! hooks or file I/O. Fixtures still use real X11 input and observe real effects;
-//! this reports only registered controls' geometry, focus and edit revisions,
-//! never chat or document text.
+//! this reports controls' geometry, focus and edit revisions, plus opaque IDs in
+//! the open session manager, never chat or document text.
 use eframe::egui::{self, Id};
 use serde::Serialize;
 use std::{
@@ -26,6 +26,7 @@ struct Button {
 struct Controls {
     visible: Vec<Button>,
     last_change: HashMap<Id, u64>,
+    session_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -44,7 +45,11 @@ fn install_at(ctx: &egui::Context, path: PathBuf) {
     let begin = probe.clone();
     ctx.on_begin_pass(
         "native-ui-probe",
-        Arc::new(move |_| begin.0.lock().unwrap().visible.clear()),
+        Arc::new(move |_| {
+            let mut controls = begin.0.lock().unwrap();
+            controls.visible.clear();
+            controls.session_ids = None;
+        }),
     );
     ctx.on_end_pass(
         "native-ui-probe",
@@ -55,6 +60,7 @@ fn install_at(ctx: &egui::Context, path: PathBuf) {
             }
             let mut controls = probe.0.lock().unwrap();
             let mut buttons = controls.visible.clone();
+            let session_ids = controls.session_ids.clone();
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
@@ -73,6 +79,7 @@ fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "pixels_per_point": ctx.pixels_per_point(),
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
                 "buttons": buttons,
+                "session_ids": session_ids,
             });
             if let Err(error) = publish(&path, &value) {
                 eprintln!(
@@ -82,6 +89,17 @@ fn install_at(ctx: &egui::Context, path: PathBuf) {
             }
         }),
     );
+}
+
+/// Report the manager's complete cached list, including rows outside its scroll
+/// viewport. A clipped row or closed dialog must not look like a removed session.
+pub(super) fn session_list<'a>(ui: &egui::Ui, ids: impl IntoIterator<Item = &'a str>) {
+    if let Some(probe) = ui
+        .ctx()
+        .data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe")))
+    {
+        probe.0.lock().unwrap().session_ids = Some(ids.into_iter().map(str::to_owned).collect());
+    }
 }
 
 fn publish(path: &Path, value: &serde_json::Value) -> anyhow::Result<()> {
@@ -121,6 +139,66 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_match_requires_the_complete_native_query() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = crate::app::EditorApp::new(&cc, Default::default());
+        app.set_dialog(crate::app::Dialog::Commands);
+        for (text, matched) in [
+            ("Terminal: Sessions", false),
+            (" and Slurm allocations", true),
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Text(text.into())],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.command_dialog(ui, ctx));
+                },
+            );
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                state["buttons"].as_array().unwrap().iter().any(|button| {
+                    button["name"] == "command-match:Terminal: Sessions and Slurm allocations"
+                }),
+                matched,
+            );
+        }
+        assert_eq!(app.dialog_input, "Terminal: Sessions and Slurm allocations");
+        assert!(matches!(app.dialog, crate::app::Dialog::Commands));
+    }
+
+    #[test]
+    fn manager_snapshot_distinguishes_clipped_rows_empty_list_and_closed_dialog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        for ids in [
+            Some(vec!["visible", "outside-scroll-viewport"]),
+            Some(vec![]),
+            None,
+        ] {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.set_clip_rect(egui::Rect::NOTHING);
+                    if let Some(ids) = &ids {
+                        session_list(ui, ids.iter().copied());
+                    }
+                });
+            });
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(state["session_ids"], serde_json::json!(ids));
+        }
+    }
 
     #[test]
     fn snapshots_follow_enabled_visible_controls_and_clear_hidden_or_discarded_layout() {

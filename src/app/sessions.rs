@@ -882,6 +882,7 @@ impl EditorApp {
         }
         let fingerprint = service::fingerprint(&self.session_plan());
         let available = self.sessions.available.clone();
+        super::ui_probe::session_list(ui, available.iter().map(|info| info.id.as_str()));
         // Destructive confirmations remain visible even when the list scrolls.
         self.session_confirmation(ui, ctx);
         let body_height = (ctx.content_rect().height() - 300.).clamp(150., 520.);
@@ -906,10 +907,10 @@ impl EditorApp {
                                 "ENDED".into()
                             });
                             let compatible = info.policy == fingerprint;
-                            if ui.add_enabled(compatible, egui::Button::new("Attach"))
-                                .on_hover_text("Open this session's original project and sandbox policy to attach.")
-                                .clicked()
-                            {
+                            let attach = ui.add_enabled(compatible, egui::Button::new("Attach"))
+                                .on_hover_text("Open this session's original project and sandbox policy to attach.");
+                            super::ui_probe::button(ui, &format!("session-attach:{}", info.id), &attach);
+                            if attach.clicked() {
                                 self.attach_info(info.clone(), ctx);
                             }
                             if ui.add_enabled(compatible && !self.sessions.busy, egui::Button::new("Rename")).clicked() {
@@ -1020,9 +1021,9 @@ impl EditorApp {
             } else {
                 !self.sessions.busy
             };
-            let confirm = ui
-                .add_enabled(ready, egui::Button::new("Confirm · Alt+Enter"))
-                .clicked()
+            let response = ui.add_enabled(ready, egui::Button::new("Confirm · Alt+Enter"));
+            super::ui_probe::button(ui, "session-confirm", &response);
+            let confirm = response.clicked()
                 || ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, Key::Enter));
             if ready
                 && confirm

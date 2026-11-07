@@ -82,12 +82,13 @@ impl EditorApp {
             ui.memory_mut(|memory| memory.request_focus(input_id));
             self.dialog_focus = false;
         }
-        ui.add(
+        let input = ui.add(
             egui::TextEdit::singleline(&mut self.dialog_input)
                 .id(input_id)
                 .desired_width(f32::INFINITY)
                 .hint_text("Type a command…"),
         );
+        super::ui_probe::button(ui, "command-palette-input", &input);
         let commands = [
             (PaletteAction::New, "New file", "Ctrl+N"),
             (PaletteAction::Open, "Open file by path", "Ctrl+P"),
@@ -316,6 +317,11 @@ impl EditorApp {
                         egui::Button::new(format!("{name}     {shortcut}"))
                             .selected(row == self.navigation.list.index),
                     );
+                    // A fixture may submit only after the complete query has
+                    // reached this frame, not merely its first matching prefix.
+                    if query == name.to_lowercase() {
+                        super::ui_probe::button(ui, &format!("command-match:{name}"), &response);
+                    }
                     if row == self.navigation.list.index && reveal {
                         response.scroll_to_me(Some(Align::Center));
                     }

@@ -376,6 +376,16 @@ impl EditorApp {
         {
             self.notify(error, true);
         }
+        if !self.session_busy()
+            && self.terminal.as_ref().is_some_and(Terminal::is_alive)
+            && let Some(active) = &self.sessions.active
+            && let Some(response) = ctx.read_response(egui::Id::new("terminal-input"))
+        {
+            super::ui_probe::button(ui, &format!("terminal-input:{}", active.key), &response);
+            if active.native.is_none() {
+                super::ui_probe::button(ui, "temporary-terminal-input", &response);
+            }
+        }
     }
 
     /// Render local/SSH project entry points when no document surface is selected.

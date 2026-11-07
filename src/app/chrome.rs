@@ -190,7 +190,7 @@ impl EditorApp {
                 }
                 // This row flows right to left: persistence is always the
                 // rightmost action, with a stable width in both states.
-                if ui.add_enabled(native && persistence_supported && !self.session_busy(), persist_button)
+                let response = ui.add_enabled(native && persistence_supported && !self.session_busy(), persist_button)
                     .on_hover_text("Keep running after exit. On: this terminal survives its last view closing. Off: it ends when its last view closes. Shared across attached RODE windows; changing this does not restart the shell.")
                     .on_disabled_hover_text(if native && !persistence_supported {
                         rode_session::LEGACY_PERSISTENCE_HELP
@@ -198,7 +198,9 @@ impl EditorApp {
                         "Waiting for the terminal service to finish the current request."
                     } else {
                         "Persistence is available for native terminals. Temporary terminals and SSH login prompts cannot be made persistent."
-                    }).clicked() {
+                    });
+                super::ui_probe::button(ui, if persistent { "terminal-persist:on" } else { "terminal-persist:off" }, &response);
+                if response.clicked() {
                     self.toggle_terminal_persistence(ctx);
                 }
                 self.slurm_terminal_button(ui, ctx);
