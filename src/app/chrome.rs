@@ -209,12 +209,14 @@ impl EditorApp {
                     self.show_terminal = false;
                     self.focus_editor(ctx);
                 }
-                if wide && ui
-                    .add(egui::Button::new("Copy").small().min_size(egui::vec2(0., height)))
-                    .on_hover_text("Copy selected text, or visible terminal contents when nothing is selected")
-                    .clicked()
-                {
-                    self.copy_terminal_output(ctx);
+                if wide {
+                    let copy = ui
+                        .add(egui::Button::new("Copy").small().min_size(egui::vec2(0., height)))
+                        .on_hover_text("Copy selected text, or visible terminal contents when nothing is selected");
+                    super::ui_probe::button(ui, "terminal-copy-output", &copy);
+                    if copy.clicked() {
+                        self.copy_terminal_output(ctx);
+                    }
                 }
                 if wide && ui
                     .add(egui::Button::new("Sessions").small().min_size(egui::vec2(0., height)))
