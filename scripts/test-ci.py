@@ -123,6 +123,25 @@ class SelectionTests(unittest.TestCase):
         for script in scripts:
             self.assertTrue((ci.ROOT / script).is_file(), script)
 
+    def test_execution_modes_cover_required_enforcement_and_forced_ssh_fallback(self):
+        script = "scripts/test-execution-modes-ui.py"
+        self.assertTrue(
+            any(
+                script in command and overrides.get("RODE_TEST_REQUIRE_SANDBOX") == "1"
+                for command, overrides, _ in ci.SUITES["sandbox"]
+            )
+        )
+        self.assertTrue(
+            any(
+                script in command
+                and "scripts/test-ssh.sh" in command
+                and overrides.get("RODE_SSH_TEST_NO_BWRAP") == "1"
+                and overrides.get("RODE_EXECUTION_UI_REMOTE") == "1"
+                and overrides.get("RODE_SSH_RUN_TRANSPORT") == "0"
+                for command, overrides, _ in ci.SUITES["ssh"]
+            )
+        )
+
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
@@ -199,6 +218,21 @@ class RunnerTests(unittest.TestCase):
         self.assertLess(len(console.getvalue()), 25000)
         log = (self.root / "target/ci-results/commands/verbose.log").read_text()
         self.assertEqual(log.count("daemon chatter"), 6000)
+
+    def test_nested_suite_failure_keeps_one_console_group_and_the_full_raw_log(self):
+        child = "::group::child UI test\nTraceback: KeyError: 'git_sandbox'\n::endgroup::\n"
+        console = io.StringIO()
+        with patch("sys.stdout", console), self.assertRaises(SystemExit) as error:
+            ci.measure("nested", [sys.executable, "-c", f"print({child!r}, end='');exit(1)"])
+        self.assertEqual(error.exception.code, 1)
+        # The command's title quotes its literal source, so inspect group markers
+        # at line starts and the replayed diagnostic beneath that title.
+        lines = console.getvalue().splitlines()
+        self.assertEqual(sum(line.startswith("::group::") for line in lines), 1)
+        self.assertEqual(sum(line == "::endgroup::" for line in lines), 1)
+        self.assertIn("child UI test", lines)
+        self.assertIn("Traceback: KeyError: 'git_sandbox'", lines)
+        self.assertEqual((self.root / "target/ci-results/commands/nested.log").read_text(), child)
 
     def test_timeout_terminates_descendants_as_well_as_the_test_driver(self):
         child_pid = self.root / "child.pid"

@@ -77,6 +77,18 @@ else
         chmod 700 "$test_dir/home/.local/bin/uv" "$test_dir/home/.local/bin/uvx"
         test_path="$test_dir/home/.local/bin:$test_path"
     fi
+    if [[ "${RODE_SSH_TEST_NO_BWRAP:-0}" == 1 ]]; then
+        # Exercise unavailable sandboxing even on development hosts that allow
+        # user namespaces. Keep all other tools available to the UI fixture.
+        mkdir -m 700 "$test_dir/no-bwrap"
+        cat > "$test_dir/no-bwrap/bwrap" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'bwrap: sandbox unavailable in SSH test fixture' >&2
+exit 1
+EOF
+        chmod 700 "$test_dir/no-bwrap/bwrap"
+        test_path="$test_dir/no-bwrap:$test_path"
+    fi
 fi
 cat > "$test_dir/host-shell" <<EOF
 #!/bin/sh

@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 remote = os.environ.get("RODE_EXECUTION_UI_REMOTE") == "1"
-label = "ssh" if remote else "local"
+expect_fallback = remote and os.environ.get("RODE_SSH_TEST_NO_BWRAP") == "1"
+label = "ssh-fallback" if expect_fallback else "ssh" if remote else "local"
 backend = os.environ.get("RODE_TEST_SANDBOX_BACKEND", "landlock")
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/execution-modes-ui" / label
@@ -187,10 +188,15 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
 
             first = created(set())
             active = first["mode"].startswith("SANDBOX")
+            if expect_fallback:
+                assert first["mode"] == "NORMAL MODE · sandbox unavailable", first
             if not active:
                 assert os.environ.get("RODE_TEST_REQUIRE_LANDLOCK") != "1", first
                 assert os.environ.get("RODE_TEST_REQUIRE_SANDBOX") != "1", first
-                print(f"Project sandbox unavailable; enforcement checks skipped: {first['mode']}")
+                print(
+                    f"Project sandbox unavailable; enforcement checks skipped: {first['mode']}",
+                    flush=True,
+                )
             first_pid = shell_check(first, "first", "blocked" if active else "host")
             click("terminal-execution-mode")
             click("terminal-new-host")
@@ -267,8 +273,11 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
             assert stored, "Project preferences were not saved"
             saved = json.loads(json.loads(stored[1]))
             preferences = next(v for k, v in saved.items() if str(root) in k)
-            assert preferences["terminal_sandbox"] is False
-            assert preferences["git_sandbox"] is False
+            # Persistence records changed fields, not every effective default.
+            # In fallback mode Git was never switched, so its default false may
+            # be absent. The terminal choice changed from true and must be saved.
+            assert preferences.get("terminal_sandbox", True) is False, preferences
+            assert preferences.get("git_sandbox", False) is False, preferences
             assert preferences["sandbox"]["enabled"] is True
             print(f"Independent Git/terminal modes and project-command policy passed ({label}).")
         except Exception:
