@@ -64,12 +64,37 @@ pub(super) struct Preferences {
     monitor_interval: u64,
     /// Requested grants; only the prepared workspace plan establishes actual isolation.
     sandbox: sandbox::Options,
+    /// User-operated Git defaults to normal host permissions.
+    git_sandbox: bool,
+    /// Default for explicitly opened terminals; existing shells retain their policy.
+    terminal_sandbox: bool,
     slurm_queue: String,
     slurm_cancel: String,
     slurm_allocation: crate::slurm::Allocation,
     pub(super) marp: crate::marp::Settings,
     pub(super) latex: crate::latex::Settings,
     pub(super) debugger: crate::debugger::Settings,
+}
+
+#[cfg(test)]
+mod execution_preferences_tests {
+    use super::*;
+
+    #[test]
+    fn existing_projects_default_to_host_git_and_project_terminals() {
+        let old: Preferences = serde_json::from_str("{}").unwrap();
+        assert!(!old.git_sandbox);
+        assert!(old.terminal_sandbox);
+        let chosen = Preferences {
+            git_sandbox: true,
+            terminal_sandbox: false,
+            ..old
+        };
+        let restored: Preferences =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert!(restored.git_sandbox);
+        assert!(!restored.terminal_sandbox);
+    }
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -82,6 +107,8 @@ impl Default for Preferences {
             live_checks: true,
             monitor_interval: 2,
             sandbox: Default::default(),
+            git_sandbox: false,
+            terminal_sandbox: true,
             slurm_queue: "squeue".into(),
             slurm_cancel: "scancel".into(),
             slurm_allocation: Default::default(),
@@ -195,6 +222,20 @@ pub(super) struct Workbench {
 }
 
 impl Workbench {
+    pub(super) fn git_sandbox(&self) -> bool {
+        self.prefs.git_sandbox
+    }
+
+    pub(super) fn terminal_sandbox(&self) -> bool {
+        self.prefs.terminal_sandbox
+    }
+
+    pub(super) fn save_terminal_sandbox(&mut self, sandboxed: bool) {
+        self.prefs.terminal_sandbox = sandboxed;
+        self.draft.terminal_sandbox = sandboxed;
+        self.save_preferences();
+    }
+
     /// Return the applied literal variables and runtime overrides for newly launched tools.
     pub(super) fn environment_settings(&self) -> &crate::environment::Settings {
         &self.prefs.environment

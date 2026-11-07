@@ -9,8 +9,8 @@ use crate::sandbox::PlanExt as _;
 
 impl EditorApp {
     /// Capture host, policy, generation, cancellation and encrypted-mount ownership,
-    /// then run a blocking project request off the UI thread. Only telemetry bypasses
-    /// the project sandbox; replies return through the generation-tagged event channel.
+    /// then run a blocking project request off the UI thread. Telemetry and explicitly
+    /// host-mode UI Git use separate host execution; other tools retain the project policy.
     pub(in crate::app) fn dispatch_tool(
         &mut self,
         request: project::Request,
@@ -30,6 +30,15 @@ impl EditorApp {
             workspace.map(|w| w.plan.clone())
         };
         let remote = workspace.and_then(|w| w.remote.clone());
+        let host_git = !self.workbench.git_sandbox()
+            && matches!(job, ToolJob::Git(_))
+            && matches!(
+                request,
+                project::Request::Git { .. }
+                    | project::Request::GitAuthenticated { .. }
+                    | project::Request::GitStash { .. }
+            );
+        let git_host_plan = self.workbench.git.host_plan.clone();
         let generation = self.generation;
         let cancel = self.extensions.cancel.clone();
         let tx = self.tx.clone();
@@ -37,39 +46,46 @@ impl EditorApp {
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
-            let request = Request::Tool { request };
-            let invocation = if let Request::Tool {
-                request: project::Request::Extension { invocation, .. },
-            } = &request
-            {
+            let invocation = if let project::Request::Extension { invocation, .. } = &request {
                 Some(invocation.clone())
             } else {
                 None
             };
-            let result = if let Request::Tool {
-                request: request @ project::Request::Extension { .. },
-            } = &request
-            {
-                let reply = match &remote {
-                    Some(remote) => remote.extension_request(request, plan.as_ref(), &cancel),
-                    None => plan
-                        .clone()
-                        .unwrap_or_default()
-                        .extension_request(request, &cancel),
+            let result = (|| -> anyhow::Result<files::Response> {
+                let plan = if host_git {
+                    let project = plan
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("Git requires a prepared project"))?;
+                    Some(git_host_plan.prepare(project, remote.as_ref())?)
+                } else {
+                    plan
                 };
-                reply.map(|reply| files::Response {
-                    tool: Some(project::Response::Extension(reply)),
-                    ..Default::default()
-                })
-            } else {
-                match remote {
-                    Some(remote) => remote.request_in(&request, plan.as_ref()),
-                    None => match plan {
-                        Some(plan) => plan.local_request(&request),
-                        None => files::local(&request),
-                    },
+                let request = Request::Tool { request };
+                if let Request::Tool {
+                    request: request @ project::Request::Extension { .. },
+                } = &request
+                {
+                    let reply = match &remote {
+                        Some(remote) => remote.extension_request(request, plan.as_ref(), &cancel),
+                        None => plan
+                            .clone()
+                            .unwrap_or_default()
+                            .extension_request(request, &cancel),
+                    };
+                    reply.map(|reply| files::Response {
+                        tool: Some(project::Response::Extension(reply)),
+                        ..Default::default()
+                    })
+                } else {
+                    match remote {
+                        Some(remote) => remote.request_in(&request, plan.as_ref()),
+                        None => match plan {
+                            Some(plan) => plan.local_request(&request),
+                            None => files::local(&request),
+                        },
+                    }
                 }
-            }
+            })()
             .and_then(|r| {
                 r.tool
                     .ok_or_else(|| anyhow::anyhow!("Host returned no project service result"))

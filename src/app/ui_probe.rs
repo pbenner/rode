@@ -193,6 +193,8 @@ mod tests {
                     order: 0,
                     name: "Existing shell".into(),
                     native: None,
+                    policy: String::new(),
+                    mode: "NORMAL MODE".into(),
                 });
                 app.show_terminal = true;
                 app.terminal_intent();

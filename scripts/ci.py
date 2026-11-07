@@ -58,6 +58,7 @@ CONTEXT_ENV = (
     "RODE_PROJECT_UI_CASE",
     "RODE_GIT_IDENTITY_UI_REMOTE",
     "RODE_GIT_AUTH_UI_REMOTE",
+    "RODE_EXECUTION_UI_REMOTE",
     "RODE_SSH_RUN_TRANSPORT",
     "RODE_SSH_TEST_FILTER",
     "RODE_SSH_TEST_NO_PYTHON",
@@ -138,6 +139,7 @@ SUITES = {
         ),
     ],
     "remote-smoke": [
+        ui("execution-modes", RODE_EXECUTION_UI_REMOTE="1"),
         ui("git-identity", RODE_GIT_IDENTITY_UI_REMOTE="1"),
         ui("project", RODE_PROJECT_UI_CASE="ssh"),
         ui("explorer", RODE_EXPLORER_UI_REMOTE="1"),
@@ -145,6 +147,7 @@ SUITES = {
         ui("large-files", RODE_LARGE_FILES_UI_REMOTE="1"),
     ],
     "tools": [
+        ui("execution-modes"),
         ui("mise"),
         ui("environment"),
         ui("layout"),
@@ -192,6 +195,7 @@ SUITES = {
         ui("notebooks", RODE_NOTEBOOK_UI_REMOTE_ONLY="1"),
     ],
     "sandbox": [
+        ui("execution-modes", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("files", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("sandbox", RODE_TEST_REQUIRE_SANDBOX="1"),

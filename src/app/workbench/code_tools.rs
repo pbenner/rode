@@ -104,6 +104,15 @@ impl EditorApp {
     /// Send a task to the prepared project terminal, creating it asynchronously if needed.
     /// Apply literal environment exports in a subshell so task overrides do not mutate the shell.
     pub(in crate::app) fn send_project_command(&mut self, command: String, ctx: &egui::Context) {
+        self.send_terminal_command(command, self.session_plan(), ctx);
+    }
+
+    pub(in crate::app) fn send_terminal_command(
+        &mut self,
+        command: String,
+        plan: sandbox::Plan,
+        ctx: &egui::Context,
+    ) {
         if !self.project_ready() {
             return;
         }
@@ -119,11 +128,7 @@ impl EditorApp {
         } else {
             format!("( {exports} {command}; )")
         };
-        let command = if self
-            .workspace
-            .as_ref()
-            .is_some_and(|workspace| workspace.plan.environment.mise)
-        {
+        let command = if plan.environment.mise {
             format!(
                 "MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 MISE_PARANOID=1 {} -C {} exec -- /bin/sh -c {}",
                 crate::mise::shell_program(&self.workbench.prefs.environment),
@@ -135,20 +140,7 @@ impl EditorApp {
         };
         self.show_terminal = true;
         self.terminal_intent();
-        if self.session_busy()
-            || self
-                .terminal
-                .as_ref()
-                .is_none_or(|terminal| !terminal.is_alive())
-        {
-            self.queue_terminal_command(command, ctx);
-            return;
-        }
-        if let Some(terminal) = &self.terminal
-            && let Err(error) = terminal.send((command + "\n").into_bytes())
-        {
-            self.notify(error.to_string(), true);
-        }
+        self.queue_terminal_command(command, plan, ctx);
         Terminal::focus(ctx);
     }
     /// Dispatch the active document to its notebook/LaTeX/language run or build path

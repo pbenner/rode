@@ -277,7 +277,13 @@ impl EditorApp {
                 match settings.validate() {
                     Ok(()) => {
                         self.workbench.save_slurm_allocation(settings.clone());
-                        self.create_terminal(reserve, Some(settings), reserve, ctx);
+                        self.create_terminal(
+                            reserve,
+                            Some(settings),
+                            reserve,
+                            self.session_plan(),
+                            ctx,
+                        );
                         if self.sessions.starting {
                             self.dialog = Dialog::None;
                         }

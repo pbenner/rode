@@ -21,11 +21,144 @@ pub(super) struct Meta {
     pub(super) order: usize,
     pub name: String,
     pub native: Option<rode_session::Info>,
+    pub policy: String,
+    pub mode: String,
+}
+
+pub(super) struct QueuedCommand {
+    command: String,
+    plan: sandbox::Plan,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reattachment_accepts_both_user_modes_but_not_other_roots_or_policies() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx);
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let mut workspace = crate::app::tests::remote_workspace();
+        workspace.plan = sandbox::Plan {
+            root: workspace.root.clone(),
+            active: true,
+            requested: true,
+            prefix: vec!["sandbox".into(), "--".into()],
+            ..Default::default()
+        };
+        app.workspace = Some(workspace);
+        for sandboxed in [false, true] {
+            let plan = app.terminal_plan(sandboxed);
+            let mut info: rode_session::Info = serde_json::from_value(serde_json::json!({
+                "id": "session", "name": "shell", "root": plan.root,
+                "policy": service::fingerprint(&plan), "mode": plan.label(),
+                "alive": true, "clients": 1, "created": 0, "exit_code": null
+            }))
+            .unwrap();
+            assert!(app.compatible_session(&info));
+            info.root = "/another-project".into();
+            assert!(!app.compatible_session(&info));
+            info.root = plan.root.clone();
+            let mut changed = plan;
+            changed.project_read_only = true;
+            info.policy = service::fingerprint(&changed);
+            assert!(!app.compatible_session(&info));
+        }
+        assert!(app.workspace.as_ref().unwrap().plan.active);
+    }
+
+    #[test]
+    fn queued_commands_keep_their_policy_and_never_fall_through_to_a_host_shell() {
+        use crate::terminal::StreamControl;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let mut workspace = crate::app::tests::remote_workspace();
+        workspace.plan = sandbox::Plan {
+            root: workspace.root.clone(),
+            active: true,
+            requested: true,
+            prefix: vec!["sandbox".into(), "--".into()],
+            ..Default::default()
+        };
+        app.workspace = Some(workspace);
+        let project = app.session_plan();
+        let host = app.terminal_plan(false);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (terminal, _stream) = Terminal::stream(&ctx, "host shell".into(), move |event| {
+            if let StreamControl::Input(bytes) = event {
+                let _ = tx.send(bytes);
+            }
+        });
+        app.terminal = Some(terminal);
+        app.sessions.active = Some(Meta {
+            key: "host".into(),
+            order: 0,
+            name: "host shell".into(),
+            native: None,
+            policy: service::fingerprint(&host),
+            mode: host.label().into(),
+        });
+        app.sessions.busy = true;
+        app.queue_terminal_command("host-command".into(), host.clone(), &ctx);
+        app.queue_terminal_command("project-command".into(), project.clone(), &ctx);
+        // A queued command retains the plan captured at submission, even if
+        // the workspace changes before it is considered for execution.
+        app.workspace.as_mut().unwrap().plan = host;
+        assert_eq!(
+            service::fingerprint(&app.sessions.queued[1].plan),
+            service::fingerprint(&project)
+        );
+        app.workspace.as_mut().unwrap().ready = false;
+        app.sessions.busy = false;
+        app.drain_terminal_commands(&ctx, None);
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            b"host-command\n"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "Project command entered the unrestricted shell"
+        );
+        assert!(app.sessions.queued.is_empty());
+        assert!(!app.sessions.starting);
+    }
+
+    #[test]
+    fn a_failed_new_terminal_drops_queued_commands_without_an_automatic_retry() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let mut workspace = crate::app::tests::remote_workspace();
+        workspace.plan.root = workspace.root.clone();
+        app.workspace = Some(workspace);
+        let plan = app.session_plan();
+        let policy = service::fingerprint(&plan);
+        let (terminal, stream) = Terminal::stream(&ctx, "Failed shell".into(), |_| {});
+        app.terminal = Some(terminal);
+        app.sessions.active = Some(Meta {
+            key: "failed".into(),
+            order: 0,
+            name: "Failed shell".into(),
+            native: None,
+            policy: policy.clone(),
+            mode: plan.label().into(),
+        });
+        app.sessions.queued.push_back(QueuedCommand {
+            command: "must-not-retry".into(),
+            plan,
+        });
+        stream.end();
+        assert!(!app.terminal.as_ref().unwrap().is_alive());
+        app.drain_terminal_commands(&ctx, Some(&policy));
+        assert!(!app.sessions.starting);
+        assert!(!app.sessions.busy);
+        assert!(app.sessions.queued.is_empty());
+        assert!(app.notice.as_ref().is_some_and(|(message, error, _)| {
+            *error && message.contains("Remaining queued commands were not sent")
+        }));
+    }
 
     #[test]
     fn quitting_waits_for_a_toggle_and_keeps_the_window_open_if_it_fails() {
@@ -88,7 +221,7 @@ struct Attached {
 /// Captured terminal/scheduler completion intent carried by generation-tagged worker events.
 pub(super) enum Job {
     List,
-    Create { persistent: bool },
+    Create { persistent: bool, policy: String },
     Rename,
     End(String),
     Slurm,
@@ -120,7 +253,7 @@ pub(super) struct Sessions {
     error: String,
     next: usize,
     view_next: usize,
-    pub queued: VecDeque<String>,
+    pub queued: VecDeque<QueuedCommand>,
     last: Option<Instant>,
     pub(super) slurm: Option<slurm::Snapshot>,
     pub(super) slurm_error: String,
@@ -189,7 +322,7 @@ impl EditorApp {
                 .iter()
                 .any(|slot| slot.terminal.is_alive())
     }
-    fn session_plan(&self) -> sandbox::Plan {
+    pub(in crate::app) fn session_plan(&self) -> sandbox::Plan {
         self.workspace
             .as_ref()
             .map(|workspace| workspace.plan.clone())
@@ -200,6 +333,31 @@ impl EditorApp {
                     .into(),
                 ..Default::default()
             })
+    }
+    /// Interactive mode selection never changes the workspace's tool/agent plan.
+    pub(in crate::app) fn terminal_plan(&self, sandboxed: bool) -> sandbox::Plan {
+        let project = self.session_plan();
+        if sandboxed {
+            project
+        } else {
+            execution::outside_sandbox(&project)
+        }
+    }
+
+    fn compatible_session(&self, info: &rode_session::Info) -> bool {
+        let project = self.session_plan();
+        info.root == project.root
+            && (info.policy == service::fingerprint(&project)
+                || info.policy == service::fingerprint(&execution::outside_sandbox(&project)))
+    }
+
+    fn terminal_matches(&self, plan: &sandbox::Plan) -> bool {
+        self.terminal.as_ref().is_some_and(Terminal::is_alive)
+            && self
+                .sessions
+                .active
+                .as_ref()
+                .is_some_and(|meta| meta.policy == service::fingerprint(plan))
     }
     fn session_remote(&self) -> Option<Remote> {
         self.workspace
@@ -260,6 +418,7 @@ impl EditorApp {
     /// Register a new window-local terminal identity and make its view active.
     pub(super) fn add_terminal_view(&mut self, terminal: Terminal, key: String, name: String) {
         self.sessions.view_next += 1;
+        let plan = self.session_plan();
         self.adopt_terminal(
             terminal,
             Meta {
@@ -267,6 +426,8 @@ impl EditorApp {
                 order: self.sessions.view_next,
                 name,
                 native: None,
+                policy: service::fingerprint(&plan),
+                mode: plan.label().into(),
             },
         );
     }
@@ -279,6 +440,8 @@ impl EditorApp {
                 order: 0,
                 name: "Temporary terminal".into(),
                 native: None,
+                policy: String::new(),
+                mode: "Unknown".into(),
             });
             if old.is_alive() {
                 self.sessions.other.push(Attached {
@@ -301,7 +464,7 @@ impl EditorApp {
             );
             return;
         }
-        let plan = self.session_plan();
+        let plan = self.terminal_plan(self.workbench.terminal_sandbox());
         let result = match self.session_remote() {
             Some(remote) => Terminal::remote_project(ctx, &remote, &plan),
             None => Terminal::local_project(ctx, &plan),
@@ -318,6 +481,8 @@ impl EditorApp {
                         order: self.sessions.view_next,
                         name,
                         native: None,
+                        policy: service::fingerprint(&plan),
+                        mode: plan.label().into(),
                     },
                 );
                 self.new_terminal_environment();
@@ -344,17 +509,19 @@ impl EditorApp {
         self.create_native_terminal(false, ctx);
     }
     fn create_native_terminal(&mut self, persistent: bool, ctx: &egui::Context) {
-        self.create_terminal(persistent, None, false, ctx);
+        let plan = self.terminal_plan(self.workbench.terminal_sandbox());
+        self.create_terminal(persistent, None, false, plan, ctx);
     }
     fn create_terminal(
         &mut self,
         persistent: bool,
         allocation: Option<slurm::Allocation>,
         reserve: bool,
+        plan: sandbox::Plan,
         ctx: &egui::Context,
     ) {
         self.terminal_intent();
-        if self.sessions.busy {
+        if self.session_busy() {
             return;
         }
         if self.sessions.other.len() >= 15 {
@@ -380,7 +547,6 @@ impl EditorApp {
             }
         };
         self.sessions.next += 1;
-        let plan = self.session_plan();
         let allocation = match allocation
             .map(|settings| {
                 if reserve {
@@ -416,13 +582,13 @@ impl EditorApp {
                     self.sessions.next
                 ),
                 plan: Box::new(plan),
-                policy,
+                policy: policy.clone(),
                 python,
                 environment: Box::new(self.workbench.environment_settings().clone()),
                 persistent,
                 allocation,
             },
-            Job::Create { persistent },
+            Job::Create { persistent, policy },
             ctx,
         );
     }
@@ -577,6 +743,13 @@ impl EditorApp {
         }
     }
     fn attach_info(&mut self, info: rode_session::Info, ctx: &egui::Context) {
+        if !self.compatible_session(&info) {
+            self.notify(
+                "Open this terminal's project and sandbox policy before attaching.",
+                true,
+            );
+            return;
+        }
         self.terminal_intent();
         if self
             .sessions
@@ -623,6 +796,8 @@ impl EditorApp {
                         key,
                         order: self.sessions.view_next,
                         name,
+                        policy: info.policy.clone(),
+                        mode: info.mode.clone(),
                         native: Some(info),
                     },
                 );
@@ -712,6 +887,19 @@ impl EditorApp {
         if matches!(job, Job::Persistence) {
             self.sessions.persistence_pending = false;
         }
+        let result = result.and_then(|response| {
+            if let Job::Create { policy, .. } = &job {
+                let valid = matches!(&response,
+                    project::Response::Sessions(reply)
+                    if matches!(&reply.response, rode_session::Response::Session(info)
+                        if info.policy == *policy && self.compatible_session(info))
+                );
+                if !valid {
+                    return Err("The terminal service did not return the requested project and execution policy. No commands were sent.".into());
+                }
+            }
+            Ok(response)
+        });
         let response = match result {
             Ok(response) => response,
             Err(error) => {
@@ -740,20 +928,12 @@ impl EditorApp {
                     rode_session::Response::Sessions(mut infos) => {
                         infos.retain(|info| info.alive);
                         self.sessions.available = infos;
-                        if !self.sessions.queued.is_empty()
-                            && self
-                                .terminal
-                                .as_ref()
-                                .is_none_or(|terminal| !terminal.is_alive())
-                        {
-                            self.new_terminal(ctx);
-                        }
                     }
                     rode_session::Response::Session(info) => {
                         if info.allocation.is_some() && matches!(job, Job::Create { .. }) {
                             self.sessions.slurm_last = None;
                         }
-                        if let Job::Create { persistent } = &job {
+                        if let Job::Create { persistent, .. } = &job {
                             if info.persistent != *persistent {
                                 self.notify("The running terminal service predates persistence controls. This session remains persistent; existing jobs were preserved. Finish old sessions before restarting the service.", true);
                             }
@@ -763,15 +943,20 @@ impl EditorApp {
                                 None
                             };
                             self.attach_info(info.clone(), ctx);
+                            if !self
+                                .sessions
+                                .active
+                                .as_ref()
+                                .is_some_and(|meta| meta.key == info.id)
+                            {
+                                self.sessions.queued.clear();
+                            }
+                            if !info.alive {
+                                self.sessions.queued.clear();
+                                self.notify("The new terminal exited. Remaining queued commands were not sent.", true);
+                            }
                             if let Some(pane) = restore {
                                 self.focus_pane(pane, ctx);
-                            }
-                            while let Some(command) = self.sessions.queued.pop_front() {
-                                if let Some(terminal) = &self.terminal
-                                    && let Err(error) = terminal.send((command + "\n").into_bytes())
-                                {
-                                    self.notify(error.to_string(), true);
-                                }
                             }
                         }
                         if let Some(meta) = &mut self.sessions.active
@@ -825,6 +1010,12 @@ impl EditorApp {
             }
             _ => self.notify("Unexpected session response", true),
         }
+        let created_policy = if let Job::Create { policy, .. } = &job {
+            Some(policy.as_str())
+        } else {
+            None
+        };
+        self.drain_terminal_commands(ctx, created_policy);
         if self.sessions.quit_waiting && !self.sessions_need_exit_check() {
             self.quit_terminals(ctx);
         }
@@ -880,7 +1071,6 @@ impl EditorApp {
         if !self.sessions.error.is_empty() {
             ui.colored_label(palette.error, &self.sessions.error);
         }
-        let fingerprint = service::fingerprint(&self.session_plan());
         let available = self.sessions.available.clone();
         super::ui_probe::session_list(ui, available.iter().map(|info| info.id.as_str()));
         // Destructive confirmations remain visible even when the list scrolls.
@@ -906,7 +1096,7 @@ impl EditorApp {
                             } else {
                                 "ENDED".into()
                             });
-                            let compatible = info.policy == fingerprint;
+                            let compatible = self.compatible_session(&info);
                             let attach = ui.add_enabled(compatible, egui::Button::new("Attach"))
                                 .on_hover_text("Open this session's original project and sandbox policy to attach.");
                             super::ui_probe::button(ui, &format!("session-attach:{}", info.id), &attach);
@@ -932,7 +1122,7 @@ impl EditorApp {
                                 ui.add(egui::TextEdit::singleline(&mut name).char_limit(64));
                                 if ui.add_enabled(!self.sessions.busy, egui::Button::new("Save name")).clicked() {
                                     self.session_request(service::Operation::Rename {
-                                        id: id.clone(), policy: fingerprint.clone(), name: name.clone(),
+                                        id: id.clone(), policy: info.policy.clone(), name: name.clone(),
                                     }, Job::Rename, ctx);
                                     self.sessions.rename = None;
                                 } else {
@@ -1172,7 +1362,12 @@ impl EditorApp {
             });
     }
     /// Retain at most eight commands while a native terminal starts; report overflow without execution.
-    pub(super) fn queue_terminal_command(&mut self, command: String, ctx: &egui::Context) {
+    pub(super) fn queue_terminal_command(
+        &mut self,
+        command: String,
+        plan: sandbox::Plan,
+        ctx: &egui::Context,
+    ) {
         if self.sessions.queued.len() >= 8 {
             self.notify(
                 "Terminal startup command queue is full; command was not run.",
@@ -1180,10 +1375,90 @@ impl EditorApp {
             );
             return;
         }
-        self.sessions.queued.push_back(command);
-        if !self.sessions.starting {
-            self.new_terminal(ctx);
+        self.sessions
+            .queued
+            .push_back(QueuedCommand { command, plan });
+        self.drain_terminal_commands(ctx, None);
+    }
+
+    /// A queued project command must never enter an explicitly unrestricted shell.
+    /// Capture each command's policy and create another view when it differs.
+    fn drain_terminal_commands(&mut self, ctx: &egui::Context, created_policy: Option<&str>) {
+        if self.session_busy() || self.sessions.quit_waiting {
+            return;
         }
+        while let Some(next) = self.sessions.queued.front() {
+            if !self.terminal_matches(&next.plan) {
+                // A creation reply is the one attempt to satisfy this policy.
+                // An early shell/attachment exit must not become a restart loop.
+                if created_policy == Some(service::fingerprint(&next.plan).as_str()) {
+                    self.sessions.queued.clear();
+                    self.notify(
+                        "The new terminal exited. Remaining queued commands were not sent.",
+                        true,
+                    );
+                    return;
+                }
+                let plan = next.plan.clone();
+                self.create_terminal(false, None, false, plan, ctx);
+                if !self.sessions.starting {
+                    self.sessions.queued.clear();
+                }
+                return;
+            }
+            let next = self.sessions.queued.pop_front().unwrap();
+            if let Some(terminal) = &self.terminal
+                && let Err(error) = terminal.send((next.command + "\n").into_bytes())
+            {
+                self.sessions.queued.clear();
+                self.notify(error.to_string(), true);
+                return;
+            }
+        }
+    }
+
+    /// Show the selected shell's actual policy; choosing another mode opens a new
+    /// shell and leaves the old session, jobs and persistence setting intact.
+    pub(in crate::app) fn terminal_execution_control(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) {
+        let mode = self.sessions.active.as_ref().map(|meta| meta.mode.as_str());
+        let label = match mode {
+            Some(mode) if mode.starts_with("SANDBOX") && mode.contains("Landlock") => {
+                "Sandbox: Landlock"
+            }
+            Some(mode) if mode.starts_with("SANDBOX") => "Sandbox: bwrap",
+            Some(mode) if mode.starts_with("NORMAL") => "Sandbox: off",
+            _ if self.ssh_master.is_some() && self.terminal.is_none() => "SSH login",
+            _ => "Sandbox: —",
+        };
+        let detail = mode.unwrap_or("No project terminal attached").to_owned();
+        let project = self.session_plan();
+        let ready = !self.session_busy() && self.project_ready();
+        ui.add_enabled_ui(ready, |ui| {
+            let menu = egui::containers::menu::MenuButton::from_button(
+                egui::Button::new(label).small()
+            ).ui(ui, |ui| {
+                ui.label(&detail);
+                ui.label("Open a new shell in the selected mode. Existing shells keep running.");
+                for (sandboxed, title) in [(true, "New sandboxed terminal"), (false, "New unsandboxed terminal")] {
+                    let response = ui.add_enabled(!sandboxed || project.active, egui::Button::new(title));
+                    super::ui_probe::button(ui, if sandboxed { "terminal-new-sandbox" } else { "terminal-new-host" }, &response);
+                    if response.clicked() {
+                        self.workbench.save_terminal_sandbox(sandboxed);
+                        self.create_native_terminal(false, ctx);
+                        ui.close();
+                    }
+                }
+                if !project.active {
+                    ui.label(if project.requested { project.reason.as_str() } else { "Enable a project sandbox in Settings to open sandboxed shells." });
+                }
+            });
+            super::ui_probe::button(ui, "terminal-execution-mode", &menu.0);
+            menu.0.on_hover_text("Actual mode of this shell. Switching opens a new terminal on the same project host.");
+        });
     }
     fn final_quit(&mut self, ctx: &egui::Context) {
         self.quitting = true;
