@@ -106,6 +106,10 @@ def handle(stream):
                 "RODE_TEST_OFFLINE_CAPABLE"
             ):
                 reply(stream, "ok")
+            elif action == "supports_async_questions" and os.environ.get(
+                "RODE_TEST_ASYNC_QUESTIONS_CAPABLE"
+            ):
+                reply(stream, "ok")
             elif action == "supports_private_agent_state" and os.environ.get(
                 "RODE_TEST_PRIVATE_STATE_CAPABLE"
             ):

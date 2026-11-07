@@ -13,6 +13,129 @@ fn prompt() -> Prompt {
     .unwrap()
 }
 
+fn frame(
+    ctx: &egui::Context,
+    prompt: &mut Prompt,
+    events: Vec<egui::Event>,
+    enabled: bool,
+) -> (egui::FullOutput, Action) {
+    let mut action = Action::default();
+    let output = ctx.run(
+        egui::RawInput {
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                action = show(ui, prompt, enabled, true, crate::theme::Palette::default());
+            });
+        },
+    );
+    (output, action)
+}
+
+fn enter(modifiers: egui::Modifiers) -> Vec<egui::Event> {
+    [true, false]
+        .into_iter()
+        .map(|pressed| egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        })
+        .collect()
+}
+
+#[test]
+fn question_enter_sends_shift_enter_keeps_newlines_and_ime_does_not_submit() {
+    let ctx = egui::Context::default();
+    let mut prompt = prompt();
+    frame(&ctx, &mut prompt, vec![], true);
+    let id = answer_id(&prompt.id, &prompt.questions[0].id);
+    ctx.memory_mut(|m| m.request_focus(id));
+    frame(
+        &ctx,
+        &mut prompt,
+        vec![egui::Event::Text("first".into())],
+        true,
+    );
+    assert!(
+        frame(&ctx, &mut prompt, enter(egui::Modifiers::SHIFT), true)
+            .1
+            .answer
+            .is_none()
+    );
+    frame(
+        &ctx,
+        &mut prompt,
+        vec![egui::Event::Text("second".into())],
+        true,
+    );
+    assert_eq!(prompt.questions[0].answer, "first\nsecond");
+    let mut ime = vec![egui::Event::Ime(egui::ImeEvent::Commit("字".into()))];
+    ime.extend(enter(egui::Modifiers::NONE));
+    assert!(frame(&ctx, &mut prompt, ime, true).1.answer.is_none());
+    assert!(
+        frame(&ctx, &mut prompt, enter(egui::Modifiers::NONE), false)
+            .1
+            .answer
+            .is_none()
+    );
+    ctx.memory_mut(|m| m.request_focus(id));
+    let (_, action) = frame(&ctx, &mut prompt, enter(egui::Modifiers::NONE), true);
+    assert_eq!(action.answer, prompt.answers());
+    assert!(action.answer.is_some());
+}
+
+#[test]
+fn one_selected_async_option_enables_send_and_enter_without_answering_another_question() {
+    let ctx = egui::Context::default();
+    let mut prompt = prompt();
+    prompt.partial_answers = true;
+    let mut second = prompt.questions[0].clone();
+    second.id = "details".into();
+    second.text = "Additional details?".into();
+    second.options.clear();
+    prompt.questions.push(second);
+    frame(&ctx, &mut prompt, vec![], true);
+    let (output, _) = frame(&ctx, &mut prompt, vec![], true);
+    let point = layout::tests::button_frame(&output, "All tests").0.center();
+    for pressed in [true, false] {
+        let (_, action) = frame(
+            &ctx,
+            &mut prompt,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            true,
+        );
+        assert!(
+            action.answer.is_none(),
+            "Selecting an option submitted it automatically"
+        );
+    }
+    assert!(ctx.memory(|m| m.has_focus(answer_id(&prompt.id, "tests"))));
+    let (_, action) = frame(&ctx, &mut prompt, enter(egui::Modifiers::NONE), true);
+    assert_eq!(
+        action.answer,
+        Some(json!({"answers":{"tests":{"answers":["All tests"]}}}))
+    );
+    prompt.partial_answers = false;
+    assert!(
+        frame(&ctx, &mut prompt, enter(egui::Modifiers::NONE), true)
+            .1
+            .answer
+            .is_none()
+    );
+}
+
 #[test]
 fn questions_replace_the_composer_without_losing_drafts_and_actions_fit_compact_panels() {
     for theme in ["phosphor", "studio", "studio-neutral", "studio-hacker"] {

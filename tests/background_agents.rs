@@ -1084,14 +1084,33 @@ fn asynchronous_questions_survive_detachment_and_hold_queued_work_until_answered
     let mut view = fixture.attach(&info);
     let state = view.until(|state| !state.chat.prompts.is_empty());
     assert_eq!(state.chat.prompts[0].id, question_id);
+    assert!(state.chat.prompts[0].partial_answers);
+    view.send(Action::Answer {
+        id: question_id.clone(),
+        result: serde_json::json!({"answers":{"question-0":{"answers":["Disabled"]}}}),
+    });
+    let state = view.until(|state| !state.chat.busy && state.chat.completed == 2);
+    assert!(state.chat.prompts[0].questions[0].answered);
+    assert!(!state.chat.prompts[0].questions[1].answered);
+    assert_eq!(state.queue.items.len(), 1);
+    assert!(!fixture.root.join("agent-created.txt").exists());
+    drop(view);
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|agent| agent.id == info.id && !agent.attached)
+    });
+    let mut view = fixture.attach(&info);
+    let state = view.until(|state| !state.chat.prompts.is_empty());
+    assert!(state.chat.prompts[0].questions[0].answered);
     view.send(Action::Answer {
         id: question_id,
         result: serde_json::json!({"answers":{
-            "question-0":{"answers":["Disabled"]},
             "question-1":{"answers":["Use the model-only connection"]}
         }}),
     });
-    let state = view.until(|state| state.chat.completed == 3 && !state.chat.busy);
+    let state = view.until(|state| state.chat.completed == 4 && !state.chat.busy);
     assert!(state.chat.prompts.is_empty());
     assert!(state.queue.items.is_empty());
     assert!(
@@ -1252,17 +1271,26 @@ fn automatic_queue_configuration_cannot_change_the_captured_backend() {
 
 #[test]
 fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
-    for (generation, queue_capable, agent_capable, offline_capable, private_state_capable) in [
-        (None, false, false, false, false),
-        (None, true, false, false, false),
-        (Some("protocol-8"), false, false, false, false),
-        (Some("protocol-9"), true, false, false, false),
-        (None, true, true, false, false),
-        (Some("protocol-13"), true, true, false, false),
-        (None, true, true, true, false),
-        (Some("protocol-14"), true, true, true, false),
-        (None, true, true, true, true),
-        (Some("protocol-15"), true, true, true, true),
+    for (
+        generation,
+        queue_capable,
+        agent_capable,
+        offline_capable,
+        private_state_capable,
+        async_capable,
+    ) in [
+        (None, false, false, false, false, false),
+        (None, true, false, false, false, false),
+        (Some("protocol-8"), false, false, false, false, false),
+        (Some("protocol-9"), true, false, false, false, false),
+        (None, true, true, false, false, false),
+        (Some("protocol-13"), true, true, false, false, false),
+        (None, true, true, true, false, false),
+        (Some("protocol-14"), true, true, true, false, false),
+        (None, true, true, true, true, false),
+        (Some("protocol-15"), true, true, true, true, false),
+        (None, true, true, true, true, true),
+        (Some("protocol-16"), true, true, true, true, true),
     ] {
         let fixture = Fixture::new();
         let directory = generation.map_or_else(
@@ -1286,6 +1314,10 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             .arg(&id)
             .arg("legacy-policy")
             .env("RODE_TEST_RUNTIME_CAPABLE", "1")
+            .env(
+                "RODE_TEST_ASYNC_QUESTIONS_CAPABLE",
+                if async_capable { "1" } else { "" },
+            )
             .env(
                 "RODE_TEST_OFFLINE_CAPABLE",
                 if offline_capable { "1" } else { "" },
@@ -1336,6 +1368,9 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             }
             if private_state_capable {
                 assert!(actions.lines().any(|s| s == "supports_async_questions"));
+            }
+            if async_capable {
+                assert!(actions.lines().any(|s| s == "supports_partial_answers"));
             }
             assert!(
                 fixture

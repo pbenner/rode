@@ -753,7 +753,7 @@ impl EditorApp {
             });
             agents.files.ui(ui, !modal && !offline);
             let id = egui::Id::new("agent-composer");
-            let shortcut = composer_submit(ui, id, modal, &mut agents.composing);
+            let shortcut = text_submit(ui, id, modal, &mut agents.composing);
             agents.composer.recall(
                 ui, &mut agents.draft, id,
                 !modal && !agents.composing,
@@ -1190,10 +1190,10 @@ impl EditorApp {
     }
 }
 
-/// Consume only a fresh, unmodified Enter in the focused composer. egui's
+/// Shared by the composer and question fields: consume only a fresh, unmodified Enter. egui's
 /// consume_key ignores extra Shift/Alt, which would also consume newlines.
 /// IME confirmation belongs to the text editor, including a commit+Enter frame.
-fn composer_submit(ui: &mut egui::Ui, id: egui::Id, modal: bool, composing: &mut bool) -> bool {
+fn text_submit(ui: &mut egui::Ui, id: egui::Id, modal: bool, composing: &mut bool) -> bool {
     if modal || !ui.memory(|m| m.has_focus(id)) {
         *composing = false;
         return false;

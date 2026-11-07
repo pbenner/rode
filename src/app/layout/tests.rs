@@ -120,6 +120,11 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                     encoded_bytes: 16,
                     lease: std::sync::Arc::new(app.image_budget.reserve(16).unwrap()),
                 });
+                // Include native-only actions without starting a host service.
+                let (mut terminal, _stream) =
+                    crate::terminal::Terminal::stream(&ctx, "Layout fixture".into(), |_| {});
+                terminal.native = true;
+                app.terminal = Some(terminal);
                 for scene in [
                     "terminal", "notebook", "image", "binary", "markdown", "slides", "dialogs",
                 ] {
@@ -211,12 +216,20 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                             );
                             if scene == "terminal" {
                                 let persist = button_frame(&output, "Persist: off").0;
-                                let slurm = button_frame(&output, "Slurm…").0;
-                                assert!(
-                                    (persist.top() - slurm.top()).abs() <= 0.5
-                                        && (persist.bottom() - slurm.bottom()).abs() <= 0.5,
-                                    "Terminal controls: {persist:?} vs {slurm:?}"
-                                );
+                                let mut labels = vec!["Slurm…", "Sandbox: —"];
+                                if button_frames(&output, "More").is_empty() {
+                                    labels.extend(["Copy", "Sessions", "New", "Detach session"]);
+                                } else {
+                                    labels.push("More");
+                                }
+                                for label in labels {
+                                    let bounds = button_frame(&output, label).0;
+                                    assert!(
+                                        (persist.top() - bounds.top()).abs() <= 0.5
+                                            && (persist.bottom() - bounds.bottom()).abs() <= 0.5,
+                                        "{theme}/{width}/{scale}: {label}: {bounds:?} vs Persist {persist:?}"
+                                    );
+                                }
                             } else if scene == "image" {
                                 let actual = button_frame(&output, "100%").0;
                                 let fit = button_frame(&output, "Fit").0;

@@ -106,7 +106,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 ),
             )
-        async_question = (root / "async-question-mode").exists() and not (root / "async-question-replied").exists()
+        async_question = (root / "async-question-mode").exists() and not (
+            root / "async-question-replied"
+        ).exists()
         if async_question:
             (root / "async-question-replied").touch()
             item = dict(
@@ -114,10 +116,17 @@ class Handler(BaseHTTPRequestHandler):
                 type="function_call",
                 name="request_user_input_async",
                 call_id="async_question_fixture",
-                arguments=json.dumps({"questions": [
-                    {"title": "Is network access enabled?", "options": ["Enabled", "Disabled"]},
-                    {"title": "Which tests should I run?"},
-                ]}),
+                arguments=json.dumps(
+                    {
+                        "questions": [
+                            {
+                                "title": "Is network access enabled?",
+                                "options": ["Enabled", "Disabled"],
+                            },
+                            {"title": "Which tests should I run?"},
+                        ]
+                    }
+                ),
             )
         response = {
             "id": f"resp_fixture_{Handler.sequence}",

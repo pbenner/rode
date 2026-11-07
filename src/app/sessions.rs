@@ -1437,9 +1437,10 @@ impl EditorApp {
         let detail = mode.unwrap_or("No project terminal attached").to_owned();
         let project = self.session_plan();
         let ready = !self.session_busy() && self.project_ready();
+        let height = layout::compact_control_height(ui);
         ui.add_enabled_ui(ready, |ui| {
             let menu = egui::containers::menu::MenuButton::from_button(
-                egui::Button::new(label).small()
+                egui::Button::new(label).small().min_size(egui::vec2(0., height))
             ).ui(ui, |ui| {
                 ui.label(&detail);
                 ui.label("Open a new shell in the selected mode. Existing shells keep running.");

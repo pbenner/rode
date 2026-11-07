@@ -62,8 +62,8 @@ mod runtimes;
 
 /// Runtime-directory generation; distinct from optional protocol feature levels.
 pub const VERSION: u32 = 1;
-/// Current feature level, including message-based asynchronous agent questions.
-pub const PROTOCOL: u32 = 16;
+/// Current feature level, including partial asynchronous answers and per-question progress.
+pub const PROTOCOL: u32 = 17;
 /// Explanation shown for older services whose lifetime policy cannot be changed.
 pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
 const MAX_FRAME: usize = 4 * 1024 * 1024;
@@ -147,6 +147,8 @@ pub enum Request {
     SupportsPrivateAgentState,
     /// Probe message-based asynchronous question forms and answer delivery.
     SupportsAsyncQuestions,
+    /// Probe partial asynchronous answers and acknowledged per-question progress.
+    SupportsPartialAnswers,
     /// Discover retained notebook and debugger runtimes.
     Runtimes,
     /// Create a captured host-owned runtime.
@@ -490,7 +492,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 14] {
+fn service_directories() -> [PathBuf; 15] {
     let primary = directory();
     [
         primary.clone(),
@@ -506,6 +508,7 @@ fn service_directories() -> [PathBuf; 14] {
         primary.join("protocol-13"),
         primary.join("protocol-14"),
         primary.join("protocol-15"),
+        primary.join("protocol-16"),
         primary.join(format!("protocol-{PROTOCOL}")),
     ]
 }
@@ -552,6 +555,7 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
             Request::SupportsOfflineAgentTools,
             Request::SupportsPrivateAgentState,
             Request::SupportsAsyncQuestions,
+            Request::SupportsPartialAnswers,
         ] {
             match request_once(&probe, launcher, &primary) {
                 Ok(Response::Ok) => {}
@@ -583,7 +587,10 @@ fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
                             .contains("unknown variant `supports_private_agent_state`")
                         || error
                             .to_string()
-                            .contains("unknown variant `supports_async_questions`") =>
+                            .contains("unknown variant `supports_async_questions`")
+                        || error
+                            .to_string()
+                            .contains("unknown variant `supports_partial_answers`") =>
                 {
                     return Ok(compatible);
                 }
@@ -750,7 +757,8 @@ fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
         | Request::SupportsFileOnly
         | Request::SupportsOfflineAgentTools
         | Request::SupportsPrivateAgentState
-        | Request::SupportsAsyncQuestions => request_once(request, launcher, &directory()),
+        | Request::SupportsAsyncQuestions
+        | Request::SupportsPartialAnswers => request_once(request, launcher, &directory()),
         Request::Attach { id, .. }
         | Request::Rename { id, .. }
         | Request::SetPersistence { id, .. }
@@ -1468,7 +1476,8 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
             | Request::SupportsFileOnly
             | Request::SupportsOfflineAgentTools
             | Request::SupportsPrivateAgentState
-            | Request::SupportsAsyncQuestions => Response::Ok,
+            | Request::SupportsAsyncQuestions
+            | Request::SupportsPartialAnswers => Response::Ok,
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();

@@ -61,6 +61,9 @@ pub struct Question {
     pub descriptions: Vec<String>,
     /// Current unsubmitted answer draft.
     pub answer: String,
+    /// Already acknowledged by the backend; retained to deduplicate repeated notifications.
+    #[serde(default)]
+    pub answered: bool,
     /// Whether the answer field should obscure its text.
     pub secret: bool,
 }
@@ -89,6 +92,10 @@ pub struct Prompt {
     /// Delivery errors stay with the form so its answer drafts remain usable.
     #[serde(default)]
     pub error: String,
+    /// This controller accepts subsets of message-based questions. Older services
+    /// default to requiring the complete form, even for asynchronous messages.
+    #[serde(default)]
+    pub partial_answers: bool,
     #[serde(default)]
     async_message: bool,
     cancel: Value,
@@ -104,18 +111,25 @@ impl Prompt {
         self.async_message
     }
 
-    /// Construct the question reply only after every question has an answer.
+    /// Construct a reply from entered, unacknowledged answers. Blocking and older
+    /// controllers require the complete form; current message-based forms accept subsets.
     /// Free-form text and suggested labels use the same app-server answer format.
     pub fn answers(&self) -> Option<Value> {
-        if self.questions.is_empty() || self.questions.iter().any(|q| q.answer.trim().is_empty()) {
+        if !self.partial_answers
+            && self
+                .questions
+                .iter()
+                .any(|q| !q.answered && q.answer.trim().is_empty())
+        {
             return None;
         }
         let answers: serde_json::Map<String, Value> = self
             .questions
             .iter()
+            .filter(|q| !q.answered && !q.answer.trim().is_empty())
             .map(|q| (q.id.clone(), json!({"answers":[q.answer]})))
             .collect();
-        Some(json!({"answers":answers}))
+        (!answers.is_empty()).then(|| json!({"answers":answers}))
     }
 }
 #[derive(Clone)]
@@ -129,6 +143,7 @@ enum Call {
     Answer {
         id: Value,
         text: String,
+        answers: Vec<String>,
         turn: Option<String>,
         deadline: Option<Instant>,
     },
@@ -213,8 +228,8 @@ impl Chat {
             config: self.config.clone(),
         }
     }
-    /// Update a remote view without creating a process. Preserve unsubmitted
-    /// question drafts when another streamed update arrives for the same card.
+    /// Update a remote view without creating a process. Preserve drafts only for
+    /// unchanged, unanswered questions; IDs can be reused by a refreshed form.
     pub fn apply_view(&mut self, mut view: crate::service::ChatView) {
         super::personality::clean_history(&mut view.messages);
         self.input_history = super::input_history::History::from_texts(
@@ -232,7 +247,14 @@ impl Chat {
         for prompt in &mut view.prompts {
             if let Some(old) = self.prompts.iter().find(|old| old.id == prompt.id) {
                 for question in &mut prompt.questions {
-                    if let Some(previous) = old.questions.iter().find(|q| q.id == question.id) {
+                    if !question.answered
+                        && let Some(previous) = old.questions.iter().find(|q| {
+                            !q.answered
+                                && q.id == question.id
+                                && q.text == question.text
+                                && q.secret == question.secret
+                        })
+                    {
                         question.answer = previous.answer.clone();
                     }
                 }
@@ -825,7 +847,13 @@ impl Chat {
         }
         let result = &value["result"];
         match call {
-            Call::Answer { id, text, turn, .. } => self.answer_accepted(id, text, turn, result)?,
+            Call::Answer {
+                id,
+                text,
+                answers,
+                turn,
+                ..
+            } => self.answer_accepted(id, text, answers, turn, result)?,
             Call::Initialize => {
                 if self.config.provider.is_acp() {
                     ensure!(
@@ -1126,6 +1154,7 @@ impl Chat {
             blocking: true,
             sending: false,
             error: String::new(),
+            partial_answers: false,
             async_message: false,
             cancel: json!({"decision":"cancel"}),
         };
@@ -1216,6 +1245,7 @@ impl Chat {
                                 })
                                 .unwrap_or_default(),
                             answer: String::new(),
+                            answered: false,
                             secret: question["isSecret"].as_bool().unwrap_or(false),
                         });
                     }

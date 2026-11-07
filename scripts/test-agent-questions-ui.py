@@ -115,7 +115,11 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
                 path = project / "async-answers.json"
                 try:
                     content = json.loads(path.read_text())
-                    return any("Disabled" in item.get("text", "") and "Keep tool commands offline" in item.get("text", "") for item in content)
+                    return any(
+                        "Disabled" in item.get("text", "")
+                        and "Keep tool commands offline" in item.get("text", "")
+                        for item in content
+                    )
                 except (FileNotFoundError, json.JSONDecodeError):
                     return False
 
@@ -129,11 +133,15 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
             control("agent-question-0-answer", focused=True)
             before = json.loads(state_path.read_text())["pass"]
             key("a", ("Control_L",))
-            text("Focused tests please")
+            text("Focused tests")
+            control("agent-question-0-answer", changed_after=before)
+            before = json.loads(state_path.read_text())["pass"]
+            key("Return", ("Shift_L",))
+            text("please")
             control("agent-question-0-answer", changed_after=before)
             screenshot(window, "answer-form.png")
-            click_button(window, process, log_path, state_path, "agent-question-send")
-            expected = {"answers": {"test_mode": {"answers": ["Focused tests please"]}}}
+            key("Return")
+            expected = {"answers": {"test_mode": {"answers": ["Focused tests\nplease"]}}}
 
             def answered():
                 path = project / "answers.json"
@@ -156,31 +164,61 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
             ), "Stop did not cancel the question"
             ask("async-question")
             control("agent-question-working")
-            wait(lambda: (project / "async-work-continued").exists(), "The async fixture did not continue independent work")
+            wait(
+                lambda: (project / "async-work-continued").exists(),
+                "The async fixture did not continue independent work",
+            )
             fill_async()
             screenshot(window, "async-active.png")
             click_button(window, process, log_path, state_path, "agent-question-send")
             wait(async_answered, "The asynchronous answer did not reach the active turn")
             control("agent-idle")
-            assert any(call.get("method") == "turn/steer" for call in calls()), "An active answer did not steer the turn"
+            assert any(call.get("method") == "turn/steer" for call in calls()), (
+                "An active answer did not steer the turn"
+            )
 
             (project / "async-answers.json").unlink()
             ask("async-question-finished")
             control("agent-question-idle")
-            fill_async()
+            click_button(window, process, log_path, state_path, "agent-question-0-option-1")
+            control("agent-question-send")
             screenshot(window, "async-after-completion.png")
             before_turns = sum(call.get("method") == "turn/start" for call in calls())
             click_button(window, process, log_path, state_path, "agent-question-send")
-            wait(async_answered, "The question disappeared or could not be answered after completion")
+
+            def partial_answered():
+                try:
+                    content = (project / "async-answers.json").read_text()
+                    return "Disabled" in content and "Which setting should I use?" not in content
+                except FileNotFoundError:
+                    return False
+
+            wait(partial_answered, "A selected option could not be sent on its own")
+            click(*control("agent-question-1-answer"))
+            control("agent-question-1-answer", focused=True)
+            before = json.loads(state_path.read_text())["pass"]
+            text("Keep tool commands offline")
+            control("agent-question-1-answer", changed_after=before)
+            key("Return")
+            wait(
+                lambda: (
+                    "Keep tool commands offline" in (project / "async-answers.json").read_text()
+                ),
+                "The remaining question could not be answered with Enter",
+            )
             control("agent-idle")
-            assert sum(call.get("method") == "turn/start" for call in calls()) == before_turns + 1
+            assert sum(call.get("method") == "turn/start" for call in calls()) == before_turns + 2
 
             ask("async-question-finished")
             control("agent-question-idle")
             before_calls = len(calls())
             click_button(window, process, log_path, state_path, "agent-question-stop")
             control("agent-idle")
-            assert not any(call.get("method") in ("turn/start", "turn/steer", "turn/interrupt") or isinstance(call.get("id"), dict) for call in calls()[before_calls:]), "Dismissing an idle question sent work or a fabricated RPC response"
+            assert not any(
+                call.get("method") in ("turn/start", "turn/steer", "turn/interrupt")
+                or isinstance(call.get("id"), dict)
+                for call in calls()[before_calls:]
+            ), "Dismissing an idle question sent work or a fabricated RPC response"
             screenshot(window, "cancelled.png")
             close_window(window, process)
             print(

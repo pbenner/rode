@@ -594,7 +594,10 @@ try:
                             "type": "agentMessage",
                             "text": "I need your sandbox network setting.",
                             "questions": [
-                                {"title": "Is network access enabled?", "options": ["Enabled", "Disabled"]},
+                                {
+                                    "title": "Is network access enabled?",
+                                    "options": ["Enabled", "Disabled"],
+                                },
                                 {"title": "Which setting should I use?"},
                             ],
                         },

@@ -45,6 +45,88 @@ fn ask(chat: &mut Chat) {
 }
 
 #[test]
+fn selecting_one_async_answer_can_be_submitted_without_filling_the_other_question() {
+    let (mut chat, received) = fixture();
+    chat.message_questions(&item());
+    chat.prompts[0].questions[0].answer = "Disabled".into();
+    let answer = chat.prompts[0]
+        .answers()
+        .expect("One selected answer must enable asynchronous submission");
+    chat.answer(answer).unwrap();
+    let request = received.try_recv().unwrap();
+    let text = request["params"]["input"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Disabled"));
+    assert!(!text.contains("Which tests?"));
+    chat.receive(json!({"id":request["id"],"result":{"turnId":"active-turn"}}))
+        .unwrap();
+    assert!(chat.prompts[0].questions[0].answered);
+    assert!(!chat.prompts[0].questions[1].answered);
+    assert!(!chat.prompts[0].sending);
+    assert!(chat.prompts[0].answers().is_none());
+    // Repeated message notifications and native view replacement must not
+    // resurrect an already delivered answer or lose the remaining question.
+    chat.message_questions(&item());
+    let mut attached = Chat::default();
+    attached.apply_view(chat.view());
+    assert!(attached.prompts[0].questions[0].answered);
+    chat.prompts[0].questions[1].answer = "Focused tests".into();
+    let answer = chat.prompts[0].answers().unwrap();
+    assert!(answer["answers"].get("question-0").is_none());
+    chat.answer(answer).unwrap();
+    let request = received.try_recv().unwrap();
+    chat.receive(json!({"id":request["id"],"result":{"turnId":"active-turn"}}))
+        .unwrap();
+    assert!(chat.prompts.is_empty());
+    assert_eq!(chat.input_history().count(), 2);
+}
+
+#[test]
+fn older_controllers_require_complete_answers_and_unknown_or_repeated_ids_are_rejected() {
+    let (mut chat, _) = fixture();
+    ask(&mut chat);
+    let mut legacy = serde_json::to_value(&chat.prompts[0]).unwrap();
+    legacy.as_object_mut().unwrap().remove("partial_answers");
+    let mut legacy: Prompt = serde_json::from_value(legacy).unwrap();
+    legacy.questions[1].answer.clear();
+    assert!(!legacy.partial_answers && legacy.answers().is_none());
+    for answers in [json!({}), json!({"unknown":{"answers":["wrong"]}})] {
+        assert!(chat.answer(json!({"answers":answers})).is_err());
+        assert!(!chat.prompts[0].sending);
+    }
+    chat.prompts[0].questions[0].answered = true;
+    assert!(
+        chat.answer(json!({"answers":{"question-0":{"answers":["repeat"]}}}))
+            .is_err()
+    );
+}
+
+#[test]
+fn refreshed_questions_do_not_reuse_drafts_after_the_question_or_secrecy_changes() {
+    let (mut server, _) = fixture();
+    server.message_questions(&item());
+    let mut client = Chat::default();
+    client.apply_view(server.view());
+    client.prompts[0].questions[1].answer = "Answer to the old question".into();
+    let mut replacement = item();
+    replacement["questions"][1]["title"] = json!("Which directory should I use?");
+    server.message_questions(&replacement);
+    client.apply_view(server.view());
+    assert!(client.prompts[0].questions[1].answer.is_empty());
+    for secret in [true, false] {
+        client.prompts[0].questions[1].answer = "An unsent private answer".into();
+        let mut view = server.view();
+        view.prompts[0].questions[1].secret = secret;
+        client.apply_view(view);
+        assert!(client.prompts[0].questions[1].answer.is_empty());
+    }
+    client.prompts[0].questions[0].answer = "Disabled".into();
+    let mut view = server.view();
+    view.prompts[0].questions[0].answered = true;
+    client.apply_view(view);
+    assert!(client.prompts[0].questions[0].answer.is_empty());
+}
+
+#[test]
 fn asynchronous_forms_survive_completion_keep_drafts_and_deduplicate_notifications() {
     let (mut chat, _) = fixture();
     ask(&mut chat);

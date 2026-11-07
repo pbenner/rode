@@ -10,6 +10,11 @@ pub(super) struct Action {
     pub stop: bool,
 }
 
+/// Keep cursor and IME state attached to a question across host snapshots.
+fn answer_id(request: &serde_json::Value, question: &str) -> egui::Id {
+    egui::Id::new(("agent-question-answer", request.to_string(), question))
+}
+
 /// Fill the available chat space, keeping the actions outside the scroll area.
 /// A non-blocking question must not claim that the agent has stopped working.
 pub(super) fn show(
@@ -40,6 +45,19 @@ pub(super) fn show(
         },
         &state,
     );
+    let remaining = prompt.questions.iter().filter(|q| !q.answered).count();
+    ui.small(if prompt.partial_answers {
+        format!("{remaining} unanswered. Send the answers you have; the others remain available.")
+    } else {
+        format!("Answer all {remaining} remaining questions before sending.")
+    });
+    ui.small("Enter sends answers · Shift+Enter inserts a new line");
+    let editable = enabled && !prompt.sending;
+    let mut keyboard_send = false;
+    let mut focus_next = prompt
+        .questions
+        .iter()
+        .any(|q| q.answered && ui.memory(|m| m.has_focus(answer_id(&prompt.id, &q.id))));
     let footer = crate::app::layout::control_height(ui) + 2. * ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
         .id_salt(("agent-questions", prompt.id.to_string()))
@@ -49,8 +67,11 @@ pub(super) fn show(
             if !prompt.error.is_empty() {
                 ui.add(egui::Label::new(RichText::new(&prompt.error).color(palette.error)).wrap());
             }
-            ui.add_enabled_ui(enabled && !prompt.sending, |ui| {
+            ui.add_enabled_ui(editable, |ui| {
                 for (index, question) in prompt.questions.iter_mut().enumerate() {
+                    if question.answered {
+                        continue;
+                    }
                     ui.push_id((&prompt.id.to_string(), &question.id), |ui| {
                         egui::Frame::new()
                             .fill(palette.raised)
@@ -73,6 +94,7 @@ pub(super) fn show(
                                 ui.add(
                                     egui::Label::new(RichText::new(&question.text).strong()).wrap(),
                                 );
+                                let mut selected_option = false;
                                 for (option_index, option) in question.options.iter().enumerate() {
                                     let selected = question.answer == *option;
                                     let response =
@@ -84,6 +106,7 @@ pub(super) fn show(
                                     );
                                     if response.clicked() {
                                         question.answer = option.clone();
+                                        selected_option = true;
                                     }
                                     if let Some(description) = question
                                         .descriptions
@@ -112,11 +135,39 @@ pub(super) fn show(
                                 } else {
                                     "Choose an option or write your own answer"
                                 });
-                                let editor = egui::TextEdit::singleline(&mut question.answer)
+                                let id = answer_id(&prompt.id, &question.id);
+                                let composing_id = id.with("composing");
+                                let mut composing = ui
+                                    .data_mut(|data| data.get_temp::<bool>(composing_id))
+                                    .unwrap_or(false);
+                                keyboard_send |= text_submit(ui, id, !editable, &mut composing);
+                                ui.data_mut(|data| data.insert_temp(composing_id, composing));
+                                let editor = egui::TextEdit::multiline(&mut question.answer)
+                                    .id(id)
+                                    .desired_rows(2)
+                                    .return_key(egui::KeyboardShortcut::new(
+                                        egui::Modifiers::SHIFT,
+                                        Key::Enter,
+                                    ))
                                     .password(question.secret)
                                     .desired_width(f32::INFINITY)
                                     .char_limit(8192);
-                                let response = ui.add(editor);
+                                let mut output = editor.show(ui);
+                                let response = output.response;
+                                if editable && (selected_option || focus_next) {
+                                    response.request_focus();
+                                    focus_next = false;
+                                    if selected_option {
+                                        output.state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::one(
+                                                egui::text::CCursor::new(
+                                                    question.answer.chars().count(),
+                                                ),
+                                            ),
+                                        ));
+                                        output.state.store(ui.ctx(), id);
+                                    }
+                                }
                                 ui_probe::button(
                                     ui,
                                     &format!("agent-question-{index}-answer"),
@@ -141,11 +192,13 @@ pub(super) fn show(
             )
             .on_disabled_hover_text(if prompt.sending {
                 "Waiting for the agent to acknowledge your answer."
+            } else if prompt.partial_answers {
+                "Enter an answer or choose an option before sending."
             } else {
                 "Answer every question before sending."
             });
         ui_probe::button(ui, "agent-question-send", &send);
-        if send.clicked() {
+        if send.clicked() || keyboard_send && editable {
             action.answer = result;
         }
         let stop = ui

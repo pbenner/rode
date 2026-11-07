@@ -599,7 +599,7 @@ fn composer_sends_enter_preserves_multiline_text_and_confirms_ime_without_sendin
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.memory_mut(|m| m.request_focus(if focused { id } else { id.with("other") }));
-                    send = composer_submit(ui, id, modal, &mut composing);
+                    send = text_submit(ui, id, modal, &mut composing);
                     ui.add(egui::TextEdit::multiline(&mut draft).id(id).return_key(
                         egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter),
                     ));

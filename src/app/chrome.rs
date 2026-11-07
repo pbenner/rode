@@ -205,7 +205,8 @@ impl EditorApp {
                 }
                 self.slurm_terminal_button(ui, ctx);
                 self.terminal_execution_control(ui, ctx);
-                if icons::small(ui, Icon::Close, "Hide terminal; keep session running").clicked() {
+                if ui.add(icons::IconButton::icon(Icon::Close, "Hide terminal; keep session running")
+                    .icon_size(14.).min_size(egui::vec2(26., height))).clicked() {
                     self.show_terminal = false;
                     self.focus_editor(ctx);
                 }

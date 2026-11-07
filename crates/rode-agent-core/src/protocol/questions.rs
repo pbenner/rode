@@ -40,15 +40,12 @@ impl Chat {
                     .filter(|title| !title.trim().is_empty())?;
                 let text = clip(title, 2048);
                 let question_id = format!("question-{index}");
-                let answer = previous
-                    .and_then(|position| {
-                        self.prompts[position]
-                            .questions
-                            .iter()
-                            .find(|question| question.id == question_id && question.text == text)
-                    })
-                    .map(|question| question.answer.clone())
-                    .unwrap_or_default();
+                let previous_answer = previous.and_then(|position| {
+                    self.prompts[position]
+                        .questions
+                        .iter()
+                        .find(|question| question.id == question_id && question.text == text)
+                });
                 Some(Question {
                     id: question_id,
                     text,
@@ -66,7 +63,10 @@ impl Chat {
                         })
                         .collect(),
                     descriptions: vec![],
-                    answer,
+                    answer: previous_answer
+                        .map(|q| q.answer.clone())
+                        .unwrap_or_default(),
+                    answered: previous_answer.is_some_and(|q| q.answered),
                     secret: false,
                 })
             })
@@ -97,6 +97,7 @@ impl Chat {
                 blocking: false,
                 sending: false,
                 error: String::new(),
+                partial_answers: true,
                 async_message: true,
                 cancel: Value::Null,
             });
@@ -114,16 +115,23 @@ impl Chat {
         ensure!(!prompt.sending, "This answer is already being sent");
         let answers = result["answers"]
             .as_object()
-            .context("Answer every question before sending")?;
+            .context("Enter an answer before sending")?;
         ensure!(
-            answers.len() == prompt.questions.len(),
-            "Answer every question before sending"
+            !answers.is_empty()
+                && answers
+                    .keys()
+                    .all(|id| prompt.questions.iter().any(|q| &q.id == id && !q.answered))
+                && (prompt.partial_answers
+                    || answers.len() == prompt.questions.iter().filter(|q| !q.answered).count()),
+            "Enter answers for the pending questions before sending"
         );
         let mut text = "Answers to your questions:\n".to_owned();
         for question in &prompt.questions {
-            let values = answers
-                .get(&question.id)
-                .and_then(|value| value["answers"].as_array())
+            let Some(value) = answers.get(&question.id) else {
+                continue;
+            };
+            let values = value["answers"]
+                .as_array()
                 .context("Answer every question before sending")?;
             ensure!(values.len() == 1, "Choose one answer or enter your own");
             let answer = values[0]
@@ -146,6 +154,7 @@ impl Chat {
         let call = Call::Answer {
             id: id.clone(),
             text: text.clone(),
+            answers: answers.keys().cloned().collect(),
             turn: turn.clone(),
             deadline: Some(Instant::now() + Duration::from_secs(30)),
         };
@@ -204,6 +213,7 @@ impl Chat {
         &mut self,
         id: Value,
         text: String,
+        answers: Vec<String>,
         turn: Option<String>,
         result: &Value,
     ) -> Result<()> {
@@ -225,7 +235,17 @@ impl Chat {
                 self.interrupt()?;
             }
         }
-        self.prompts.retain(|prompt| prompt.id != id);
+        if let Some(prompt) = self.prompts.iter_mut().find(|prompt| prompt.id == id) {
+            for question in &mut prompt.questions {
+                if answers.contains(&question.id) {
+                    question.answered = true;
+                }
+            }
+            prompt.sending = false;
+            prompt.error.clear();
+        }
+        self.prompts
+            .retain(|prompt| prompt.id != id || prompt.questions.iter().any(|q| !q.answered));
         self.serial += 1;
         let message_id = format!("user-{}", self.serial);
         self.input_history.remember(&message_id, &text);
