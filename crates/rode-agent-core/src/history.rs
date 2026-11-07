@@ -616,6 +616,14 @@ impl Browser {
                     .map(|summary| format!("{summary}. Refresh failed. "))
             })
             .unwrap_or_default();
+        let error = super::network::explain_error(
+            self.launch.config.provider,
+            self.launch
+                .plan
+                .controller_network_disabled(self.launch.config.network),
+            error,
+            16384_usize.saturating_sub(progress.len()),
+        );
         self.status = clip(&format!("{progress}{error}"), 16384);
         self.busy = false;
         self.more = false;

@@ -330,6 +330,224 @@ fn model_discovery_errors_finish_without_submitting_a_prompt() {
 }
 
 #[test]
+fn routing_failure_guidance_uses_the_controller_policy_in_chat_catalog_and_history() {
+    use rode::agent::{Network, history::Browser};
+
+    for (isolated, shared, network, blocked) in [
+        (true, false, Network::Project, true),
+        (true, true, Network::Project, false),
+        (true, false, Network::ModelOnly, false),
+        (false, false, Network::Project, false),
+    ] {
+        let (_temp, root, program) = fixture();
+        fs::write(
+            root.join("agent-startup-error"),
+            "workspace routing discovery failed",
+        )
+        .unwrap();
+        let mut launch = launch(&root, &program, Provider::Codex, false);
+        launch.config.network = network;
+        launch.config.access = Access::ReadOnly;
+        launch.plan = native_peer::prepare(
+            root.to_str().unwrap(),
+            &sandbox::Options {
+                enabled: isolated,
+                backend: sandbox::Backend::Landlock,
+                share_network: shared,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if isolated && !launch.plan.active {
+            assert_ne!(
+                std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                Ok("1"),
+                "{}",
+                launch.plan.reason
+            );
+            eprintln!("Routing policy test unavailable: {}", launch.plan.reason);
+            continue;
+        }
+        let original = launch.plan.prefix.clone();
+        let check = |message: &str| {
+            assert!(
+                message.contains("workspace routing discovery failed"),
+                "{message}"
+            );
+            assert_eq!(
+                message.contains("sandbox blocks network"),
+                blocked,
+                "{message}"
+            );
+            assert!(
+                message.contains(if blocked {
+                    "Model connection only"
+                } else {
+                    "CA certificate"
+                }),
+                "{message}"
+            );
+        };
+        let mut chat = Chat::default();
+        chat.submit(
+            launch.clone(),
+            "Do not send a model request".into(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        wait(&mut chat, |chat| chat.recoverable());
+        assert!(!chat.busy);
+        check(&chat.messages.back().unwrap().text);
+
+        let mut catalog = rode::agent::controls::discover(launch.clone(), Arc::new(|| {}));
+        let until = Instant::now() + Duration::from_secs(10);
+        while catalog.busy() {
+            catalog.poll();
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        check(catalog.error.as_deref().unwrap());
+
+        let mut history = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while history.busy {
+            history.poll();
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        check(&history.status);
+        assert_eq!(launch.plan.prefix, original);
+        assert!(log(&root).iter().all(|call| call["method"] == "initialize"));
+    }
+}
+
+#[test]
+fn offline_policy_context_covers_all_providers_without_guessing_error_wording() {
+    use rode::agent::history::Browser;
+
+    for provider in [
+        Provider::Codex,
+        Provider::Local,
+        Provider::Claude,
+        Provider::Acp,
+    ] {
+        for blocked in [false, true] {
+            let (_temp, root, program) = fixture();
+            let error = "Provider connection failed (fixture)";
+            fs::write(root.join("agent-startup-error"), error).unwrap();
+            let mut launch = launch(&root, &program, provider, false);
+            launch.config.local_model = "fixture-local-model".into();
+            launch.plan = native_peer::prepare(
+                root.to_str().unwrap(),
+                &sandbox::Options {
+                    enabled: true,
+                    backend: sandbox::Backend::Landlock,
+                    share_network: !blocked,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            if !launch.plan.active {
+                assert_ne!(
+                    std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+                    Ok("1"),
+                    "{}",
+                    launch.plan.reason
+                );
+                eprintln!("Offline policy test unavailable: {}", launch.plan.reason);
+                continue;
+            }
+            let original = launch.plan.prefix.clone();
+            let check = |message: &str| {
+                assert!(message.contains(error), "{provider:?}: {message}");
+                assert_eq!(
+                    message.contains("sandbox blocks network"),
+                    blocked,
+                    "{provider:?}: {message}"
+                );
+                assert_eq!(
+                    message.contains("choose Access →"),
+                    blocked && !provider.is_acp(),
+                    "{provider:?}: {message}"
+                );
+                assert_eq!(
+                    message.contains("not supported for this provider"),
+                    blocked && provider.is_acp(),
+                    "{provider:?}: {message}"
+                );
+            };
+            let mut chat = Chat::default();
+            submit(
+                &mut chat,
+                launch.clone(),
+                "Fail before requesting inference",
+            );
+            wait(&mut chat, |chat| chat.recoverable());
+            check(&chat.messages.back().unwrap().text);
+            assert!(!chat.busy);
+
+            let mut history = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+            let until = Instant::now() + Duration::from_secs(10);
+            while history.busy {
+                history.poll();
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            check(&history.status);
+            assert_eq!(launch.plan.prefix, original);
+            assert!(log(&root).iter().all(|call| call["method"] == "initialize"));
+        }
+    }
+}
+
+#[test]
+fn an_offline_acp_agent_can_complete_a_turn_without_network_access() {
+    let (_temp, root, program) = fixture();
+    let mut launch = launch(&root, &program, Provider::Acp, false);
+    launch.plan = native_peer::prepare(
+        root.to_str().unwrap(),
+        &sandbox::Options {
+            enabled: true,
+            backend: sandbox::Backend::Landlock,
+            share_network: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    if !launch.plan.active {
+        assert_ne!(
+            std::env::var("RODE_TEST_REQUIRE_LANDLOCK").as_deref(),
+            Ok("1"),
+            "{}",
+            launch.plan.reason
+        );
+        eprintln!("Offline ACP test unavailable: {}", launch.plan.reason);
+        return;
+    }
+    let original = launch.plan.prefix.clone();
+    let mut chat = Chat::default();
+    submit(
+        &mut chat,
+        launch.clone(),
+        "An offline fixture does not need a model connection",
+    );
+    wait(&mut chat, |chat| chat.completed == 1);
+    assert!(chat.last_turn_succeeded, "{}", chat.status);
+    assert!(
+        chat.messages
+            .iter()
+            .any(|message| message.role == Role::Assistant)
+    );
+    assert!(
+        !chat
+            .messages
+            .iter()
+            .any(|message| message.text.contains("sandbox blocks network"))
+    );
+    assert_eq!(launch.plan.prefix, original);
+}
+
+#[test]
 fn codex_model_reasoning_and_access_changes_apply_to_the_next_turn() {
     let (_temp, root, program) = fixture();
     let mut launch = launch(&root, &program, Provider::Codex, false);

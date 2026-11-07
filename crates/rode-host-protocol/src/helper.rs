@@ -34,6 +34,7 @@ pub const CAPABILITIES: &[&str] = &[
     "agent_files",
     "agent_offline_tools",
     "agent_private_state",
+    "agent_async_questions",
     "bundled_bwrap",
     "explorer_mutations",
     "large_document_transfer",

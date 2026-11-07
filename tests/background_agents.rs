@@ -1050,6 +1050,64 @@ fn offline_approvals_wait_and_wrong_policy_or_stale_answers_are_rejected() {
 }
 
 #[test]
+fn asynchronous_questions_survive_detachment_and_hold_queued_work_until_answered() {
+    use rode_agent_core::queue::Action as Queue;
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("agent.py"),
+        include_str!("fixtures/agent.py"),
+    )
+    .unwrap();
+    let info = fixture.create(Provider::Codex, true, "async-question-finished");
+    let mut view = fixture.attach(&info);
+    let state = view.until(|state| !state.chat.busy && !state.chat.prompts.is_empty());
+    let question_id = state.chat.prompts[0].id.clone();
+    assert!(state.chat.prompts[0].is_async_message());
+    view.queue(
+        "held",
+        Queue::Push {
+            id: 1,
+            text: "queued after the answer".into(),
+            attachments: vec![],
+        },
+    );
+    let state = view.until(|state| state.queue.items.len() == 1);
+    assert_eq!(state.chat.completed, 1);
+    assert!(!fixture.root.join("agent-created.txt").exists());
+    drop(view);
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|agent| agent.id == info.id && !agent.attached)
+    });
+    let mut view = fixture.attach(&info);
+    let state = view.until(|state| !state.chat.prompts.is_empty());
+    assert_eq!(state.chat.prompts[0].id, question_id);
+    view.send(Action::Answer {
+        id: question_id,
+        result: serde_json::json!({"answers":{
+            "question-0":{"answers":["Disabled"]},
+            "question-1":{"answers":["Use the model-only connection"]}
+        }}),
+    });
+    let state = view.until(|state| state.chat.completed == 3 && !state.chat.busy);
+    assert!(state.chat.prompts.is_empty());
+    assert!(state.queue.items.is_empty());
+    assert!(
+        fs::read_to_string(fixture.root.join("async-answers.json"))
+            .unwrap()
+            .contains("Use the model-only connection")
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("agent-created.txt")).unwrap(),
+        "queued after the answer"
+    );
+    view.send(Action::End);
+    view.until(|state| !state.info.alive);
+}
+
+#[test]
 fn automatic_queue_preserves_pause_edit_and_failure_holds_while_detached() {
     use rode_agent_core::queue::Action as Queue;
     for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
@@ -1194,15 +1252,17 @@ fn automatic_queue_configuration_cannot_change_the_captured_backend() {
 
 #[test]
 fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
-    for (generation, queue_capable, agent_capable, offline_capable) in [
-        (None, false, false, false),
-        (None, true, false, false),
-        (Some("protocol-8"), false, false, false),
-        (Some("protocol-9"), true, false, false),
-        (None, true, true, false),
-        (Some("protocol-13"), true, true, false),
-        (None, true, true, true),
-        (Some("protocol-14"), true, true, true),
+    for (generation, queue_capable, agent_capable, offline_capable, private_state_capable) in [
+        (None, false, false, false, false),
+        (None, true, false, false, false),
+        (Some("protocol-8"), false, false, false, false),
+        (Some("protocol-9"), true, false, false, false),
+        (None, true, true, false, false),
+        (Some("protocol-13"), true, true, false, false),
+        (None, true, true, true, false),
+        (Some("protocol-14"), true, true, true, false),
+        (None, true, true, true, true),
+        (Some("protocol-15"), true, true, true, true),
     ] {
         let fixture = Fixture::new();
         let directory = generation.map_or_else(
@@ -1238,6 +1298,10 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
                 "RODE_TEST_QUEUE_CAPABLE",
                 if queue_capable { "1" } else { "" },
             )
+            .env(
+                "RODE_TEST_PRIVATE_STATE_CAPABLE",
+                if private_state_capable { "1" } else { "" },
+            )
             .spawn()
             .unwrap();
         struct Stop<'a>(&'a mut Child);
@@ -1269,6 +1333,9 @@ fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
             }
             if offline_capable {
                 assert!(actions.lines().any(|s| s == "supports_private_agent_state"));
+            }
+            if private_state_capable {
+                assert!(actions.lines().any(|s| s == "supports_async_questions"));
             }
             assert!(
                 fixture

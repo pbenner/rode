@@ -638,7 +638,8 @@ impl EditorApp {
                 }
             }
             if answering {
-                let action = questions::show(ui, agents.chat.prompts.front_mut().unwrap(), !offline && !modal, palette);
+                let working = agents.chat.busy;
+                let action = questions::show(ui, agents.chat.prompts.front_mut().unwrap(), !offline && !modal, working, palette);
                 answer = action.answer;
                 stop = action.stop;
                 return;

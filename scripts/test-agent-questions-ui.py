@@ -46,6 +46,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
+        RODE_SESSION_DIR=str(base / "runtime"),
         RODE_UI_TEST_STATE=str(state_path),
     )
     log_path = ARTIFACTS / "questions.log"
@@ -90,16 +91,33 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
                     None,
                 )
 
-            def ask():
+            def ask(message="question"):
                 click(*control("agent-composer"))
                 control("agent-composer", focused=True)
                 before = json.loads(state_path.read_text())["pass"]
-                text("question")
+                text(message)
                 control("agent-composer", changed_after=before)
                 click_button(window, process, log_path, state_path, "agent-send")
                 control("agent-question-0-answer")
-                control("agent-question-0-header")
-                control("agent-question-0-description-0")
+                if message == "question":
+                    control("agent-question-0-header")
+                    control("agent-question-0-description-0")
+
+            def fill_async():
+                click_button(window, process, log_path, state_path, "agent-question-0-option-1")
+                click(*control("agent-question-1-answer"))
+                control("agent-question-1-answer", focused=True)
+                before = json.loads(state_path.read_text())["pass"]
+                text("Keep tool commands offline")
+                control("agent-question-1-answer", changed_after=before)
+
+            def async_answered():
+                path = project / "async-answers.json"
+                try:
+                    content = json.loads(path.read_text())
+                    return any("Disabled" in item.get("text", "") and "Keep tool commands offline" in item.get("text", "") for item in content)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    return False
 
             ask()
             wait(lambda: enabled("agent-question-send") is False, "An empty answer could be sent")
@@ -136,10 +154,37 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
             assert any(
                 call.get("id") == 401 and call.get("result") == {"answers": {}} for call in calls()
             ), "Stop did not cancel the question"
+            ask("async-question")
+            control("agent-question-working")
+            wait(lambda: (project / "async-work-continued").exists(), "The async fixture did not continue independent work")
+            fill_async()
+            screenshot(window, "async-active.png")
+            click_button(window, process, log_path, state_path, "agent-question-send")
+            wait(async_answered, "The asynchronous answer did not reach the active turn")
+            control("agent-idle")
+            assert any(call.get("method") == "turn/steer" for call in calls()), "An active answer did not steer the turn"
+
+            (project / "async-answers.json").unlink()
+            ask("async-question-finished")
+            control("agent-question-idle")
+            fill_async()
+            screenshot(window, "async-after-completion.png")
+            before_turns = sum(call.get("method") == "turn/start" for call in calls())
+            click_button(window, process, log_path, state_path, "agent-question-send")
+            wait(async_answered, "The question disappeared or could not be answered after completion")
+            control("agent-idle")
+            assert sum(call.get("method") == "turn/start" for call in calls()) == before_turns + 1
+
+            ask("async-question-finished")
+            control("agent-question-idle")
+            before_calls = len(calls())
+            click_button(window, process, log_path, state_path, "agent-question-stop")
+            control("agent-idle")
+            assert not any(call.get("method") in ("turn/start", "turn/steer", "turn/interrupt") or isinstance(call.get("id"), dict) for call in calls()[before_calls:]), "Dismissing an idle question sent work or a fabricated RPC response"
             screenshot(window, "cancelled.png")
             close_window(window, process)
             print(
-                "Question options, explicit edited answers, composer restoration and cancellation passed."
+                "Blocking and asynchronous question forms, active/idle answer delivery, dismissal and composer restoration passed."
             )
         except BaseException:
             if window and process.poll() is None:

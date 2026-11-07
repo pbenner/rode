@@ -58,6 +58,9 @@ impl Chat {
         self.file_factory = self.config.native_tools().then(|| launch.factory.clone());
         self.file_wake = self.config.native_tools().then(|| wake.clone());
         self.root = launch.plan.root.clone();
+        self.controller_offline = launch
+            .plan
+            .controller_network_disabled(launch.config.network);
         self.session = Some(Session::start(launch, wake)?);
         self.status = if preparing_remote_bundle {
             "Preparing Codex on SSH host…"

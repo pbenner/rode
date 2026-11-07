@@ -15,6 +15,7 @@ pub struct Catalog {
     /// Discovery failure, retained so drawing the menu does not retry indefinitely.
     pub error: Option<String>,
     config: Config,
+    controller_offline: bool,
     session: Option<Session>,
     deadline: Instant,
     initialized: bool,
@@ -28,6 +29,9 @@ impl Catalog {
     /// Never creates, resumes or submits a conversation.
     pub fn open(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         let config = launch.config.clone();
+        let controller_offline = launch
+            .plan
+            .controller_network_disabled(launch.config.network);
         let timeout = if launch.remote { 420 } else { 60 };
         let result = (|| -> Result<_> {
             ensure!(
@@ -48,6 +52,7 @@ impl Catalog {
             models: vec![],
             error,
             config,
+            controller_offline,
             session,
             deadline: Instant::now() + Duration::from_secs(timeout),
             initialized: false,
@@ -86,14 +91,25 @@ impl Catalog {
                 )),
             };
             if let Err(error) = result {
-                self.error = Some(crate::protocol::clip(&format!("{error:#}"), 2048));
-                self.session = None;
+                self.fail(&format!("{error:#}"));
             }
         }
         if self.busy() && Instant::now() >= self.deadline {
-            self.error = Some("Model discovery timed out. Check the agent executable and authentication on this host.".into());
-            self.session = None;
+            self.fail("Model discovery timed out. Check the agent executable and authentication on this host.");
         }
+    }
+
+    fn fail(&mut self, error: &str) {
+        self.error = Some(crate::protocol::clip(
+            &crate::network::explain_error(
+                self.config.provider,
+                self.controller_offline,
+                error,
+                2048,
+            ),
+            2048,
+        ));
+        self.session = None;
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<()> {

@@ -106,6 +106,19 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 ),
             )
+        async_question = (root / "async-question-mode").exists() and not (root / "async-question-replied").exists()
+        if async_question:
+            (root / "async-question-replied").touch()
+            item = dict(
+                id="async_question_fixture",
+                type="function_call",
+                name="request_user_input_async",
+                call_id="async_question_fixture",
+                arguments=json.dumps({"questions": [
+                    {"title": "Is network access enabled?", "options": ["Enabled", "Disabled"]},
+                    {"title": "Which tests should I run?"},
+                ]}),
+            )
         response = {
             "id": f"resp_fixture_{Handler.sequence}",
             "object": "response",
@@ -131,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             {"type": "response.output_item.done", "output_index": 0, "item": item},
             {"type": "response.completed", "response": response},
         ]
-        if tool or file_tool or offline_tool or question:
+        if tool or file_tool or offline_tool or question or async_question:
             events = [event for event in events if event["type"] != "response.output_text.delta"]
         for event in events:
             self.wfile.write(

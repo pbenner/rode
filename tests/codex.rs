@@ -431,6 +431,81 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
             .unwrap()
             .contains("Changed tests only")
     );
+    // request_user_input_async uses agentMessage.questions, not a server
+    // request. Let Codex finish before answering: the form must survive, and
+    // the answer must start a normal follow-up turn with the captured policy.
+    {
+        let async_home = root.join("async-codex-home");
+        fs::create_dir(&async_home).unwrap();
+        fs::write(
+            async_home.join("config.toml"),
+            "[features]\ncode_mode = true\nsend_message_to_user_async = true\n",
+        )
+        .unwrap();
+        let async_wrapper = root.join("codex-async-wrapper");
+        fs::write(&async_wrapper, format!("#!/bin/sh\nexport CODEX_HOME={}\nexec {} \"$@\" -c 'features.default_mode_request_user_input=false'\n", ssh::quote(async_home.to_str().unwrap()), ssh::quote(program))).unwrap();
+        fs::set_permissions(&async_wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut launch = launch.clone();
+        launch.config.codex = async_wrapper.to_string_lossy().into();
+        // Use bundled catalog metadata advertising asynchronous interaction.
+        // Inference still goes exclusively to our loopback Responses fixture.
+        launch.config.local_model = "gpt-6-astra".into();
+        let mut chat = Chat::default();
+        fs::write(temp.path().join("async-question-mode"), "").unwrap();
+        chat.submit(
+            launch.clone(),
+            "Ask an asynchronous network question.".into(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let end = Instant::now() + Duration::from_secs(30);
+        while chat.busy {
+            chat.poll();
+            assert!(
+                Instant::now() < end,
+                "Async question did not finish: {}",
+                chat.status
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(chat.last_turn_succeeded, "{}", chat.status);
+        if chat.prompts.is_empty() {
+            let request: Value = serde_json::from_str(
+                &fs::read_to_string(temp.path().join("request.json")).unwrap(),
+            )
+            .unwrap();
+            let outputs: Vec<_> = request["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["type"] == "function_call_output")
+                .collect();
+            let tools = request["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|tool| {
+                    tool["name"]
+                        .as_str()
+                        .filter(|name| name.contains("user_input"))
+                })
+                .collect::<Vec<_>>();
+            panic!(
+                "No asynchronous form: {outputs:?}\nTools: {tools:?}\n{:?}",
+                chat.messages
+            );
+        }
+        assert_eq!(chat.prompts.len(), 1);
+        assert!(chat.prompts[0].is_async_message());
+        assert_eq!(chat.prompts[0].questions.len(), 2);
+        chat.prompts[0].questions[0].answer = "Disabled".into();
+        chat.prompts[0].questions[1].answer = "Only the async regression".into();
+        chat.answer(chat.prompts[0].answers().unwrap()).unwrap();
+        finish_turn(&mut chat);
+        assert!(chat.prompts.is_empty());
+        let request = fs::read_to_string(temp.path().join("request.json")).unwrap();
+        assert!(request.contains("Only the async regression"), "{request}");
+    }
     // A second process cannot resume an idle chat that still has an owner.
     // Keep that chat usable, and distinguish the lock from startup diagnostics.
     {
@@ -442,7 +517,13 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
             assert!(Instant::now() < end, "{}", locked.status);
             std::thread::sleep(Duration::from_millis(10));
         }
-        let id = locked.entries[0].id.clone();
+        let id = locked
+            .entries
+            .iter()
+            .find(|entry| Some(entry.id.as_str()) == chat.conversation_id())
+            .unwrap()
+            .id
+            .clone();
         locked.resume(&id).unwrap();
         while locked.busy {
             locked.poll();

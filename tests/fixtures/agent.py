@@ -170,6 +170,15 @@ try:
         metadata("agent-rpc.jsonl", json.dumps(request) + "\n", append=True)
         method = request.get("method")
         params = request.get("params", {})
+        startup_error = root / "agent-startup-error"
+        if method == "initialize" and startup_error.exists():
+            emit(
+                {
+                    "id": request["id"],
+                    "error": {"code": -32603, "message": startup_error.read_text()},
+                }
+            )
+            continue
         if method in ("thread/resume", "session/load"):
             identity = params["threadId" if method == "thread/resume" else "sessionId"]
             options = history_options()
@@ -574,6 +583,31 @@ try:
                         },
                     }
                 )
+            elif message in ("async-question", "async-question-finished"):
+                notify(
+                    "item/completed",
+                    {
+                        "threadId": thread_id,
+                        "turnId": f"turn-{counter}",
+                        "item": {
+                            "id": f"async-question-{counter}",
+                            "type": "agentMessage",
+                            "text": "I need your sandbox network setting.",
+                            "questions": [
+                                {"title": "Is network access enabled?", "options": ["Enabled", "Disabled"]},
+                                {"title": "Which setting should I use?"},
+                            ],
+                        },
+                    },
+                )
+                metadata("async-work-continued", "yes")
+                if message == "async-question-finished":
+                    finish("The independent work finished. The question still needs an answer.")
+                else:
+                    reply("Independent work is continuing while you answer.")
+            elif message.startswith("Answers to your questions:"):
+                metadata("async-answers.json", json.dumps(content))
+                finish("The answer reached a new turn.")
             elif message == "question":
                 pending = "question"
                 emit(
@@ -619,6 +653,11 @@ try:
                 (root / "agent-created.txt").write_text(message)
                 reply("Project agent response: ")
                 finish(f"{message} (turn {counter}).\n\n```python\nprint('hello')\n```")
+        elif method == "turn/steer":
+            assert params["expectedTurnId"] == f"turn-{counter}"
+            metadata("async-answers.json", json.dumps(params["input"]))
+            response(request, {"turnId": f"turn-{counter}"})
+            finish("The answer reached the active turn.")
         elif method in ("turn/interrupt", "session/cancel"):
             if "id" in request:
                 response(request, {})

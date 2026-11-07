@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+mod questions;
 mod recovery;
 
 /// Presentation role for one bounded in-memory chat item.
@@ -82,6 +83,14 @@ pub struct Prompt {
     /// Older services only exposed blocking questions and permission requests.
     #[serde(default = "blocking_request")]
     pub blocking: bool,
+    /// An asynchronous message answer is awaiting a backend acknowledgement.
+    #[serde(default)]
+    pub sending: bool,
+    /// Delivery errors stay with the form so its answer drafts remain usable.
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    async_message: bool,
     cancel: Value,
 }
 
@@ -90,6 +99,11 @@ fn blocking_request() -> bool {
 }
 
 impl Prompt {
+    /// Message-based questions use ordinary user input rather than an RPC reply.
+    pub fn is_async_message(&self) -> bool {
+        self.async_message
+    }
+
     /// Construct the question reply only after every question has an answer.
     /// Free-form text and suggested labels use the same app-server answer format.
     pub fn answers(&self) -> Option<Value> {
@@ -112,6 +126,12 @@ enum Call {
     Turn,
     Interrupt,
     Models,
+    Answer {
+        id: Value,
+        text: String,
+        turn: Option<String>,
+        deadline: Option<Instant>,
+    },
     Configure {
         id: String,
         value: Value,
@@ -147,6 +167,8 @@ pub struct Chat {
     read_only: bool,
     external: bool,
     network: bool,
+    /// Actual controller policy, including read-only chats and model-only access.
+    controller_offline: bool,
     conversation: String,
     turn: String,
     next_id: u64,
@@ -168,6 +190,7 @@ pub struct Chat {
     recovery: Option<String>,
     fresh_recovery: bool,
     input_history: super::input_history::History,
+    question_messages: VecDeque<String>,
 }
 
 impl Chat {
@@ -242,6 +265,10 @@ impl Chat {
     /// Current project policy was captured before the backend resumed the thread.
     pub fn restore(&mut self, restored: super::history::Restored) {
         self.disconnect();
+        self.controller_offline = restored
+            .launch
+            .plan
+            .controller_network_disabled(restored.launch.config.network);
         self.config = restored.launch.config;
         self.root = restored.launch.plan.root;
         self.read_only = restored.launch.plan.project_read_only
@@ -291,7 +318,17 @@ impl Chat {
 
     /// Whether startup, settings, cancellation or native I/O needs a timed repaint.
     pub fn has_deadline(&self) -> bool {
-        self.deadline.is_some() || self.file_jobs.pending()
+        self.deadline.is_some()
+            || self.file_jobs.pending()
+            || self.calls.values().any(|call| {
+                matches!(
+                    call,
+                    Call::Answer {
+                        deadline: Some(_),
+                        ..
+                    }
+                )
+            })
     }
 
     /// Whether cached capabilities belong to the currently selected executable/provider.
@@ -345,6 +382,10 @@ impl Chat {
         ensure!(
             !self.recoverable(),
             "Recover the agent before sending another prompt."
+        );
+        ensure!(
+            self.prompts.is_empty(),
+            "Answer or dismiss the pending agent question first."
         );
         attachment::validate(&text, &attachments)?;
         let reset_defaults = (self.config.model() != launch.config.model()
@@ -430,6 +471,7 @@ impl Chat {
                 self.fail(&format!("{error:#}"));
             }
         }
+        self.poll_answers();
         if self.deadline.is_some_and(|time| Instant::now() >= time) {
             let message = if self.cancelling {
                 "Agent did not stop in time; its process was closed."
@@ -443,6 +485,18 @@ impl Chat {
     /// Reply to the oldest outstanding agent prompt with an explicit protocol result.
     pub fn answer(&mut self, result: Value) -> Result<()> {
         if let Some(prompt) = self.prompts.front() {
+            if prompt.async_message {
+                let id = prompt.id.clone();
+                let outcome = self.answer_message(result);
+                if let Err(error) = &outcome
+                    && let Some(prompt) = self.prompts.iter_mut().find(|prompt| prompt.id == id)
+                    && !prompt.sending
+                {
+                    prompt.error = clip(&format!("Could not send answers: {error:#}"), 2048);
+                    self.changed = true;
+                }
+                return outcome;
+            }
             self.send(json!({"jsonrpc":"2.0", "id":prompt.id, "result":result}))?;
             self.prompts.pop_front();
             self.request_status();
@@ -453,6 +507,13 @@ impl Chat {
     /// Request cancellation of the current turn; timeout handling may stop the owned process.
     pub fn cancel(&mut self) {
         if !self.busy {
+            if self.prompts.front().is_some_and(|prompt| {
+                prompt.async_message && (!prompt.sending || !prompt.error.is_empty())
+            }) {
+                self.prompts.pop_front();
+                self.changed = true;
+                self.request_status();
+            }
             return;
         }
         if self
@@ -470,7 +531,9 @@ impl Chat {
         self.deadline = Some(Instant::now() + Duration::from_secs(3));
         let prompts = std::mem::take(&mut self.prompts);
         for prompt in prompts {
-            let _ = self.send(json!({"jsonrpc":"2.0", "id":prompt.id, "result":prompt.cancel}));
+            if !prompt.async_message {
+                let _ = self.send(json!({"jsonrpc":"2.0", "id":prompt.id, "result":prompt.cancel}));
+            }
         }
         let result = if self.conversation.is_empty() {
             self.disconnect();
@@ -500,6 +563,7 @@ impl Chat {
         self.calls.clear();
         self.pending = None;
         self.prompts.clear();
+        self.question_messages.clear();
         self.deadline = None;
         self.cancelling = false;
         self.last_stderr.clear();
@@ -607,6 +671,19 @@ impl Chat {
         self.deadline = None;
         self.turn.clear();
         self.file_calls = 0;
+        let input = self.prompt_input(text, attachments);
+        if self.config.provider.is_acp() {
+            self.call(
+                "session/prompt",
+                json!({"sessionId":self.conversation,"prompt":input}),
+                Call::Turn,
+            )
+        } else {
+            self.codex_turn(input, Call::Turn)
+        }
+    }
+
+    fn prompt_input(&mut self, text: String, attachments: Vec<Attachment>) -> Vec<Value> {
         let mut input = vec![
             json!({"type":"text","text":if text.trim().is_empty() { "Attached files.".into() } else { text }}),
         ];
@@ -617,47 +694,43 @@ impl Chat {
             input.push(json!({"type":"text","text":format!("\n\n{hint}")}));
             self.response_style_context = true;
         }
-        if self.config.provider.is_acp() {
-            self.call(
-                "session/prompt",
-                json!({"sessionId":self.conversation,"prompt":input}),
-                Call::Turn,
-            )
+        input
+    }
+
+    fn codex_turn(&mut self, input: Vec<Value>, call: Call) -> Result<()> {
+        let mut params = json!({"threadId":self.conversation,"input":input});
+        params["approvalPolicy"] = if self.read_only {
+            "never"
         } else {
-            let mut params = json!({"threadId":self.conversation,"input":input});
-            params["approvalPolicy"] = if self.read_only {
-                "never"
-            } else {
-                self.config.approval.codex()
-            }
-            .into();
-            if !self.config.model().is_empty() {
-                params["model"] = self.config.model().into();
-            }
-            if !self.config.reasoning_effort.is_empty() {
-                params["effort"] = self.config.reasoning_effort.clone().into();
-            }
-            if self.config.native_tools() {
-                // Built-in tools stay read-only even though the trusted model
-                // controller has a network exception. Dynamic tools use RODE's
-                // original offline policy and never this inner sandbox.
-                params["sandboxPolicy"] = json!({"type":"readOnly"});
-                params["approvalPolicy"] = "never".into();
-            } else if self.external {
-                // The outer sandbox enforces the project policy for this process
-                // and every child. Tell Codex to use that external sandbox.
-                params["sandboxPolicy"] = json!({"type":"externalSandbox","networkAccess":if self.network {"enabled"} else {"restricted"}});
-            } else {
-                params["sandboxPolicy"] = if self.read_only {
-                    json!({"type":"readOnly"})
-                } else if self.config.access() == Access::Full {
-                    json!({"type":"dangerFullAccess"})
-                } else {
-                    json!({"type":"workspaceWrite","writableRoots":[self.root],"networkAccess":false})
-                };
-            }
-            self.call("turn/start", params, Call::Turn)
+            self.config.approval.codex()
         }
+        .into();
+        if !self.config.model().is_empty() {
+            params["model"] = self.config.model().into();
+        }
+        if !self.config.reasoning_effort.is_empty() {
+            params["effort"] = self.config.reasoning_effort.clone().into();
+        }
+        if self.config.native_tools() {
+            // Built-in tools stay read-only even though the trusted model
+            // controller has a network exception. Dynamic tools use RODE's
+            // original offline policy and never this inner sandbox.
+            params["sandboxPolicy"] = json!({"type":"readOnly"});
+            params["approvalPolicy"] = "never".into();
+        } else if self.external {
+            // The outer sandbox enforces the project policy for this process
+            // and every child. Tell Codex to use that external sandbox.
+            params["sandboxPolicy"] = json!({"type":"externalSandbox","networkAccess":if self.network {"enabled"} else {"restricted"}});
+        } else {
+            params["sandboxPolicy"] = if self.read_only {
+                json!({"type":"readOnly"})
+            } else if self.config.access() == Access::Full {
+                json!({"type":"dangerFullAccess"})
+            } else {
+                json!({"type":"workspaceWrite","writableRoots":[self.root],"networkAccess":false})
+            };
+        }
+        self.call("turn/start", params, call)
     }
     fn interrupt(&mut self) -> Result<()> {
         self.call(
@@ -715,7 +788,28 @@ impl Chat {
             return Ok(());
         };
         if let Some(error) = value.get("error") {
+            if let Call::Answer { id, turn, .. } = call {
+                self.answer_failed(
+                    &id,
+                    error["message"]
+                        .as_str()
+                        .unwrap_or("Answer was not accepted"),
+                    turn.is_none(),
+                );
+                return Ok(());
+            }
             if matches!(call, Call::Models) {
+                let message = error["message"].as_str().unwrap_or("request failed");
+                let explanation = super::network::explain_error(
+                    self.config.provider,
+                    self.controller_offline,
+                    message,
+                    16384,
+                );
+                if explanation != message {
+                    self.notice(&explanation);
+                    return Ok(());
+                }
                 self.notice("This agent does not provide a model catalog. Enter a model ID in Model controls.");
                 return Ok(());
             }
@@ -731,6 +825,7 @@ impl Chat {
         }
         let result = &value["result"];
         match call {
+            Call::Answer { id, text, turn, .. } => self.answer_accepted(id, text, turn, result)?,
             Call::Initialize => {
                 if self.config.provider.is_acp() {
                     ensure!(
@@ -915,6 +1010,7 @@ impl Chat {
                         if let Some(text) = item["text"].as_str() {
                             self.replace(id, Role::Assistant, "Agent", text);
                         }
+                        self.message_questions(item);
                     }
                     "commandExecution" => {
                         let title = item["command"].as_str().unwrap_or("Command");
@@ -1028,6 +1124,9 @@ impl Chat {
             choices: vec![],
             questions: vec![],
             blocking: true,
+            sending: false,
+            error: String::new(),
+            async_message: false,
             cancel: json!({"decision":"cancel"}),
         };
         let permission = matches!(
@@ -1193,8 +1292,10 @@ impl Chat {
     fn request_status(&mut self) {
         self.status = if self.prompts.iter().any(|prompt| prompt.blocking) {
             "Waiting for you"
-        } else if !self.prompts.is_empty() {
+        } else if !self.prompts.is_empty() && self.busy {
             "Question awaiting your answer · agent working"
+        } else if !self.prompts.is_empty() {
+            "Question awaiting your answer"
         } else if self.busy {
             "Working…"
         } else {
@@ -1324,19 +1425,37 @@ impl Chat {
         self.last_turn_succeeded = success && !self.cancelling;
         self.pending = None;
         self.turn.clear();
-        self.prompts.clear();
+        if self.cancelling {
+            self.prompts.clear();
+        } else {
+            self.prompts.retain(|prompt| prompt.async_message);
+        }
         self.cancelling = false;
         self.deadline = None;
         self.status = if success { "Ready" } else { "Stopped / failed" }.into();
+        if !self.prompts.is_empty() {
+            self.request_status();
+        }
         self.completed += 1;
         if let Some(error) = error {
-            self.notice(error);
+            self.notice(&super::network::explain_error(
+                self.config.provider,
+                self.controller_offline,
+                error,
+                16384,
+            ));
         }
     }
     fn fail(&mut self, error: &str) {
+        let detail = self.last_stderr.trim().to_owned();
+        let error = super::network::explain_error(
+            self.config.provider,
+            self.controller_offline,
+            error,
+            16384_usize.saturating_sub(detail.len() + usize::from(!detail.is_empty())),
+        );
         let conversation = self.conversation_id().unwrap_or_default().to_owned();
         self.completed += u64::from(self.busy);
-        let detail = self.last_stderr.trim().to_owned();
         self.disconnect();
         self.recovery = Some(conversation);
         self.status = "Disconnected · recovery available".into();
@@ -1459,6 +1578,89 @@ fn append_bounded(target: &mut String, text: &str, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offline_guidance_covers_failed_turns_and_timeouts_for_every_provider() {
+        for provider in [
+            Provider::Codex,
+            Provider::Local,
+            Provider::Claude,
+            Provider::Acp,
+        ] {
+            for offline in [false, true] {
+                let mut chat = Chat {
+                    config: Config {
+                        provider,
+                        ..Default::default()
+                    },
+                    controller_offline: offline,
+                    busy: true,
+                    conversation: "saved-thread".into(),
+                    ..Default::default()
+                };
+                chat.finish(false, Some("Unable to connect to model"));
+                assert!(!chat.busy);
+                assert!(!chat.last_turn_succeeded);
+                assert!(!chat.recoverable());
+                assert_eq!(chat.conversation_id(), Some("saved-thread"));
+                let text = &chat.messages.back().unwrap().text;
+                assert!(text.starts_with("Unable to connect to model"));
+                assert_eq!(text.contains("sandbox blocks network"), offline);
+
+                chat.busy = true;
+                chat.deadline = Some(Instant::now());
+                chat.poll();
+                assert!(chat.recoverable());
+                assert!(!chat.busy);
+                let text = &chat.messages.back().unwrap().text;
+                assert!(text.starts_with("Agent startup timed out."));
+                assert_eq!(text.contains("sandbox blocks network"), offline);
+            }
+        }
+    }
+
+    #[test]
+    fn routing_errors_keep_recovery_and_explain_catalog_failures_without_ending_the_chat() {
+        for offline in [false, true] {
+            let mut chat = Chat {
+                controller_offline: offline,
+                busy: true,
+                conversation: "saved-thread".into(),
+                last_stderr: "backend diagnostic".into(),
+                ..Default::default()
+            };
+            chat.calls.insert(1, Call::Models);
+            chat.receive(json!({"id":1,"error":{"message":"workspace routing discovery failed"}}))
+                .unwrap();
+            assert!(chat.busy);
+            assert!(!chat.recoverable());
+            assert!(
+                !chat
+                    .messages
+                    .back()
+                    .unwrap()
+                    .text
+                    .contains("does not provide a model catalog")
+            );
+
+            chat.calls.insert(2, Call::Conversation);
+            let error = chat
+                .receive(json!({"id":2,"error":{"message":"workspace routing discovery failed"}}))
+                .unwrap_err();
+            chat.fail(&error.to_string());
+            assert!(!chat.busy);
+            assert!(chat.recoverable());
+            assert_eq!(chat.conversation_id(), Some("saved-thread"));
+            let text = &chat.messages.back().unwrap().text;
+            assert!(text.starts_with("Agent: workspace routing discovery failed"));
+            assert!(text.ends_with("backend diagnostic"));
+            assert_eq!(text.contains("sandbox blocks network"), offline);
+            assert_eq!(chat.config.network, super::super::network::Network::Project);
+            let mut view = Chat::default();
+            view.apply_view(chat.view());
+            assert_eq!(view.messages.back().unwrap().text, *text);
+        }
+    }
 
     #[test]
     fn questions_need_all_answers_and_preserve_legacy_views_and_request_lifetimes() {

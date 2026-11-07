@@ -16,17 +16,29 @@ pub(super) fn show(
     ui: &mut egui::Ui,
     prompt: &mut Prompt,
     enabled: bool,
+    working: bool,
     palette: crate::theme::Palette,
 ) -> Action {
     let mut action = Action::default();
     ui.label(RichText::new(&prompt.title).strong().color(palette.accent));
-    ui.add(
+    let state = ui.add(
         egui::Label::new(if prompt.blocking {
             "The agent is waiting for your answer. Your message draft and queued work are kept."
-        } else {
+        } else if working {
             "The agent can continue independent work while you answer. Your message draft is kept."
+        } else {
+            "The agent has finished this turn. Send your answer to continue the conversation. Your message draft is kept."
         })
         .wrap(),
+    );
+    ui_probe::button(
+        ui,
+        if working {
+            "agent-question-working"
+        } else {
+            "agent-question-idle"
+        },
+        &state,
     );
     let footer = crate::app::layout::control_height(ui) + 2. * ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
@@ -34,7 +46,10 @@ pub(super) fn show(
         .auto_shrink([false, false])
         .max_height((ui.available_height() - footer).max(1.))
         .show(ui, |ui| {
-            ui.add_enabled_ui(enabled, |ui| {
+            if !prompt.error.is_empty() {
+                ui.add(egui::Label::new(RichText::new(&prompt.error).color(palette.error)).wrap());
+            }
+            ui.add_enabled_ui(enabled && !prompt.sending, |ui| {
                 for (index, question) in prompt.questions.iter_mut().enumerate() {
                     ui.push_id((&prompt.id.to_string(), &question.id), |ui| {
                         egui::Frame::new()
@@ -117,17 +132,32 @@ pub(super) fn show(
         let result = prompt.answers();
         let send = ui
             .add_enabled(
-                enabled && result.is_some(),
-                egui::Button::new("Send answers"),
+                enabled && !prompt.sending && result.is_some(),
+                egui::Button::new(if prompt.sending {
+                    "Sending answers…"
+                } else {
+                    "Send answers"
+                }),
             )
-            .on_disabled_hover_text("Answer every question before sending.");
+            .on_disabled_hover_text(if prompt.sending {
+                "Waiting for the agent to acknowledge your answer."
+            } else {
+                "Answer every question before sending."
+            });
         ui_probe::button(ui, "agent-question-send", &send);
         if send.clicked() {
             action.answer = result;
         }
         let stop = ui
-            .add_enabled(enabled, egui::Button::new("Stop"))
-            .on_hover_text("Cancel the questions and stop the current turn.");
+            .add_enabled(
+                enabled && (working || !prompt.sending || !prompt.error.is_empty()),
+                egui::Button::new(if working { "Stop" } else { "Dismiss question" }),
+            )
+            .on_hover_text(if working {
+                "Cancel the questions and stop the current turn."
+            } else {
+                "Dismiss this question without sending an answer."
+            });
         ui_probe::button(ui, "agent-question-stop", &stop);
         action.stop = stop.clicked();
     });
