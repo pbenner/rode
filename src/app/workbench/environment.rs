@@ -103,7 +103,9 @@ impl EditorApp {
                     ("Trust project configuration", crate::mise::Action::Trust),
                     ("Install declared tools", crate::mise::Action::Install),
                 ] {
-                    if ui.add_enabled(!busy, egui::Button::new(label)).clicked() {
+                    let response = ui.add_enabled(!busy, egui::Button::new(label));
+                    ui_probe::button(ui, label, &response);
+                    if response.clicked() {
                         action = Some(operation);
                     }
                 }
@@ -134,7 +136,9 @@ impl EditorApp {
                 if tasks {
                     for task in snapshot.tasks {
                         ui.horizontal_wrapped(|ui| {
-                        if ui.button(&task.name).clicked() {
+                        let response = ui.button(&task.name);
+                        ui_probe::button(ui, &format!("mise-task:{}", task.name), &response);
+                        if response.clicked() {
                             let program = crate::mise::shell_program(&self.workbench.prefs.environment);
                             let command = format!("MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 MISE_PARANOID=1 {} -C {} run {}", program, crate::ssh::quote(&self.root()), crate::ssh::quote(&task.name));
                             self.send_project_command(command, ctx);

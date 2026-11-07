@@ -697,8 +697,7 @@ impl EditorApp {
                                     ui.label(RichText::new(&message.title).strong().size(11.).color(if message.role == Role::Notice {palette.muted}else{palette.accent}));
                                     message.role == Role::Assistant && icons::small(ui,Icon::Copy,"Copy response").clicked()
                                 }).inner;
-                                let output = render_message(ui,&message.text,palette);
-                                if copy {ctx.copy_text(output.galley.text().to_owned());}
+                                render_message(ui,&message.text,palette,copy);
                             });
                         }
                     });
@@ -1233,8 +1232,10 @@ fn render_message(
     ui: &mut egui::Ui,
     text: &str,
     palette: theme::Palette,
+    copy_response: bool,
 ) -> egui::text_edit::TextEditOutput {
-    let job = message::layout(ui, text, palette);
+    let layout = message::layout(ui, text, palette);
+    let job = &layout.job;
     // A parent can request more width than the visible transcript, especially
     // during resizing. Wrap to the visible edge rather than that larger layout.
     let visible_width = ui
@@ -1256,6 +1257,7 @@ fn render_message(
         } else {
             None
         };
+    let commands_before = ui.ctx().output(|output| output.commands.len());
     let mut output = egui::TextEdit::multiline(&mut display)
         .id(id)
         .frame(false)
@@ -1272,6 +1274,26 @@ fn render_message(
         output.cursor_range = output.state.cursor.range(&output.galley);
         output.state.clone().store(ui.ctx(), id);
     }
+    layout.paint(ui, &output, palette.text);
+    // TextEdit owns keyboard selection/copy. Replace only commands it just emitted,
+    // expanding the single-character formula slots into portable TeX source.
+    if let Some(range) = output
+        .state
+        .cursor
+        .char_range()
+        .filter(|range| !range.is_empty())
+    {
+        ui.ctx().output_mut(|output| {
+            for command in output.commands.iter_mut().skip(commands_before) {
+                if let egui::OutputCommand::CopyText(text) = command {
+                    *text = layout.copy(range.as_sorted_char_range());
+                }
+            }
+        });
+    }
+    if copy_response {
+        ui.ctx().copy_text(layout.copy(0..job.text.chars().count()));
+    }
     output.response.context_menu(|ui| {
         // The popup can take keyboard focus; use the stored, clamped selection.
         let selection = output
@@ -1284,7 +1306,8 @@ fn render_message(
             .clicked()
         {
             if let Some(selection) = selection {
-                ui.ctx().copy_text(selection.slice_str(display).to_owned());
+                ui.ctx()
+                    .copy_text(layout.copy(selection.as_sorted_char_range()));
             }
             ui.close();
         }

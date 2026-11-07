@@ -15,21 +15,25 @@ from ui_harness import (
     BINARY,
     ROOT,
     assert_running,
-    click,
+    click_button,
     close_window,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
+    wait_for_button,
+    wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
 )
 
 
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.3)
+def contents(path):
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        return None
 
 
 with tempfile.TemporaryDirectory(prefix="rode-mise-ui-") as directory:
@@ -55,18 +59,21 @@ with tempfile.TemporaryDirectory(prefix="rode-mise-ui-") as directory:
         ),
     }
     (config / "app.ron").write_text(json.dumps(preferences))
+    state_path = base / "ui-state.json"
     environment = dict(
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
         SHELL=str(shell),
+        RODE_UI_TEST_STATE=str(state_path),
     )
     log_path = ARTIFACTS / "mise.log"
     with log_path.open("w") as log:
         process = subprocess.Popen(
             [str(BINARY), str(project)], env=environment, stdout=log, stderr=log
         )
+        window = None
         try:
 
             def wait(check, message):
@@ -78,41 +85,94 @@ with tempfile.TemporaryDirectory(prefix="rode-mise-ui-") as directory:
                     time.sleep(0.05)
                 raise AssertionError(message)
 
+            def control(name, *, focused=False):
+                return wait_for_button(window, process, log_path, state_path, name, focused=focused)
+
+            def click_control(name):
+                click_button(window, process, log_path, state_path, name)
+
             window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus_window(window)
             key("t", ("Control_L", "Shift_L"))
-            time.sleep(0.8)
+            state = wait_for_ui_state(
+                process,
+                log_path,
+                state_path,
+                lambda state: any(
+                    button["name"].startswith("terminal-input:")
+                    and button["enabled"]
+                    and button["focused"]
+                    for button in state["buttons"]
+                ),
+                "Project terminal did not acquire input focus",
+                timeout=20,
+            )
+            terminals = [
+                button["name"]
+                for button in state["buttons"]
+                if button["name"].startswith("terminal-input:")
+            ]
+            assert len(terminals) == 1, terminals
+            terminal = terminals[0]
+            control(terminal, focused=True)
             text('printf "%s %s" "$RODE_MISE_VALUE" "$$" > before.tmp && mv before.tmp before\n')
             wait(lambda: (project / "before").exists(), "mise terminal did not accept input")
-            assert (project / "before").read_text().startswith("from-mise ")
-            command("Tasks")
+            before = (project / "before").read_text()
+            value, pid = before.split()
+            assert value == "from-mise" and int(pid) > 0, before
+            palette_command(window, process, log_path, state_path, "Tasks: Run, build and test")
+            control("Refresh mise tools and tasks")
             screenshot(window, "tasks-before-refresh.png")
-            click(450, 260)  # Refresh tools/tasks in the mise card.
-            wait(
-                lambda: any(
-                    call["args"] == ["tasks", "ls", "--local", "--json"]
-                    for call in [
-                        json.loads(line)
-                        for line in (project / "mise-calls.jsonl").read_text().splitlines()
-                    ]
-                ),
-                "Mise metadata was not requested",
+            click_control("Refresh mise tools and tasks")
+            # A logged request is not evidence that its reply reached the UI.
+            control("mise-task:smoke")
+            calls = [
+                json.loads(line)
+                for line in (project / "mise-calls.jsonl").read_text().splitlines(keepends=True)
+                if line.endswith("\n")
+            ]
+            assert any(call["args"] == ["tasks", "ls", "--local", "--json"] for call in calls), (
+                calls
             )
-            time.sleep(0.5)
             screenshot(window, "tasks-discovered.png")
-            click(395, 350)  # The contributed smoke task below discovered metadata.
+            click_control("mise-task:smoke")
             wait(
-                lambda: (project / "mise-task-result").exists(),
+                lambda: contents(project / "mise-task-result") == "task passed",
                 "Mise task did not run in the project terminal",
             )
-            click(400, 69)  # Task execution already selected Terminal; keep it selected.
-            time.sleep(0.3)
+            control(terminal, focused=True)
+            # Keep this redundant tab click: it caught observation replaying
+            # egui hit testing and surrendering the terminal's restored focus.
+            click_control("workspace-tab:Terminal")
+            control(terminal, focused=True)
             text('printf "%s %s" "$RODE_MISE_VALUE" "$$" > after.tmp && mv after.tmp after\n')
             wait(lambda: (project / "after").exists(), "Terminal input was not retained")
-            assert (project / "before").read_text() == (project / "after").read_text()
+            assert before == (project / "after").read_text(), (
+                "Task replaced the shell or environment"
+            )
             screenshot(window, "terminal-retained.png")
             close_window(window, process)
             print("Optional mise tasks, terminal environment and retained shell passed.")
+        except Exception:
+            for path in [
+                state_path,
+                project / "mise-calls.jsonl",
+                project / "before",
+                project / "after",
+                project / "mise-task-result",
+            ]:
+                try:
+                    if path.exists():
+                        shutil.copyfile(path, ARTIFACTS / ("failure-" + path.name))
+                except OSError as error:
+                    print(f"Could not retain {path.name}: {error}")
+            if window is not None and process.poll() is None:
+                try:
+                    screenshot(window, "failure.png")
+                except Exception as error:
+                    print(f"Could not capture the failure window: {error}")
+            raise
         finally:
             if process.poll() is None:
                 process.terminate()

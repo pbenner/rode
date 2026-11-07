@@ -1,6 +1,6 @@
 //! Git identity forms and serialized config operations on the captured project host.
 //! Git owns config discovery/locking; arguments remain data and the project
-//! sandbox remains in force for repository and global writes alike.
+//! execution mode applies to repository and global writes alike.
 use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,6 +131,11 @@ pub(super) struct State {
     notice: String,
 }
 impl State {
+    pub(super) fn invalidate(&mut self) {
+        self.snapshot = None;
+        self.notice.clear();
+    }
+
     pub(super) fn failure(&mut self, job: &Job, detail: &str) -> String {
         self.notice.clear();
         job.failure(detail)
@@ -233,7 +238,8 @@ impl EditorApp {
             .unwrap_or_else(|| "Local host".into());
         let mut save = false;
         let mut inherit = false;
-        let sandboxed = self.workspace.as_ref().is_some_and(|w| w.plan.active);
+        let sandboxed =
+            self.workbench.git_sandbox() && self.workspace.as_ref().is_some_and(|w| w.plan.active);
         layout::section(ui, "Commit identity", palette, |ui| {
             let state = &mut self.workbench.git.identity;
             ui.label(host);

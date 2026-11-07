@@ -1,6 +1,6 @@
 //! Bundled git feature implementation.
 //!
-//! Git commands run on the project host under its actual sandbox. UI actions guard dirty
+//! Git commands run on the project host with the user's selected Git policy. UI actions guard dirty
 //! buffers before worktree/index/history mutations, and destructive actions require explicit
 //! choices. Render from cached results rather than running Git during layout.
 use super::*;
@@ -31,6 +31,7 @@ impl From<Vec<String>> for Mutation {
 /// Cached host Git results and unapplied forms; a single busy gate serializes requests
 /// and confirmations retain their original mutation payload.
 pub(super) struct State {
+    pub(super) host_plan: execution::HostPlan,
     pub(super) git_root: String,
     pub(super) git_busy: bool,
     /// Only an in-flight commit locks the draft that its success will clear.
@@ -64,6 +65,7 @@ pub(super) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            host_plan: Default::default(),
             git_root: String::new(),
             git_busy: false,
             committing: false,
@@ -113,6 +115,7 @@ impl EditorApp {
             palette,
         );
         ui.horizontal_wrapped(|ui| {
+            self.git_execution_control(ui, ctx);
             if ui
                 .add_enabled(!self.workbench.git.git_busy, egui::Button::new("Refresh"))
                 .clicked()
@@ -337,16 +340,76 @@ impl EditorApp {
                 .on_hover_text("Interactive authentication and all Git commands")
                 .clicked()
             {
-                self.send_project_command(
+                self.send_terminal_command(
                     format!(
                         "cd -- {} && git status",
                         ssh::quote(&self.workbench.git.git_root)
                     ),
+                    self.terminal_plan(self.workbench.git_sandbox()),
                     ctx,
                 );
             }
         });
         ui.label(RichText::new("HTTPS authentication opens a one-operation credential prompt. Use Git terminal for other interactive authentication.").small().color(palette.muted));
+    }
+
+    fn git_execution_control(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let sandboxed = self.workbench.prefs.git_sandbox;
+        let active = sandboxed
+            && self
+                .workspace
+                .as_ref()
+                .is_some_and(|workspace| workspace.plan.active);
+        let label = if active {
+            "Git sandbox: on"
+        } else {
+            "Git sandbox: off"
+        };
+        let ready = self.project_ready()
+            && !self.workbench.git.git_busy
+            && !self.workbench.git.auth.open()
+            && self.workbench.git.confirm.is_none();
+        ui.add_enabled_ui(ready, |ui| {
+            let menu = ui.menu_button(label, |ui| {
+                ui.label("Runs on the project host.");
+                for (choice, title) in [(false, "Outside sandbox"), (true, "Use project sandbox")] {
+                    let response = ui.selectable_label(sandboxed == choice, title);
+                    ui_probe::button(ui, if choice { "git-use-sandbox" } else { "git-use-host" }, &response);
+                    if response.clicked() {
+                        self.set_git_sandbox(choice, ctx);
+                        ui.close();
+                    }
+                }
+                if sandboxed && !active {
+                    ui.label("The project sandbox is not active. Git has normal host access.");
+                }
+            });
+            ui_probe::button(ui, "git-execution-mode", &menu.response);
+            menu.response.on_hover_text("Choose normal host permissions or this project's sandbox for Git. Agent tools keep the project policy.");
+        });
+    }
+
+    fn set_git_sandbox(&mut self, sandboxed: bool, ctx: &egui::Context) {
+        if self.workbench.git.git_busy
+            || self.workbench.git.auth.open()
+            || self.workbench.git.confirm.is_some()
+            || self.workbench.prefs.git_sandbox == sandboxed
+        {
+            return;
+        }
+        self.workbench.prefs.git_sandbox = sandboxed;
+        self.workbench.draft.git_sandbox = sandboxed;
+        self.workbench.save_preferences();
+        self.workbench.git.git_root.clear();
+        self.workbench.git.files.clear();
+        self.workbench.git.diff = None;
+        self.workbench.git.git_tab_data.clear();
+        self.workbench.git.identity.invalidate();
+        self.workbench.git.branch.clear();
+        self.workbench.git.git_error.clear();
+        self.workbench.git.git_output.clear();
+        self.workbench.git.git_last = None;
+        self.refresh_git(ctx);
     }
     /// Render bounded working-tree/index rows and defer file-specific actions until selection completes.
     pub(in crate::app) fn git_changes_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -848,6 +911,7 @@ impl EditorApp {
             self.workbench.git.diff = Some(diff);
         }
         if self.workbench.git.show_output {
+            let mut close = false;
             egui::Window::new("Git output / history")
                 .open(&mut self.workbench.git.show_output)
                 .default_size([850., 580.])
@@ -856,7 +920,13 @@ impl EditorApp {
                     let output =
                         ui.scope(|ui| diff_view(ui, &self.workbench.git.git_output, palette));
                     ui_probe::button(ui, "git-output-view", &output.response);
+                    let dismiss = ui.button("Close");
+                    ui_probe::button(ui, "git-output-close", &dismiss);
+                    close = dismiss.clicked();
                 });
+            if close {
+                self.workbench.git.show_output = false;
+            }
         }
         if let Some((message, mutation)) = self.workbench.git.confirm.clone() {
             egui::Modal::new(egui::Id::new("git-confirm"))

@@ -187,6 +187,47 @@ def click_button(window, process, log_path, state_path, name, timeout=20):
     click(*point)
 
 
+def wait_for_ui_state(process, log_path, state_path, check, description, timeout=12):
+    """Require a valid snapshot from this process before testing an observable UI condition."""
+    deadline = time.monotonic() + timeout
+    last = "No layout snapshot received"
+    while time.monotonic() < deadline:
+        assert_running(process, log_path)
+        try:
+            state = json.loads(Path(state_path).read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            time.sleep(0.05)
+            continue
+        last = repr(state)
+        if state.get("pid") == process.pid and check(state):
+            return state
+        time.sleep(0.05)
+    raise AssertionError(f"{description} within {timeout}s. Last layout: {last}. Log: {log_path}")
+
+
+def palette_command(window, process, log_path, state_path, value, timeout=12):
+    """Submit once, after focus and the complete query reach the native palette.
+
+    The exact-match control is registered only after all query characters were
+    processed. A matching prefix or a new paint alone cannot acknowledge typing.
+    """
+    focus_window(window)
+    key("p", ("Control_L", "Shift_L"))
+    wait_for_button(
+        window, process, log_path, state_path, "command-palette-input", timeout, focused=True
+    )
+    text(value)
+    click_button(window, process, log_path, state_path, "command-match:" + value, timeout)
+    wait_for_ui_state(
+        process,
+        log_path,
+        state_path,
+        lambda state: all(button["name"] != "command-palette-input" for button in state["buttons"]),
+        "Command palette did not close after submitting " + value,
+        timeout,
+    )
+
+
 def assert_running(process, log_path):
     """Report early native startup failure with bounded stderr, rather than a bare assert."""
     code = process.poll()

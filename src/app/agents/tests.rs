@@ -333,6 +333,10 @@ fn copy_response_copies_displayed_content_without_code_fences() {
             "Intro\n\n```rust\n  let value = `literal`;\n```\n\nOutro",
             "Intro\n\n  let value = `literal`;\n\nOutro",
         ),
+        (
+            "**Math** \\(v\\mapsto Rv\\) and $x_i$\n\n\\[W Rv=R Wv\\]\n\n```latex\n\\frac{1}{2}\n```",
+            "Math \\(v\\mapsto Rv\\) and $x_i$\n\n\\[W Rv=R Wv\\]\n\n\\frac{1}{2}",
+        ),
     ] {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -446,7 +450,7 @@ fn response_selection_copies_across_prose_and_code_without_editing() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    output = Some(render_message(ui, source, theme::Palette::default()));
+                    output = Some(render_message(ui, source, theme::Palette::default(), false));
                 });
             },
         );
@@ -544,7 +548,7 @@ fn response_selection_survives_streaming_updates() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    output = Some(render_message(ui, text, theme::Palette::default()));
+                    output = Some(render_message(ui, text, theme::Palette::default(), false));
                 });
             },
         );

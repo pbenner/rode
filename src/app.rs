@@ -34,6 +34,7 @@ mod commands;
 mod connections;
 mod debugging;
 mod dialogs;
+mod execution;
 mod explorer;
 mod extensions;
 mod file_browser;

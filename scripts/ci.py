@@ -58,6 +58,7 @@ CONTEXT_ENV = (
     "RODE_PROJECT_UI_CASE",
     "RODE_GIT_IDENTITY_UI_REMOTE",
     "RODE_GIT_AUTH_UI_REMOTE",
+    "RODE_EXECUTION_UI_REMOTE",
     "RODE_SSH_RUN_TRANSPORT",
     "RODE_SSH_TEST_FILTER",
     "RODE_SSH_TEST_NO_PYTHON",
@@ -119,6 +120,15 @@ SUITES = {
         rust("native_host"),
         remote("remote-smoke", transport=True),
         (
+            ["bash", "scripts/test-ssh.sh", sys.executable, "scripts/test-execution-modes-ui.py"],
+            {
+                "RODE_SSH_RUN_TRANSPORT": "0",
+                "RODE_SSH_TEST_NO_BWRAP": "1",
+                "RODE_EXECUTION_UI_REMOTE": "1",
+            },
+            300,
+        ),
+        (
             ["bash", "scripts/test-ssh.sh"],
             {
                 "RODE_SSH_TEST_FILTER": "x11_forwarding",
@@ -138,6 +148,7 @@ SUITES = {
         ),
     ],
     "remote-smoke": [
+        ui("execution-modes", RODE_EXECUTION_UI_REMOTE="1"),
         ui("git-identity", RODE_GIT_IDENTITY_UI_REMOTE="1"),
         ui("project", RODE_PROJECT_UI_CASE="ssh"),
         ui("explorer", RODE_EXPLORER_UI_REMOTE="1"),
@@ -145,6 +156,7 @@ SUITES = {
         ui("large-files", RODE_LARGE_FILES_UI_REMOTE="1"),
     ],
     "tools": [
+        ui("execution-modes"),
         ui("mise"),
         ui("environment"),
         ui("layout"),
@@ -192,6 +204,7 @@ SUITES = {
         ui("notebooks", RODE_NOTEBOOK_UI_REMOTE_ONLY="1"),
     ],
     "sandbox": [
+        ui("execution-modes", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("files", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("sandbox", RODE_TEST_REQUIRE_SANDBOX="1"),
@@ -296,7 +309,11 @@ def measure(label, command, env=None, timeout=300, group="commands"):
         if len(rest) > 12000:
             output.seek(-12000, os.SEEK_END)
             rest = b"\n... middle omitted; full output is in the log artifact ...\n" + output.read()
-        print((start_output + rest).decode(errors="replace"), flush=True)
+        # Nested suite output is already captured inside this command's group.
+        # Replaying child group markers hides its traceback in another collapsed
+        # heading on Actions. Preserve the raw artifact, flatten console output.
+        console = (start_output + rest).decode(errors="replace")
+        print(console.replace("::group::", "").replace("::endgroup::", ""), flush=True)
     print(
         f"{label}: {state} in {elapsed}s; exit {code}; deadline {timeout}s "
         f"(log: {logfile.relative_to(ROOT)})",

@@ -371,10 +371,20 @@ impl EditorApp {
             }));
             ui.allocate_space(ui.available_size().max(egui::Vec2::ZERO));
         }
-        if let Some(terminal) = self.terminal.as_mut().or(self.ssh_master.as_mut())
-            && let Some(error) = terminal.ui(ui, self.font_size - 1.0, palette)
-        {
-            self.notify(error, true);
+        if let Some(terminal) = self.terminal.as_mut().or(self.ssh_master.as_mut()) {
+            let (response, error) = terminal.ui_with_response(ui, self.font_size - 1.0, palette);
+            if let Some(error) = error {
+                self.notify(error, true);
+            }
+            if !self.session_busy()
+                && self.terminal.as_ref().is_some_and(Terminal::is_alive)
+                && let Some(active) = &self.sessions.active
+            {
+                super::ui_probe::button(ui, &format!("terminal-input:{}", active.key), &response);
+                if active.native.is_none() {
+                    super::ui_probe::button(ui, "temporary-terminal-input", &response);
+                }
+            }
         }
     }
 

@@ -11,8 +11,10 @@ from unittest.mock import Mock, patch
 from ui_harness import (
     click_button,
     focus_window,
+    palette_command,
     wait_for_button,
     wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
 )
 
@@ -206,6 +208,79 @@ class ButtonReadinessTests(unittest.TestCase):
         with patch("ui_harness.time.monotonic", side_effect=[0, 0, 21]):
             with self.assertRaisesRegex(AssertionError, "Install Codex.*False.*startup.log"):
                 self.wait()
+
+
+class PaletteReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.process = Mock(pid=42)
+        self.process.poll.return_value = None
+        self.read = patch("ui_harness.Path.read_text").start()
+        patch("ui_harness.time.sleep").start()
+        patch("ui_harness.window_geometry", return_value=(0, 0, 800, 600)).start()
+        patch("ui_harness.focus_window").start()
+        self.key = patch("ui_harness.key").start()
+        self.text = patch("ui_harness.text").start()
+        self.click = patch("ui_harness.click").start()
+        self.addCleanup(patch.stopall)
+
+    @staticmethod
+    def state(*names, focused=True, pid=42):
+        return json.dumps(
+            {
+                "pid": pid,
+                "pass": 1,
+                "size": [800, 600],
+                "pixels_per_point": 1,
+                "buttons": [
+                    {"name": name, "enabled": True, "focused": focused, "rect": [10, 20, 110, 40]}
+                    for name in names
+                ],
+            }
+        )
+
+    def command(self):
+        palette_command(0x123, self.process, "log", "state", "Terminal: New terminal")
+
+    def test_delayed_focus_and_partial_query_never_submit_the_default_command(self):
+        input_name = "command-palette-input"
+        self.read.side_effect = [
+            self.state(input_name, focused=False),
+            self.state(input_name),
+            self.state(input_name),  # An unprocessed or partial query is not an acknowledgement.
+            self.state(input_name, "command-match:New file"),
+            self.state(input_name, "command-match:Terminal: New terminal"),
+            self.state(input_name),  # Click is queued; do not start the next operation yet.
+            self.state(),
+        ]
+        self.text.side_effect = lambda _: self.assertEqual(self.read.call_count, 2)
+        self.click.side_effect = lambda *_: self.assertEqual(self.read.call_count, 5)
+        self.command()
+        self.assertEqual(self.read.call_count, 7)
+        self.key.assert_called_once_with("p", ("Control_L", "Shift_L"))
+        self.text.assert_called_once_with("Terminal: New terminal")
+        self.click.assert_called_once_with(60, 30)
+
+    def test_missing_complete_query_fails_without_click_or_return_or_retry(self):
+        self.read.return_value = self.state("command-palette-input")
+        with patch("ui_harness.time.monotonic", side_effect=[0, 0, 0, 0, 13]):
+            with self.assertRaisesRegex(AssertionError, "command-match:Terminal: New terminal"):
+                self.command()
+        self.click.assert_not_called()
+        self.key.assert_called_once_with("p", ("Control_L", "Shift_L"))
+        self.text.assert_called_once()
+
+    def test_absence_checks_reject_missing_malformed_and_other_process_snapshots(self):
+        self.read.side_effect = [
+            FileNotFoundError(),
+            "{",
+            self.state(pid=41),
+            self.state("still-open"),
+            self.state(),
+        ]
+        wait_for_ui_state(
+            self.process, "log", "state", lambda state: not state["buttons"], "Dialog stayed open"
+        )
+        self.assertEqual(self.read.call_count, 5)
 
 
 if __name__ == "__main__":

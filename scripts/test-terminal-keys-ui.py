@@ -15,12 +15,17 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
+    wait_for_button,
+    wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
     x11,
     xtest,
@@ -53,7 +58,7 @@ def clipboard():
     return result.stdout if result.returncode == 0 else ""
 
 
-def check_selection(window, root):
+def check_selection(window, root, click_control, command, focus_terminal):
     """Exercise actual mouse selection and the native system clipboard."""
     text("python3 selection-input.py\n")
     wait_for(lambda: (root / "selection-ready").exists(), "Selection fixture not ready")
@@ -66,7 +71,7 @@ def check_selection(window, root):
     mouse_button(390, 150, 1, False)
     screenshot(window, "selected-text.png")
 
-    def assert_copy(action):
+    def assert_copy(label, action):
         subprocess.run(
             ["xclip", "-selection", "clipboard"],
             input="clipboard sentinel",
@@ -77,19 +82,16 @@ def check_selection(window, root):
             timeout=2,
         )
         action()
-        wait_for(lambda: clipboard() == "SELECT_ME", "Copied text did not match selection")
+        wait_for(
+            lambda: clipboard() == "SELECT_ME",
+            f"{label}: copied text did not match selection",
+        )
         assert not (root / "selection-result").exists(), "Copy leaked input into the PTY"
 
-    assert_copy(lambda: key("c", ("Control_L",)))
-    assert_copy(lambda: key("c", ("Control_L", "Shift_L")))
-    assert_copy(lambda: click(1096, 108))  # Header Copy.
-
-    def palette_copy():
-        key("p", ("Control_L", "Shift_L"))
-        text("Terminal: Copy output")
-        key("Return")
-
-    assert_copy(palette_copy)
+    assert_copy("Ctrl+C", lambda: key("c", ("Control_L",)))
+    assert_copy("Ctrl+Shift+C", lambda: key("c", ("Control_L", "Shift_L")))
+    assert_copy("Header Copy", lambda: click_control("terminal-copy-output"))
+    assert_copy("Palette Copy", lambda: command("Terminal: Copy output"))
 
     def context_copy():
         mouse_button(420, 150, 3, True)
@@ -98,8 +100,8 @@ def check_selection(window, root):
         key("x")  # Menu typing must not leak into the raw terminal fixture.
         click(470, 162)
 
-    assert_copy(context_copy)
-    click(600, 300)  # Clear selection and return focus after using the header/palette.
+    assert_copy("Context Copy", context_copy)
+    focus_terminal()  # Clear selection and return focus after using the header/palette.
     key("c", ("Control_L",))
     wait_for(lambda: (root / "selection-result").exists(), "Interrupt did not reach the PTY")
     assert (root / "selection-result").read_text() == "03"
@@ -137,31 +139,65 @@ def run():
         shell = base / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         shell.chmod(0o755)
+        state_path = ARTIFACTS / "ui-state.json"
         environment = dict(
             os.environ,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             SHELL=str(shell),
             WINIT_X11_SCALE_FACTOR="1",
+            RODE_UI_TEST_STATE=str(state_path),
         )
-        with (ARTIFACTS / "native.log").open("w") as log:
+        log_path = ARTIFACTS / "native.log"
+        with log_path.open("w") as log:
             process = subprocess.Popen(
-                [str(BINARY), "--theme", "carbon", str(root)],
+                [str(BINARY), "--theme", "carbon", str(source)],
                 env=environment,
                 stdout=log,
                 stderr=log,
             )
             window = None
             try:
-                window = wait_for_window(process, ARTIFACTS / "native.log")
+
+                def control(name, *, focused=False):
+                    return wait_for_button(
+                        window, process, log_path, state_path, name, focused=focused
+                    )
+
+                def click_control(name):
+                    click_button(window, process, log_path, state_path, name)
+
+                def command(value):
+                    palette_command(window, process, log_path, state_path, value)
+
+                def focus_terminal():
+                    click_control(terminal)
+                    control(terminal, focused=True)
+
+                window = wait_for_window(process, log_path)
+                wait_for_project(window, process, log_path, root)
                 focus_window(window)
-                time.sleep(0.7)
-                key("p", ("Control_L",))
-                text("main.txt")
-                key("Return")
-                time.sleep(0.4)
+                control("source-editor", focused=True)
                 key("t", ("Control_L", "Shift_L"))
-                time.sleep(0.6)
+                state = wait_for_ui_state(
+                    process,
+                    log_path,
+                    state_path,
+                    lambda state: any(
+                        button["name"].startswith("terminal-input:")
+                        and button["enabled"]
+                        and button["focused"]
+                        for button in state["buttons"]
+                    ),
+                    "Project terminal did not acquire input focus",
+                )
+                terminals = [
+                    button["name"]
+                    for button in state["buttons"]
+                    if button["name"].startswith("terminal-input:")
+                ]
+                assert len(terminals) == 1, terminals
+                terminal = terminals[0]
                 text("cat completion-")
                 key("Tab")
                 text(" > completed.out\n")
@@ -179,8 +215,10 @@ def run():
                 text("cat completion-")
                 key("space", ("Control_L",))
                 key("e")  # Code and terminal share a workspace; switch away and back.
+                control("source-editor", focused=True)
                 key("space", ("Control_L",))
                 key("t")
+                control(terminal, focused=True)
                 key("Tab")
                 text(" > refocused.out\n")
                 wait_for(
@@ -207,15 +245,19 @@ def run():
                 key("c", ("Control_L",))
                 wait_for(lambda: (root / "control-result").exists(), "Control keys were swallowed")
                 assert (root / "control-result").read_text() == "1803"
-                check_selection(window, root)
+                check_selection(window, root, click_control, command, focus_terminal)
                 # The editor escape route must still work with terminal focus.
-                key("p", ("Control_L", "Shift_L"))
-                text("Terminal: Sessions and Slurm allocations")
-                key("Return")
-                time.sleep(0.5)
+                command("Terminal: Sessions and Slurm allocations")
+                wait_for_ui_state(
+                    process,
+                    log_path,
+                    state_path,
+                    lambda state: state.get("session_ids") is not None,
+                    "Terminal session manager did not open",
+                )
                 screenshot(window, "palette-from-terminal.png")
                 key("Escape")
-                click(550, 740)
+                focus_terminal()
                 text("echo after > palette.out\n")
                 wait_for(
                     lambda: (root / "palette.out").exists(),
