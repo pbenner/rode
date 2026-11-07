@@ -511,6 +511,17 @@ impl Terminal {
     /// Render selectable terminal cells and process focused shell input. Returns input
     /// errors; ordinary control keys remain shell input outside editor escape routes.
     pub fn ui(&mut self, ui: &mut egui::Ui, font_size: f32, palette: Palette) -> Option<String> {
+        self.ui_with_response(ui, font_size, palette).1
+    }
+
+    /// Return the original interaction response for observation. Re-reading it
+    /// through Context::read_response repeats hit testing and can surrender focus.
+    pub(crate) fn ui_with_response(
+        &mut self,
+        ui: &mut egui::Ui,
+        font_size: f32,
+        palette: Palette,
+    ) -> (egui::Response, Option<String>) {
         let font = FontId::monospace(font_size);
         let char_size =
             ui.fonts_mut(|fonts| Vec2::new(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
@@ -855,9 +866,12 @@ impl Terminal {
             });
         }
         if !bytes_to_send.is_empty() {
-            return self.send(bytes_to_send).err().map(|e| e.to_string());
+            return (
+                response,
+                self.send(bytes_to_send).err().map(|e| e.to_string()),
+            );
         }
-        None
+        (response, None)
     }
 }
 

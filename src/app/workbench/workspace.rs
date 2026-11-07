@@ -337,6 +337,7 @@ impl EditorApp {
                     && (!self.workbench.detached || child);
                 let response =
                     ui.add_enabled(!detached, egui::Button::selectable(selected, tab.label()));
+                ui_probe::button(ui, &format!("workspace-tab:{}", tab.label()), &response);
                 if detached {
                     response.on_disabled_hover_text(format!(
                         "{} is open in its own window. Reattach it there or close that window.",

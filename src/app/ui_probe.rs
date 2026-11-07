@@ -141,6 +141,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reselecting_terminal_tab_keeps_shell_input_with_and_without_the_probe() {
+        use crate::{
+            app::{EditorApp, sessions::Meta},
+            terminal::{StreamControl, Terminal},
+        };
+        use std::{sync::mpsc, time::Duration};
+
+        fn frame(
+            app: &mut EditorApp,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 800.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.navigation.begin_layout();
+                    app.activity(ctx);
+                    app.explorer(ctx);
+                    app.workspace_content(ctx);
+                },
+            )
+        }
+
+        for probe_enabled in [false, true] {
+            for batched_click in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let ctx = egui::Context::default();
+                if probe_enabled {
+                    install_at(&ctx, directory.path().join("widgets.json"));
+                }
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(&cc, Default::default());
+                let (tx, rx) = mpsc::channel();
+                let (terminal, _stream) =
+                    Terminal::stream(&ctx, "Existing shell".into(), move |event| {
+                        if let StreamControl::Input(bytes) = event {
+                            tx.send(bytes).unwrap();
+                        }
+                    });
+                app.terminal = Some(terminal);
+                app.sessions.active = Some(Meta {
+                    key: "existing-session".into(),
+                    order: 0,
+                    name: "Existing shell".into(),
+                    native: None,
+                });
+                app.show_terminal = true;
+                app.terminal_intent();
+                frame(&mut app, &ctx, vec![]);
+                let output = frame(&mut app, &ctx, vec![]);
+                assert!(Terminal::focused(&ctx));
+                let point = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::Shape::Text(text) = &shape.shape
+                            && text.galley.text() == "Terminal"
+                        {
+                            Some(text.pos + text.galley.size() / 2.)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                let button = |pressed| egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+                if batched_click {
+                    frame(&mut app, &ctx, vec![button(true), button(false)]);
+                } else {
+                    frame(&mut app, &ctx, vec![button(true)]);
+                    frame(&mut app, &ctx, vec![button(false)]);
+                }
+                frame(&mut app, &ctx, vec![]);
+                assert!(
+                    Terminal::focused(&ctx),
+                    "probe={probe_enabled}, batched={batched_click}"
+                );
+                frame(&mut app, &ctx, vec![egui::Event::Text("retained".into())]);
+                assert_eq!(
+                    rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+                    b"retained"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn palette_match_requires_the_complete_native_query() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("widgets.json");
