@@ -699,6 +699,12 @@ fn stale_service_sockets_do_not_hide_sessions_or_prevent_safe_startup() {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        if let Ok(Response::Tunnels(tunnels)) = self.rpc(&Request::Tunnels) {
+            for tunnel in tunnels {
+                let _ = self.rpc(&Request::StopTunnel { id: tunnel.id });
+            }
+        }
+
         for (id, policy) in &self.ids {
             let _ = self.rpc(&Request::End {
                 id: id.clone(),
@@ -1339,4 +1345,66 @@ fn immediate_restart_after_ending_the_last_terminal_is_safe_and_create_is_idempo
             })
             .unwrap();
     }
+}
+
+#[test]
+fn retained_tunnels_keep_sessiond_alive_after_last_terminal_and_stop_explicitly() {
+    let mut fixture = Fixture::new();
+    fixture.standalone = true;
+    let vacant = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = vacant.local_addr().unwrap().port();
+    drop(vacant);
+    let id = rode_session::new_id().unwrap();
+    let spec = rode_session::tunnels::Spec {
+        relay_host: "127.0.0.1".into(),
+        relay_port: port,
+        relay_user: "fixture".into(),
+        ..Default::default()
+    };
+    assert!(
+        matches!(fixture.rpc(&Request::Tunnels).unwrap(), Response::Tunnels(list) if list.is_empty())
+    );
+    assert!(
+        !fixture.runtime.join("socket").exists(),
+        "Listing must not launch a service"
+    );
+    fixture
+        .rpc(&Request::StartTunnel {
+            id: id.clone(),
+            spec,
+        })
+        .unwrap();
+    // Both explicit End and last-view cleanup must retain a tunnel-only daemon.
+    let info = fixture.create(&fixture.plan());
+    fixture
+        .rpc(&Request::End {
+            id: info.id.clone(),
+            policy: info.policy.clone(),
+        })
+        .unwrap();
+    let info = fixture.create_with_persistence(&fixture.plan(), false);
+    let terminal = fixture.attach(&info);
+    wait(|| {
+        fixture
+            .direct_list()
+            .iter()
+            .any(|session| session.id == info.id && session.clients == 1)
+    });
+    drop(terminal);
+    wait(|| fixture.direct_list().is_empty());
+    assert!(
+        fixture
+            .rpc(&Request::Shutdown)
+            .unwrap_err()
+            .to_string()
+            .contains("tunnels")
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    assert!(
+        matches!(fixture.rpc(&Request::Tunnels).unwrap(), Response::Tunnels(list) if list.len() == 1 && list[0].id == id)
+    );
+    let service = std::fs::read_to_string(fixture.runtime.join("service.log")).unwrap_or_default();
+    assert!(!service.contains("panicked"));
+    fixture.rpc(&Request::StopTunnel { id }).unwrap();
+    fixture.rpc(&Request::Shutdown).unwrap();
 }

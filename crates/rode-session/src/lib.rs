@@ -58,9 +58,10 @@ mod agents;
 #[cfg(target_os = "linux")]
 pub mod control_auth;
 mod runtimes;
+pub mod tunnels;
 
 /// Required service protocol and runtime-directory generation.
-pub const PROTOCOL: u32 = 18;
+pub const PROTOCOL: u32 = 19;
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 8;
@@ -113,6 +114,20 @@ pub struct Info {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
+    /// Discover daemon-owned reverse SSH tunnels without starting a service.
+    Tunnels,
+    /// Start or explicitly replace one daemon-owned tunnel.
+    StartTunnel {
+        /// Stable request identity for idempotent retries.
+        id: String,
+        /// Relay, host identity and loopback forwarding settings.
+        spec: tunnels::Spec,
+    },
+    /// Stop a tunnel and all of its active forwarding channels.
+    StopTunnel {
+        /// Exact tunnel identity; unrelated sessions are retained.
+        id: String,
+    },
     /// Report the required protocol before accepting client operations.
     Protocol,
     /// Discover retained notebook and debugger runtimes.
@@ -221,6 +236,10 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum Response {
+    /// Discoverable daemon-owned reverse SSH tunnels.
+    Tunnels(Vec<tunnels::Info>),
+    /// Started/replaced tunnel, which may still be connecting.
+    Tunnel(tunnels::Info),
     /// Exact protocol implemented by this service.
     Protocol(u32),
     /// Discoverable retained notebook/debugger controllers.
@@ -384,7 +403,10 @@ mod control_tests;
 /// creation is serialized; only the current runtime directory is used.
 pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
     let until = Instant::now()
-        + if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
+        + if matches!(
+            request,
+            Request::List | Request::Agents | Request::Runtimes | Request::Tunnels
+        ) {
             Duration::from_millis(500)
         } else {
             Duration::from_secs(10)
@@ -393,12 +415,14 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         let result = request_current(request, launcher);
         let retry = matches!(
             request,
-            Request::Create { .. }
+            Request::StartTunnel { .. }
+                | Request::Create { .. }
                 | Request::CreateAgent { .. }
                 | Request::CreateRuntime { .. }
                 | Request::List
                 | Request::Agents
                 | Request::Runtimes
+                | Request::Tunnels
         ) && result.as_ref().err().is_some_and(|error| {
             error.to_string() == "Session service is stopping"
                 || error.chain().any(|cause| {
@@ -443,7 +467,9 @@ fn request_current(request: &Request, launcher: &Launcher) -> Result<Response> {
             Request::List => Response::Sessions(vec![]),
             Request::Agents => Response::Agents(vec![]),
             Request::Runtimes => Response::Runtimes(vec![]),
-            Request::End { .. }
+            Request::Tunnels => Response::Tunnels(vec![]),
+            Request::StopTunnel { .. }
+            | Request::End { .. }
             | Request::EndAgent { .. }
             | Request::EndRuntime { .. }
             | Request::Shutdown => Response::Ok,
@@ -473,13 +499,17 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
     let mut stream = match connect_control(dir) {
         Ok(stream) => stream,
         Err(error) => {
-            if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
+            if matches!(
+                request,
+                Request::List | Request::Agents | Request::Runtimes | Request::Tunnels
+            ) {
                 return Err(error)
                     .context("Session service is unavailable; existing jobs were not touched");
             }
             if !matches!(
                 request,
-                Request::Create { .. }
+                Request::StartTunnel { .. }
+                    | Request::Create { .. }
                     | Request::CreateAgent { .. }
                     | Request::CreateRuntime { .. }
             ) {
@@ -644,6 +674,7 @@ struct Server {
     #[cfg(target_os = "linux")]
     control_auth: control_auth::Token,
     runtimes: runtimes::Store,
+    tunnels: tunnels::Store,
     agents: agents::Store,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     last_exit: Mutex<Instant>,
@@ -656,7 +687,8 @@ impl Server {
         // starting concurrently must either keep this service alive or retry
         // against the next service, never be accepted while it is exiting.
         let sessions = self.sessions.lock().unwrap();
-        if !sessions.is_empty() || self.agents.live() || self.runtimes.live() {
+        if !sessions.is_empty() || self.agents.live() || self.runtimes.live() || self.tunnels.live()
+        {
             *idle_since = None;
             return;
         }
@@ -683,7 +715,11 @@ impl Server {
             session.stopped.store(true, Ordering::Release);
         }
         sessions.remove(id);
-        if sessions.is_empty() && !self.agents.live() && !self.runtimes.live() {
+        if sessions.is_empty()
+            && !self.agents.live()
+            && !self.runtimes.live()
+            && !self.tunnels.live()
+        {
             self.stop.store(true, Ordering::Release);
         }
         drop(sessions);
@@ -1151,6 +1187,19 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     let response = (|| -> Result<Response> {
         Ok(match request {
             Request::Protocol => Response::Protocol(PROTOCOL),
+            Request::Tunnels => Response::Tunnels(server.tunnels.list()),
+            Request::StartTunnel { id, spec } => {
+                let _creation = server.sessions.lock().unwrap();
+                ensure!(
+                    !server.stop.load(Ordering::Acquire),
+                    "Session service is stopping"
+                );
+                Response::Tunnel(server.tunnels.start(id, spec)?)
+            }
+            Request::StopTunnel { id } => {
+                server.tunnels.stop(&id);
+                Response::Ok
+            }
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();
@@ -1234,12 +1283,21 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
                 {
                     sessions.remove(&id);
                 }
-                if sessions.is_empty() && !server.agents.live() && !server.runtimes.live() {
+                if sessions.is_empty()
+                    && !server.agents.live()
+                    && !server.runtimes.live()
+                    && !server.tunnels.live()
+                {
                     server.stop.store(true, Ordering::Release);
                 }
                 Response::Ok
             }
             Request::Shutdown => {
+                let sessions = server.sessions.lock().unwrap();
+                ensure!(
+                    !server.tunnels.live(),
+                    "Stop SSH tunnels before stopping the service"
+                );
                 ensure!(
                     !server.runtimes.live(),
                     "End notebook/debugger runtimes before stopping the service"
@@ -1249,12 +1307,7 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
                     "End running agents before stopping the service"
                 );
                 ensure!(
-                    server
-                        .sessions
-                        .lock()
-                        .unwrap()
-                        .values()
-                        .all(|session| !session.info().alive),
+                    sessions.values().all(|session| !session.info().alive),
                     "End running terminals before stopping the service"
                 );
                 server.stop.store(true, Ordering::Release);
@@ -1305,6 +1358,7 @@ pub fn serve() -> Result<()> {
         control_auth,
         agents: agents::Store::default(),
         runtimes: runtimes::Store::default(),
+        tunnels: tunnels::Store::default(),
         sessions: Mutex::new(HashMap::new()),
         last_exit: Mutex::new(Instant::now()),
         stop: AtomicBool::new(false),

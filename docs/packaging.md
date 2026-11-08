@@ -110,3 +110,13 @@ The override replaces only automatic ELF dependency scanning; the declared displ
 ## Validation
 
 `scripts/test-deb.py` inspects metadata, architecture, payload allowlists, ownership/modes, checksums, launcher syntax, notices, the extracted editor CLI, and a real shell started by the extracted native helper. It verifies that the core contains no Codex files and works without a runtime. Add `--gui` under `xvfb-run` to exercise the extracted desktop application too. Use `--codex-package PATH` to additionally inspect the optional component, overlay it and check verified discovery, version and app-server support. Everything runs in temporary directories; no system package is installed or removed. The **Package Debian** workflow runs this validation before uploading release-tag or manually requested packages.
+
+## Reverse SSH tunnel support
+
+The headless session helper includes the russh client for explicitly started
+[compute-node return tunnels](remote.md#compute-node-return-tunnels). Both editor
+and helper require Rust 1.89; no system SSH client or GSSAPI library is needed for
+that key/agent-authenticated outbound connection. The static musl helper retains
+its existing deployment size/ABI checks. Session protocol 19 must match the
+editor; rebuild both packages together. Existing daemon generations and their
+jobs are not replaced or migrated during installation.

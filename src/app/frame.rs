@@ -80,11 +80,14 @@ impl EditorApp {
                 ui.add_space(12.0);
                 let label = self.workspace.as_ref().map(|w| format!("{}  /  {}", if w.remote.is_some() { "SSH" } else { "LOCAL" }, ssh::display_name(&w.root))).unwrap_or_else(|| "Your next workspace starts here".into());
                 let roomy = ctx.content_rect().width() >= 1180.;
-                let workspace_width = (ui.available_width()-if roomy {250.} else {150.}).clamp(90.,360.);
+                let tunnels_available = self.workspace.as_ref().is_some_and(|w| w.connected && w.remote.is_some());
+                let workspace_width = (ui.available_width()-if roomy {250.} else if tunnels_available {230.} else {150.}).clamp(90.,360.);
                 if ui.add_sized([workspace_width,28.],egui::Button::new(RichText::new(&label).color(palette.muted)).truncate()).on_hover_text(format!("{label}\nOpen command palette · Ctrl+Shift+P")).clicked() { self.set_dialog(Dialog::Commands); }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add(IconButton::new(Icon::Remote, "Connect SSH").color(palette.accent)).clicked() { self.set_dialog(Dialog::Connect); }
-                    if roomy { ui.label(palette.tag("NATIVE / RUST")); }
+                    if tunnels_available {
+                        if ui.button("Tunnels").clicked() { self.set_dialog(Dialog::Tunnels); }
+                    } else if roomy { ui.label(palette.tag("NATIVE / RUST")); }
                 });
             });
         });

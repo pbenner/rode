@@ -31,6 +31,29 @@ geometry for settings navigation and verifies discarded/saved edits and persiste
 
 New and changed launchers must follow the [compact process argument contract](architecture.md#compact-process-arguments). Review the complete local or remote process chain, including intermediate shell and sandbox arguments. Keep generated payloads off `argv`; reuse the shared handoff mechanisms and retain the full policy internally. Add regressions for the affected transport, input framing, descriptor/file lifetime and enforcement, including actual process-argument inspection. Document any external-tool constraint that requires an inline payload at the adapter that owns it.
 
+## Reverse tunnel validation
+
+`cargo test -p rode-session tunnels` runs a private Rust relay and compute-side
+TCP fixture: explicit host-key trust, changed-key refusal before credentials,
+real byte forwarding, unexpected-channel denial, idempotent starts, relay-port
+conflicts, forced-disconnect recovery, credential attention, nonblocking identity
+validation and scoped shutdown.
+It needs no installed SSH tools or display server.
+
+`cargo test --test ssh_client tunnel_return_route` checks a real native jump
+connection to an otherwise unreachable compute alias, retaining its original
+known-hosts identity and rejecting a changed compute key before authentication.
+`cargo test --test sessions retained_tunnels` checks that list-only discovery does
+not start a service, tunnel state survives both terminal End and last-view
+cleanup, idle timeout does not kill it, and shutdown requires explicit Stop.
+`cargo test --lib tunnel` covers saved profile arguments, UI state/layout and
+late results after a workspace change or dialog dismissal.
+
+The service now embeds russh and needs Rust 1.89. Rebuild the protocol-19 helper
+alongside the editor; existing daemon generations keep their own jobs. Validate
+the static musl helper against the existing 24 MiB deployment limit. Native UI
+checks must use the isolated headless display workflow below.
+
 ## Native SSH validation
 
 The default transport is embedded russh. `cargo test --test ssh_client` uses an

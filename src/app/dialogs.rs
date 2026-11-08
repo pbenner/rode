@@ -119,6 +119,8 @@ impl EditorApp {
                             self.help_dialog(ui);
                         } else if self.dialog == Dialog::Commands {
                             self.command_dialog(ui, ctx);
+                        } else if self.dialog == Dialog::Tunnels {
+                            self.tunnels_dialog(ui, ctx);
                         } else if self.dialog == Dialog::Sessions {
                             self.sessions_dialog(ui, ctx);
                         } else if self.dialog == Dialog::Slurm {
@@ -266,6 +268,16 @@ impl EditorApp {
                     }
                 });
         });
+        if let Some(route) = &self.profile.tunnel {
+            ui.label(format!(
+                "Tunnel route: relay loopback port {} · verified as {}",
+                route.port, route.host_key_alias
+            ));
+            ui.small("Host / alias and identity settings still describe the compute host. Jump host(s) reach the relay.");
+            if ui.button("Remove tunnel route").clicked() {
+                self.profile.tunnel = None;
+            }
+        }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.label("SSH client");

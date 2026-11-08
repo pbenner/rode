@@ -635,7 +635,14 @@ pub(super) async fn connect(
     append(profile, target, &mut chain, 0)?;
     let count = chain.len();
     let mut sessions: Vec<Session> = vec![];
-    for (index, config) in chain.into_iter().enumerate() {
+    for (index, mut config) in chain.into_iter().enumerate() {
+        let route = profile.tunnel.as_ref().filter(|_| index + 1 == count);
+        if let Some(route) = route {
+            config.host_key_alias = route.host_key_alias.clone();
+        }
+        let (address, port) = route.map_or((config.host.as_str(), config.port), |r| {
+            ("127.0.0.1", r.port)
+        });
         eprintln!(
             "Connecting to {}:{}{}…",
             config.host,
@@ -669,12 +676,7 @@ pub(super) async fn connect(
         let mut session = if let Some(previous) = sessions.last() {
             let channel = tokio::time::timeout(
                 IO_TIMEOUT,
-                previous.channel_open_direct_tcpip(
-                    &config.host,
-                    config.port.into(),
-                    "127.0.0.1",
-                    0,
-                ),
+                previous.channel_open_direct_tcpip(address, port.into(), "127.0.0.1", 0),
             )
             .await??;
             tokio::time::timeout(
@@ -683,13 +685,13 @@ pub(super) async fn connect(
             )
             .await??
         } else {
-            let stream = tokio::time::timeout(
-                IO_TIMEOUT,
-                tokio::net::TcpStream::connect((config.host.as_str(), config.port)),
-            )
-            .await
-            .context("SSH connection timed out")?
-            .with_context(|| format!("SSH connect to {} port {}", config.host, config.port))?;
+            let stream =
+                tokio::time::timeout(IO_TIMEOUT, tokio::net::TcpStream::connect((address, port)))
+                    .await
+                    .context("SSH connection timed out")?
+                    .with_context(|| {
+                        format!("SSH connect to {} port {}", config.host, config.port)
+                    })?;
             tokio::time::timeout(
                 Duration::from_secs(120),
                 client::connect_stream(options, stream, handler),

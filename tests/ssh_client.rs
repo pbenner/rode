@@ -26,6 +26,7 @@ enum Method {
 }
 #[derive(Clone)]
 struct Peer {
+    forward_port: Arc<AtomicUsize>,
     method: Method,
     calls: Arc<AtomicUsize>,
 }
@@ -91,6 +92,31 @@ impl server::Handler for Peer {
             server::Auth::reject()
         })
     }
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<server::Msg>,
+        host: &str,
+        port: u32,
+        _: &str,
+        _: u32,
+        reply: server::ChannelOpenHandle,
+        _: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        if host != "127.0.0.1"
+            || port == 0
+            || port as usize != self.forward_port.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let Ok(mut stream) = tokio::net::TcpStream::connect((host, port as u16)).await else {
+            return Ok(());
+        };
+        reply.accept().await;
+        tokio::spawn(async move {
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut channel.into_stream()).await;
+        });
+        Ok(())
+    }
     async fn channel_open_session(
         &mut self,
         _: Channel<server::Msg>,
@@ -115,6 +141,7 @@ impl server::Handler for Peer {
     }
 }
 struct Fixture {
+    forward_port: Arc<AtomicUsize>,
     root: tempfile::TempDir,
     port: u16,
     key: PrivateKey,
@@ -158,7 +185,9 @@ impl Fixture {
             ..Default::default()
         });
         let calls = Arc::new(AtomicUsize::new(0));
+        let forward_port = Arc::new(AtomicUsize::new(0));
         let mut peer = Peer {
+            forward_port: forward_port.clone(),
             method,
             calls: calls.clone(),
         };
@@ -178,6 +207,7 @@ impl Fixture {
             runtime.shutdown_timeout(Duration::from_millis(100));
         });
         Self {
+            forward_port,
             root,
             port,
             key,
@@ -538,4 +568,74 @@ fn rust_ssh_fast_exit_drains_reply_while_input_is_pending() {
         assert!(output.success(), "{output:?}");
         assert_eq!(output.stdout, "authenticated");
     }
+}
+
+#[test]
+fn tunnel_return_route_preserves_compute_identity_through_a_verified_relay() {
+    let target = Fixture::new(Method::Password);
+    let relay = Fixture::new(Method::Password);
+    relay
+        .forward_port
+        .store(target.port.into(), Ordering::SeqCst);
+    let config = target.root.path().join("route-config");
+    let known_hosts = target.root.path().join("route-hosts");
+    std::fs::write(&config, format!("Host compute\n HostName compute.invalid\n Port 2222\nHost relay\n HostName 127.0.0.1\n Port {}\nHost *\n User fixture\n UserKnownHostsFile {}\n GlobalKnownHostsFile /nonexistent/rode-tunnel-fixture-global-hosts\n IdentityFile none\n IdentityAgent none\n StrictHostKeyChecking yes\n", relay.port, known_hosts.display())).unwrap();
+    std::fs::write(
+        &known_hosts,
+        format!(
+            "[compute.invalid]:2222 {}\n[127.0.0.1]:{} {}\n",
+            target.key.public_key().to_openssh().unwrap(),
+            relay.port,
+            relay.key.public_key().to_openssh().unwrap()
+        ),
+    )
+    .unwrap();
+    let original = Profile {
+        host: "compute".into(),
+        config: config.to_string_lossy().into(),
+        x11_forwarding: false,
+        ..Default::default()
+    };
+    let profile = original
+        .through_tunnel("relay".into(), target.port)
+        .unwrap();
+    assert_eq!(
+        profile.tunnel.as_ref().unwrap().host_key_alias,
+        "[compute.invalid]:2222"
+    );
+    {
+        let connection = Connection::new(profile.clone());
+        connection.wait("password:");
+        connection.answer("private-password");
+        let until = Instant::now() + Duration::from_secs(15);
+        while connection.text().matches("password:").count() < 2 {
+            assert!(Instant::now() < until, "{}", connection.text());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        connection.answer("private-password");
+        connection.ready();
+        assert_eq!(target.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+    }
+    // A valid relay does not authorise a changed compute key.
+    let other = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    std::fs::write(
+        &known_hosts,
+        format!(
+            "[compute.invalid]:2222 {}\n[127.0.0.1]:{} {}\n",
+            other.public_key().to_openssh().unwrap(),
+            relay.port,
+            relay.key.public_key().to_openssh().unwrap()
+        ),
+    )
+    .unwrap();
+    let connection = Connection::new(profile);
+    connection.wait("password:");
+    connection.answer("private-password");
+    connection.wait("CHANGED");
+    assert_eq!(
+        target.calls.load(Ordering::SeqCst),
+        1,
+        "Changed compute host must not receive credentials"
+    );
 }

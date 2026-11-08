@@ -3316,14 +3316,18 @@ dependencies = [
  "base64 0.22.1",
  "libc",
  "portable-pty",
+ "rand",
  "rode-agent-core",
  "rode-host-core",
  "rode-host-protocol",
  "rode-runtime-core",
+ "russh",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "vt100",
+ "zeroize",
 ]
 
 [[package]]

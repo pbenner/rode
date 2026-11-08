@@ -25,6 +25,10 @@ const MAX_PACKET: usize = 128 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 type Session = client::Handle<auth::Handler>;
 
+pub(super) fn host_token(profile: &super::Profile) -> Result<String> {
+    Ok(config::Config::resolve(profile, &profile.host, true)?.host_token())
+}
+
 #[derive(Serialize, Deserialize)]
 enum Request {
     Check,

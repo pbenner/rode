@@ -58,6 +58,15 @@ pub fn client_cli(args: &[String]) -> Result<i32> {
 
 static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(0);
 
+/// Alternate network route to a compute host, retaining its original SSH identity.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TunnelRoute {
+    /// Loopback port on the last ProxyJump host.
+    pub port: u16,
+    /// Original known-hosts token, including a nonstandard SSH port if applicable.
+    pub host_key_alias: String,
+}
+
 /// User-managed OpenSSH settings, without passwords, private-key contents or cached
 /// credentials.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -77,6 +86,8 @@ pub struct Profile {
     pub identity: String,
     /// Optional comma-separated ProxyJump chain.
     pub jump: String,
+    /// Optional daemon-owned reverse tunnel reached through the configured jump host.
+    pub tunnel: Option<Box<TunnelRoute>>,
     /// Optional alternative SSH config file on the desktop.
     pub config: String,
     /// Optional preinstalled helper on the remote host; empty enables discovery/deployment.
@@ -100,6 +111,7 @@ impl Default for Profile {
             port: String::new(),
             identity: String::new(),
             jump: String::new(),
+            tunnel: None,
             config: String::new(),
             remote_helper: String::new(),
             x11_forwarding: true,
@@ -113,6 +125,21 @@ impl Profile {
     /// Validate input bounds and SSH option values before constructing a command.
     pub fn validate(&self) -> Result<()> {
         self.sandbox.validate()?;
+        if let Some(route) = &self.tunnel {
+            anyhow::ensure!(
+                route.port > 0 && !self.jump.is_empty() && self.jump != "none",
+                "A tunnel route requires a relay jump host and a nonzero port"
+            );
+            anyhow::ensure!(
+                !route.host_key_alias.is_empty()
+                    && route.host_key_alias.len() <= 1024
+                    && !route
+                        .host_key_alias
+                        .chars()
+                        .any(|c| c.is_whitespace() || c.is_control()),
+                "Invalid compute host key alias"
+            );
+        }
         if self.host.trim().is_empty() {
             bail!("Enter an SSH alias or hostname.");
         }
@@ -180,7 +207,20 @@ impl Profile {
                 files::expand_home(&self.config).to_string_lossy().into(),
             ]);
         }
+        if let Some(route) = &self.tunnel {
+            args.extend([
+                "-o".into(),
+                "HostName=127.0.0.1".into(),
+                "-o".into(),
+                format!("HostKeyAlias={}", route.host_key_alias),
+                "-p".into(),
+                route.port.to_string(),
+            ]);
+        }
         for (flag, value) in [("-l", &self.user), ("-p", &self.port), ("-J", &self.jump)] {
+            if flag == "-p" && self.tunnel.is_some() {
+                continue;
+            }
             if !value.is_empty() {
                 args.extend([flag.into(), value.clone()]);
             }
@@ -192,6 +232,25 @@ impl Profile {
             ]);
         }
         args
+    }
+
+    /// Construct a return route without changing the compute host's authentication settings.
+    /// Reads SSH configuration; call on a worker, not the UI thread.
+    #[cfg(unix)]
+    pub fn through_tunnel(&self, jump: String, port: u16) -> Result<Self> {
+        let alias = match &self.tunnel {
+            Some(route) => route.host_key_alias.clone(),
+            None => native::host_token(self)?,
+        };
+        let mut profile = self.clone();
+        profile.jump = jump;
+        profile.tunnel = Some(Box::new(TunnelRoute {
+            port,
+            host_key_alias: alias,
+        }));
+        profile.name = format!("{} via tunnel", self.label());
+        profile.validate()?;
+        Ok(profile)
     }
 }
 
@@ -653,6 +712,43 @@ pub fn display_name(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tunnel_profiles_roundtrip_and_keep_openssh_identity_separate_from_destination() {
+        let profile = Profile {
+            host: "compute".into(),
+            port: "2222".into(),
+            user: "worker".into(),
+            identity: "/keys/compute".into(),
+            jump: "relay".into(),
+            tunnel: Some(Box::new(TunnelRoute {
+                port: 22022,
+                host_key_alias: "[compute.example]:2222".into(),
+            })),
+            ..Default::default()
+        };
+        profile.validate().unwrap();
+        let saved: Profile =
+            serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+        assert_eq!(saved.tunnel, profile.tunnel);
+        let args = saved.options();
+        assert!(args.iter().any(|s| s == "HostName=127.0.0.1"));
+        assert!(
+            args.iter()
+                .any(|s| s == "HostKeyAlias=[compute.example]:2222")
+        );
+        assert_eq!(args.iter().filter(|s| *s == "-p").count(), 1);
+        assert!(args.windows(2).any(|s| s == ["-p", "22022"]));
+        assert!(args.windows(2).any(|s| s == ["-i", "/keys/compute"]));
+        assert_eq!(saved.endpoint(), "worker@compute");
+        assert!(
+            Profile {
+                jump: String::new(),
+                ..profile
+            }
+            .validate()
+            .is_err()
+        );
+    }
     #[test]
     fn old_profiles_default_to_rust_and_explicit_openssh_survives_serialization() {
         let profile: Profile = serde_json::from_str(r#"{"host":"cluster"}"#).unwrap();

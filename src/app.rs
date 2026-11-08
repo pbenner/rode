@@ -52,6 +52,7 @@ mod pdf_view;
 mod sandbox_presets;
 mod sessions;
 mod terminal_colors;
+mod tunnels;
 mod ui_probe;
 mod vaults;
 mod workbench;
@@ -354,6 +355,7 @@ enum Dialog {
     Save(u64),
     Commands,
     Sessions,
+    Tunnels,
     Slurm,
     AgentSessions,
     TerminalExit,
@@ -400,6 +402,7 @@ pub struct EditorApp {
     opening: HashSet<String>,
     terminal: Option<Terminal>,
     sessions: sessions::Sessions,
+    tunnels: tunnels::Tunnels,
     ssh_master: Option<Terminal>,
     preparing: bool,
     project_token: u64,
@@ -544,6 +547,7 @@ impl EditorApp {
             opening: HashSet::new(),
             terminal: None,
             sessions: Default::default(),
+            tunnels: Default::default(),
             ssh_master: None,
             preparing: false,
             project_token: 0,
@@ -2060,6 +2064,7 @@ impl eframe::App for EditorApp {
         self.marp_tick();
         self.workbench_tick(ctx);
         self.session_tick(ctx);
+        self.tunnel_tick(ctx);
         self.handle_close_request(ctx);
         self.replay_style_input(ctx);
         self.navigation_shortcuts(ctx);

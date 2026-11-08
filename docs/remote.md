@@ -105,6 +105,83 @@ Rust control endpoints use the existing sealed process capability on Linux and
 reject different mount namespaces, so local sandboxed tools cannot use them to
 launch unrestricted remote commands.
 
+## Compute-node return tunnels
+
+Connect to the compute node with **Connect SSH**, then open **Tunnels** beside
+that button. The compute node must already run `sshd`. Its session service can
+maintain an outbound Rust SSH connection to a relay and request a reverse forward:
+
+```text
+RODE desktop → relay SSH → relay 127.0.0.1:22022
+                             ↓ reverse SSH connection from compute node
+                          compute 127.0.0.1:22 → compute sshd
+```
+
+1. Expand **Start a new tunnel**. Enter the relay's literal hostname/IP, SSH port
+   and username, a stable relay loopback port, and the compute node's SSH port.
+   The outbound worker does not read SSH aliases or ProxyJump configuration.
+2. Choose credentials **on the compute node**: an unencrypted private-key file,
+   or an explicitly selected persistent SSH-agent socket. Clear the identity
+   field to use only the agent. The default identity path is `~/.ssh/id_ed25519`.
+   RODE does not copy your desktop key to the node or provision credentials.
+3. Start the tunnel. Verify the displayed relay SHA-256 host-key fingerprint
+   through a trusted source, then choose **Trust relay key and start**. This pin
+   belongs to the retained tunnel; it does not edit `known_hosts`. A changed key
+   stops retries until explicitly verified and replaced.
+4. Once connected, choose **Configure return route**. If the desktop reaches the
+   relay through a different SSH alias or jump chain, enter it in **Desktop relay
+   alias / jump chain** first. The default is the relay username, hostname and port.
+5. In **Connect SSH**, save the generated profile before leaving the direct
+   connection. Reconnect with it to reach the same compute host and project
+   through the relay. Desktop authentication to both relay and compute node stays
+   interactive and uses the normal SSH configuration. The route supports either
+   desktop backend; the daemon's outbound tunnel always uses Rust SSH.
+
+Automatic return-profile creation currently requires desktop SSH configuration
+understood by the Rust backend, even when selecting OpenSSH for the resulting
+connection.
+
+The return profile retains the compute host's original configuration alias,
+identity settings and known-hosts identity. Only the final network destination
+becomes the relay's loopback port. **Remove tunnel route** in Connect SSH restores
+ordinary destination routing; edit the jump field as needed. Both SSH hosts are
+verified independently; trusting the relay never skips compute-host verification.
+Files, tools and terminals then use the normal authenticated workspace connection
+and its existing sandbox policy.
+
+The relay must permit remote TCP forwarding for the compute login and direct TCP
+forwarding for the desktop login. RODE requests a `127.0.0.1` listener; the relay
+administrator must keep `GatewayPorts no` or `clientspecified` to honour that
+scope. Other relay users can reach its loopback port, but must still authenticate
+to the compute node's SSH server. No session-service control socket is exposed.
+
+The tunnel survives editor exit and closing the last terminal. After a network
+loss, the service retries after 1, 2, 4, 8, 16 and then 30 seconds, with SSH
+keepalives detecting stalled peers. Existing connections through a failed tunnel
+close; reconnect RODE once the tunnel returns. Authentication rejection or a
+changed host key requires attention rather than repeated login attempts. Open
+**Tunnels** through any working connection to the compute host to inspect, retry
+or stop it. If all routes are lost, administrative access to the compute host is
+needed to repair credentials or trust.
+
+Tunnels are retained in service memory, not restarted after a daemon restart,
+node reboot or allocation ending. **Stop tunnel** closes its forwarded streams;
+it leaves unrelated terminals, jobs and tunnels alone. Starting a tunnel does
+not grant persistence to project jobs or extend a scheduler allocation.
+
+Unattended relay authentication currently supports plain private keys and
+agent-held keys/certificates. Passwords, keyboard-interactive/MFA, Kerberos,
+encrypted keys without a persistent agent, and relay host certificates are not
+supported by this worker. A forwarded desktop agent can disappear when the
+original connection closes and is unsuitable for recovery. These limits do not
+restrict the desktop's ordinary SSH authentication. At most eight tunnels and
+32 simultaneous forwarding channels per tunnel are retained.
+
+Tunnel management is an explicit host-administration action outside the project
+sandbox, through the existing protected session-service channel. Settings travel
+in bounded protocol messages, never in process arguments. No local `ssh` binary
+is required on either the desktop or the compute node for this workflow.
+
 ## X11 applications
 
 **Forward X11 when available** in the connection form requests X11

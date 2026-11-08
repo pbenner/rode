@@ -49,6 +49,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/notebook/`, `src/notebook.rs`, `crates/rode-host-core/src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` and `crates/rode-host-core/src/` modules | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
+| `crates/rode-session/src/tunnels.rs`, `src/app/tunnels.rs`, `src/ssh.rs` | Daemon-owned reverse SSH forwarding, reconnect/trust state, explicit host controls and return profiles preserving compute identity |
 | `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
 | `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
@@ -212,6 +213,28 @@ Confirmed runtime terminations use a bounded worker separate from read-only disc
 
 Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Hidden monitors stop scheduling samples; hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
 
+### Daemon-owned reverse SSH tunnels
+
+`crates/rode-session/src/tunnels.rs` owns bounded native SSH reverse forwards;
+`src/app/tunnels.rs` manages them over the existing authenticated host-admin path.
+The compute node already runs sshd. Each outbound connection requests a fixed
+loopback relay listener and accepts only forwarding channels naming that exact
+address/port, then connects to a fixed compute loopback SSH port. There is no
+public session-service endpoint or general forwarding proxy.
+
+Workers retain explicit compute-host credentials and a pinned relay public key,
+not desktop attachments. Network failures retry with capped exponential delay;
+unknown/changed host keys and credential failures require an explicit action.
+Stop cancels the worker and its streams. Retained tunnels participate in idle,
+last-terminal and shutdown checks, and creation shares the existing service-stop
+lock. State is memory-only and bounded to eight tunnels and 32 channels each.
+
+Return profiles retain the original compute alias, authentication and host-key
+identity while overriding only the final transport destination through the
+relay. Normal compute SSH verification, host operations and sandbox preparation
+remain in force. Specifications use bounded existing control frames; neither
+JSON settings nor credentials enter argv. See [setup and limits](remote.md#compute-node-return-tunnels).
+
 ### Compact process arguments
 
 RODE-owned launchers must keep OS-visible command lines short and useful for process inspection. This applies to local and remote execution, intermediate shells, sandbox wrappers, helpers, agents, tools and terminals. Increasing a profile, policy, script or document payload must not increase the launch command line by embedding that payload in `argv`.
@@ -330,7 +353,7 @@ Maintain `rode_host_protocol::helper::API` for incompatible changes to helper CL
 - Terminal and long-lived process streams use separate channels on the same master. They retain their own bounded queues and cannot be blocked behind a bulk RPC response. Host SSH server channel limits still apply.
 - Lost acknowledgements are uncertain outcomes. RODE does not replay a save, Git mutation, deployment or session creation after channel loss. Revision checks and explicit reconnect/reattach provide recovery; there is no exactly-once guarantee across gateway restarts.
 
-Host services use threads and bounded channels. The embedded SSH client uses Tokio only in its separate connection/channel processes. Physical transport buffers and pending-call counts remain bounded. Document fields and editor snapshots are loaded into RAM, so their sizes and concurrent copies determine peak memory use; document messages have no whole-file byte ceiling.
+Host services use threads and bounded channels. The desktop SSH client uses Tokio in its separate connection/channel processes. Explicit daemon-owned reverse tunnels each use a current-thread Tokio worker in the session service; no tunnel runtime starts during ordinary service discovery. Physical transport buffers and pending-call counts remain bounded. Document fields and editor snapshots are loaded into RAM, so their sizes and concurrent copies determine peak memory use; document messages have no whole-file byte ceiling.
 
 A text save passes one submitted snapshot between its worker request and acknowledgement instead of retaining a duplicate in each. The editable document stays independent so typing during I/O remains unsaved. Native RPC envelopes borrow their file payload during synchronous serialization; they do not clone the whole document to submit an operation.
 

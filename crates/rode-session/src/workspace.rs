@@ -7,6 +7,11 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Operation {
+    /// Explicit host administration for reverse SSH tunnels, outside project commands.
+    Tunnels {
+        /// Only list/start/stop tunnel requests are accepted.
+        request: Box<crate::Request>,
+    },
     /// Host-owned notebook/debugger control, outside the captured process sandbox.
     Runtimes {
         /// Preserve bare commands for resolution by the captured mise launch wrapper.
@@ -120,6 +125,18 @@ pub fn fingerprint(plan: &sandbox::Plan) -> String {
 /// restart existing jobs merely to upgrade the helper.
 pub fn local(operation: &Operation, launcher: crate::Launcher) -> Result<Reply> {
     let request = match operation {
+        Operation::Tunnels { request } => {
+            ensure!(
+                matches!(
+                    request.as_ref(),
+                    crate::Request::Tunnels
+                        | crate::Request::StartTunnel { .. }
+                        | crate::Request::StopTunnel { .. }
+                ),
+                "Only tunnel control requests are accepted"
+            );
+            *request.clone()
+        }
         Operation::Runtimes { request, mise } => {
             let mut request = *request.clone();
             ensure!(
