@@ -364,11 +364,20 @@ impl EditorApp {
             .and_then(|w| w.remote.as_ref())
             .map(|r| r.profile.endpoint())
             .unwrap_or_default();
-        ui.label(palette.tag(if self.folder_remote {
+        let host = ui.label(palette.tag(if self.folder_remote {
             format!("SSH · {host}")
         } else {
             "THIS MACHINE".into()
         }));
+        ui_probe::button(
+            ui,
+            if self.folder_remote {
+                "project-dialog-host:ssh"
+            } else {
+                "project-dialog-host:local"
+            },
+            &host,
+        );
         layout::heading(
             ui,
             if self.folder_remote {
@@ -406,7 +415,9 @@ impl EditorApp {
                         .unwrap_or_else(|| "/".into()),
                 );
             }
-            if ui.button("Browse").clicked() || enter {
+            let response = ui.button("Browse");
+            ui_probe::button(ui, "project-dialog-browse", &response);
+            if response.clicked() || enter {
                 browse = Some(self.dialog_input.clone());
             }
             if self.folder_loading {
@@ -449,6 +460,12 @@ impl EditorApp {
         }
         if let Some(path) = browse {
             self.browse_folder(path, ctx);
+        }
+        if !self.folder_loading
+            && self.folder_error.is_none()
+            && self.dialog_input == self.folder_policy_path
+        {
+            ui_probe::button(ui, "project-dialog-ready", &response);
         }
         ui.separator();
         ui.push_id("folder-sandbox-presets", |ui| {

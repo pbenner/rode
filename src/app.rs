@@ -1883,6 +1883,9 @@ impl EditorApp {
                                 doc.modified = doc.path.is_none() || doc.text != doc.saved_text;
                                 doc.lines = doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
                             }
+                            if !doc.saving && !doc.dirty() {
+                                ui_probe::button(ui, "source-editor-saved", &output.response);
+                            }
                             if let Some(range) = output.cursor_range
                                 && (range.primary.index != doc.last_cursor
                                     || output.response.changed())

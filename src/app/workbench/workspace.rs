@@ -317,13 +317,12 @@ impl EditorApp {
             ui.disable();
         }
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_label(
-                    !child && (self.workbench.detached || !self.tool_surface()),
-                    "Code",
-                )
-                .clicked()
-            {
+            let code = ui.selectable_label(
+                !child && (self.workbench.detached || !self.tool_surface()),
+                "Code",
+            );
+            ui_probe::button(ui, "workspace-code", &code);
+            if code.clicked() {
                 self.focus_editor(ctx);
                 self.editor_intent();
             }

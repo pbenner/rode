@@ -70,6 +70,8 @@ UI fixtures can opt into `RODE_UI_TEST_STATE` to locate named controls in the cu
 
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
 
+Project fixtures use named controls and completed directory listings for folder selection, confirm complete paths and editor buffers through the real clipboard, and wait for native save acknowledgements after checking file effects. Project switches and SSH reconnects verify the displayed terminal's native session ID, project root, live attachment and input focus before continuing. Resize checks require the new rendered size; refused SSH login checks require an ended terminal before testing read-only diagnostics. The fixture retains its final layout snapshot on failure. Its explicit sleeps only poll bounded conditions; CI command deadlines are unchanged and activating input is not retried.
+
 Inspect or run the same suites locally:
 
 ```sh

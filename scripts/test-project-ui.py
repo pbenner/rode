@@ -15,13 +15,18 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    assert_running,
+    click_button,
     close_window,
     display,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
+    wait_for_button,
+    wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
     x11,
 )
@@ -35,39 +40,216 @@ def window_for(process, log_path):
     return window
 
 
-def wait_for(check, message):
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.05)
-    raise AssertionError(message)
+class ProjectUI:
+    """Drive the real controls, with acknowledgements before dependent input."""
 
+    def __init__(self, window, process, log_path, environment):
+        self.window = window
+        self.process = process
+        self.log_path = log_path
+        self.environment = environment
+        self.state_path = Path(environment["RODE_UI_TEST_STATE"])
 
-def edit_file(path, marker):
-    # This remains available while the remote login/project terminal has focus;
-    # Ctrl+P by itself belongs to the shell in that case.
-    key("p", ("Control_L", "Shift_L"))
-    text("Open file by path")
-    key("Return")
-    time.sleep(0.15)
-    text(path.name)
-    key("Return")
-    time.sleep(0.5)
-    click(600, 250)
-    key("End", ("Control_L",))
-    text("\n// " + marker)
-    key("s", ("Control_L",))
-    wait_for(lambda: marker in path.read_text(), "File was not saved: " + str(path))
+    def wait(self, check, message):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            assert_running(self.process, self.log_path)
+            result = check()
+            if result:
+                return result
+            time.sleep(0.05)
+        raise AssertionError(message + ". Log: " + str(self.log_path))
 
+    def layout(self, check=lambda state: True, message="No rendered layout"):
+        return wait_for_ui_state(self.process, self.log_path, self.state_path, check, message)
 
-def title(window):
-    return subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+    def control(self, name, **guards):
+        return wait_for_button(
+            self.window, self.process, self.log_path, self.state_path, name, **guards
+        )
 
+    def click(self, name):
+        click_button(self.window, self.process, self.log_path, self.state_path, name)
 
-def workspace_y(window, y):
-    # A prepared project adds a host bar and, in fallback mode, a reason strip.
-    return y + (44 if "[Sandbox]" in title(window) else 74)
+    def absent(self, name):
+        self.layout(
+            lambda state: all(button["name"] != name for button in state["buttons"]),
+            name + " did not close",
+        )
+
+    def command(self, value):
+        palette_command(self.window, self.process, self.log_path, self.state_path, value)
+
+    def title(self):
+        return subprocess.check_output(
+            ["xwininfo", "-id", hex(self.window)],
+            text=True,
+            env=dict(os.environ, LC_ALL="C.UTF-8"),
+            timeout=3,
+        )
+
+    def project(self, project, remote=False):
+        wait_for_project(self.window, self.process, self.log_path, project)
+        assert ("[SSH" in self.title()) == remote, self.title()
+
+    def clipboard(self):
+        result = subprocess.run(
+            ["xclip", "-selection", "clipboard", "-o"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return result.stdout if result.returncode == 0 else None
+
+    def copy(self, name, expected):
+        self.control(name, focused=True)
+        before = self.layout()["pass"]
+        key("a", ("Control_L",))
+        self.control(name, focused=True, after_pass=before)
+        key("c", ("Control_L",))
+        self.wait(
+            lambda: self.clipboard() == expected,
+            f"{name} did not contain {expected!r}",
+        )
+        before = self.layout()["pass"]
+        key("End", ("Control_L",))
+        self.control(name, focused=True, after_pass=before)
+
+    def path(self, name, value):
+        self.click(name)
+        self.control(name, focused=True)
+        before = self.layout()["pass"]
+        key("a", ("Control_L",))
+        text(value)
+        self.control(name, focused=True, changed_after=before)
+        self.copy(name, value)
+
+    def editor(self):
+        state = self.layout(
+            lambda state: any(
+                button["name"] in ("source-editor", "workspace-code") and button["enabled"]
+                for button in state["buttons"]
+            ),
+            "Neither the source editor nor its workspace tab became available",
+        )
+        if not any(
+            button["name"] == "source-editor" and button["enabled"] for button in state["buttons"]
+        ):
+            self.click("workspace-code")
+        self.click("source-editor")
+        self.control("source-editor", focused=True)
+
+    def append(self, contents, marker):
+        self.editor()
+        self.copy("source-editor", contents)
+        before = self.layout()["pass"]
+        text("\n// " + marker)
+        self.control("source-editor", focused=True, changed_after=before)
+        self.copy("source-editor", contents + "\n// " + marker)
+
+    def saved(self, path, contents):
+        self.wait(
+            lambda: path.exists() and path.read_text() == contents,
+            "File did not receive the complete expected contents: " + str(path),
+        )
+
+    def saved_edit(self, path, marker):
+        # Rust format-on-save may change whitespace. Verify the complete buffer
+        # before Save, then wait for the edit to reach the actual project file.
+        self.wait(
+            lambda: path.exists() and marker in path.read_text(),
+            "The edit was not saved: " + str(path),
+        )
+        self.control("source-editor-saved")
+
+    def edit_file(self, path, marker):
+        self.command("Open file by path")
+        self.control("file-dialog-path", focused=True)
+        self.path("file-dialog-path", path.name)
+        key("Return")
+        self.absent("file-dialog-path")
+        contents = path.read_text()
+        self.append(contents, marker)
+        key("s", ("Control_L",))
+        self.saved_edit(path, marker)
+
+    def picker(self, remote=False):
+        key("o", ("Control_L", "Shift_L"))
+        self.control("project-dialog-path", focused=True)
+        self.control("project-dialog-host:" + ("ssh" if remote else "local"))
+        # Let the initial listing finish before editing its path; its response
+        # otherwise competes with the typed destination.
+        self.control("project-dialog-ready")
+
+    def open_project(self, project, remote=False, screenshot_name=None):
+        self.picker(remote)
+        self.path("project-dialog-path", str(project))
+        self.click("project-dialog-browse")
+        self.control("project-dialog-ready")
+        self.click("project-dialog-path")
+        self.copy("project-dialog-path", str(project))
+        if screenshot_name:
+            screenshot(self.window, screenshot_name)
+        self.click("project-dialog-open")
+        self.absent("project-dialog-path")
+        self.project(project, remote)
+
+    def resize(self, width, height):
+        before = self.layout()["pass"]
+        x11.XResizeWindow(display, self.window, width, height)
+        x11.XFlush(display)
+        self.layout(
+            lambda state: (
+                state["pass"] > before
+                and all(
+                    abs(logical * state["pixels_per_point"] - actual) <= 2
+                    for logical, actual in zip(state["size"], (width, height))
+                )
+            ),
+            f"Window did not render at {width}x{height}",
+        )
+
+    def terminal(self, project):
+        """Check the displayed session, its project, live attachment and input focus."""
+        state = self.layout(
+            lambda state: any(
+                button["name"].startswith("terminal-input:") and button["enabled"]
+                for button in state["buttons"]
+            ),
+            "The selected project's terminal did not become ready",
+        )
+        name = next(
+            button["name"]
+            for button in state["buttons"]
+            if button["name"].startswith("terminal-input:") and button["enabled"]
+        )
+        identity = name.removeprefix("terminal-input:")
+        info = self.wait(
+            lambda: next(
+                (
+                    info
+                    for info in session_rpc(self.environment, "list")
+                    if info["id"] == identity
+                    and info["root"] == str(project)
+                    and info["alive"]
+                    and info["clients"] > 0
+                ),
+                None,
+            ),
+            "The displayed terminal is not attached to " + str(project),
+        )
+        self.click(name)
+        self.control(name, focused=True)
+        return info
+
+    def disconnected(self):
+        self.wait(lambda: '"RODE"' in self.title(), "Disconnect did not clear the host")
+
+    def failure(self, label):
+        if self.state_path.exists():
+            shutil.copy2(self.state_path, ARTIFACTS / (label + "-ui-state.json"))
+        if self.process.poll() is None:
+            screenshot(self.window, label + "-failure.png")
 
 
 def session_rpc(environment, action, **values):
@@ -76,6 +258,7 @@ def session_rpc(environment, action, **values):
             [str(BINARY), "--session-service", "request"],
             input=json.dumps(dict(action=action, **values)).encode(),
             env=environment,
+            timeout=20,
         )
     )
     assert reply["kind"] != "error", reply
@@ -93,13 +276,14 @@ def run(remote=False, fallback=False):
             project.mkdir()
             (project / "src").mkdir()
             (project / filename).write_text(
-                '// project file\nfn main() {\n    println!("remote host");\n}\n' + "\n" * 5
+                f'// {filename}\nfn main() {{\n    println!("remote host");\n}}\n' + "\n" * 5
             )
         environment = dict(
             os.environ,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data-home"),
             RODE_SESSION_DIR=str(base / "sessions"),
+            RODE_UI_TEST_STATE=str(base / "ui-state.json"),
         )
         landlock = os.environ.get("RODE_TEST_SANDBOX_BACKEND") == "landlock" and not fallback
         if landlock:
@@ -150,166 +334,106 @@ def run(remote=False, fallback=False):
             args += [str(first)]
         with (ARTIFACTS / (label + ".log")).open("w") as log:
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
-            window = None
+            ui = None
             try:
                 window = window_for(process, log.name)
-                wait_for(
-                    lambda: (
-                        "first-project" in title(window)
-                        and "[Opening project]" not in title(window)
-                    ),
-                    "Initial project did not open",
-                )
-                if remote:
-                    assert "SSH" in title(window)
+                ui = ProjectUI(window, process, log.name, environment)
+                ui.project(first, remote)
                 if fallback:
-                    assert "[Sandbox]" not in title(window)
-                edit_file(first / "alpha.rs", label + "-first-saved")
+                    assert "[Sandbox]" not in ui.title()
+                ui.edit_file(first / "alpha.rs", label + "-first-saved")
                 screenshot(window, label + "-project.png")
                 if launch_copy is not None:
                     replacement = base / "rode-rebuilt"
                     shutil.copy2(BINARY, replacement)
                     os.replace(replacement, launch_copy)
-                    edit_file(first / "alpha.rs", "saved-after-executable-replacement")
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Terminal: New terminal")
-                    key("Return")
-                    time.sleep(0.5)
+                    ui.edit_file(first / "alpha.rs", "saved-after-executable-replacement")
+                    ui.command("Terminal: New terminal")
+                    ui.terminal(first)
                     text("pwd > after-update.cwd\n")
-                    wait_for(
-                        lambda: (first / "after-update.cwd").exists(),
-                        "A rebuilt editor could not start a new native terminal",
-                    )
-                    assert (first / "after-update.cwd").read_text().strip() == str(first)
+                    ui.saved(first / "after-update.cwd", str(first) + "\n")
                     if landlock:
                         infos = session_rpc(environment, "list")
                         assert infos and all(
                             info["mode"] == "SANDBOX · Landlock" for info in infos
                         ), infos
-                key("o", ("Control_L", "Shift_L"))
-                time.sleep(0.3)
-                key("a", ("Control_L",))
-                text(str(second))
-                key("Return")  # Browse the selected host, without changing project yet.
-                time.sleep(0.5)
-                screenshot(window, label + "-folder-picker.png")
-                key("Return", ("Control_L",))
-                wait_for(
-                    lambda: (
-                        "second-project" in title(window)
-                        and "[Opening project]" not in title(window)
-                    ),
-                    "Project switch did not complete on " + label,
-                )
-                time.sleep(0.6)
-                if remote:
-                    assert "SSH" in title(window), (
-                        "Opening a remote folder must not switch to local mode"
-                    )
-                edit_file(second / "beta.rs", label + "-second-saved")
+                ui.open_project(second, remote, label + "-folder-picker.png")
+                ui.edit_file(second / "beta.rs", label + "-second-saved")
                 screenshot(window, label + "-second-project.png")
                 key("t", ("Control_L", "Shift_L"))
-                time.sleep(0.3)
-                click(600, 740)
+                selected = ui.terminal(second)
                 text("pwd > cwd.txt\n")
-                wait_for(
-                    lambda: (second / "cwd.txt").exists(),
-                    "Shell did not start in the selected project",
-                )
-                assert (second / "cwd.txt").read_text().strip() == str(second)
+                ui.saved(second / "cwd.txt", str(second) + "\n")
                 if remote:
                     infos = session_rpc(environment, "list")
                     assert len(infos) == 1, infos
-                    persistent = infos[0]
-                    # Enable the real per-terminal toggle and verify that this
-                    # session, rather than the new nonpersistent one, survives.
-                    click(1326, workspace_y(window, 108))
-                    wait_for(
+                    persistent = selected
+                    ui.click("terminal-persist:off")
+                    ui.wait(
                         lambda: any(
                             info["id"] == persistent["id"] and info["persistent"]
                             for info in session_rpc(environment, "list")
                         ),
                         "Could not enable remote terminal persistence",
                     )
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Terminal: New terminal")
-                    key("Return")
-                    wait_for(
+                    ui.command("Terminal: New terminal")
+                    ui.wait(
                         lambda: len(session_rpc(environment, "list")) == 2,
                         "No second remote terminal",
                     )
-                    time.sleep(0.4)
-                    # Dirty the remote source before disconnecting. The source
-                    # must remain in its remote tab and save after reconnect.
-                    click(339, workspace_y(window, 69))  # Code replaces the terminal.
-                    click(600, 250)
-                    key("End", ("Control_L",))
-                    text("\n// survives-disconnect")
-                    x11.XResizeWindow(display, window, 850, 560)
-                    x11.XFlush(display)
-                    time.sleep(0.4)
+                    temporary = ui.terminal(second)
+                    assert temporary["id"] != persistent["id"], temporary
+                    assert not temporary["persistent"], temporary
+                    # The complete dirty buffer must survive disconnect, while
+                    # the nonpersistent terminal must not survive its last view.
+                    contents = (second / "beta.rs").read_text()
+                    ui.append(contents, "survives-disconnect")
+                    ui.resize(850, 560)
                     screenshot(window, "ssh-disconnect-compact.png")
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Remote: Disconnect SSH")
-                    key("Return")
-                    wait_for(lambda: '"RODE"' in title(window), "Disconnect did not clear the host")
-                    wait_for(
-                        lambda: len(session_rpc(environment, "list")) == 1,
-                        "A nonpersistent remote terminal survived its last view",
-                    )
-                    assert session_rpc(environment, "list")[0]["id"] == persistent["id"]
-                    assert "survives-disconnect" not in (second / "beta.rs").read_text()
-                    screenshot(window, "ssh-disconnected.png")
-                    # Folder opening now defaults to this machine immediately,
-                    # even while a dirty disconnected remote tab is retained.
-                    key("o", ("Control_L", "Shift_L"))
-                    time.sleep(0.4)
-                    screenshot(window, "ssh-disconnected-local-picker.png")
-                    key("Escape")
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Remote: Reconnect SSH")
-                    key("Return")
-                    wait_for(
+                    ui.command("Remote: Disconnect SSH")
+                    ui.disconnected()
+                    ui.wait(
                         lambda: (
-                            "SSH" in title(window)
-                            and "second-project" in title(window)
-                            and "[Opening project]" not in title(window)
+                            [info["id"] for info in session_rpc(environment, "list")]
+                            == [persistent["id"]]
                         ),
-                        "Reconnect did not restore the project",
+                        "The persistent terminal was not the only surviving session",
                     )
-                    time.sleep(0.5)
+                    assert (second / "beta.rs").read_text() == contents
+                    screenshot(window, "ssh-disconnected.png")
+                    # Dirty disconnected remote tabs must not keep folder
+                    # discovery bound to the lost host.
+                    ui.picker()
+                    screenshot(window, "ssh-disconnected-local-picker.png")
+                    ui.click("project-dialog-cancel")
+                    ui.absent("project-dialog-path")
+                    ui.command("Remote: Reconnect SSH")
+                    ui.project(second, remote=True)
+                    ui.terminal(second)
                     screenshot(window, "ssh-reconnected-compact.png")
-                    x11.XResizeWindow(display, window, 1380, 900)
-                    x11.XFlush(display)
-                    time.sleep(0.4)
-                    click(339, workspace_y(window, 69))
-                    click(600, 250)
+                    ui.resize(1380, 900)
+                    ui.editor()
+                    ui.copy("source-editor", contents + "\n// survives-disconnect")
                     key("s", ("Control_L",))
-                    wait_for(
-                        lambda: "survives-disconnect" in (second / "beta.rs").read_text(),
-                        "Reconnect lost the dirty remote buffer",
+                    ui.saved_edit(second / "beta.rs", "survives-disconnect")
+                    ui.command("Terminal: Sessions and Slurm allocations")
+                    ui.layout(
+                        lambda state: persistent["id"] in (state["session_ids"] or []),
+                        "The reconnected session manager did not list the persistent terminal",
                     )
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Terminal: Sessions and Slurm allocations")
-                    key("Return")
-                    time.sleep(0.6)
                     screenshot(window, "ssh-reconnected-sessions.png")
                     key("Escape")
-                    # Disconnect once more after restoring the dirty buffer.
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Remote: Disconnect SSH")
-                    key("Return")
-                    wait_for(lambda: '"RODE"' in title(window), "Palette disconnect failed")
-                    # Reconnect once more, then close only this GUI's private
-                    # master from outside the UI to exercise unexpected loss.
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Remote: Reconnect SSH")
-                    key("Return")
-                    wait_for(
-                        lambda: "SSH" in title(window) and "[Opening project]" not in title(window),
-                        "Could not reconnect before connection-loss check",
+                    ui.layout(
+                        lambda state: state["session_ids"] is None,
+                        "The session manager did not close",
                     )
-                    time.sleep(0.5)
+                    ui.command("Remote: Disconnect SSH")
+                    ui.disconnected()
+                    ui.command("Remote: Reconnect SSH")
+                    ui.project(second, remote=True)
+                    ui.terminal(second)
+                    # Close only this GUI's private master to exercise
+                    # unexpected transport loss rather than a palette action.
                     sockets = list(Path(tempfile.gettempdir()).glob(f"rode-{process.pid}-*/ssh"))
                     assert len(sockets) == 1, sockets
                     subprocess.run(
@@ -325,27 +449,12 @@ def run(remote=False, fallback=False):
                         ],
                         check=True,
                         capture_output=True,
+                        timeout=10,
                     )
-                    wait_for(lambda: '"RODE"' in title(window), "Lost SSH still selected a host")
+                    ui.disconnected()
                     screenshot(window, "ssh-lost-local-mode.png")
-                    # A local project can open/save without any SSH connection.
-                    key("o", ("Control_L", "Shift_L"))
-                    time.sleep(0.3)
-                    key("a", ("Control_L",))
-                    text(str(local))
-                    key("Return")
-                    time.sleep(0.4)
-                    key("Return", ("Control_L",))
-                    wait_for(
-                        lambda: (
-                            "local-project" in title(window)
-                            and "[Opening project]" not in title(window)
-                        ),
-                        "Could not open a local folder after connection loss",
-                    )
-                    assert "SSH" not in title(window), title(window)
-                    time.sleep(0.5)
-                    edit_file(local / "local.rs", "saved-locally-after-ssh-loss")
+                    ui.open_project(local)
+                    ui.edit_file(local / "local.rs", "saved-locally-after-ssh-loss")
                     screenshot(window, "ssh-lost-local-project.png")
                     session_rpc(
                         environment, "end", id=persistent["id"], policy=persistent["policy"]
@@ -356,8 +465,8 @@ def run(remote=False, fallback=False):
                     + ": native folder browsing, project switch, edit/save, and host indicators passed."
                 )
             except Exception:
-                if window is not None and process.poll() is None:
-                    screenshot(window, label + "-failure.png")
+                if ui is not None:
+                    ui.failure(label)
                 raise
             finally:
                 if process.poll() is None:
@@ -367,7 +476,7 @@ def run(remote=False, fallback=False):
                     try:
                         for info in session_rpc(environment, "list"):
                             session_rpc(environment, "end", id=info["id"], policy=info["policy"])
-                    except (subprocess.CalledProcessError, OSError, ValueError):
+                    except (subprocess.SubprocessError, OSError, ValueError):
                         pass
 
 
@@ -389,6 +498,7 @@ def failed_connection():
                 XDG_CONFIG_HOME=str(base / "config"),
                 XDG_DATA_HOME=str(base / "data"),
                 RODE_SESSION_DIR=str(base / "sessions"),
+                RODE_UI_TEST_STATE=str(base / "ui-state.json"),
             )
             with (ARTIFACTS / "ssh-login-failure.log").open("w") as log:
                 process = subprocess.Popen(
@@ -398,60 +508,57 @@ def failed_connection():
                     stdout=log,
                     stderr=log,
                 )
-                window = None
+                ui = None
                 try:
                     window = window_for(process, log.name)
-                    wait_for(
-                        lambda: '"RODE"' in title(window), "Failed SSH retained the host title"
-                    )
+                    ui = ProjectUI(window, process, log.name, environment)
+                    ui.control("terminal-output-ended")
+                    ui.disconnected()
                     screenshot(window, "ssh-login-error-output.png")
-                    click(600, 740)
-                    text("echo should-not-run\n")  # The failed-login view accepts no input.
-                    # Use the same copy action as the header without depending on its layout.
-                    key("p", ("Control_L", "Shift_L"))
-                    text("Terminal: Copy output")
-                    key("Return")
+                    ui.click("terminal-output-ended")
+                    ui.control("terminal-output-ended", focused=True)
+                    text("echo should-not-run\n")
+                    # Rejected input has no edit/file effect to acknowledge.
+                    # Finish its native frame before opening a palette, where
+                    # the terminal's pending Enter could select a command.
+                    before = ui.layout()["pass"]
+                    ui.control("terminal-output-ended", focused=True, after_pass=before)
+                    ui.command("Terminal: Copy output")
 
                     def copied_error():
-                        result = subprocess.run(
-                            ["xclip", "-selection", "clipboard", "-o"],
-                            capture_output=True,
-                            text=True,
-                            timeout=2,
-                        )
-                        return result.returncode == 0 and "Connection refused" in result.stdout
+                        output = ui.clipboard()
+                        return output if output and "Connection refused" in output else None
 
-                    wait_for(
+                    output = ui.wait(
                         copied_error, "Terminal copy did not expose the refused SSH diagnostic"
                     )
-                    key("p", ("Control_L", "Shift_L"))
-                    text("New file")
-                    key("Return")
-                    time.sleep(0.2)
-                    key("v", ("Control_L",))
-                    key("s", ("Control_L",))
-                    time.sleep(0.25)
-                    key("a", ("Control_L",))
-                    copied = base / "copied-ssh-error.txt"
-                    text(str(copied))
-                    key("Return")
-                    wait_for(copied.exists, "Could not save copied login output locally")
-                    output = copied.read_text()
-                    assert "Connection refused" in output, f"Copied SSH diagnostic: {output!r}"
                     assert "should-not-run" not in output, output
+                    ui.command("New file")
+                    ui.control("source-editor", focused=True)
+                    before = ui.layout()["pass"]
+                    key("v", ("Control_L",))
+                    ui.control("source-editor", focused=True, changed_after=before)
+                    ui.copy("source-editor", output)
+                    key("s", ("Control_L",))
+                    ui.control("file-dialog-path", focused=True)
+                    copied = base / "copied-ssh-error.txt"
+                    ui.path("file-dialog-path", str(copied))
+                    key("Return")
+                    ui.absent("file-dialog-path")
+                    ui.saved(copied, output)
                     screenshot(window, "ssh-login-error-copied.png")
-                    key("o", ("Control_L", "Shift_L"))
-                    time.sleep(0.3)
+                    ui.picker()
                     screenshot(window, "ssh-login-error-local-picker.png")
-                    key("Escape")
-                    assert "SSH" not in title(window), title(window)
+                    ui.click("project-dialog-cancel")
+                    ui.absent("project-dialog-path")
+                    assert "[SSH" not in ui.title(), ui.title()
                     close_window(window, process)
                     print(
                         "SSH failure: retained read-only OpenSSH error, Copy and local opening passed."
                     )
                 except Exception:
-                    if window is not None and process.poll() is None:
-                        screenshot(window, "ssh-login-failure.png")
+                    if ui is not None:
+                        ui.failure("ssh-login")
                     raise
                 finally:
                     if process.poll() is None:
