@@ -14,10 +14,8 @@ use std::{
 };
 
 /// Service composition excludes all desktop decoded results.
-pub type FileRequest = wire::files::Request<
-    project::Request<crate::workspace::Operation, crate::workspace::Helper>,
-    sandbox::Options,
->;
+pub type FileRequest =
+    wire::files::Request<project::Request<crate::workspace::Operation>, sandbox::Options>;
 /// Typed native gateway command.
 pub type Operation = wire::Operation<FileRequest, sandbox::Options, environment::Settings>;
 
@@ -175,7 +173,6 @@ pub fn worker() -> Result<()> {
 }
 
 struct Gateway {
-    digest: String,
     contexts: Mutex<HashMap<String, Arc<sandbox::Plan>>>,
     cancelled: AtomicBool,
 }
@@ -248,20 +245,6 @@ impl Gateway {
                     ),
                     "This operation requires a prepared project context"
                 );
-                if let FileRequest::Tool {
-                    request:
-                        project::Request::Sessions {
-                            helper: Some(helper),
-                            ..
-                        },
-                } = &request
-                {
-                    ensure!(
-                        helper.digest == self.digest
-                            && helper.architecture == std::env::consts::ARCH,
-                        "This connection uses a fixed native helper; per-request replacement is refused. Reconnect with a matching RODE_HOST_HELPER."
-                    );
-                }
                 Ok(Response::Completed {
                     response: local(&request, &self.cancelled)?,
                 })
@@ -348,7 +331,6 @@ pub fn serve() -> Result<()> {
     );
     let output = Mutex::new(());
     let gateway = Gateway {
-        digest: digest.clone(),
         contexts: Mutex::new(HashMap::new()),
         cancelled: AtomicBool::new(false),
     };

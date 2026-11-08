@@ -686,6 +686,7 @@ fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
                 remote: false,
                 token,
                 path: old,
+                options: app.folder_sandbox.clone(),
             },
             result: Box::new(Ok(response.clone())),
         })
@@ -703,6 +704,7 @@ fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
                 remote: false,
                 token,
                 path: old,
+                options: app.folder_sandbox.clone(),
             },
             result: Box::new(Ok(response)),
         })

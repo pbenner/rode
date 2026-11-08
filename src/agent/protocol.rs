@@ -87,18 +87,10 @@ impl Chat {
         if let Some(client) = &self.native
             && client.matches(&launch)
         {
-            ensure!(
-                attachments.is_empty()
-                    || client
-                        .state
-                        .as_ref()
-                        .is_some_and(|s| s.info.supports_attachments),
-                "This background agent uses an older Rode version without attachments. Start a new chat to send files."
-            );
             client.send(Command::Submit {
                 text,
                 attachments,
-                config: launch.config,
+                config: Box::new(launch.config),
             })?;
             self.inner.busy = true;
             self.inner.last_turn_succeeded = false;
@@ -141,18 +133,9 @@ impl Chat {
             .as_ref()
             .and_then(|client| client.response_style_status(selected))
     }
-    /// Older live agents remain usable, but cannot claim to retain a queue.
-    pub fn supports_queue(&self) -> bool {
-        self.native
-            .as_ref()
-            .is_none_or(|c| c.state.as_ref().is_none_or(|s| s.info.supports_queue))
-    }
     /// Whether automatic queue advancement belongs to the host service.
     pub fn automatic_queue(&self) -> bool {
-        self.native
-            .as_ref()
-            .and_then(|client| client.state.as_ref())
-            .is_some_and(|state| state.info.automatic_queue)
+        self.native.is_some()
     }
     /// Transfer one queue mutation to the controlling host.
     pub fn queue_action(&mut self, operation: rode_agent_core::queue::Action) -> Result<()> {
@@ -216,11 +199,7 @@ impl Chat {
         );
         if let Some(client) = &mut self.native {
             ensure!(
-                client
-                    .state
-                    .as_ref()
-                    .is_some_and(|s| s.info.supports_recovery)
-                    && client.matches(&launch),
+                client.matches(&launch),
                 "This agent cannot recover with the selected backend or project policy"
             );
             client.queue_action(rode_agent_core::queue::Action::Recover {

@@ -25,7 +25,6 @@ pub fn request(launch: &Launch, request: rode_session::Request) -> Result<servic
             request: project::Request::Sessions {
                 root: launch.plan.root.clone(),
                 operation,
-                helper: None,
                 directory: std::env::var("RODE_SESSION_DIR").ok(),
             },
         })?;
@@ -67,7 +66,7 @@ pub struct Client {
     desired: bool,
     persistence_pending: Option<bool>,
     queue_requests: VecDeque<QueueRequest>,
-    /// Retain the user's request separately from an older host's fallback value.
+    /// Retain the user's request separately from the host's acknowledged setting.
     requested_style: super::Personality,
     /// Reattachments adopt their first saved setting instead of the workspace default.
     adopt_style: bool,
@@ -389,10 +388,6 @@ impl Client {
             self.require_response_style(selected)?;
         }
         ensure!(
-            self.state.as_ref().is_none_or(|s| s.info.supports_queue),
-            "This agent uses an older Rode version without persistent queues. Start a new chat to use them."
-        );
-        ensure!(
             self.queue_requests.len() < 64,
             "Wait for queued changes to be saved."
         );
@@ -459,8 +454,7 @@ impl Client {
             self.response_style_status(self.requested_style),
             Some(super::response_style::Status::Mismatch { .. })
         ) && self.state.as_ref().is_some_and(|s| {
-            s.info.supports_queue
-                && !s.queue.paused
+            !s.queue.paused
                 && (!s.queue.items.is_empty()
                     || self.queue_requests.iter().any(|r| {
                         matches!(r.operation, rode_agent_core::queue::Action::Push { .. })
@@ -529,21 +523,11 @@ impl Client {
         Ok(())
     }
 
-    /// Use correlated settings acknowledgements when the host advertises them.
+    /// Apply settings through the host's correlated queue acknowledgements.
     pub fn configure(&mut self, config: &Config) -> Result<()> {
-        if self.state.as_ref().is_some_and(|s| s.info.automatic_queue) {
-            self.queue_action(rode_agent_core::queue::Action::Configure {
-                config: Box::new(config.clone()),
-            })
-        } else {
-            // Manual queues predate Queue::Configure. Keep their legacy command
-            // path without inferring support for a new style from serialization.
-            self.requested_style = config.personality;
-            self.require_response_style(config.personality)?;
-            self.send(Command::Configure {
-                config: config.clone(),
-            })
-        }
+        self.queue_action(rode_agent_core::queue::Action::Configure {
+            config: Box::new(config.clone()),
+        })
     }
     /// Queue controls reserve room for automatic Stop/failure pause operations.
     pub fn queue_capacity(&self) -> bool {
@@ -556,10 +540,7 @@ impl Client {
     /// Last acknowledged queue, including the final pause after a backend exits.
     /// Mutations still require a live controlling connection.
     pub fn queue_view(&self) -> Option<&rode_agent_core::queue::View> {
-        self.state
-            .as_ref()
-            .filter(|s| s.info.supports_queue)
-            .map(|s| &s.queue)
+        self.state.as_ref().map(|s| &s.queue)
     }
     /// Whether this exact process/host/interpreter can accept a follow-up.
     pub fn matches(&self, launch: &Launch) -> bool {

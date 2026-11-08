@@ -6,7 +6,7 @@ use super::Personality;
 pub enum Status {
     /// A settings request is still awaiting its correlated host acknowledgement.
     Pending(Personality),
-    /// The host retained a different tone, including legacy unknown-value fallback.
+    /// The host retained a different tone.
     Mismatch {
         /// The user's selection, retained until they explicitly change it.
         selected: Personality,
@@ -23,7 +23,7 @@ impl Status {
                 selected.label()
             ),
             Self::Mismatch { selected, applied } => format!(
-                "Tone not applied: {} is selected, but the agent host reports {}. The host may be running an older Rode helper. Update or restart the host helper before starting a new agent session, or select {}. New messages are held; existing work is not stopped.",
+                "Tone not applied: {} is selected, but the agent host reports {}. Review the host settings or select {}. New messages are held; existing work is not stopped.",
                 selected.label(),
                 applied.label(),
                 applied.label()

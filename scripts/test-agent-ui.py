@@ -16,16 +16,21 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    assert_running,
     click,
     click_button,
     close_window,
     display,
     focus_window,
     key,
+    palette_command,
+    read_json_lines,
     screenshot,
     text,
-    theme,
     wait_for_button,
+    wait_for_project,
+    wait_for_ui_state,
+    wait_for_window,
     window_geometry,
     x11,
     xtest,
@@ -37,6 +42,7 @@ x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ct
 def wait_for(check, message):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
+        assert_running(process, ARTIFACTS / "chat.log")
         if check():
             return
         time.sleep(0.05)
@@ -44,34 +50,26 @@ def wait_for(check, message):
 
 
 def window_for(process):
-    for _ in range(150):
-        tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-        match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-        if match:
-            window = int(match[1], 16)
-            time.sleep(0.8)
-            focus_window(window)
-
-            # The project banner moves the chat header. Wait for preparation
-            # before clicking its controls, especially during parallel builds.
-            def project_ready():
-                info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                return "project" in info and "[Opening project]" not in info
-
-            wait_for(project_ready, "Project did not finish preparing before chat input")
-            if "[Sandbox]" not in subprocess.check_output(
-                ["xwininfo", "-id", hex(window)], text=True
-            ):
-                click(1331, 820)  # Dismiss this host's sandbox-unavailable notification.
-            return window
-        assert process.poll() is None, "RODE exited before opening a window"
-        time.sleep(0.05)
-    raise AssertionError("No RODE window")
+    log = ARTIFACTS / "chat.log"
+    state_path = base / "ui-state.json"
+    window = wait_for_window(process, log)
+    wait_for_project(window, process, log, root)
+    focus_window(window)
+    state = wait_for_ui_state(process, log, state_path, lambda _: True, "No native layout")
+    if any(button["name"] == "notice-dismiss" for button in state["buttons"]):
+        click_button(window, process, log, state_path, "notice-dismiss")
+        wait_for_ui_state(
+            process,
+            log,
+            state_path,
+            lambda state: all(button["name"] != "notice-dismiss" for button in state["buttons"]),
+            "The startup notice did not close",
+        )
+    return window
 
 
 def rpc(root):
-    path = root / "agent-rpc.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    return read_json_lines(root / "agent-rpc.jsonl")
 
 
 def agent_preferences(path):
@@ -103,6 +101,57 @@ def rendered_pass():
 def click_control(name):
     """Click a named native widget once, after its enabled geometry is rendered."""
     click_button(window, process, ARTIFACTS / "chat.log", base / "ui-state.json", name)
+
+
+def wait_layout(check, message):
+    return wait_for_ui_state(
+        process, ARTIFACTS / "chat.log", base / "ui-state.json", check, message, timeout=10
+    )
+
+
+def absent(name):
+    wait_layout(
+        lambda state: all(button["name"] != name for button in state["buttons"]),
+        name + " did not close",
+    )
+
+
+def replace_control(name, value):
+    """Edit fixture settings through native input and acknowledge their complete value."""
+    click_control(name)
+    control(name, focused=True)
+    before = rendered_pass()
+    key("a", ("Control_L",))
+    text(value)
+    control(name, focused=True, changed_after=before)
+    key("a", ("Control_L",))
+    key("c", ("Control_L",))
+    copied_text(value, name)
+    before = rendered_pass()
+    key("End", ("Control_L",))
+    control(name, focused=True, after_pass=before)
+
+
+def close_settings(field):
+    click_control("agent-settings")
+    absent(field)
+
+
+def resize(width, height, content="agent-composer"):
+    before = rendered_pass()
+    x11.XResizeWindow(display, window, width, height)
+    x11.XFlush(display)
+    wait_layout(
+        lambda state: (
+            state["pass"] > before
+            and any(button["name"] == content for button in state["buttons"])
+            and all(
+                abs(logical * state["pixels_per_point"] - physical) <= 2
+                for logical, physical in zip(state["size"], (width, height))
+            )
+        ),
+        f"The {width}x{height} layout did not finish rendering",
+    )
 
 
 def controls_idle():
@@ -164,7 +213,7 @@ def composer_start():
 
 def focus_composer():
     show_tools()
-    click(*control("agent-composer"))
+    click_control("agent-composer")
     control("agent-composer", focused=True)
 
 
@@ -181,6 +230,16 @@ def browse(prompts, direction="Up"):
 
 
 def submit(root, message, idle=True):
+    # Verify the native draft before sending. A focus/cleanup failure must not
+    # submit a different prompt and masquerade as a missing Enter afterwards.
+    control("agent-composer", focused=True)
+    key("a", ("Control_L",))
+    key("c", ("Control_L",))
+    copied_text(message, "draft-before-submit")
+    before = rendered_pass()
+    key("End", ("Control_L",))
+    control("agent-composer", focused=True, after_pass=before)
+    control("agent-send")
     # Count this specific request: repeated prompts must not match an old turn.
     previous = submitted(root).count(message)
     key("Return")
@@ -199,26 +258,24 @@ def submit(root, message, idle=True):
 def show_tools():
     key("space", ("Control_L",))
     key("p")
-
-
-def header_click(x, offset):
-    info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-    # The sandbox-status strip and wrapping workspace tabs determine the header.
-    y = 157 if "[Sandbox]" in info else 187
-    if int(re.search(r"Width: (\d+)", info)[1]) < 1000:
-        y += 26
-    click(x, y + offset)
+    control("agent-composer")
 
 
 def select_provider(preferences, provider):
     """Select a known native menu row and wait for the saved provider identity."""
-    offsets = {"codex": 35, "claude": 68, "local": 102, "acp": 136}
-    header_click(1150, 0)
-    header_click(340, offsets[provider])
+    click_control("agent-provider-menu")
+    click_control("agent-provider-" + provider.capitalize())
     wait_for(
         lambda: agent_preferences(preferences).get("provider") == provider,
         f"Provider {provider!r} was not selected",
     )
+    field = {
+        "codex": "agent-codex-executable",
+        "local": "agent-local-model",
+        "acp": "agent-acp-executable",
+        "claude": "agent-claude-executable",
+    }[provider]
+    control(field)
 
 
 def select_personality(preferences, value, capture=False):
@@ -246,6 +303,7 @@ def select_personality(preferences, value, capture=False):
 
 def send(root, message, first=False, idle=True):
     focus_composer()
+    control("agent-composer-empty", focused=True)
     for index, line in enumerate(message.split("\n")):
         if index:
             key("Return", ("Shift_L",))
@@ -315,32 +373,33 @@ def long_composer(root, window, process, state_path, prompt):
 
     key("p", ("Control_L",))
     control("file-dialog-path", focused=True)
-    text("prompt.txt")
+    replace_control("file-dialog-path", "prompt.txt")
     key("Return")
     control("source-editor", focused=True)
     key("a", ("Control_L",))
     key("c", ("Control_L",))
     copied_text(prompt, "long-composer-source-copy")
     show_tools()
-    click(*control("agent-composer"))
+    click_button(window, process, ARTIFACTS / "chat.log", state_path, "agent-composer")
     control("agent-composer", focused=True)
     paste("agent-composer")
     screenshot(window, "long-composer-end.png")
 
-    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer"), 0)
+    before = rendered_pass()
+    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer", hovered=True), 0)
     for _ in range(24):
         xtest.XTestFakeButtonEvent(display, 4, 1, 0)
         xtest.XTestFakeButtonEvent(display, 4, 0, 0)
     x11.XFlush(display)
-    time.sleep(0.3)
+    control("agent-composer", hovered=True, after_pass=before)
     screenshot(window, "long-composer-scrolled.png")
 
     # Drag the divider upward; releasing it must return typing to the draft.
-    divider_x, divider_y = control("agent-composer-resize")
+    divider_x, divider_y = control("agent-composer-resize", hovered=True)
     xtest.XTestFakeMotionEvent(display, -1, divider_x, divider_y, 0)
     xtest.XTestFakeButtonEvent(display, 1, 1, 0)
     x11.XFlush(display)
-    time.sleep(0.1)
+    control("agent-composer-resize-active")
     for step in range(1, 11):
         xtest.XTestFakeMotionEvent(display, -1, divider_x, divider_y - 20 * step, 0)
         x11.XFlush(display)
@@ -358,7 +417,7 @@ def long_composer(root, window, process, state_path, prompt):
     key("a", ("Control_L",))
     key("c", ("Control_L",))
     copied_text(prompt + " visible-tail", "long-composer-draft-copy")
-    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer-resize"), 0)
+    xtest.XTestFakeMotionEvent(display, -1, *control("agent-composer-resize", hovered=True), 0)
     for _ in range(2):
         xtest.XTestFakeButtonEvent(display, 1, 1, 0)
         xtest.XTestFakeButtonEvent(display, 1, 0, 0)
@@ -376,8 +435,7 @@ def long_composer(root, window, process, state_path, prompt):
     paste("source-editor")
     key("s", ("Control_L", "Shift_L"))
     control("file-dialog-path", focused=True)
-    key("a", ("Control_L",))
-    text("composed.txt")
+    replace_control("file-dialog-path", "composed.txt")
     key("Return")
     wait_for(lambda: (root / "composed.txt").exists(), "Could not inspect the long chat draft")
     text_matches(
@@ -386,9 +444,12 @@ def long_composer(root, window, process, state_path, prompt):
     assert (root / "prompt.txt").read_text() == prompt
     assert not (root / "agent-rpc.jsonl").exists(), "Composing or resizing started an agent"
     show_tools()
-    click(1280, 785)
+    click_button(window, process, ARTIFACTS / "chat.log", state_path, "agent-composer")
+    control("agent-composer", focused=True)
+    before = json.loads(state_path.read_text())["pass"]
     key("a", ("Control_L",))
     key("BackSpace")
+    control("agent-composer-empty", focused=True, after_pass=before)
 
 
 with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
@@ -422,17 +483,18 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
         try:
             window = window_for(process)
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            control("agent-composer")
             assert not (root / "agent-rpc.jsonl").exists(), "Opening chat started a process"
-            header_click(1213, 0)  # Settings in the default-width chat panel.
-            header_click(1110, 94)
-            key("a", ("Control_L",))
-            text("./agent.py")
+            click_control("agent-settings")
+            replace_control("agent-codex-executable", "./agent.py")
             wait_for(
-                lambda: preferences.exists() and "./agent.py" in preferences.read_text(),
+                lambda: (
+                    preferences.exists()
+                    and agent_preferences(preferences).get("codex") == "./agent.py"
+                ),
                 "Agent executable preference was not saved immediately",
             )
-            header_click(1213, 0)
+            close_settings("agent-codex-executable")
             # Tone choices alone must not start an agent.
             select_personality(preferences, "jackson_lamb", capture=True)
             select_personality(preferences, "panne")
@@ -526,7 +588,13 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             text(" from retained history")
             submit(root, "first\nsecond line from retained history")
             screenshot(window, "conversation-phosphor.png")
-            theme("carbon")
+            palette_command(
+                window, process, ARTIFACTS / "chat.log", base / "ui-state.json", "Theme: Carbon"
+            )
+            wait_for(
+                lambda: bool(re.search(r'"color_theme"\s*:\s*"carbon"', preferences.read_text())),
+                "The Carbon theme was not saved",
+            )
             screenshot(window, "conversation-carbon.png")
             open_controls("agent-model-menu")
             screenshot(window, "codex-model-controls.png")
@@ -556,10 +624,11 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert selected_turn["params"]["effort"] == "high"
             assert selected_turn["params"]["input"][1] == styled["params"]["input"][1]
             assert not (root / "approved.txt").exists()
+            control("agent-permission-choice-0")
             screenshot(window, "permission.png")
-            header_click(350, 188)  # Allow once, after the visible command and Details.
+            click_control("agent-permission-choice-0")  # The fixture advertises Allow once first.
             wait_for(lambda: (root / "approved.txt").exists(), "Approval was not delivered")
-            time.sleep(0.3)
+            control("agent-idle")
             send(root, "wait", idle=False)
             follow_up = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert follow_up["params"]["input"][1] == styled["params"]["input"][1]
@@ -584,44 +653,48 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             assert not new_chat_state()[1]["enabled"], "New chat discarded the active turn"
             assert sum(m.get("method") == "turn/interrupt" for m in rpc(root)) == interrupts
             screenshot(window, "new-chat-disabled.png")
-            click(380, 840)  # Stop, without interrupting the project terminal.
+            click_control("agent-stop")
             wait_for(
-                lambda: any(m.get("method") == "turn/interrupt" for m in rpc(root)),
+                lambda: sum(m.get("method") == "turn/interrupt" for m in rpc(root)) > interrupts,
                 "Stop did not interrupt the turn",
             )
-            control("agent-new-chat")  # Stop must finish before starting another conversation.
+            control("agent-idle")  # Request receipt alone does not acknowledge a completed Stop.
             # Open and edit a file without saving. Agent edits must not replace that buffer.
-            key("p", ("Control_L", "Shift_L"))
-            text("Open file by path")
+            palette_command(
+                window, process, ARTIFACTS / "chat.log", base / "ui-state.json", "Open file by path"
+            )
+            replace_control("file-dialog-path", "main.py")
             key("Return")
-            time.sleep(0.2)
-            text("main.py")
-            key("Return")
-            time.sleep(0.3)
+            control("source-editor", focused=True)
             key("End", ("Control_L",))
             text("# keep my unsaved change\n")
+            key("a", ("Control_L",))
+            key("c", ("Control_L",))
+            copied_text(
+                "# original on disk\n# keep my unsaved change\n", "unsaved-buffer-before-agent"
+            )
             send(root, "rewrite")
             wait_for(lambda: source.read_text() == "# written by the agent\n", "Agent did not edit")
             screenshot(window, "unsaved-buffer.png")
             key("space", ("Control_L",))
             key("e")
+            control("source-editor", focused=True)
             key("s", ("Control_L", "Shift_L"))
-            time.sleep(0.2)
-            key("a", ("Control_L",))
-            text("preserved.txt")
+            replace_control("file-dialog-path", "preserved.txt")
             key("Return")
             preserved = root / "preserved.txt"
             wait_for(preserved.exists, "Could not save the preserved user buffer")
             assert "keep my unsaved change" in preserved.read_text()
             assert "written by the agent" not in preserved.read_text()
             # Minimum window keeps the composer and Send button accessible.
-            x11.XResizeWindow(display, window, 850, 560)
-            x11.XFlush(display)
-            time.sleep(0.4)
+            focus_composer()
+            resize(850, 560)
+            wait_layout(
+                lambda state: any(button["name"] == "agent-send" for button in state["buttons"]),
+                "Send was clipped out of the compact chat",
+            )
             screenshot(window, "minimum-chat.png")
-            x11.XResizeWindow(display, window, 1380, 900)
-            x11.XFlush(display)
-            time.sleep(0.3)
+            resize(1380, 900)
             close_window(window, process)
             # A native restart restores executable settings, but not the conversation.
             before = sum(m.get("method") == "initialize" for m in rpc(root))
@@ -630,35 +703,34 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             )
             window = window_for(process)
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            control("agent-composer")
             send(root, "restored")
             selected_turn = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert selected_turn["params"]["effort"] == "high"
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
             assert "keep my unsaved change" not in preferences.read_text()
             select_provider(preferences, "local")
-            header_click(1280, 193)
-            text("fixture-local-model")
+            replace_control("agent-local-model", "fixture-local-model")
             wait_for(
-                lambda: "fixture-local-model" in preferences.read_text(), "Model was not saved"
+                lambda: agent_preferences(preferences).get("local_model") == "fixture-local-model",
+                "Model was not saved",
             )
             screenshot(window, "local-model-settings.png")
-            header_click(1213, 0)
+            close_settings("agent-codex-executable")
             send(root, "local-provider")
             scope = json.loads((root / "agent-scope.json").read_text())
             assert 'model_provider="rode_local"' in scope["argv"]
-            x11.XResizeWindow(display, window, 850, 560)
-            x11.XFlush(display)
-            time.sleep(0.4)
+            resize(850, 560)
             screenshot(window, "minimum-local-chat.png")
-            x11.XResizeWindow(display, window, 1380, 900)
-            x11.XFlush(display)
-            time.sleep(0.3)
+            resize(1380, 900)
             select_provider(preferences, "acp")
             (root / "slow-controls").touch()
-            header_click(1280, 94)
-            text("./agent.py")
-            header_click(1213, 0)
+            replace_control("agent-acp-executable", "./agent.py")
+            wait_for(
+                lambda: agent_preferences(preferences).get("acp_program") == "./agent.py",
+                "ACP executable was not saved",
+            )
+            close_settings("agent-acp-executable")
             send(root, "acp-provider")
             assert any(m.get("method") == "session/new" for m in rpc(root))
             calls_before_tone = len(rpc(root))
@@ -685,15 +757,12 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 permissions=True,
                 captures=("acp-permission-controls.png",),
             )
-            x11.XResizeWindow(display, window, 850, 560)
-            x11.XFlush(display)
-            time.sleep(0.4)
+            resize(850, 560)
             screenshot(window, "minimum-acp-chat.png")
             before = sum(m.get("method") == "initialize" for m in rpc(root))
             click_button(window, process, log.name, base / "ui-state.json", "agent-new-chat")
-            x11.XResizeWindow(display, window, 1380, 900)
-            x11.XFlush(display)
-            time.sleep(0.3)
+            control("agent-composer-empty")
+            resize(1380, 900)
             send(root, "new-acp-conversation")
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == before + 1
             # Claude is a distinct provider using the same ACP transport. Its
@@ -701,15 +770,13 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             saved_acp = agent_preferences(preferences)["acp_options"].copy()
             before = len(rpc(root))
             select_provider(preferences, "claude")
-            header_click(1280, 94)
-            key("a", ("Control_L",))
-            text("./agent.py")
+            replace_control("agent-claude-executable", "./agent.py")
             wait_for(
                 lambda: agent_preferences(preferences).get("claude_program") == "./agent.py",
                 "Claude adapter setting was not saved",
             )
             assert len(rpc(root)) == before, "Selecting Claude started an agent"
-            header_click(1213, 0)
+            close_settings("agent-claude-executable")
             send(root, "claude-provider")
             initialized = next(m for m in reversed(rpc(root)) if m.get("method") == "initialize")
             assert initialized["params"]["protocolVersion"] == 1
@@ -720,7 +787,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             # The native permission selectors persist choices and affect the
             # next Codex turn while the existing outer sandbox remains active.
             select_provider(preferences, "codex")
-            header_click(1213, 0)  # Hide the automatically opened provider settings.
+            close_settings("agent-codex-executable")
             open_controls("agent-access-menu")
             click_button(
                 window, process, log.name, base / "ui-state.json", "agent-approval-Never ask"
@@ -776,32 +843,28 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 assert last["params"]["sandboxPolicy"]["type"] == "externalSandbox"
             # History is explicit host work; opening it must not send a model prompt.
             prompts_before = sum(m.get("method") == "turn/start" for m in rpc(root))
-            header_click(1340, 74)
+            click_control("agent-history")
             wait_for(
                 lambda: any(m.get("method") == "thread/list" for m in rpc(root)),
                 "History did not list saved conversations",
             )
-            time.sleep(0.3)
+            control("agent-history-ready")
             screenshot(window, "history-list.png")
             # Saved tool output evicts early display rows. Recall must retain
             # user prompts independently of that rolling transcript.
             (root / "history-fixture.json").write_text(json.dumps({"replay_tools": 80}))
             assert sum(m.get("method") == "turn/start" for m in rpc(root)) == prompts_before
-            x11.XResizeWindow(display, window, 850, 560)
-            x11.XFlush(display)
-            time.sleep(0.3)
+            resize(850, 560, content="agent-history-filter")
             screenshot(window, "minimum-history.png")
-            x11.XResizeWindow(display, window, 1380, 900)
-            x11.XFlush(display)
-            time.sleep(0.3)
-            header_click(700, 349)  # Load older metadata without prompting the model.
+            resize(1380, 900, content="agent-history-filter")
+            click_control("agent-history-more")
             wait_for(
                 lambda: sum(m.get("method") == "thread/list" for m in rpc(root)) == 2,
                 "History did not load another page",
             )
-            header_click(700, 175)
-            text("saved-2")
-            time.sleep(0.2)
+            control("agent-history-restore:saved-2")
+            control("agent-history-ready")
+            replace_control("agent-history-filter", "saved-2")
             screenshot(window, "history-filtered.png")
             # The filter exposes the older conversation first. Resolve its real
             # content bounds after layout instead of clicking the card's padding.
@@ -810,13 +873,13 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
                 process,
                 ARTIFACTS / "chat.log",
                 base / "ui-state.json",
-                "Restore conversation",
+                "agent-history-restore:saved-2",
             )
             wait_for(
                 lambda: any(m.get("method") == "thread/resume" for m in rpc(root)),
                 "History did not restore the selected conversation",
             )
-            time.sleep(0.3)
+            control("agent-idle", focused=True)
             screenshot(window, "history-restored.png")
             focus_composer()
             control("agent-idle", focused=True)

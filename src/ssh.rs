@@ -182,7 +182,7 @@ pub fn quote(value: &str) -> String {
 
 impl Remote {
     /// Allocate a private connection runtime after validating the profile; authentication
-    /// starts separately. Unknown fields from older saved profiles are ignored.
+    /// starts separately.
     pub fn new(profile: Profile) -> Result<Self> {
         profile.validate()?;
         #[cfg(not(unix))]
@@ -367,7 +367,7 @@ impl Remote {
             .unwrap_or_default();
         let helper = quote(&self.native.client(self)?.executable);
         command.arg(format!("{prefix}{helper} --extension-helper"));
-        crate::extensions::execute_with_prelude(command, request, cancel, vec![])
+        crate::extensions::execute(command, request, cancel)
     }
     /// Close only this connection's master and remove its private socket directory.
     pub fn cleanup(&self) {
@@ -399,7 +399,7 @@ impl Remote {
             + " ";
         let helper = quote(&self.native.client(self)?.executable);
         command.arg(format!("{prefix}{helper} --latex-helper"));
-        crate::latex::execute_with_prelude(command, invocation, cancel, vec![])
+        crate::latex::execute(command, invocation, cancel)
     }
     /// Run a cancellable Marp coordinator over the existing master and actual project policy.
     pub fn marp_request(
@@ -425,7 +425,7 @@ impl Remote {
             + " ";
         let helper = quote(&self.native.client(self)?.executable);
         command.arg(format!("{prefix}{helper} --marp-helper"));
-        crate::marp::execute_with_prelude(command, invocation, cancel, vec![])
+        crate::marp::execute(command, invocation, cancel)
     }
 }
 
@@ -552,25 +552,6 @@ pub fn display_name(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn saved_compatibility_profiles_keep_connection_settings() {
-        let profile: Profile = serde_json::from_value(serde_json::json!({
-            "host": "cluster", "jump": "login", "root": "/work/project",
-            "backend": "legacy_python"
-        }))
-        .unwrap();
-        assert_eq!(profile.host, "cluster");
-        assert_eq!(profile.jump, "login");
-        assert_eq!(profile.root, "/work/project");
-        assert!(profile.remote_helper.is_empty());
-        assert!(profile.x11_forwarding);
-        assert!(
-            serde_json::to_value(profile)
-                .unwrap()
-                .get("backend")
-                .is_none()
-        );
-    }
     #[test]
     fn display_channels_keep_multiplex_only_policy_and_profile_preference() {
         for enabled in [false, true] {

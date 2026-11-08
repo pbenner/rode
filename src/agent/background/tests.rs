@@ -1,4 +1,4 @@
-//! Correlated settings replies, legacy fallback and preservation of held work.
+//! Correlated settings replies and preservation of held work.
 use super::*;
 use crate::agent::{Personality, response_style::Status};
 use rode_agent_core::queue::{Action, Item};
@@ -8,7 +8,7 @@ fn view(style: Personality) -> State {
     serde_json::from_value(json!({
         "info":{"id":"fixture","name":"Fixture","root":"/project","policy":"a".repeat(64),
             "mode":"NORMAL MODE","provider":"codex","alive":true,"busy":false,"status":"Ready",
-            "attached":true,"persistent":true,"created":0,"supports_queue":true,"automatic_queue":true},
+            "attached":true,"persistent":true,"created":0,"history_browser":false},
         "chat":rode_agent_core::service::ChatView { config: Config { personality: style, codex:"fixture-agent".into(), ..Default::default() }, ..Default::default() },
         "queue":rode_agent_core::queue::View::default(),"history":null,"error":""
     })).unwrap()
@@ -172,31 +172,6 @@ fn initial_fallback_is_visible_and_reattachment_adopts_the_existing_hosts_actual
             .require_response_style(Personality::JacksonLamb)
             .is_ok()
     );
-}
-
-#[test]
-fn manual_queue_hosts_do_not_receive_settings_actions_they_cannot_decode() {
-    let mut client = Client::test_style_view(Personality::Default, Personality::Default);
-    client.state.as_mut().unwrap().info.automatic_queue = false;
-    let mut config = client.launch.config.clone();
-    config.personality = Personality::Panne;
-    let error = client.configure(&config).unwrap_err().to_string();
-    assert!(error.contains("Tone not applied: Panne"), "{error}");
-    assert!(client.queue_requests.is_empty());
-    assert!(!client.closed());
-    assert!(client.queue_action(push(1)).is_err());
-
-    // Returning to the acknowledged tone uses the legacy command path. This
-    // fixture has no bridge, so the transport error proves that path was reached
-    // without enqueuing the unsupported Queue::Configure variant.
-    config.personality = Personality::Default;
-    let error = client.configure(&config).unwrap_err().to_string();
-    assert!(
-        error.contains("Agent service is still preparing"),
-        "{error}"
-    );
-    assert!(client.queue_requests.is_empty());
-    assert_eq!(client.response_style_status(Personality::Default), None);
 }
 
 #[test]

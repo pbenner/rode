@@ -380,7 +380,9 @@ impl EditorApp {
             palette,
         );
         let input_id = egui::Id::new("project-dialog-path");
-        if self.dialog_focus {
+        // Closing the context menu that opened this modal can discard its
+        // first focus request. Recover only while no control owns focus.
+        if self.dialog_focus || ui.memory(|memory| memory.focused().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(input_id));
             self.dialog_focus = false;
         }
@@ -390,6 +392,7 @@ impl EditorApp {
                 .desired_width(f32::INFINITY)
                 .hint_text("Project folder"),
         );
+        ui_probe::button(ui, "project-dialog-path", &response);
         let enter = (response.has_focus() || response.lost_focus())
             && ui.input(|i| i.key_pressed(Key::Enter));
         let mut browse = None;
@@ -467,7 +470,9 @@ impl EditorApp {
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if palette.primary(ui, "Open project  ·  Ctrl+Enter").clicked() || open_by_key {
+            let open = palette.primary(ui, "Open project  ·  Ctrl+Enter");
+            ui_probe::button(ui, "project-dialog-open", &open);
+            if open.clicked() || open_by_key {
                 let options = self.folder_sandbox.clone();
                 if let Err(error) = options.validate() {
                     self.folder_error = Some(error.to_string());
@@ -485,7 +490,9 @@ impl EditorApp {
                     );
                 }
             }
-            if ui.button("Cancel").clicked() {
+            let cancel = ui.button("Cancel");
+            ui_probe::button(ui, "project-dialog-cancel", &cancel);
+            if cancel.clicked() {
                 self.dialog = Dialog::None;
             }
         });
@@ -594,7 +601,9 @@ impl EditorApp {
                                 },
                             ));
                             ui.add(egui::Label::new(text).wrap());
-                            if icons::small(ui, Icon::Close, "Dismiss notification").clicked() {
+                            let dismiss = icons::small(ui, Icon::Close, "Dismiss notification");
+                            ui_probe::button(ui, "notice-dismiss", &dismiss);
+                            if dismiss.clicked() {
                                 self.notice = None;
                             }
                         });

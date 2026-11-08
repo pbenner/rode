@@ -72,19 +72,6 @@ pub enum Operation {
         policy: String,
     },
 }
-/// Legacy per-request helper metadata retained for wire compatibility.
-/// Native connections deploy once during their verified handshake; this value
-/// can only confirm that identity and cannot replace the connection's helper.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Helper {
-    /// Lowercase SHA-256 of helper bytes.
-    pub digest: String,
-    /// Target helper architecture label.
-    pub architecture: String,
-    /// Old base64 deployment payload, ignored by the native gateway.
-    /// Current clients leave it absent and reuse the connection-owned helper.
-    pub data: Option<String>,
-}
 /// Control result and matching executable identity needed for later attachment.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Reply {
@@ -478,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_and_legacy_plans_keep_their_existing_policy_identity() {
+    fn plans_without_a_helper_mount_hash_their_complete_policy() {
         for plan in [
             sandbox::Plan {
                 root: "/project".into(),
@@ -489,7 +476,7 @@ mod tests {
                 ..sandbox_plan("/helper", sandbox::Backend::Bwrap)
             },
         ] {
-            let legacy = rode_host_core::files::digest(
+            let expected = rode_host_core::files::digest(
                 &serde_json::to_vec(&(
                     &plan.root,
                     plan.active,
@@ -498,7 +485,7 @@ mod tests {
                 ))
                 .unwrap(),
             );
-            assert_eq!(fingerprint(&plan), legacy);
+            assert_eq!(fingerprint(&plan), expected);
         }
     }
 

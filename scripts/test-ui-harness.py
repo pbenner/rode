@@ -12,11 +12,37 @@ from ui_harness import (
     click_button,
     focus_window,
     palette_command,
+    read_json_lines,
     wait_for_button,
     wait_for_project,
     wait_for_ui_state,
     wait_for_window,
 )
+
+
+class FixtureAcknowledgementTests(unittest.TestCase):
+    def test_missing_log_has_no_acknowledgements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(read_json_lines(Path(directory) / "missing.jsonl"), [])
+
+    def test_partial_json_and_utf8_wait_for_the_completed_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rpc.jsonl"
+            first = b'{"id":1}\n'
+            path.write_bytes(first + b'{"text":"\xce')
+            self.assertEqual(read_json_lines(path), [{"id": 1}])
+            path.write_bytes(first + '{"text":"\u03bb"}'.encode())
+            self.assertEqual(read_json_lines(path), [{"id": 1}])
+            with path.open("ab") as stream:
+                stream.write(b"\n")
+            self.assertEqual(read_json_lines(path), [{"id": 1}, {"text": "\u03bb"}])
+
+    def test_malformed_completed_record_is_not_hidden(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rpc.jsonl"
+            path.write_bytes(b'{"id":1}\nmalformed\n')
+            with self.assertRaises(json.JSONDecodeError):
+                read_json_lines(path)
 
 
 class WindowReadinessTests(unittest.TestCase):

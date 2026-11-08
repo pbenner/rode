@@ -181,7 +181,6 @@ fn native_terminal(remote: &Remote, plan: &rode::sandbox::Plan, expected: &str, 
                     persistent: false,
                     allocation: None,
                 },
-                helper: None,
                 directory: Some(format!("{}/runtime", plan.root)),
             },
         })

@@ -530,20 +530,8 @@ pub fn checker_diagnostics(output: &str, source: &str) -> Vec<crate::project::Di
 }
 /// Drive a LaTeX helper process, propagate cancellation and decode its bounded reply.
 pub fn execute(command: Command, invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
-    execute_with_prelude(command, invocation, cancel, vec![])
-}
-
-/// Run a captured compiler invocation after an optional helper prelude,
-/// with explicit cancellation, output limits and termination grace; decode only a
-/// successful coordinator reply.
-pub fn execute_with_prelude(
-    command: Command,
-    invocation: &Invocation,
-    cancel: &AtomicBool,
-    mut input: Vec<u8>,
-) -> Result<Reply> {
     invocation.settings.validate()?;
-    input.extend(serde_json::to_vec(invocation)?);
+    let mut input = serde_json::to_vec(invocation)?;
     input.push(b'\n');
     let result = crate::project::run_controlled_limited(
         command,

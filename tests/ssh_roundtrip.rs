@@ -173,7 +173,6 @@ fn remote_native_tools(model_only: bool) {
                             mise: false,
                             request: Box::new(request),
                         },
-                        helper: Some(native_test_helper(false)),
                         directory: Some(base.path().join("runtime").to_string_lossy().into()),
                     },
                 })
@@ -1097,7 +1096,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 .unwrap();
             let policy = rode::sessions::fingerprint(&plan);
             let runtime = base.path().join("runtime").to_string_lossy().into_owned();
-            let rpc = |remote: &Remote, request, upload| {
+            let rpc = |remote: &Remote, request| {
                 let response = remote
                     .request(&Request::Tool {
                         request: rode::project::Request::Sessions {
@@ -1106,7 +1105,6 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                                 mise: false,
                                 request: Box::new(request),
                             },
-                            helper: Some(native_test_helper(upload)),
                             directory: Some(runtime.clone()),
                         },
                     })
@@ -1144,7 +1142,6 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 rode_session::Request::CreateAgent {
                     spec: Box::new(spec),
                 },
-                true,
             );
             let rode_session::Response::Agent(info) = &reply.response else {
                 panic!()
@@ -1202,7 +1199,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                     .unwrap();
             assert_eq!(scope["cwd"], plan.root);
             assert_eq!(scope["private_visible"], !plan.active);
-            assert!(info.automatic_queue);
+
             for id in 1..=2 {
                 first
                     .send(
@@ -1285,12 +1282,11 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                     id: info.id.clone(),
                     policy: policy.clone(),
                 },
-                false,
             );
             let until = Instant::now() + Duration::from_secs(8);
             loop {
                 let rode_session::Response::Agents(infos) =
-                    rpc(&next, rode_session::Request::Agents, false).response
+                    rpc(&next, rode_session::Request::Agents).response
                 else {
                     panic!()
                 };
@@ -1724,7 +1720,6 @@ fn roundtrip(jump: &str) {
     encrypted_roundtrip(&remote, root.path());
     binary_extension_roundtrip(&remote, &plan, &path);
     agent_roundtrip(&remote, &plan);
-    native_upgrade_roundtrip(&remote, &plan);
     interactive_allocation_roundtrip(&remote, &plan);
     let (native_info, native_reply, native_runtime) = native_terminal_start(&remote, &plan);
     drop(terminal);
@@ -1765,7 +1760,6 @@ fn roundtrip(jump: &str) {
                     policy: native_info.policy.clone(),
                     persistent: false,
                 },
-                helper: Some(native_test_helper(false)),
                 directory: Some(native_runtime.clone()),
             },
         })
@@ -1790,7 +1784,6 @@ fn roundtrip(jump: &str) {
                 request: rode::project::Request::Sessions {
                     root: plan.root.clone(),
                     operation: rode::sessions::Operation::List,
-                    helper: Some(native_test_helper(false)),
                     directory: Some(native_runtime.clone()),
                 },
             })
@@ -1816,22 +1809,6 @@ fn roundtrip(jump: &str) {
         && Instant::now() < until
     {
         std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn native_test_helper(data: bool) -> rode::sessions::Helper {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    let path = std::env::var_os("RODE_TEST_SESSION_HELPER")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("target/release/rode-sessiond-static")
-        });
-    let bytes = std::fs::read(path).expect("Run cargo xtask build-helper before the SSH test");
-    rode::sessions::Helper {
-        digest: rode::files::digest(&bytes),
-        architecture: std::env::consts::ARCH.into(),
-        data: data.then(|| STANDARD.encode(bytes)),
     }
 }
 
@@ -2216,7 +2193,6 @@ fn interactive_allocation_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan)
                     persistent: false,
                     allocation: Some(settings.launch(plan, &id).unwrap()),
                 },
-                helper: Some(native_test_helper(true)),
                 directory: Some(runtime.to_string_lossy().into()),
             },
         })
@@ -2246,184 +2222,6 @@ fn interactive_allocation_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan)
     }
     assert!(state.join("ended").exists());
     assert!(remote.connected());
-}
-
-fn native_upgrade_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
-    fn wait_output(terminal: &Terminal, token: &str, runtime: &std::path::Path) {
-        let until = Instant::now() + Duration::from_secs(8);
-        while !terminal.contents().contains(token) {
-            assert!(
-                terminal.is_alive() && Instant::now() < until,
-                "Missing {token}: {}
-Inputs: {:?}",
-                terminal.contents(),
-                std::fs::read_to_string(runtime.join("input"))
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    }
-    let runtime = std::path::Path::new(&plan.root)
-        .parent()
-        .unwrap()
-        .join("legacy-runtime");
-    let id = rode_session::new_id().unwrap();
-    let policy = rode::sessions::fingerprint(plan);
-    let mut legacy = Command::new("python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/session_v1.py"
-        ))
-        .arg(&runtime)
-        .arg(&plan.root)
-        .arg(&id)
-        .arg(&policy)
-        .spawn()
-        .unwrap();
-    struct StopLegacy<'a>(&'a mut std::process::Child);
-    impl Drop for StopLegacy<'_> {
-        fn drop(&mut self) {
-            unsafe {
-                libc::kill(self.0.id() as i32, libc::SIGTERM);
-            }
-            let _ = self.0.wait();
-        }
-    }
-    let _stop = StopLegacy(&mut legacy);
-    let wait = |label: &str, check: &dyn Fn() -> bool| {
-        let until = Instant::now() + Duration::from_secs(8);
-        while !check() {
-            assert!(
-                Instant::now() < until,
-                "SSH terminal upgrade timed out: {label}"
-            );
-            std::thread::sleep(Duration::from_millis(25));
-        }
-    };
-    wait("legacy startup", &|| runtime.join("socket").exists());
-    let request = |operation| {
-        remote.request(&Request::Tool {
-            request: rode::project::Request::Sessions {
-                root: plan.root.clone(),
-                operation,
-                helper: Some(native_test_helper(true)),
-                directory: Some(runtime.to_string_lossy().into()),
-            },
-        })
-    };
-    {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        let stale = b"#!/bin/sh\nexit 2\n";
-        let error = remote
-            .request(&Request::Tool {
-                request: rode::project::Request::Sessions {
-                    root: plan.root.clone(),
-                    operation: rode::sessions::Operation::List,
-                    helper: Some(rode::sessions::Helper {
-                        digest: rode::files::digest(stale),
-                        architecture: std::env::consts::ARCH.into(),
-                        data: Some(STANDARD.encode(stale)),
-                    }),
-                    directory: Some(runtime.to_string_lossy().into()),
-                },
-            })
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("fixed native helper"), "{error}");
-    }
-    let response = request(rode::sessions::Operation::List).unwrap();
-    let Some(rode::project::Response::Sessions(reply)) = response.tool else {
-        panic!()
-    };
-    let rode_session::Response::Sessions(infos) = &reply.response else {
-        panic!()
-    };
-    let old = infos[0].clone();
-    assert!(old.persistent && !old.persistence_supported);
-    let old_view = native_attach(remote, &reply, &old);
-    old_view
-        .send(b"TOKEN=ssh_kept; printf 'LEGACY_%s\\n' READY\n".to_vec())
-        .unwrap();
-    wait_output(&old_view, "LEGACY_READY", &runtime);
-    drop(old_view);
-    let response = request(rode::sessions::Operation::Create {
-        environment: Default::default(),
-        allocation: None,
-        id: rode_session::new_id().unwrap(),
-        name: "Updated terminal".into(),
-        plan: Box::new(plan.clone()),
-        policy: policy.clone(),
-        python: "off".into(),
-        persistent: false,
-    })
-    .unwrap();
-    let Some(rode::project::Response::Sessions(reply)) = response.tool else {
-        panic!()
-    };
-    let rode_session::Response::Session(info) = &reply.response else {
-        panic!()
-    };
-    assert!(info.persistence_supported && !info.persistent);
-    let current = native_attach(remote, &reply, info);
-    current
-        .send(b"printf 'UPDATED_%s\\n' READY\n".to_vec())
-        .unwrap();
-    wait_output(&current, "UPDATED_READY", &runtime);
-    let error = request(rode::sessions::Operation::SetPersistence {
-        id: id.clone(),
-        policy: policy.clone(),
-        persistent: false,
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("Start a new terminal"), "{error}");
-    assert!(!error.contains("unknown variant"), "{error}");
-    let old_view = native_attach(remote, &reply, &old);
-    old_view
-        .send(b"printf 'TOKEN_%s\\n' \"$TOKEN\"\n".to_vec())
-        .unwrap();
-    wait_output(&old_view, "TOKEN_ssh_kept", &runtime);
-    assert!(
-        !std::fs::read_to_string(runtime.join("input"))
-            .unwrap()
-            .contains("\\x04"),
-        "Detaching a native view must not forward portable-pty's EOF sentinel to the shell"
-    );
-    let response = request(rode::sessions::Operation::List).unwrap();
-    assert!(
-        matches!(response.tool, Some(rode::project::Response::Sessions(rode::sessions::Reply { response: rode_session::Response::Sessions(infos), .. })) if infos.len() == 2)
-    );
-    drop(old_view);
-    request(rode::sessions::Operation::End { id, policy }).unwrap();
-    wait("legacy cleanup", &|| !runtime.join("socket").exists());
-    current
-        .send(b"printf 'UPDATED_%s\\n' SURVIVED\n".to_vec())
-        .unwrap();
-    wait_output(&current, "UPDATED_SURVIVED", &runtime);
-    request(rode::sessions::Operation::SetPersistence {
-        id: info.id.clone(),
-        policy: info.policy.clone(),
-        persistent: true,
-    })
-    .unwrap();
-    wait("persistence update", &|| current.persistent());
-    current.send(b"exit\n".to_vec()).unwrap();
-    wait("natural shell exit", &|| !current.is_alive());
-    // The exited session must disappear before the service's idle timeout,
-    // while this already-open view retains its final output.
-    let response = request(rode::sessions::Operation::List).unwrap();
-    assert!(
-        matches!(response.tool, Some(rode::project::Response::Sessions(rode::sessions::Reply { response: rode_session::Response::Sessions(infos), .. })) if infos.is_empty())
-    );
-    assert!(current.contents().contains("UPDATED_SURVIVED"));
-    wait("new cleanup", &|| {
-        !runtime
-            .join(format!("protocol-{}/socket", rode_session::PROTOCOL))
-            .exists()
-    });
-    let response = request(rode::sessions::Operation::List).unwrap();
-    assert!(
-        matches!(response.tool, Some(rode::project::Response::Sessions(rode::sessions::Reply { response: rode_session::Response::Sessions(infos), .. })) if infos.is_empty())
-    );
 }
 
 fn native_terminal_start(
@@ -2467,7 +2265,6 @@ fn native_terminal_start(
                     policy: rode::sessions::fingerprint(plan),
                     python: "auto".into(),
                 },
-                helper: Some(native_test_helper(true)),
                 directory: Some(runtime.clone()),
             },
         })
@@ -3477,7 +3274,6 @@ fn native_provider_and_terminal_without_python(remote: &Remote, mut plan: rode::
                 request: rode::project::Request::Sessions {
                     root: plan.root.clone(),
                     operation,
-                    helper: None,
                     directory: Some(directory.clone()),
                 },
             })

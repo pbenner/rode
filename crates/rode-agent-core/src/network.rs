@@ -38,8 +38,7 @@ impl Config {
 
     /// Read-only and file-only agents never receive a native command tool.
     pub fn offline_commands(&self) -> bool {
-        self.network == Network::ModelOnly
-            && matches!(self.access(), Access::Project | Access::Full)
+        self.network == Network::ModelOnly && matches!(self.access, Access::Project | Access::Full)
     }
 }
 

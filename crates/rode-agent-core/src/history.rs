@@ -122,7 +122,7 @@ impl Browser {
         crate::service::HistoryView {
             entries: self.entries.clone(),
             owners: self.owners.clone(),
-            backend_output: Some(self.stderr.trim().into()),
+            backend_output: self.stderr.trim().into(),
             status: self.status.clone(),
             busy: self.busy,
             can_resume: self.can_resume,
@@ -493,7 +493,7 @@ impl Browser {
                 let access = if self.launch.plan.project_read_only {
                     Access::ReadOnly
                 } else {
-                    self.launch.config.access()
+                    self.launch.config.access
                 };
                 let mut params = json!({"threadId":self.selected,"cwd":self.launch.plan.root,"excludeTurns":true,"sandbox":access.codex(),"approvalPolicy":if access == Access::ReadOnly {"never"} else {self.launch.config.approval.codex()}});
                 if !self.launch.config.model().is_empty() {

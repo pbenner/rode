@@ -65,7 +65,6 @@ impl Drop for Connection {
                         id: info.id.clone(),
                         policy: info.policy.clone(),
                     },
-                    helper: None,
                     directory: Some(format!("{}/runtime", info.root)),
                 },
             });
@@ -216,7 +215,6 @@ fn x11_forwarding_reaches_native_terminals_and_survives_view_reattachment() {
                             persistent: true,
                             allocation: None,
                         },
-                        helper: None,
                         directory: Some(format!("{}/runtime", plan.root)),
                     },
                 })

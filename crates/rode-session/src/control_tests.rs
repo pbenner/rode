@@ -2,64 +2,94 @@ use super::*;
 use std::os::linux::net::SocketAddrExt;
 
 #[test]
-fn service_starting_after_initial_refusal_uses_protected_control() {
+fn authenticated_control_requires_the_current_protocol() {
+    for protocol in [PROTOCOL, PROTOCOL - 1] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let address = control_address(&fs::metadata(dir.path()).unwrap()).unwrap();
+        let token = control_auth::Token::publish(dir.path()).unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            token.verify(&mut stream).unwrap();
+            send_json(&mut stream, &Response::Ok).unwrap();
+            assert!(matches!(
+                recv_json::<_, Request>(&mut stream).unwrap(),
+                Request::Protocol
+            ));
+            send_json(&mut stream, &Response::Protocol(protocol)).unwrap();
+        });
+        let result = connect_control(dir.path());
+        server.join().unwrap();
+        if protocol == PROTOCOL {
+            assert_eq!(
+                result.unwrap().peer_addr().unwrap().as_abstract_name(),
+                address.as_abstract_name()
+            );
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("protocol mismatch")
+            );
+        }
+    }
+}
+
+#[test]
+fn authentication_disconnects_preserve_the_transport_error_for_restart_retries() {
     let dir = tempfile::tempdir().unwrap();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let address = control_address(&fs::metadata(dir.path()).unwrap()).unwrap();
-    assert_eq!(
-        UnixStream::connect_addr(&address).unwrap_err().kind(),
-        std::io::ErrorKind::ConnectionRefused
-    );
-
-    // Publish the service between the client's initial refusal and fallback,
-    // in the same order as serve(). No scheduler timing or sleeps are needed.
     let token = control_auth::Token::publish(dir.path()).unwrap();
-    let protected = UnixListener::bind_addr(&address).unwrap();
-    let _discovery = UnixListener::bind(dir.path().join("socket")).unwrap();
+    let listener = UnixListener::bind_addr(&address).unwrap();
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = protected.accept().unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
         token.verify(&mut stream).unwrap();
-        send_json(&mut stream, &Response::Ok).unwrap();
+        // Shutdown can close a connected client before authentication is acknowledged.
     });
-    let stream = connect_control_fallback(dir.path(), &address).unwrap();
-    server.join().unwrap();
-    assert_eq!(
-        stream.peer_addr().unwrap().as_abstract_name(),
-        address.as_abstract_name(),
-        "The discovery socket rejects control requests"
-    );
-}
-
-#[test]
-fn legacy_abstract_control_remains_available_without_an_authenticated_listener() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let address = legacy_control_address(&fs::metadata(dir.path()).unwrap()).unwrap();
-    let _listener = UnixListener::bind_addr(&address).unwrap();
-    let stream = connect_control(dir.path()).unwrap();
-    assert_eq!(
-        stream.peer_addr().unwrap().as_abstract_name(),
-        address.as_abstract_name()
-    );
-}
-
-#[test]
-fn an_authentication_failure_never_falls_back_to_legacy_control() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let _legacy = UnixListener::bind(dir.path().join("socket")).unwrap();
-    let address = control_address(&fs::metadata(dir.path()).unwrap()).unwrap();
-    let _protected = UnixListener::bind_addr(&address).unwrap();
-    // The current endpoint exists, but its capability is missing. A legacy
-    // listener must not turn this into a successful unauthenticated connection.
     let error = connect_control(dir.path()).unwrap_err();
-    let diagnostic = format!("{error:#}");
-    assert!(
-        diagnostic.contains("outside the project sandbox"),
-        "{diagnostic}"
-    );
-    let cause = std::io::Error::from_raw_os_error(libc::ENOENT).to_string();
-    assert!(diagnostic.contains(&cause), "{diagnostic}");
+    server.join().unwrap();
+    assert!(error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::UnexpectedEof)
+    }));
+}
+
+#[test]
+fn control_never_uses_unauthenticated_endpoints() {
+    for protected in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let _discovery = UnixListener::bind(dir.path().join("socket")).unwrap();
+        let meta = fs::metadata(dir.path()).unwrap();
+        let address = std::os::unix::net::SocketAddr::from_abstract_name(format!(
+            "rode-session-{}-{}-{}",
+            meta.uid(),
+            meta.dev(),
+            meta.ino()
+        ))
+        .unwrap();
+        let _unprotected = UnixListener::bind_addr(&address).unwrap();
+        let _protected =
+            protected.then(|| UnixListener::bind_addr(&control_address(&meta).unwrap()).unwrap());
+        let error = connect_control(dir.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("outside the project sandbox"));
+        assert_eq!(
+            service_offline(&error),
+            !protected,
+            "A live listener without its capability must not disappear from discovery or acknowledge shutdown"
+        );
+        fs::remove_file(dir.path().join("socket")).unwrap();
+        let launcher = Launcher {
+            executable: "/unused-helper".into(),
+            prefix: vec![],
+        };
+        let error = request_once(&Request::List, &launcher, dir.path()).unwrap_err();
+        assert_eq!(service_offline(&error), !protected);
+    }
 }
 
 #[test]
@@ -87,17 +117,4 @@ fn namespace_checks_deny_unreadable_proc_entries_and_keep_the_underlying_error()
     assert!(verify_control_namespace(Ok("mnt:[1]".into()), Ok("mnt:[1]".into())).is_ok());
     let error = verify_control_namespace(Ok("mnt:[2]".into()), Ok("mnt:[1]".into())).unwrap_err();
     assert!(error.to_string().contains("outside the project sandbox"));
-}
-
-#[test]
-fn legacy_control_remains_available_without_a_protected_listener() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let path = dir.path().join("socket");
-    let _legacy = UnixListener::bind(&path).unwrap();
-    let stream = connect_control(dir.path()).unwrap();
-    assert_eq!(
-        stream.peer_addr().unwrap().as_pathname(),
-        Some(path.as_path())
-    );
 }

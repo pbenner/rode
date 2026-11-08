@@ -21,9 +21,8 @@
 //!
 //! Persistence is a property of the session, not a particular window: closing
 //! one of several views must not end another view's shell. Explicit termination
-//! and last-view cleanup therefore differ. Capability probing and separate
-//! service generations preserve running jobs during editor upgrades instead of
-//! restarting a service merely to obtain newer behavior.
+//! and last-view cleanup therefore differ. Clients require the current protocol;
+//! they never discover or route requests to earlier service generations.
 //!
 //! Agent controllers share this host lifetime but use a single controlling view
 //! rather than PTY-style shared input. Their complete protocol/history state
@@ -60,12 +59,8 @@ mod agents;
 mod control_auth;
 mod runtimes;
 
-/// Runtime-directory generation; distinct from optional protocol feature levels.
-pub const VERSION: u32 = 1;
-/// Current feature level, including partial asynchronous answers and per-question progress.
-pub const PROTOCOL: u32 = 17;
-/// Explanation shown for older services whose lifetime policy cannot be changed.
-pub const LEGACY_PERSISTENCE_HELP: &str = "This terminal uses an older service and keeps its original lifetime setting. Start a new terminal to use the Persist toggle; existing jobs keep running.";
+/// Required service protocol and runtime-directory generation.
+pub const PROTOCOL: u32 = 18;
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 8;
@@ -108,47 +103,18 @@ pub struct Info {
     pub created: u64,
     /// Exit status when known; completed records are normally reaped promptly.
     pub exit_code: Option<u32>,
-    /// Keep running with no attached views; legacy records default to their historical
-    /// persistent behavior.
-    #[serde(default = "persistent_default")]
+    /// Keep running with no attached views.
     pub persistent: bool,
-    /// Whether this service can change persistence in place.
-    #[serde(default)]
-    pub persistence_supported: bool,
     /// Scheduler job name for a managed interactive allocation, retained across
-    /// renames and shared attachments. Absence also supports older services.
-    #[serde(default)]
+    /// renames and shared attachments.
     pub allocation: Option<String>,
-}
-fn persistent_default() -> bool {
-    true
 }
 /// Owner-only Unix-socket control protocol, serialized as JSON with an `action` tag.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
-    /// Probe backend history deletion before creating a browser in an older service.
-    SupportsHistoryDeletion,
-    /// Probe host-owned notebook/debugger controllers without starting work.
-    SupportsRuntimes,
-    /// Probe prompt dispatch that continues without a controlling desktop view.
-    SupportsAutomaticQueue,
-    /// Probe host control that rejects requests from a Landlock domain.
-    SupportsScopedControl,
-    /// Probe host-owned control authentication, including on Landlock ABI 4/5.
-    SupportsAuthenticatedControl,
-    /// Probe named Claude provider settings and its ACP-backed execution.
-    SupportsClaude,
-    /// Probe confined native file tools and command-free Codex launch policy.
-    SupportsFileOnly,
-    /// Probe enforced model-controller networking with native offline commands.
-    SupportsOfflineAgentTools,
-    /// Probe configuration and credential privacy in native agent file tools.
-    SupportsPrivateAgentState,
-    /// Probe message-based asynchronous question forms and answer delivery.
-    SupportsAsyncQuestions,
-    /// Probe partial asynchronous answers and acknowledged per-question progress.
-    SupportsPartialAnswers,
+    /// Report the required protocol before accepting client operations.
+    Protocol,
     /// Discover retained notebook and debugger runtimes.
     Runtimes,
     /// Create a captured host-owned runtime.
@@ -172,12 +138,6 @@ pub enum Request {
     },
     /// List running sessions without keeping an otherwise idle service alive.
     List,
-    /// Probe persistence support before sending newer requests to legacy services.
-    SupportsPersistence,
-    /// Probe allocation metadata before creating work in an older service.
-    SupportsAllocations,
-    /// Probe native agent-controller support without starting an agent.
-    SupportsAgents,
     /// List live agents without starting a service or inference.
     Agents,
     /// Create a host-owned conversation controller on explicit Send/History.
@@ -214,15 +174,12 @@ pub enum Request {
         /// Executable and literal arguments, including any enforcing sandbox prefix.
         argv: Vec<String>,
         /// Startup shell input sent once, never replayed when reattaching.
-        #[serde(default)]
         initial_input: String,
         /// Environment captured from the creating caller.
         env: BTreeMap<String, String>,
         /// Whether to retain the shell after its final view disconnects.
-        #[serde(default = "persistent_default")]
         persistent: bool,
         /// Unique scheduler job name, if this terminal owns an allocation.
-        #[serde(default)]
         allocation: Option<String>,
     },
     /// Attach a streaming view after verifying the workspace policy fingerprint.
@@ -264,6 +221,8 @@ pub enum Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum Response {
+    /// Exact protocol implemented by this service.
+    Protocol(u32),
     /// Discoverable retained notebook/debugger controllers.
     Runtimes(Vec<rode_runtime_core::service::Info>),
     /// Created notebook/debugger identity.
@@ -305,7 +264,7 @@ pub fn directory() -> PathBuf {
     std::env::var_os("RODE_SESSION_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(format!("/tmp/rode-session-v{VERSION}-{}", unsafe {
+            PathBuf::from(format!("/tmp/rode-session-v{PROTOCOL}-{}", unsafe {
                 libc::geteuid()
             }))
         })
@@ -374,53 +333,29 @@ fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::S
 }
 
 #[cfg(target_os = "linux")]
-fn legacy_control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::SocketAddr> {
-    use std::os::linux::net::SocketAddrExt;
-    std::os::unix::net::SocketAddr::from_abstract_name(format!(
-        "rode-session-{}-{}-{}",
-        meta.uid(),
-        meta.dev(),
-        meta.ino()
-    ))
+#[derive(Debug)]
+struct ControlAuthentication;
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for ControlAuthentication {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Cannot authenticate terminal control")
+    }
 }
 
 #[cfg(target_os = "linux")]
 fn connect_authenticated(
     dir: &Path,
     address: &std::os::unix::net::SocketAddr,
-) -> std::io::Result<UnixStream> {
+) -> Result<UnixStream> {
     let mut stream = UnixStream::connect_addr(address)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    control_auth::authenticate(&mut stream, dir).map_err(std::io::Error::other)?;
+    control_auth::authenticate(&mut stream, dir).context(ControlAuthentication)?;
     Ok(stream)
 }
 
-#[cfg(target_os = "linux")]
-fn connect_control_fallback(
-    dir: &Path,
-    address: &std::os::unix::net::SocketAddr,
-) -> std::io::Result<UnixStream> {
-    let legacy = match UnixStream::connect_addr(&legacy_control_address(&fs::metadata(dir)?)?) {
-        Ok(stream) => stream,
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-            UnixStream::connect(dir.join("socket"))?
-        }
-        Err(error) => return Err(error),
-    };
-    // The service can start between the refused abstract connection and this
-    // filesystem connection. It binds its protected listener before publishing
-    // discovery, so check again before treating this socket as a legacy service.
-    // Permission denials on either attempt must never fall back to a pathname.
-    match connect_authenticated(dir, address) {
-        Ok(stream) => Ok(stream),
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(legacy),
-        Err(error) => Err(error),
-    }
-}
-
-/// Authenticate the protected control transport in a private runtime directory.
-/// Legacy filesystem sockets remain supported, but permission denials never fall back.
+/// Authenticate control and require the current protocol in a private runtime directory.
 pub fn connect_control(dir: &Path) -> Result<UnixStream> {
     let meta = fs::symlink_metadata(dir)?;
     ensure!(
@@ -428,23 +363,17 @@ pub fn connect_control(dir: &Path) -> Result<UnixStream> {
         "Unsafe session directory"
     );
     #[cfg(target_os = "linux")]
-    let stream = {
-        let address = control_address(&meta)?;
-        match connect_authenticated(dir, &address) {
-            Ok(stream) => Ok(stream),
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-                // Older services have no abstract listener. New services reject
-                // all requests on this discovery socket, including raw clients.
-                connect_control_fallback(dir, &address)
-            }
-            Err(error) => Err(error),
-        }
-        .context("Cannot access terminal control; use a client outside the project sandbox")?
-    };
+    let mut stream = connect_authenticated(dir, &control_address(&meta)?)
+        .context("Cannot access terminal control; use a client outside the project sandbox")?;
     #[cfg(not(target_os = "linux"))]
-    let stream = UnixStream::connect(dir.join("socket"))?;
+    let mut stream = UnixStream::connect(dir.join("socket"))?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+    send_json(&mut stream, &Request::Protocol)?;
+    ensure!(
+        matches!(recv_json::<_, Response>(&mut stream)?.checked()?, Response::Protocol(version) if version == PROTOCOL),
+        "Terminal service protocol mismatch; use the matching service in a new runtime directory"
+    );
     Ok(stream)
 }
 
@@ -452,7 +381,7 @@ pub fn connect_control(dir: &Path) -> Result<UnixStream> {
 mod control_tests;
 
 /// Perform a blocking control request, starting a matching service when needed. Service
-/// creation is serialized; existing legacy sessions remain separately discoverable.
+/// creation is serialized; only the current runtime directory is used.
 pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
     let until = Instant::now()
         + if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
@@ -461,7 +390,7 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
             Duration::from_secs(10)
         };
     loop {
-        let result = request_routed(request, launcher);
+        let result = request_current(request, launcher);
         let retry = matches!(
             request,
             Request::Create { .. }
@@ -492,140 +421,13 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
-fn service_directories() -> [PathBuf; 15] {
-    let primary = directory();
-    [
-        primary.clone(),
-        primary.join("protocol-2"),
-        primary.join("protocol-3"),
-        primary.join("protocol-6"),
-        primary.join("protocol-7"),
-        primary.join("protocol-8"),
-        primary.join("protocol-9"),
-        primary.join("protocol-10"),
-        primary.join("protocol-11"),
-        primary.join("protocol-12"),
-        primary.join("protocol-13"),
-        primary.join("protocol-14"),
-        primary.join("protocol-15"),
-        primary.join("protocol-16"),
-        primary.join(format!("protocol-{PROTOCOL}")),
-    ]
-}
-fn agents_at(dir: &Path, launcher: &Launcher) -> Result<Vec<rode_agent_core::service::Info>> {
-    match request_once(&Request::Agents, launcher, dir) {
-        Ok(Response::Agents(infos)) => Ok(infos),
-        Err(error)
-            if service_offline(&error)
-                || error.to_string().contains("unknown variant `agents`") =>
-        {
-            Ok(vec![])
-        }
-        Err(error) => Err(error),
-        _ => bail!("Unexpected background-agent listing"),
-    }
-}
-fn runtimes_at(dir: &Path, launcher: &Launcher) -> Result<Vec<rode_runtime_core::service::Info>> {
-    match request_once(&Request::Runtimes, launcher, dir) {
-        Ok(Response::Runtimes(infos)) => Ok(infos),
-        Err(error)
-            if service_offline(&error)
-                || error.to_string().contains("unknown variant `runtimes`") =>
-        {
-            Ok(vec![])
-        }
-        Err(error) => Err(error),
-        _ => bail!("Unexpected runtime listing"),
-    }
-}
-fn creation_directory(launcher: &Launcher) -> Result<PathBuf> {
-    let primary = directory();
-    let compatible = primary.join(format!("protocol-{PROTOCOL}"));
-    if compatible.join("socket").exists() {
-        return Ok(compatible);
-    }
-    if primary.join("socket").exists() {
-        for probe in [
-            Request::SupportsRuntimes,
-            Request::SupportsAutomaticQueue,
-            Request::SupportsScopedControl,
-            Request::SupportsFileOnly,
-            Request::SupportsAuthenticatedControl,
-            Request::SupportsClaude,
-            Request::SupportsOfflineAgentTools,
-            Request::SupportsPrivateAgentState,
-            Request::SupportsAsyncQuestions,
-            Request::SupportsPartialAnswers,
-        ] {
-            match request_once(&probe, launcher, &primary) {
-                Ok(Response::Ok) => {}
-                Err(error) if service_offline(&error) => break,
-                Err(error)
-                    if error
-                        .to_string()
-                        .contains("unknown variant `supports_runtimes`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_automatic_queue`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_scoped_control`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_file_only`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_authenticated_control`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_claude`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_offline_agent_tools`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_private_agent_state`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_async_questions`")
-                        || error
-                            .to_string()
-                            .contains("unknown variant `supports_partial_answers`") =>
-                {
-                    return Ok(compatible);
-                }
-                Err(error) => return Err(error),
-                _ => bail!("Unexpected native service capability response"),
-            }
-        }
-    }
-    Ok(primary)
-}
-fn list_at(dir: &Path, launcher: &Launcher) -> Result<Vec<Info>> {
-    let response = match request_once(&Request::List, launcher, dir) {
-        // A crashed service may leave a socket behind. It cannot supply
-        // sessions, but must not hide a working compatible service. Never
-        // unlink its socket/lock here; startup uses the singleton flock.
-        Err(error) if service_offline(&error) => return Ok(vec![]),
-        result => result?,
-    };
-    let Response::Sessions(infos) = response else {
-        bail!("Unexpected terminal service listing");
-    };
-    Ok(infos)
-}
-fn locate(id: &str, launcher: &Launcher) -> Result<Option<(PathBuf, Info)>> {
-    for dir in service_directories() {
-        if let Some(info) = list_at(&dir, launcher)?
-            .into_iter()
-            .find(|info| info.id == id)
-        {
-            return Ok(Some((dir, info)));
-        }
-    }
-    Ok(None)
-}
 fn service_offline(error: &anyhow::Error) -> bool {
+    // A missing capability or proc descriptor is an authentication failure,
+    // not evidence that the listener and its jobs have gone away.
+    #[cfg(target_os = "linux")]
+    if error.downcast_ref::<ControlAuthentication>().is_some() {
+        return false;
+    }
     error.chain().any(|cause| {
         cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
             matches!(
@@ -635,163 +437,43 @@ fn service_offline(error: &anyhow::Error) -> bool {
         })
     })
 }
-fn request_routed(request: &Request, launcher: &Launcher) -> Result<Response> {
-    match request {
-        Request::Runtimes => {
-            let mut infos = vec![];
-            for dir in service_directories() {
-                infos.extend(runtimes_at(&dir, launcher)?);
-            }
-            infos.sort_by_key(|i| i.created);
-            Ok(Response::Runtimes(infos))
-        }
-        Request::CreateRuntime { spec } => {
-            for dir in service_directories() {
-                if runtimes_at(&dir, launcher)?
-                    .iter()
-                    .any(|info| info.id == spec.id)
-                {
-                    return request_once(request, launcher, &dir);
-                }
-            }
-            request_once(request, launcher, &creation_directory(launcher)?)
-        }
-        Request::AttachRuntime { id, .. } | Request::EndRuntime { id, .. } => {
-            for dir in service_directories() {
-                if runtimes_at(&dir, launcher)?
-                    .iter()
-                    .any(|info| info.id == *id)
-                {
-                    return request_once(request, launcher, &dir);
-                }
-            }
-            ensure!(
-                matches!(request, Request::EndRuntime { .. }),
-                "Runtime is no longer available; refresh the running list"
-            );
-            Ok(Response::Ok)
-        }
-        Request::List => {
-            let mut infos = vec![];
-            for dir in service_directories() {
-                infos.extend(list_at(&dir, launcher)?);
-            }
+fn request_current(request: &Request, launcher: &Launcher) -> Result<Response> {
+    let response = match request_once(request, launcher, &directory()) {
+        Err(error) if service_offline(&error) => match request {
+            Request::List => Response::Sessions(vec![]),
+            Request::Agents => Response::Agents(vec![]),
+            Request::Runtimes => Response::Runtimes(vec![]),
+            Request::End { .. }
+            | Request::EndAgent { .. }
+            | Request::EndRuntime { .. }
+            | Request::Shutdown => Response::Ok,
+            _ => return Err(error),
+        },
+        result => result?,
+    };
+    Ok(match response {
+        Response::Sessions(mut infos) => {
             infos.retain(|info| info.alive);
             infos.sort_by_key(|info| info.created);
-            Ok(Response::Sessions(infos))
+            Response::Sessions(infos)
         }
-        Request::Agents => {
-            let mut infos = vec![];
-            for dir in service_directories() {
-                infos.extend(agents_at(&dir, launcher)?);
-            }
+        Response::Agents(mut infos) => {
             infos.retain(|info| info.alive);
             infos.sort_by_key(|info| info.created);
-            Ok(Response::Agents(infos))
+            Response::Agents(infos)
         }
-        Request::Create { id, .. } => {
-            for dir in service_directories() {
-                if list_at(&dir, launcher)?.iter().any(|info| info.id == *id) {
-                    return request_once(request, launcher, &dir);
-                }
-            }
-            request_once(request, launcher, &creation_directory(launcher)?)
+        Response::Runtimes(mut infos) => {
+            infos.sort_by_key(|info| info.created);
+            Response::Runtimes(infos)
         }
-        Request::CreateAgent { spec } => {
-            for dir in service_directories() {
-                if agents_at(&dir, launcher)?
-                    .iter()
-                    .any(|info| info.id == spec.id)
-                {
-                    return request_once(request, launcher, &dir);
-                }
-            }
-            request_once(request, launcher, &creation_directory(launcher)?)
-        }
-        Request::AttachAgent { id, .. } | Request::EndAgent { id, .. } => {
-            for dir in service_directories() {
-                if agents_at(&dir, launcher)?.iter().any(|info| info.id == *id) {
-                    return request_once(request, launcher, &dir);
-                }
-            }
-            ensure!(
-                matches!(request, Request::EndAgent { .. }),
-                "Background agent is no longer available; refresh the list"
-            );
-            Ok(Response::Ok)
-        }
-        Request::Shutdown => {
-            ensure!(
-                matches!(request_routed(&Request::Runtimes,launcher)?,Response::Runtimes(infos) if infos.is_empty()),
-                "End notebook/debugger runtimes before stopping the service"
-            );
-            ensure!(
-                matches!(request_routed(&Request::List, launcher)?, Response::Sessions(infos) if infos.is_empty()),
-                "End running terminals before stopping the service"
-            );
-            ensure!(
-                matches!(request_routed(&Request::Agents, launcher)?, Response::Agents(infos) if infos.is_empty()),
-                "End running agents before stopping the service"
-            );
-            for dir in service_directories() {
-                if dir.join("socket").exists() {
-                    match request_once(request, launcher, &dir) {
-                        Err(error) if service_offline(&error) => {}
-                        result => {
-                            result?;
-                        }
-                    }
-                }
-            }
-            Ok(Response::Ok)
-        }
-        Request::SupportsPersistence
-        | Request::SupportsAllocations
-        | Request::SupportsAgents
-        | Request::SupportsHistoryDeletion
-        | Request::SupportsRuntimes
-        | Request::SupportsAutomaticQueue
-        | Request::SupportsScopedControl
-        | Request::SupportsAuthenticatedControl
-        | Request::SupportsClaude
-        | Request::SupportsFileOnly
-        | Request::SupportsOfflineAgentTools
-        | Request::SupportsPrivateAgentState
-        | Request::SupportsAsyncQuestions
-        | Request::SupportsPartialAnswers => request_once(request, launcher, &directory()),
-        Request::Attach { id, .. }
-        | Request::Rename { id, .. }
-        | Request::SetPersistence { id, .. }
-        | Request::End { id, .. } => {
-            let Some((dir, info)) = locate(id, launcher)? else {
-                ensure!(
-                    matches!(request, Request::End { .. }),
-                    "Terminal session is no longer available; refresh the session list"
-                );
-                return Ok(Response::Ok);
-            };
-            ensure!(
-                !matches!(request, Request::SetPersistence { .. }) || info.persistence_supported,
-                "{LEGACY_PERSISTENCE_HELP}"
-            );
-            request_once(request, launcher, &dir)
-        }
-    }
+        response => response,
+    })
 }
 fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Response> {
     let mut stream = match connect_control(dir) {
         Ok(stream) => stream,
         Err(error) => {
             if matches!(request, Request::List | Request::Agents | Request::Runtimes) {
-                if !dir.join("socket").exists() {
-                    return Ok(if matches!(request, Request::Runtimes) {
-                        Response::Runtimes(vec![])
-                    } else if matches!(request, Request::Agents) {
-                        Response::Agents(vec![])
-                    } else {
-                        Response::Sessions(vec![])
-                    });
-                }
                 return Err(error)
                     .context("Session service is unavailable; existing jobs were not touched");
             }
@@ -804,10 +486,8 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
                 return Err(error)
                     .context("Session service is offline; no session was created or ended.");
             }
-            // A compatibility service has its own socket and stable lock.
-            // Its parent is the already validated primary runtime directory.
-            if dir != directory() {
-                private_directory()?;
+            if !service_offline(&error) {
+                return Err(error);
             }
             private_directory_at(dir)?;
             let log = OpenOptions::new()
@@ -1192,7 +872,6 @@ impl Server {
                     created: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
                     exit_code: None,
                     persistent,
-                    persistence_supported: true,
                     allocation,
                 };
                 let session = Arc::new(Session {
@@ -1378,6 +1057,11 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
         server.control_auth.verify(&mut stream)?;
         send_json(&mut stream, &Response::Ok)?;
     }
+    ensure!(
+        matches!(recv_json::<_, Request>(&mut stream)?, Request::Protocol),
+        "Session protocol handshake required"
+    );
+    send_json(&mut stream, &Response::Protocol(PROTOCOL))?;
     let request: Request = recv_json(&mut stream)?;
     if let Request::AttachRuntime { id, policy } = &request {
         return server.runtimes.attach(stream, id, policy);
@@ -1464,20 +1148,7 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
     }
     let response = (|| -> Result<Response> {
         Ok(match request {
-            Request::SupportsPersistence
-            | Request::SupportsAllocations
-            | Request::SupportsAgents
-            | Request::SupportsHistoryDeletion
-            | Request::SupportsRuntimes
-            | Request::SupportsAutomaticQueue
-            | Request::SupportsScopedControl
-            | Request::SupportsAuthenticatedControl
-            | Request::SupportsClaude
-            | Request::SupportsFileOnly
-            | Request::SupportsOfflineAgentTools
-            | Request::SupportsPrivateAgentState
-            | Request::SupportsAsyncQuestions
-            | Request::SupportsPartialAnswers => Response::Ok,
+            Request::Protocol => Response::Protocol(PROTOCOL),
             Request::Runtimes => Response::Runtimes(server.runtimes.list()),
             Request::CreateRuntime { spec } => {
                 let _sessions = server.sessions.lock().unwrap();
@@ -1695,13 +1366,7 @@ extern "C" fn resized(_: libc::c_int) {
 /// Attach stdin/stdout to a session after policy verification. Framed mode multiplexes
 /// input/resize/output; dropping a view obeys the session's persistence policy.
 pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
-    let launcher = Launcher {
-        executable: current_executable()?,
-        prefix: vec![],
-    };
-    let (dir, _) = locate(id, &launcher)?
-        .context("Terminal session is no longer available; refresh the session list")?;
-    let mut stream = connect_control(&dir)?;
+    let mut stream = connect_control(&directory())?;
     send_json(
         &mut stream,
         &Request::Attach {

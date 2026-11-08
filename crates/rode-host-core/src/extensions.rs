@@ -643,23 +643,12 @@ pub fn coordinator() -> Result<()> {
     Ok(())
 }
 /// Run the prepared adapter coordinator command with a single framed project request.
-pub fn execute<S: Serialize, H: Serialize>(
+pub fn execute<S: Serialize>(
     command: std::process::Command,
-    request: &crate::project::Request<S, H>,
+    request: &crate::project::Request<S>,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<Reply> {
-    execute_with_prelude(command, request, cancel, vec![])
-}
-
-/// Prepend staged SSH helper bytes before the JSON request, then enforce coordinator
-/// deadline/cancellation/output bounds and validate its JSON reply.
-pub fn execute_with_prelude<S: Serialize, H: Serialize>(
-    command: std::process::Command,
-    request: &crate::project::Request<S, H>,
-    cancel: &std::sync::atomic::AtomicBool,
-    mut input: Vec<u8>,
-) -> Result<Reply> {
-    input.extend(serde_json::to_vec(request)?);
+    let mut input = serde_json::to_vec(request)?;
     input.push(b'\n');
     let output = crate::project::run_controlled(
         command,

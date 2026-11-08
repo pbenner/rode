@@ -4,7 +4,7 @@ Use this checklist for the exact commit intended for release. Local checks, opti
 
 ## Source and documentation
 
-- Check the diff for unrelated local files, debug code, obsolete launch paths and duplicated sources. Keep compatibility code that protects saved data, running sessions or supported agent protocols; its removal needs a deliberate migration decision and regression coverage.
+- Check the diff for unrelated local files, debug code, obsolete launch paths and duplicated sources. Remove obsolete compatibility paths, their callers and fixtures together. Require the current session protocol and validate current persistence, attachment and shutdown behavior.
 - Run `mise run check` with the [documented system dependencies](development.md). This covers formatting, Python/CI/packaging regressions, Rust API documentation, Clippy and ordinary workspace Rust tests.
 - Run `scripts/uvx.sh --from mkdocs==1.6.1 mkdocs build --strict`. Review the published guides and repository-file links as well as warning-free generation.
 - Follow changed operations through the [source map and ownership contracts](architecture.md). Document host identity, coordinate units, cancellation, version checks and resource lifetime where those contracts live. Keep public API documentation and the user-facing guide consistent with the final behavior.
@@ -31,7 +31,7 @@ Linux x86_64 is the locally validated platform. Treat arm64, particular desktop 
 
 1. Set the intended version in `Cargo.toml`, review workspace package versions and keep `Cargo.lock` consistent. Package versions, helper API revisions and host/session protocol versions are separate contracts; change compatibility revisions only when their documented contracts require it.
 2. Supply a real **DEB_MAINTAINER** identity before redistribution. Full CI uses an explicitly marked test identity; its package artifact is validation output.
-3. Build on the oldest desktop distribution being supported. Run the [Debian package validation](packaging.md#validation), including extracted GUI startup and a real helper-owned shell. `--skip-build` requires the current standalone static helper or an explicit `--helper` path; it must not pick a stale pre-migration executable.
+3. Build on the oldest desktop distribution being supported. Run the [Debian package validation](packaging.md#validation), including extracted GUI startup and a real helper-owned shell. `--skip-build` requires the current standalone static helper or an explicit `--helper` path; it must not pick a stale executable.
 4. If distributing the optional agent runtime, validate it separately and check that the core editor also works without it. Include complete notices and verify the final artifact checksums.
 5. Tag only the validated commit. The package workflow requires a tag equal to `v` plus the root package version. Tagging triggers package construction; publishing a GitHub Release and installing packages remain explicit actions.
 

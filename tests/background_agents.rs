@@ -254,7 +254,7 @@ fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_promp
             fs::write(fixture.root.join("record-inputs"), "").unwrap();
             let prompt = format!("overflow-{stream}");
             let info = fixture.create(provider, true, &prompt);
-            assert!(info.supports_recovery);
+
             let mut view = fixture.attach(&info);
             view.until(|s| s.chat.connected && s.chat.busy);
             view.queue(
@@ -515,7 +515,7 @@ fn native_tool_controller(model_only: bool) {
     });
     let mut view = fixture.attach(&info);
     let state = view.until(|state| state.chat.connected);
-    assert_eq!(state.chat.config.access(), access);
+    assert_eq!(state.chat.config.access, access);
     // Recovery must rebuild the verified file-only tools, never resume a thread
     // with command tools enabled or repeat the completed edit automatically.
     let pid: i32 = fs::read_to_string(fixture.root.join("file-agent.pid"))
@@ -542,7 +542,7 @@ fn native_tool_controller(model_only: bool) {
         },
     );
     let ready = view.until(|s| s.chat.connected && !s.chat.busy && !s.chat.recoverable);
-    assert_eq!(ready.chat.config.access(), access);
+    assert_eq!(ready.chat.config.access, access);
     assert!(!fixture.root.join("forbidden").exists());
     let calls: Vec<serde_json::Value> =
         fs::read_to_string(fixture.root.join("file-agent-rpc.jsonl"))
@@ -652,25 +652,26 @@ fn restored_prompt_recall_survives_native_deltas_and_reattachment() {
         .apply(Some(&restored))
         .unwrap();
         assert_eq!(assembled.chat.input_history, restored.chat.input_history);
-        // Older services remain usable through the visible-message fallback.
-        let mut legacy = restored.chat.clone();
-        legacy.input_history = None;
-        let expected: Vec<_> = legacy
+        let mut incomplete = restored.clone();
+        incomplete.chat.input_history = None;
+        let order = incomplete
+            .chat
             .messages
             .iter()
-            .filter(|m| m.role == rode_agent_core::protocol::Role::User)
-            .map(|m| m.text.clone())
+            .map(|m| m.id.clone())
             .collect();
-        let mut mirror = rode_agent_core::protocol::Chat::default();
-        mirror.apply_view(legacy);
-        assert_eq!(
-            mirror.input_history().collect::<Vec<_>>(),
-            expected.iter().map(String::as_str).collect::<Vec<_>>()
+        assert!(
+            rode_agent_core::service::Update {
+                state: incomplete,
+                order
+            }
+            .apply(None)
+            .is_err()
         );
         view.send(Action::Submit {
             text: "new follow-up".into(),
             attachments: vec![],
-            config: restored.chat.config,
+            config: Box::new(restored.chat.config),
         });
         let done = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
         assert_eq!(
@@ -864,7 +865,7 @@ fn history_deletion_uses_host_backend_and_protects_another_open_controller() {
         current.send(Action::Submit {
             text: "still open".into(),
             attachments: vec![],
-            config,
+            config: Box::new(config),
         });
         let state = current.until(|s| s.chat.completed == 2);
         assert_eq!(state.chat.conversation, conversation);
@@ -905,7 +906,7 @@ fn persistent_agents_finish_without_a_view_and_resume_the_same_conversation() {
         view.send(Action::Submit {
             attachments: vec![],
             text: "second".into(),
-            config: state.chat.config,
+            config: Box::new(state.chat.config),
         });
         let state = view.until(|s| s.chat.completed == 2 && !s.chat.busy);
         assert_eq!(
@@ -1270,119 +1271,6 @@ fn automatic_queue_configuration_cannot_change_the_captured_backend() {
 }
 
 #[test]
-fn automatic_queue_upgrade_preserves_primary_and_compatible_legacy_services() {
-    for (
-        generation,
-        queue_capable,
-        agent_capable,
-        offline_capable,
-        private_state_capable,
-        async_capable,
-    ) in [
-        (None, false, false, false, false, false),
-        (None, true, false, false, false, false),
-        (Some("protocol-8"), false, false, false, false, false),
-        (Some("protocol-9"), true, false, false, false, false),
-        (None, true, true, false, false, false),
-        (Some("protocol-13"), true, true, false, false, false),
-        (None, true, true, true, false, false),
-        (Some("protocol-14"), true, true, true, false, false),
-        (None, true, true, true, true, false),
-        (Some("protocol-15"), true, true, true, true, false),
-        (None, true, true, true, true, true),
-        (Some("protocol-16"), true, true, true, true, true),
-    ] {
-        let fixture = Fixture::new();
-        let directory = generation.map_or_else(
-            || fixture.runtime.clone(),
-            |name| fixture.runtime.join(name),
-        );
-        fs::create_dir_all(directory.parent().unwrap()).unwrap();
-        fs::set_permissions(
-            directory.parent().unwrap(),
-            fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
-        let id = rode_session::new_id().unwrap();
-        let mut legacy = Command::new("python3")
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/session_v1.py"
-            ))
-            .arg(&directory)
-            .arg(&fixture.root)
-            .arg(&id)
-            .arg("legacy-policy")
-            .env("RODE_TEST_RUNTIME_CAPABLE", "1")
-            .env(
-                "RODE_TEST_ASYNC_QUESTIONS_CAPABLE",
-                if async_capable { "1" } else { "" },
-            )
-            .env(
-                "RODE_TEST_OFFLINE_CAPABLE",
-                if offline_capable { "1" } else { "" },
-            )
-            .env(
-                "RODE_TEST_AGENT_CAPABLE",
-                if agent_capable { "1" } else { "" },
-            )
-            .env(
-                "RODE_TEST_QUEUE_CAPABLE",
-                if queue_capable { "1" } else { "" },
-            )
-            .env(
-                "RODE_TEST_PRIVATE_STATE_CAPABLE",
-                if private_state_capable { "1" } else { "" },
-            )
-            .spawn()
-            .unwrap();
-        struct Stop<'a>(&'a mut Child);
-        impl Drop for Stop<'_> {
-            fn drop(&mut self) {
-                // The fixture handles TERM by closing its owned shell and PTY.
-                unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
-                let _ = self.0.wait();
-            }
-        }
-        let _stop = Stop(&mut legacy);
-        wait(|| directory.join("socket").exists());
-        let info = fixture.create(Provider::Codex, true, "work");
-        assert!(info.automatic_queue);
-        let Response::Sessions(sessions) = fixture.rpc(&Request::List).unwrap() else {
-            panic!()
-        };
-        assert!(sessions.iter().any(|s| s.id == id && s.alive));
-        let actions = fs::read_to_string(directory.join("requests")).unwrap();
-        assert!(!actions.lines().any(|s| s == "create_agent"));
-        if generation.is_none() {
-            assert!(actions.lines().any(|s| s == "supports_runtimes"));
-            assert!(actions.lines().any(|s| s == "supports_automatic_queue"));
-            if queue_capable {
-                assert!(actions.lines().any(|s| s == "supports_scoped_control"));
-            }
-            if agent_capable {
-                assert!(actions.lines().any(|s| s == "supports_offline_agent_tools"));
-            }
-            if offline_capable {
-                assert!(actions.lines().any(|s| s == "supports_private_agent_state"));
-            }
-            if private_state_capable {
-                assert!(actions.lines().any(|s| s == "supports_async_questions"));
-            }
-            if async_capable {
-                assert!(actions.lines().any(|s| s == "supports_partial_answers"));
-            }
-            assert!(
-                fixture
-                    .runtime
-                    .join(format!("protocol-{}/socket", rode_session::PROTOCOL))
-                    .exists()
-            );
-        }
-    }
-}
-
-#[test]
 fn native_agent_creation_and_follow_ups_preserve_large_document_snapshots() {
     use rode_agent_core::attachment::Attachment;
     let fixture = Fixture::new();
@@ -1392,7 +1280,7 @@ fn native_agent_creation_and_follow_ups_preserve_large_document_snapshots() {
     };
     let info =
         fixture.create_with_attachments(Provider::Codex, false, "first", vec![document.clone()]);
-    assert!(info.supports_attachments);
+
     fs::write(fixture.root.join("continue"), "").unwrap();
     let mut view = fixture.attach(&info);
     let state = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
@@ -1413,7 +1301,7 @@ fn native_agent_creation_and_follow_ups_preserve_large_document_snapshots() {
     view.send(Action::Submit {
         text: "follow up".into(),
         attachments: vec![document],
-        config: state.chat.config,
+        config: Box::new(state.chat.config),
     });
     let state = view.until(|s| s.chat.completed == 2 && !s.chat.busy);
     assert!(
@@ -1434,7 +1322,7 @@ fn queued_prompts_and_files_survive_view_replacement_without_reordering_or_dupli
         let fixture = Fixture::new();
         fs::write(fixture.root.join("record-inputs"), "").unwrap();
         let info = fixture.create(provider, true, "work");
-        assert!(info.supports_queue);
+
         let mut view = fixture.attach(&info);
         view.until(|s| s.chat.connected && s.chat.busy);
         let file = Attachment::Document {
@@ -1554,7 +1442,7 @@ fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_
         let fixture = Fixture::new();
         fs::write(fixture.root.join("record-inputs"), "").unwrap();
         let info = fixture.create(provider, true, "work");
-        assert!(info.automatic_queue);
+
         let mut view = fixture.attach(&info);
         let state = view.until(|s| s.chat.connected && s.chat.busy);
         let mut config = state.chat.config;

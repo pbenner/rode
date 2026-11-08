@@ -53,7 +53,7 @@ mod tests {
             let mut info: rode_session::Info = serde_json::from_value(serde_json::json!({
                 "id": "session", "name": "shell", "root": plan.root,
                 "policy": service::fingerprint(&plan), "mode": plan.label(),
-                "alive": true, "clients": 1, "created": 0, "exit_code": null
+                "alive": true, "clients": 1, "created": 0, "exit_code": null, "persistent": false, "allocation": null
             }))
             .unwrap();
             assert!(app.compatible_session(&info));
@@ -381,14 +381,6 @@ impl EditorApp {
     pub(super) fn session_busy(&self) -> bool {
         self.sessions.starting || self.sessions.busy
     }
-    /// Check the selected native terminal's negotiated in-place lifetime-toggle capability.
-    pub(super) fn terminal_persistence_supported(&self) -> bool {
-        self.sessions
-            .active
-            .as_ref()
-            .and_then(|meta| meta.native.as_ref())
-            .is_some_and(|info| info.persistence_supported)
-    }
     /// Include pending terminal/runtime creation, lifetime changes and cleanup in the exit barrier.
     pub(super) fn sessions_need_exit_check(&self) -> bool {
         self.sessions.starting
@@ -613,7 +605,6 @@ impl EditorApp {
                                 request: project::Request::Sessions {
                                     root,
                                     operation,
-                                    helper: None,
                                     directory: std::env::var("RODE_SESSION_DIR").ok(),
                                 },
                             },
@@ -856,10 +847,6 @@ impl EditorApp {
         else {
             return;
         };
-        if !info.persistence_supported {
-            self.notify(rode_session::LEGACY_PERSISTENCE_HELP, true);
-            return;
-        }
         let operation = service::Operation::SetPersistence {
             id: info.id.clone(),
             policy: info.policy.clone(),
@@ -983,7 +970,8 @@ impl EditorApp {
                     }
                     rode_session::Response::Ok => {}
                     rode_session::Response::Error(error) => self.notify(error, true),
-                    rode_session::Response::Agents(_)
+                    rode_session::Response::Protocol(_)
+                    | rode_session::Response::Agents(_)
                     | rode_session::Response::Agent(_)
                     | rode_session::Response::Runtimes(_)
                     | rode_session::Response::Runtime(_) => {

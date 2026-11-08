@@ -2,8 +2,8 @@
 use super::super::*;
 use rode_runtime_core::service::{Info, Spec, Start};
 use std::{
-    io::{Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixListener},
+    io::Write,
+    os::unix::fs::PermissionsExt,
     process::{Command, Stdio},
 };
 
@@ -28,6 +28,13 @@ fn notebook_shutdown_ownership_survives_view_replacement_and_reports_failures() 
         "reload_foreground",
     ] {
         let root = tempfile::tempdir().unwrap();
+        let wrapper = root.path().join("helper.py");
+        std::fs::write(
+            &wrapper,
+            include_str!("../../../../tests/fixtures/session_helper_gate.py"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
         let output = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -37,7 +44,9 @@ fn notebook_shutdown_ownership_survives_view_replacement_and_reports_failures() 
             ])
             .env("RODE_NOTEBOOK_SHUTDOWN_CASE", case)
             .env("RODE_SESSION_DIR", root.path().join("runtime"))
-            .env("RODE_SESSION_HELPER", &helper)
+            .env("RODE_SESSION_HELPER", &wrapper)
+            .env("RODE_TEST_REAL_SESSION_HELPER", &helper)
+            .env("RODE_TEST_HELPER_GATE", root.path())
             .output()
             .unwrap();
         assert!(
@@ -146,69 +155,33 @@ impl Drop for Host {
     }
 }
 
-/// A legacy service can delay routing before End reaches the current service.
-/// Hold that exact window open instead of relying on sleeps in a fast local test.
-struct BlockedDiscovery {
-    entered: mpsc::Receiver<()>,
-    release: Option<mpsc::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
+/// Hold the matching helper's readiness check while a shutdown is pending.
+struct BlockedHelper {
+    root: PathBuf,
 }
-impl BlockedDiscovery {
-    fn new(directory: &std::path::Path, failure: bool) -> Self {
-        let socket = directory.join("socket");
-        let listener = UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let (ready, entered) = mpsc::channel();
-        let (release, gate) = mpsc::channel();
-        let thread = std::thread::spawn(move || {
-            let until = Instant::now() + Duration::from_secs(10);
-            let mut peer = loop {
-                match listener.accept() {
-                    Ok((peer, _)) => break peer,
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::WouldBlock
-                            && Instant::now() < until =>
-                    {
-                        std::thread::sleep(Duration::from_millis(5))
-                    }
-                    Err(error) => panic!("No pending shutdown reached discovery: {error}"),
-                }
-            };
-            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            let mut len = [0u8; 4];
-            peer.read_exact(&mut len).unwrap();
-            let mut frame = vec![0; u32::from_be_bytes(len) as usize];
-            peer.read_exact(&mut frame).unwrap();
-            ready.send(()).unwrap();
-            let _ = gate.recv_timeout(Duration::from_secs(10));
-            let response = if failure {
-                br#"J{"kind":"error","data":"Fixture host connection lost"}"#.as_slice()
-            } else {
-                br#"J{"kind":"runtimes","data":[]}"#.as_slice()
-            };
-            let _ = peer
-                .write_all(&(response.len() as u32).to_be_bytes())
-                .and_then(|_| peer.write_all(response));
-            drop(listener);
-            let _ = std::fs::remove_file(socket);
-        });
-        Self {
-            entered,
-            release: Some(release),
-            thread: Some(thread),
+impl BlockedHelper {
+    fn new(root: &std::path::Path, failure: bool) -> Self {
+        if failure {
+            std::fs::write(root.join("fail"), "").unwrap();
+        }
+        std::fs::write(root.join("hold"), "").unwrap();
+        Self { root: root.into() }
+    }
+    fn wait(&self) {
+        let until = Instant::now() + Duration::from_secs(5);
+        while !self.root.join("entered").exists() {
+            assert!(
+                Instant::now() < until,
+                "Shutdown did not reach helper readiness check"
+            );
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
-    fn release(&mut self) {
-        if let Some(release) = self.release.take() {
-            let _ = release.send(());
-        }
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
-        }
+    fn release(&self) {
+        std::fs::write(self.root.join("release"), "").unwrap();
     }
 }
-impl Drop for BlockedDiscovery {
+impl Drop for BlockedHelper {
     fn drop(&mut self) {
         self.release();
     }
@@ -229,8 +202,8 @@ fn notebook_shutdown_probe() {
         ..Default::default()
     };
     let host = Host {
-        helper: std::env::var("RODE_SESSION_HELPER").unwrap(),
-        directory: primary.join(format!("protocol-{}", rode_session::PROTOCOL)),
+        helper: std::env::var("RODE_TEST_REAL_SESSION_HELPER").unwrap(),
+        directory: primary.clone(),
         id: rode_session::new_id().unwrap(),
         policy: crate::sessions::fingerprint(&plan),
         plan,
@@ -325,13 +298,10 @@ fn notebook_shutdown_probe() {
     }
     app.documents[0].notebook.as_mut().unwrap().kernel = Some(kernel);
     let failure = case == "shutdown_failure";
-    let mut blocked = BlockedDiscovery::new(&primary, failure);
+    let blocked = BlockedHelper::new(primary.parent().unwrap(), failure);
     app.toggle_notebook_source(&ctx);
     assert!(app.sessions_need_exit_check());
-    blocked
-        .entered
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
+    blocked.wait();
     if case == "close_tab" {
         app.perform(crate::app::Action::CloseTab(app.documents[0].id), &ctx);
         assert!(app.documents.is_empty());
@@ -369,9 +339,11 @@ fn notebook_shutdown_probe() {
     if failure {
         assert!(!app.quitting);
         assert!(!app.session_exit_pending());
-        assert!(app.notice.as_ref().is_some_and(
-            |(message, error, _)| *error && message.contains("Fixture host connection lost")
-        ));
+        assert!(
+            app.notice.as_ref().is_some_and(
+                |(message, error, _)| *error && message.contains("RODE_SESSION_HELPER")
+            )
+        );
         assert!(
             host.infos()
                 .iter()

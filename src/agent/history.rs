@@ -109,7 +109,7 @@ impl Browser {
     }
     /// Additional process output, including startup warnings, without the operation error.
     pub fn backend_output(&self) -> &str {
-        self.view.backend_output.as_deref().unwrap_or_default()
+        &self.view.backend_output
     }
     fn connection_closed(&mut self, error: String) {
         self.view.status = error;
@@ -122,16 +122,6 @@ impl Browser {
     }
     fn describe_status(&mut self) {
         self.diagnostics.clear();
-        // Older host services appended stderr to the operation error. Keep
-        // those diagnostics separate even before the host service is upgraded.
-        if self.view.backend_output.is_none() {
-            // Legacy failures separated the error from accumulated stderr
-            // with a blank line. Preserve multiline error messages intact.
-            if let Some((primary, output)) = self.view.status.split_once("\n\n") {
-                self.view.backend_output = Some(output.trim().into());
-                self.view.status = primary.into();
-            }
-        }
         if let Some(mut explanation) = writer_conflict(&self.view.status) {
             if self.view.status.starts_with("Agent history: ")
                 && let Some(selected) = self.selected.take()
@@ -253,8 +243,7 @@ impl Browser {
     }
 }
 
-/// Interpret ownership failures at the desktop boundary, including replies
-/// from older services which may still own detached agents after an upgrade.
+/// Interpret host ownership failures at the desktop boundary.
 fn writer_conflict(status: &str) -> Option<String> {
     let primary = status.lines().next()?;
     if primary
@@ -304,7 +293,7 @@ mod tests {
         let error = "Agent history: Cannot read saved chat\nPermission denied\n\nCheck directory permissions";
         let view: HistoryView = serde_json::from_value(serde_json::json!({
             "entries": [], "status": error, "busy": false, "can_resume": false,
-            "more": false, "backend_output": ""
+            "more": false, "backend_output": "", "owners": {}, "can_delete": false, "deleting": false
         }))
         .unwrap();
         let mut browser = presentation(view);
@@ -318,7 +307,7 @@ mod tests {
     fn deletion_conflicts_cannot_mark_an_earlier_restore_selection_as_owned() {
         let mut browser = presentation(HistoryView {
             status: "Deleted 0 chats before this operation stopped. Agent history: thread different-chat already has an active writer".into(),
-            backend_output: Some(String::new()),
+            backend_output: String::new(),
             ..Default::default()
         });
         browser.selected = Some("earlier-selection".into());
@@ -326,33 +315,6 @@ mod tests {
         assert!(browser.status.starts_with("No chats were deleted."));
         assert!(browser.owners.is_empty());
         assert!(browser.locked.is_empty());
-    }
-
-    #[test]
-    fn legacy_service_output_does_not_obscure_the_failure_or_claim_unrelated_ownership() {
-        for primary in [
-            "Agent history: thread saved-1 already has an active writer",
-            "Agent history: Permission denied",
-        ] {
-            let mut browser = presentation(HistoryView {
-                status: format!(
-                    "{primary}\n\nERROR: Codex could not find bubblewrap on PATH; using the bundled copy"
-                ),
-                ..Default::default()
-            });
-            browser.selected = Some("saved-1".into());
-            browser.describe_status();
-            assert!(!browser.status.contains("bubblewrap"));
-            assert!(!browser.diagnostics().contains("bubblewrap"));
-            assert!(browser.backend_output().contains("using the bundled copy"));
-            if primary.contains("active writer") {
-                assert!(browser.status.starts_with("Cannot restore this chat:"));
-                assert_eq!(browser.owners.get("saved-1"), Some(&Owner::OtherProcess));
-            } else {
-                assert_eq!(browser.status, primary);
-                assert!(browser.owners.is_empty());
-            }
-        }
     }
 
     #[test]

@@ -578,7 +578,8 @@ impl EditorApp {
                             let claude = agents.config.provider == Provider::Claude;
                             ui.label(if claude { "Claude ACP adapter on this host" } else { "ACP executable on this host" });
                             let program = if claude { &mut agents.config.claude_program } else { &mut agents.config.acp_program };
-                            ui.add(egui::TextEdit::singleline(program).desired_width(f32::INFINITY).hint_text(if claude { rode_agent_core::CLAUDE_ACP } else { "agent executable or absolute path" }).char_limit(4096));
+                            let executable = ui.add(egui::TextEdit::singleline(program).desired_width(f32::INFINITY).hint_text(if claude { rode_agent_core::CLAUDE_ACP } else { "agent executable or absolute path" }).char_limit(4096));
+                            ui_probe::button(ui, if claude { "agent-claude-executable" } else { "agent-acp-executable" }, &executable);
                             ui.label("Arguments (JSON array)");
                             if ui.add(egui::TextEdit::singleline(&mut agents.arguments).desired_width(f32::INFINITY).hint_text("[\"acp\"]").char_limit(16384)).changed() {
                                 match serde_json::from_str::<Vec<String>>(&agents.arguments) {
@@ -606,7 +607,8 @@ impl EditorApp {
                                 ui.label("Local model API base URL");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048)).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");
                                 ui.label("Installed model name");
-                                ui.add(egui::TextEdit::singleline(&mut agents.config.local_model).desired_width(f32::INFINITY).hint_text("Model already available on the local server").char_limit(256));
+                                let model = ui.add(egui::TextEdit::singleline(&mut agents.config.local_model).desired_width(f32::INFINITY).hint_text("Model already available on the local server").char_limit(256));
+                                ui_probe::button(ui, "agent-local-model", &model);
                             } else {
                                 ui.label("Model (blank: Codex default)");
                                 ui.add(egui::TextEdit::singleline(&mut agents.config.model).desired_width(f32::INFINITY).char_limit(256));
@@ -618,7 +620,9 @@ impl EditorApp {
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add_enabled(!offline && !installing && !answering,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project").clicked() {
+                let history = ui.add_enabled(!offline && !installing && !answering,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project");
+                ui_probe::button(ui, "agent-history", &history);
+                if history.clicked() {
                     agents.history_open = !agents.history_open;
                     if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
                 }
@@ -666,7 +670,11 @@ impl EditorApp {
                             ui.collapsing("Details",|ui| { ui.add(egui::Label::new(RichText::new(&prompt.detail).monospace().size(11.)).wrap().selectable(true)); });
                         }
                         ui.horizontal_wrapped(|ui| {
-                            for choice in &prompt.choices { if ui.button(&choice.label).clicked() {answer=Some(choice.result.clone());} }
+                            for (index, choice) in prompt.choices.iter().enumerate() {
+                                let response = ui.button(&choice.label);
+                                ui_probe::button(ui, &format!("agent-permission-choice-{index}"), &response);
+                                if response.clicked() {answer=Some(choice.result.clone());}
+                            }
                         });
                     });
                 });
@@ -770,6 +778,9 @@ impl EditorApp {
                 }
             }
             ui_probe::button(ui, "agent-composer", &response);
+            if agents.draft.is_empty() {
+                ui_probe::button(ui, "agent-composer-empty", &response);
+            }
             if agents.config.personality == before.personality
                 && agents.chat.response_style_status(agents.config.personality).is_none() {
                 ui_probe::button(ui, "agent-tone-ready", &response);
@@ -818,16 +829,14 @@ impl EditorApp {
                             {
                                 send = true;
                             }
-                            if agents.chat.busy
-                                && ui
-                                    .button(if agents.chat.stopping() {
+                            if agents.chat.busy {
+                                let button = ui.button(if agents.chat.stopping() {
                                         "Close process"
                                     } else {
                                         "Stop"
-                                    })
-                                    .clicked()
-                            {
-                                stop = true;
+                                    });
+                                ui_probe::button(ui, "agent-stop", &button);
+                                if button.clicked() { stop = true; }
                             }
                             if !agents.chat.busy
                                 && agents.chat.connected()
@@ -1032,11 +1041,7 @@ impl EditorApp {
             || self.agents.queue.waiting_for_reply()
             || !self.agents.queue.is_empty()
         {
-            if !self.agents.chat.supports_queue() {
-                Err(anyhow::anyhow!(
-                    "This running agent predates persistent queues. Start a new chat to queue prompts without losing them on restart."
-                ))
-            } else if !self.agents.chat.queue_capacity() {
+            if !self.agents.chat.queue_capacity() {
                 Err(anyhow::anyhow!("Wait for queued changes to be saved."))
             } else {
                 let result = self.agents.queue.push_with_attachments(text, files);

@@ -730,10 +730,14 @@ impl EditorApp {
                                 }
                             }
                             Job::BrowseFiles { .. } => self.file_browser.loaded(response),
-                            Job::Browse { .. } => {
+                            Job::Browse { options, .. } => {
                                 if self.folder_policy_path != response.path {
-                                    if let Some(saved) =
-                                        self.saved_sandbox_for(&response.path, self.folder_remote)
+                                    // Canonicalizing a symlink can change the path
+                                    // while this reply is in flight. Preserve edits
+                                    // made since the listing was requested.
+                                    if self.folder_sandbox == options
+                                        && let Some(saved) = self
+                                            .saved_sandbox_for(&response.path, self.folder_remote)
                                     {
                                         self.folder_sandbox = saved;
                                     }

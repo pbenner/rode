@@ -244,13 +244,7 @@ try:
             result = {"thread": {"id": thread_id}}
             if acp:
                 result = {"sessionId": session_id}
-                if "--legacy-controls" in sys.argv:
-                    result["modes"] = {
-                        "currentModeId": option_values["mode"],
-                        "availableModes": [{"id": mode, "name": mode} for mode in ["ask", "code"]],
-                    }
-                else:
-                    result["configOptions"] = controls()
+                result["configOptions"] = controls()
             response(request, result)
         elif method in ("thread/list", "session/list"):
             assert params["cwd"] == str(root)
@@ -519,19 +513,6 @@ try:
             if "--ignore-controls" not in sys.argv:
                 option_values[name] = params["value"]
             response(request, {"configOptions": controls()})
-        elif method == "session/set_mode":
-            option_values["mode"] = params["modeId"]
-            notify(
-                "session/update",
-                {
-                    "sessionId": session_id,
-                    "update": {
-                        "sessionUpdate": "current_mode_update",
-                        "currentModeId": params["modeId"],
-                    },
-                },
-            )
-            response(request, {})
         elif method in ("turn/start", "session/prompt"):
             counter += 1
             waiting = request

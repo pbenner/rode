@@ -225,7 +225,6 @@ fn native_agent_controllers_honor_environment_prefixes_in_normal_mode() {
                 mise: true,
                 request: Box::new(request),
             },
-            helper: None,
             directory: None,
         },
     };
@@ -292,7 +291,6 @@ fn native_kernel_controllers_resolve_the_provider_before_starting_the_bridge() {
                 mise: true,
                 request: Box::new(request),
             },
-            helper: None,
             directory: None,
         },
     };

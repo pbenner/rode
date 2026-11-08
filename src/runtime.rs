@@ -26,7 +26,6 @@ pub fn request(
             request: project::Request::Sessions {
                 root: plan.root.clone(),
                 operation,
-                helper: None,
                 directory: std::env::var("RODE_SESSION_DIR").ok(),
             },
         })?;

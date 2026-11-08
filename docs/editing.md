@@ -4,7 +4,7 @@
 
 Right-click a file, folder, or the project name in the explorer to open its menu. Press Escape to close the menu. Mutations run on supported Linux project hosts.
 
-- **Open as project** opens the selected folder on its current local or SSH host, using the normal unsaved-edit and encrypted-project guards.
+- **Open as project** opens the normal project dialog with the selected folder prefilled on the current local or SSH host. It loads any saved sandbox settings for that folder, otherwise starting with the current project's policy. Choose the sandbox and access rules before confirming Open. Cancelling leaves the current project intact; confirming uses the normal unsaved-edit and encrypted-project guards.
 - **New file…** and **New folder…** create a named entry inside the selected folder, or beside a selected file.
 - **Rename…** updates open editor paths, including files inside a renamed folder, while preserving unsaved edits.
 - **Duplicate…** copies saved file or folder contents to a new name. Existing destinations are never replaced. Executable permissions are retained and symbolic links are copied as links.

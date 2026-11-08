@@ -1,4 +1,4 @@
-//! Real native service/PTYS, shared attachment, explicit persistence, upgrade compatibility and
+//! Real native service/PTYS, shared attachment, explicit persistence and
 //! idle/child cleanup in private runtimes.
 
 #[path = "support/native.rs"]
@@ -118,8 +118,8 @@ impl Fixture {
             .unwrap()
     }
     fn direct_list(&self) -> Vec<rode_session::Info> {
-        // Inspect the daemon itself, bypassing client-side filtering for
-        // older helpers, so these checks prove its records are released.
+        // Inspect the daemon itself, bypassing client-side filtering, so these
+        // checks prove its records are released.
         let mut stream = rode_session::connect_control(&self.runtime).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -313,7 +313,7 @@ fn native_ssh_attach_never_runs_a_synchronous_connection_probe() {
     };
     let info: rode_session::Info = serde_json::from_value(serde_json::json!({
         "id":"s-0123456789abcdef0123456789abcdef", "name":"Fixture", "root":"/", "policy":"a".repeat(64),
-        "mode":"NORMAL MODE", "alive":true,"clients":0,"created":0,"exit_code":null
+        "mode":"NORMAL MODE", "alive":true,"clients":0,"created":0,"exit_code":null,"persistent":false,"allocation":null
     })).unwrap();
     let result = Terminal::native_session(
         &eframe::egui::Context::default(),
@@ -389,18 +389,6 @@ fn persistence_changes_in_place_and_nonpersistent_sessions_end_only_after_the_la
             .iter()
             .any(|i| i.id == keeper.id && i.alive && i.persistent)
     );
-}
-
-#[test]
-fn older_session_metadata_retains_persistence_instead_of_ending_existing_jobs() {
-    let info: rode_session::Info = serde_json::from_value(serde_json::json!({
-        "id":"legacy", "name":"old", "root":"/", "policy":"old", "mode":"NORMAL MODE",
-        "alive":true, "clients":1, "created":0, "exit_code":null,
-    }))
-    .unwrap();
-    assert!(info.persistent);
-    assert!(!info.persistence_supported);
-    assert!(info.allocation.is_none());
 }
 
 #[test]
@@ -691,169 +679,24 @@ uid: 1, version: 0, code: "import os\nprint('ALLOCATED', os.environ['SLURM_JOB_I
 #[test]
 fn stale_service_sockets_do_not_hide_sessions_or_prevent_safe_startup() {
     use std::os::unix::{fs::PermissionsExt, net::UnixListener};
-    for stale_compatible in [false, true] {
-        let mut fixture = Fixture::new();
-        fs::create_dir(&fixture.runtime).unwrap();
-        fs::set_permissions(&fixture.runtime, fs::Permissions::from_mode(0o700)).unwrap();
-        drop(UnixListener::bind(fixture.runtime.join("socket")).unwrap());
-        if stale_compatible {
-            let path = fixture.runtime.join("protocol-2");
-            fs::create_dir(&path).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-            drop(UnixListener::bind(path.join("socket")).unwrap());
-        }
-        let info = fixture.create_with_persistence(&fixture.plan(), false);
-        assert!(info.persistence_supported && !info.persistent);
-        let terminal = fixture.attach(&info);
-        terminal
-            .send(b"printf 'RECOVERED_%s\\n' READY\n".to_vec())
-            .unwrap();
-        wait(|| terminal.contents().contains("RECOVERED_READY"));
-        let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
-            panic!()
-        };
-        assert_eq!(infos.len(), 1);
-        assert_eq!(infos[0].id, info.id);
-    }
-}
-
-#[test]
-fn older_service_keeps_its_jobs_while_new_terminals_get_persistence_controls() {
     let mut fixture = Fixture::new();
-    let plan = fixture.plan();
-    let policy = sessions::fingerprint(&plan);
-    let legacy_id = rode_session::new_id().unwrap();
-    let mut legacy = Command::new("python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/session_v1.py"
-        ))
-        .arg(&fixture.runtime)
-        .arg(&plan.root)
-        .arg(&legacy_id)
-        .arg(&policy)
-        .spawn()
+    fs::create_dir(&fixture.runtime).unwrap();
+    fs::set_permissions(&fixture.runtime, fs::Permissions::from_mode(0o700)).unwrap();
+    drop(UnixListener::bind(fixture.runtime.join("socket")).unwrap());
+    let info = fixture.create_with_persistence(&fixture.plan(), false);
+    assert!(!info.persistent);
+    let terminal = fixture.attach(&info);
+    terminal
+        .send(b"printf 'RECOVERED_%s\\n' READY\n".to_vec())
         .unwrap();
-    struct StopLegacy<'a>(&'a mut std::process::Child);
-    impl Drop for StopLegacy<'_> {
-        fn drop(&mut self) {
-            unsafe {
-                libc::kill(self.0.id() as i32, libc::SIGTERM);
-            }
-            let _ = self.0.wait();
-        }
-    }
-    let _stop = StopLegacy(&mut legacy);
-    wait(|| fixture.runtime.join("socket").exists());
+    wait(|| terminal.contents().contains("RECOVERED_READY"));
     let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
         panic!()
     };
-    let old = infos.into_iter().find(|info| info.id == legacy_id).unwrap();
-    assert!(old.persistent);
-    assert!(!old.persistence_supported);
-    let first = fixture.attach(&old);
-    first
-        .send(b"TOKEN=kept; printf 'LEGACY_%s\\n' READY\n".to_vec())
-        .unwrap();
-    wait(|| first.contents().contains("LEGACY_READY"));
-    drop(first);
-
-    let modern = fixture.create_with_persistence(&plan, false);
-    assert!(modern.persistence_supported);
-    assert!(!modern.persistent);
-    assert!(
-        fixture
-            .runtime
-            .join(format!("protocol-{}/socket", rode_session::PROTOCOL))
-            .exists()
-    );
-    let new_view = fixture.attach(&modern);
-    new_view
-        .send(b"printf 'MODERN_%s\\n' READY\n".to_vec())
-        .unwrap();
-    wait(|| new_view.contents().contains("MODERN_READY"));
-    fixture
-        .rpc(&Request::SetPersistence {
-            id: modern.id.clone(),
-            policy: modern.policy.clone(),
-            persistent: true,
-        })
-        .unwrap();
-    wait(|| new_view.persistent());
-    let error = fixture
-        .rpc(&Request::SetPersistence {
-            id: old.id.clone(),
-            policy: old.policy.clone(),
-            persistent: false,
-        })
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("Start a new terminal"), "{error}");
-    assert!(!error.contains("unknown variant"), "{error}");
-
-    let reattached = fixture.attach(&old);
-    reattached
-        .send(b"printf 'TOKEN_%s\\n' \"$TOKEN\"\n".to_vec())
-        .unwrap();
-    wait(|| reattached.contents().contains("TOKEN_kept"));
-    fixture
-        .rpc(&Request::Rename {
-            id: old.id.clone(),
-            policy: old.policy.clone(),
-            name: "Retained job".into(),
-        })
-        .unwrap();
-    let Response::Sessions(infos) = fixture.rpc(&Request::List).unwrap() else {
-        panic!()
-    };
-    assert_eq!(infos.len(), 2);
-    assert!(
-        infos
-            .iter()
-            .any(|info| info.id == old.id && info.name == "Retained job")
-    );
-    assert!(infos.iter().all(|info| info.alive));
-    assert!(fixture.rpc(&Request::Shutdown).is_err());
-    let actions = fs::read_to_string(fixture.runtime.join("requests")).unwrap();
-    assert!(
-        !actions
-            .lines()
-            .any(|action| matches!(action, "create" | "set_persistence" | "shutdown"))
-    );
-    drop(reattached);
-    fixture
-        .rpc(&Request::End {
-            id: old.id,
-            policy: old.policy,
-        })
-        .unwrap();
-    wait(|| !fixture.runtime.join("socket").exists());
-    // Creation/retry/attachment still find the compatibility service after
-    // the older daemon has gone away. No shell is restarted or duplicated.
-    let replay = fixture
-        .rpc(&Request::Create {
-            allocation: None,
-            id: modern.id.clone(),
-            name: "Retry".into(),
-            root: modern.root.clone(),
-            policy: modern.policy.clone(),
-            mode: modern.mode.clone(),
-            argv: vec!["/bin/sh".into()],
-            initial_input: String::new(),
-            env: BTreeMap::new(),
-            persistent: false,
-        })
-        .unwrap();
-    assert!(
-        matches!(replay, Response::Session(info) if info.persistent && info.name == modern.name)
-    );
-    let next = fixture.create_with_persistence(&plan, false);
-    assert!(next.persistence_supported && !next.persistent);
-    new_view
-        .send(b"printf 'MODERN_%s\\n' SURVIVED\n".to_vec())
-        .unwrap();
-    wait(|| new_view.contents().contains("MODERN_SURVIVED"));
+    assert_eq!(infos.len(), 1);
+    assert_eq!(infos[0].id, info.id);
 }
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         for (id, policy) in &self.ids {

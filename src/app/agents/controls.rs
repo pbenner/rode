@@ -211,7 +211,7 @@ pub(super) fn buttons(
     let access = if read_only && !config.files_only() {
         Access::ReadOnly
     } else {
-        config.access()
+        config.access
     };
     let label = if config.provider.is_acp() {
         "Permissions".into()
@@ -304,7 +304,6 @@ fn codex_access(
         crate::app::ui_probe::button(ui, "agent-access-project-sandbox", &response);
         if response.clicked() {
             config.access = Access::Project;
-            config.read_only = false;
         }
     }
     for choice in [
@@ -328,7 +327,6 @@ fn codex_access(
         crate::app::ui_probe::button(ui, &format!("agent-access-{}", choice.label()), &response);
         if response.clicked() {
             config.access = choice;
-            config.read_only = false;
         }
     }
     if isolated {
@@ -476,7 +474,7 @@ mod tests {
             let output = click(&ctx, &mut config, &chat, size, pos);
             let pos = position(&output, "Edit project files only");
             click(&ctx, &mut config, &chat, size, pos);
-            assert_eq!(config.access(), Access::FilesOnly);
+            assert_eq!(config.access, Access::FilesOnly);
             assert!(!config.same_process(&before));
             let saved: Config =
                 serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
@@ -642,11 +640,7 @@ mod tests {
                     for choice in [Access::Project, Access::Full] {
                         let pos = position(&output, choice.label());
                         click_policy(&ctx, &mut config, &chat, size, pos, false, true);
-                        assert_eq!(
-                            config.access(),
-                            saved,
-                            "Disabled choice changed preferences"
-                        );
+                        assert_eq!(config.access, saved, "Disabled choice changed preferences");
                     }
                     // With no enforced outer sandbox (including a failed
                     // sandbox probe), the saved choice is still available.
@@ -662,7 +656,7 @@ mod tests {
                     };
                     let pos = position(&output, other.label());
                     click(&ctx, &mut config, &chat, size, pos);
-                    assert_eq!(config.access(), other);
+                    assert_eq!(config.access, other);
                     assert!(!chat.connected());
                 }
             }
@@ -689,11 +683,11 @@ mod tests {
             frame_policy(&ctx, &mut config, &chat, size, vec![], read_only, true);
             for choice in [Access::FilesOnly, Access::ReadOnly, Access::FilesOnly] {
                 let output = frame_policy(&ctx, &mut config, &chat, size, vec![], read_only, true);
-                let pos = position(&output, &format!("Access: {}", config.access().label()));
+                let pos = position(&output, &format!("Access: {}", config.access.label()));
                 let output = click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
                 let pos = position(&output, choice.label());
                 click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
-                assert_eq!(config.access(), choice);
+                assert_eq!(config.access, choice);
             }
             let output = frame_policy(&ctx, &mut config, &chat, size, vec![], read_only, true);
             let pos = position(&output, "Access: Edit project files only");
@@ -701,7 +695,7 @@ mod tests {
             let pos = position(&output, "Use project sandbox");
             click_policy(&ctx, &mut config, &chat, size, pos, read_only, true);
             assert_eq!(
-                config.access(),
+                config.access,
                 if read_only {
                     Access::FilesOnly
                 } else {

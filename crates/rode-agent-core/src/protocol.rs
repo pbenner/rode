@@ -51,18 +51,15 @@ pub struct Question {
     pub id: String,
     /// Human-readable question text.
     pub text: String,
-    /// Short agent-supplied heading; absent in older native service views.
-    #[serde(default)]
+    /// Short agent-supplied heading.
     pub header: String,
     /// Suggested answers supplied by the agent.
     pub options: Vec<String>,
-    /// Explanations aligned with `options`; empty for older native service views.
-    #[serde(default)]
+    /// Explanations aligned with `options`.
     pub descriptions: Vec<String>,
     /// Current unsubmitted answer draft.
     pub answer: String,
     /// Already acknowledged by the backend; retained to deduplicate repeated notifications.
-    #[serde(default)]
     pub answered: bool,
     /// Whether the answer field should obscure its text.
     pub secret: bool,
@@ -83,26 +80,15 @@ pub struct Prompt {
     /// Questions to include in the reply.
     pub questions: Vec<Question>,
     /// Whether the agent is waiting rather than continuing independent work.
-    /// Older services only exposed blocking questions and permission requests.
-    #[serde(default = "blocking_request")]
     pub blocking: bool,
     /// An asynchronous message answer is awaiting a backend acknowledgement.
-    #[serde(default)]
     pub sending: bool,
     /// Delivery errors stay with the form so its answer drafts remain usable.
-    #[serde(default)]
     pub error: String,
-    /// This controller accepts subsets of message-based questions. Older services
-    /// default to requiring the complete form, even for asynchronous messages.
-    #[serde(default)]
+    /// Whether this form accepts subsets of message-based questions.
     pub partial_answers: bool,
-    #[serde(default)]
     async_message: bool,
     cancel: Value,
-}
-
-fn blocking_request() -> bool {
-    true
 }
 
 impl Prompt {
@@ -111,8 +97,8 @@ impl Prompt {
         self.async_message
     }
 
-    /// Construct a reply from entered, unacknowledged answers. Blocking and older
-    /// controllers require the complete form; current message-based forms accept subsets.
+    /// Construct a reply from entered, unacknowledged answers. Blocking requests
+    /// require the complete form; message-based forms accept subsets.
     /// Free-form text and suggested labels use the same app-server answer format.
     pub fn answers(&self) -> Option<Value> {
         if !self.partial_answers
@@ -150,7 +136,6 @@ enum Call {
     Configure {
         id: String,
         value: Value,
-        legacy: bool,
     },
 }
 
@@ -233,16 +218,7 @@ impl Chat {
     pub fn apply_view(&mut self, mut view: crate::service::ChatView) {
         super::personality::clean_history(&mut view.messages);
         self.input_history = super::input_history::History::from_texts(
-            view.input_history
-                .take()
-                .unwrap_or_else(|| {
-                    view.messages
-                        .iter()
-                        .filter(|message| message.role == Role::User)
-                        .map(|message| message.text.clone())
-                        .collect()
-                })
-                .into_iter(),
+            view.input_history.take().unwrap_or_default().into_iter(),
         );
         for prompt in &mut view.prompts {
             if let Some(old) = self.prompts.iter().find(|old| old.id == prompt.id) {
@@ -294,7 +270,7 @@ impl Chat {
         self.config = restored.launch.config;
         self.root = restored.launch.plan.root;
         self.read_only = restored.launch.plan.project_read_only
-            || (!self.config.provider.is_acp() && self.config.access() == Access::ReadOnly);
+            || (!self.config.provider.is_acp() && self.config.access == Access::ReadOnly);
         self.external = restored.launch.plan.active && !self.read_only;
         self.network = restored
             .launch
@@ -420,7 +396,7 @@ impl Chat {
         }
         self.read_only = launch.plan.project_read_only
             || (!launch.config.provider.is_acp()
-                && matches!(launch.config.access(), Access::ReadOnly | Access::FilesOnly));
+                && matches!(launch.config.access, Access::ReadOnly | Access::FilesOnly));
         self.external = launch.plan.active && !self.read_only;
         self.network = launch.plan.prefix.iter().any(|arg| arg == "--share-net");
         self.config = launch.config.clone();
@@ -648,27 +624,19 @@ impl Chat {
                     );
                     self.settings_attempts += 1;
                     let mut params = json!({"sessionId":self.conversation});
-                    let legacy = control.legacy;
-                    let method = if legacy {
-                        params["modeId"] = value.clone();
-                        "session/set_mode"
-                    } else {
-                        params["configId"] = id.clone().into();
-                        params["value"] = value.clone();
-                        if control.boolean {
-                            params["type"] = "boolean".into();
-                        }
-                        "session/set_config_option"
-                    };
+                    params["configId"] = id.clone().into();
+                    params["value"] = value.clone();
+                    if control.boolean {
+                        params["type"] = "boolean".into();
+                    }
                     self.status = "Applying agent controls…".into();
                     self.deadline = Some(Instant::now() + Duration::from_secs(30));
                     return self.call(
-                        method,
+                        "session/set_config_option",
                         params,
                         Call::Configure {
                             id: id.clone(),
                             value: value.clone(),
-                            legacy,
                         },
                     );
                 }
@@ -746,7 +714,7 @@ impl Chat {
         } else {
             params["sandboxPolicy"] = if self.read_only {
                 json!({"type":"readOnly"})
-            } else if self.config.access() == Access::Full {
+            } else if self.config.access == Access::Full {
                 json!({"type":"dangerFullAccess"})
             } else {
                 json!({"type":"workspaceWrite","writableRoots":[self.root],"networkAccess":false})
@@ -900,7 +868,7 @@ impl Chat {
                     let access = if self.read_only {
                         Access::ReadOnly
                     } else {
-                        self.config.access()
+                        self.config.access
                     };
                     let mut params = json!({"cwd":self.root,"approvalPolicy":if self.read_only {"never"} else {self.config.approval.codex()},"sandbox":access.codex()});
                     if !self.config.model().is_empty() {
@@ -978,18 +946,12 @@ impl Chat {
                     )?;
                 }
             }
-            Call::Configure { id, value, legacy } => {
+            Call::Configure { id, value } => {
                 if self.cancelling {
                     self.finish(false, None);
                     return Ok(());
                 }
-                if legacy {
-                    if let Some(control) = self.controls.iter_mut().find(|c| c.id == id) {
-                        control.current = value.clone();
-                    }
-                } else {
-                    self.controls = controls::acp(result);
-                }
+                self.controls = controls::acp(result);
                 ensure!(
                     self.controls
                         .iter()
@@ -1110,13 +1072,6 @@ impl Chat {
             }
             "config_option_update" => {
                 self.controls = controls::acp(update);
-            }
-            "current_mode_update" => {
-                if let Some(control) = self.controls.iter_mut().find(|c| c.legacy)
-                    && control.accepts(&update["currentModeId"])
-                {
-                    control.current = update["currentModeId"].clone();
-                }
             }
             _ => {}
         }
@@ -1693,7 +1648,7 @@ mod tests {
     }
 
     #[test]
-    fn questions_need_all_answers_and_preserve_legacy_views_and_request_lifetimes() {
+    fn questions_need_all_answers_and_preserve_request_lifetimes() {
         let mut chat = Chat {
             busy: true,
             conversation: "thread".into(),
@@ -1724,15 +1679,9 @@ mod tests {
                 "scope":{"answers":["All"]}, "note":{"answers":["Keep this exact text\nplease"]}
             }})
         );
-        let mut old = serde_json::to_value(&*prompt).unwrap();
-        old.as_object_mut().unwrap().remove("blocking");
-        for question in old["questions"].as_array_mut().unwrap() {
-            question.as_object_mut().unwrap().remove("header");
-            question.as_object_mut().unwrap().remove("descriptions");
-        }
-        let old: Prompt = serde_json::from_value(old).unwrap();
-        assert!(old.blocking);
-        assert!(old.questions[0].descriptions.is_empty());
+        let mut incomplete = serde_json::to_value(&*prompt).unwrap();
+        incomplete.as_object_mut().unwrap().remove("blocking");
+        assert!(serde_json::from_value::<Prompt>(incomplete).is_err());
         chat.codex_update(
             "serverRequest/resolved",
             &json!({"threadId":"other","requestId":402}),
@@ -1895,13 +1844,12 @@ mod tests {
         chat.finish(true, None);
         chat.disconnect();
         assert!(!chat.last_turn_succeeded);
-        let mut old_view = serde_json::to_value(chat.view()).unwrap();
-        old_view
+        let mut incomplete = serde_json::to_value(chat.view()).unwrap();
+        incomplete
             .as_object_mut()
             .unwrap()
             .remove("last_turn_succeeded");
-        let view: crate::service::ChatView = serde_json::from_value(old_view).unwrap();
-        assert!(!view.last_turn_succeeded);
+        assert!(serde_json::from_value::<crate::service::ChatView>(incomplete).is_err());
     }
 
     #[test]

@@ -4,10 +4,11 @@ use super::*;
 fn prompt() -> Prompt {
     serde_json::from_value(json!({
         "id":401, "title":"Agent needs your input", "summary":"", "detail":"",
+        "blocking":true, "sending":false, "error":"", "partial_answers":false, "async_message":false,
         "choices":[], "cancel":{"answers":{}}, "questions":[{
             "id":"tests", "header":"Tests", "text":"Which tests should I run?",
             "options":["All tests"], "descriptions":["Run the full suite before continuing."],
-            "answer":"", "secret":false
+            "answer":"", "secret":false, "answered":false
         }]
     }))
     .unwrap()

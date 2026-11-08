@@ -28,7 +28,7 @@ const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
 /// host telemetry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "task", rename_all = "snake_case")]
-pub enum Request<S = serde_json::Value, H = serde_json::Value> {
+pub enum Request<S = serde_json::Value> {
     /// Inspect or explicitly manage mise on the project host, inside the selected sandbox.
     Mise {
         /// Project root used for configuration discovery and execution.
@@ -73,10 +73,6 @@ pub enum Request<S = serde_json::Value, H = serde_json::Value> {
         root: String,
         /// Session creation/discovery/mutation request.
         operation: S,
-        /// Compatibility metadata from older clients. The native gateway checks
-        /// its identity against the connection's helper; it never deploys a
-        /// replacement from this field. Current clients use `None`.
-        helper: Option<H>,
         /// Optional explicit remote service runtime directory.
         directory: Option<String>,
     },
@@ -383,7 +379,7 @@ pub struct Analysis {
 
 /// Execute a blocking project service on this host; callers enforce sandbox policy and keep
 /// this off the UI thread.
-pub fn local<S, H, R>(request: &Request<S, H>) -> Result<Response<R>> {
+pub fn local<S, R>(request: &Request<S>) -> Result<Response<R>> {
     match request {
         Request::Mise {
             root,

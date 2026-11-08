@@ -499,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_environment_survives_disabling_python_and_old_preferences_migrate() {
+    fn generic_environment_survives_disabling_python_and_preserves_preferences() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());

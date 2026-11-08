@@ -303,17 +303,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn running_hides_browser_roles_and_keeps_legacy_or_restored_chat_metadata() {
+    fn running_hides_browser_roles_and_keeps_restored_chat_metadata() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        // Older services have no role flag. A restored chat can retain this
-        // title too, so filter the explicit role rather than its display name.
+        // A restored chat can retain the browser title, so filter the explicit
+        // role rather than its display name.
         let chat: Info = serde_json::from_value(serde_json::json!({
             "id": "chat", "name": "Saved conversations", "root": "/project",
             "policy": "policy", "mode": "NORMAL MODE", "provider": "codex",
             "alive": true, "busy": false, "status": "Ready", "attached": true,
-            "persistent": false, "created": 0
+            "persistent": false, "created": 0, "history_browser": false
         }))
         .unwrap();
         assert!(!chat.history_browser);

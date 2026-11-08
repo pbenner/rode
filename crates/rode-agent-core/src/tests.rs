@@ -3,14 +3,14 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn legacy_preferences_keep_codex_and_claude_uses_only_its_literal_command() {
-    let legacy: Config = serde_json::from_str("{}").unwrap();
-    assert_eq!(legacy.provider, Provider::Codex);
+fn default_provider_is_codex_and_claude_uses_only_its_literal_command() {
+    let defaults: Config = serde_json::from_str("{}").unwrap();
+    assert_eq!(defaults.provider, Provider::Codex);
     let mut config = Config {
         provider: Provider::Claude,
         codex: "/missing-codex".into(),
         acp_program: "/different-acp-agent".into(),
-        ..legacy
+        ..defaults
     };
     assert_eq!(config.argv().unwrap(), [CLAUDE_ACP]);
     config.claude_program = "/tools/Claude adapter".into();

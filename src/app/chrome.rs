@@ -180,7 +180,6 @@ impl EditorApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let native = self.terminal.as_ref().is_some_and(|t| t.native && t.is_alive());
                 let persistent = self.terminal.as_ref().is_some_and(Terminal::persistent);
-                let persistence_supported = self.terminal_persistence_supported();
                 let mut persist_button = egui::Button::new(
                     RichText::new(if persistent { "Persist: on" } else { "Persist: off" })
                         .color(if persistent { palette.background } else { palette.text }),
@@ -190,11 +189,9 @@ impl EditorApp {
                 }
                 // This row flows right to left: persistence is always the
                 // rightmost action, with a stable width in both states.
-                let response = ui.add_enabled(native && persistence_supported && !self.session_busy(), persist_button)
+                let response = ui.add_enabled(native && !self.session_busy(), persist_button)
                     .on_hover_text("Keep running after exit. On: this terminal survives its last view closing. Off: it ends when its last view closes. Shared across attached RODE windows; changing this does not restart the shell.")
-                    .on_disabled_hover_text(if native && !persistence_supported {
-                        rode_session::LEGACY_PERSISTENCE_HELP
-                    } else if native {
+                    .on_disabled_hover_text(if native {
                         "Waiting for the terminal service to finish the current request."
                     } else {
                         "Persistence is available for native terminals. Temporary terminals and SSH login prompts cannot be made persistent."

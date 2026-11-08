@@ -222,6 +222,7 @@ enum Job {
         remote: bool,
         token: u64,
         path: String,
+        options: sandbox::Options,
     },
     BrowseFiles {
         token: u64,
@@ -946,9 +947,22 @@ impl EditorApp {
                 remote: self.folder_remote,
                 token: self.folder_token,
                 path,
+                options: self.folder_sandbox.clone(),
             },
             ctx,
         );
+    }
+
+    /// Prefill the normal selected-host picker without changing the workspace.
+    /// Resolve this folder's saved policy now so its first directory reply does
+    /// not replace sandbox choices edited while the listing was loading.
+    fn open_folder_dialog_at(&mut self, path: String) {
+        self.set_dialog(Dialog::Folder);
+        if let Some(options) = self.saved_sandbox_for(&path, self.folder_remote) {
+            self.folder_sandbox = options;
+        }
+        self.folder_policy_path.clone_from(&path);
+        self.dialog_input = path;
     }
 
     /// Initialize the project picker explicitly on the desktop host, even during an SSH workspace.

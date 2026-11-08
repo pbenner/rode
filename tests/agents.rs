@@ -662,52 +662,32 @@ fn acp_controls_are_acknowledged_in_dependency_order_before_the_next_prompt() {
 }
 
 #[test]
-fn acp_legacy_modes_work_and_unacknowledged_options_never_send_a_prompt() {
-    for legacy in [true, false] {
-        let (_temp, root, program) = fixture();
-        let mut launch = launch(&root, &program, Provider::Acp, false);
-        launch.config.acp_arguments = vec![
-            if legacy {
-                "--legacy-controls"
-            } else {
-                "--ignore-controls"
-            }
-            .into(),
-        ];
-        let mut chat = Chat::default();
-        submit(&mut chat, launch.clone(), "first");
-        wait(&mut chat, |c| c.completed == 1);
-        launch.config.acp_options.insert(
-            if legacy { "rode:legacy-mode" } else { "mode" }.into(),
-            json!("code"),
-        );
-        submit(&mut chat, launch, "second");
-        wait(&mut chat, |c| !c.busy);
-        let log = log(&root);
-        assert_eq!(
-            log.iter()
-                .filter(|r| r["method"] == "session/prompt")
-                .count(),
-            if legacy { 2 } else { 1 }
-        );
-        if legacy {
-            assert!(log.iter().any(|r| r["method"] == "session/set_mode"));
-        } else {
-            assert!(!chat.connected());
-            assert!(
-                chat.messages
-                    .iter()
-                    .any(|m| m.text.contains("did not acknowledge"))
-            );
-        }
-    }
-}
-
-#[test]
-fn legacy_read_only_preferences_remain_effective() {
-    let config: Config = serde_json::from_value(json!({"read_only":true})).unwrap();
-    assert_eq!(config.access(), Access::ReadOnly);
-    assert_eq!(config.approval, Approval::Ask);
+fn acp_unacknowledged_options_never_send_a_prompt() {
+    let (_temp, root, program) = fixture();
+    let mut launch = launch(&root, &program, Provider::Acp, false);
+    launch.config.acp_arguments = vec!["--ignore-controls".into()];
+    let mut chat = Chat::default();
+    submit(&mut chat, launch.clone(), "first");
+    wait(&mut chat, |c| c.completed == 1);
+    launch
+        .config
+        .acp_options
+        .insert("mode".into(), json!("code"));
+    submit(&mut chat, launch, "second");
+    wait(&mut chat, |c| !c.busy);
+    assert_eq!(
+        log(&root)
+            .iter()
+            .filter(|r| r["method"] == "session/prompt")
+            .count(),
+        1
+    );
+    assert!(!chat.connected());
+    assert!(
+        chat.messages
+            .iter()
+            .any(|m| m.text.contains("did not acknowledge"))
+    );
 }
 
 #[test]

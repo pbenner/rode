@@ -4,6 +4,145 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn provider_controls_follow_native_selection_and_settings_visibility_without_starting_a_chat() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("widgets.json");
+    let ctx = egui::Context::default();
+    ui_probe::install_at(&ctx, path.clone());
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.agents.config.codex = "fixture-agent".into();
+    app.agents.settings = true;
+    let frame = |app: &mut EditorApp, events| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100., 800.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.agent_ui(ui, ctx));
+            },
+        );
+        let snapshot = std::fs::read_to_string(&path).unwrap();
+        assert!(!snapshot.contains("fixture-agent"));
+        serde_json::from_str::<serde_json::Value>(&snapshot).unwrap()
+    };
+    let has = |state: &serde_json::Value, name: &str| {
+        state["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|button| button["name"] == name && button["enabled"] == true)
+    };
+    let click = |app: &mut EditorApp, state: &serde_json::Value, name: &str| {
+        let target = state["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|button| button["name"] == name)
+            .unwrap();
+        let rect: [f32; 4] = serde_json::from_value(target["rect"].clone()).unwrap();
+        let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
+        frame(app, vec![egui::Event::PointerMoved(point)]);
+        for pressed in [true, false] {
+            frame(
+                app,
+                vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        frame(app, vec![])
+    };
+    frame(&mut app, vec![]);
+    let state = frame(&mut app, vec![]);
+    assert!(has(&state, "agent-codex-executable"));
+    let menu = click(&mut app, &state, "agent-provider-menu");
+    for provider in ["Codex", "Claude", "Local", "Acp"] {
+        assert!(has(&menu, &format!("agent-provider-{provider}")));
+    }
+    let selected = click(&mut app, &menu, "agent-provider-Acp");
+    assert_eq!(app.agents.config.provider, Provider::Acp);
+    assert!(has(&selected, "agent-acp-executable"));
+    assert!(!has(&selected, "agent-codex-executable"));
+    let closed = click(&mut app, &selected, "agent-settings");
+    assert!(!app.agents.settings);
+    assert!(!has(&closed, "agent-acp-executable"));
+    assert!(!app.agents.chat.busy && !app.agents.chat.connected());
+}
+
+#[test]
+fn composer_empty_probe_tracks_processed_edits_without_exposing_the_draft() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("widgets.json");
+    let ctx = egui::Context::default();
+    ui_probe::install_at(&ctx, path.clone());
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.agents.config.codex = "fixture-agent".into();
+    app.agents.draft = "Retained private draft\n".repeat(80);
+    let frame = |app: &mut EditorApp, events| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900., 700.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.agent_ui(ui, ctx));
+            },
+        );
+        let snapshot = std::fs::read_to_string(&path).unwrap();
+        assert!(!snapshot.contains("Retained private draft"));
+        serde_json::from_str::<serde_json::Value>(&snapshot).unwrap()
+    };
+    let empty = |state: &serde_json::Value| {
+        state["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|button| button["name"] == "agent-composer-empty" && button["focused"] == true)
+    };
+    frame(&mut app, vec![]);
+    let id = egui::Id::new("agent-composer");
+    ctx.memory_mut(|memory| memory.request_focus(id));
+    let retained = frame(&mut app, vec![]);
+    assert!(!empty(&retained));
+    let key = |key, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let cleared = frame(
+        &mut app,
+        vec![
+            key(Key::A, egui::Modifiers::COMMAND),
+            key(Key::Backspace, egui::Modifiers::NONE),
+        ],
+    );
+    assert!(app.agents.draft.is_empty());
+    assert!(empty(&cleared));
+    assert!(cleared["pass"].as_u64().unwrap() > retained["pass"].as_u64().unwrap());
+    let typed = frame(&mut app, vec![egui::Event::Text("Next prompt".into())]);
+    assert!(!empty(&typed));
+    assert_eq!(app.agents.draft, "Next prompt");
+    assert!(!app.agents.chat.busy);
+    assert!(app.agents.chat.messages.is_empty());
+}
+
+#[test]
 fn mismatched_host_tones_show_the_actual_setting_and_keep_the_draft_and_queue() {
     for (width, height) in [(650., 900.), (320., 650.)] {
         let ctx = egui::Context::default();

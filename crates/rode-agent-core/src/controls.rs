@@ -130,7 +130,7 @@ impl ModelPages {
 /// One supported ACP select/boolean capability, including current backend state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Control {
-    /// Agent-defined option identifier (or the legacy mode selector identifier).
+    /// Agent-defined option identifier.
     pub id: String,
     /// Human-readable selector label.
     pub name: String,
@@ -144,8 +144,6 @@ pub struct Control {
     pub options: Vec<OptionValue>,
     /// Whether the control is boolean rather than a string selector.
     pub boolean: bool,
-    /// Whether to use the legacy session/set_mode method.
-    pub legacy: bool,
 }
 impl Control {
     /// Validate an explicit user selection against this session's current capabilities.
@@ -160,7 +158,7 @@ impl Control {
     }
 }
 
-/// Decode supported modern ACP controls, or the stable legacy mode fallback.
+/// Decode supported ACP session configuration controls.
 pub(crate) fn acp(result: &Value) -> Vec<Control> {
     if let Some(values) = result["configOptions"].as_array().filter(|v| !v.is_empty()) {
         return values
@@ -205,42 +203,12 @@ pub(crate) fn acp(result: &Value) -> Vec<Control> {
                     current: v["currentValue"].clone(),
                     options,
                     boolean,
-                    legacy: false,
                 };
                 control.accepts(&control.current).then_some(control)
             })
             .collect();
     }
-    let modes = &result["modes"];
-    let options: Vec<_> = modes["availableModes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .take(128)
-        .filter_map(|m| {
-            let id = m["id"].as_str().filter(|id| identifier(id, false))?;
-            Some(OptionValue {
-                id: id.into(),
-                name: text(&m["name"], id, 256),
-                description: text(&m["description"], "", 2048),
-            })
-        })
-        .collect();
-    let control = Control {
-        id: "rode:legacy-mode".into(),
-        name: "Agent mode".into(),
-        category: "mode".into(),
-        description: "Operating modes advertised by this agent".into(),
-        current: modes["currentModeId"].clone(),
-        options,
-        boolean: false,
-        legacy: true,
-    };
-    if control.accepts(&control.current) {
-        vec![control]
-    } else {
-        vec![]
-    }
+    vec![]
 }
 
 #[cfg(test)]

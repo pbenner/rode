@@ -140,7 +140,7 @@ pub struct Plan {
     /// Selected implementation, retained even when its probe is unavailable.
     #[serde(default)]
     pub backend: Backend,
-    /// Opaque native gateway context; absent for local and legacy execution.
+    /// Opaque native gateway context; absent for local execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_context: Option<String>,
     /// Verified native helper on this host; used for policy and environment launch.

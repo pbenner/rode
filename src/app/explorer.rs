@@ -183,19 +183,7 @@ impl EditorApp {
                 "Open as project",
                 ready && !root,
             ) {
-                let remote = self.workspace.as_ref().is_some_and(|w| w.remote.is_some());
-                let options = self
-                    .saved_sandbox_for(&entry.path, remote)
-                    .or_else(|| self.workspace.as_ref().map(|w| w.sandbox_options.clone()))
-                    .unwrap_or_else(|| self.sandbox_defaults.clone());
-                self.guarded(
-                    Action::Project {
-                        path: entry.path.clone(),
-                        remote,
-                        options,
-                    },
-                    ctx,
-                );
+                self.open_folder_dialog_at(entry.path.clone());
             }
         } else {
             if item(ui, "explorer-open", "Open", ready) {

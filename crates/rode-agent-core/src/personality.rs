@@ -22,7 +22,6 @@ pub enum Personality {
     Panne,
     /// Preserve the agent's own normal response style, including configured defaults.
     #[default]
-    #[serde(other)]
     Default,
 }
 
@@ -167,13 +166,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_and_future_preferences_keep_other_agent_settings() {
+    fn default_preferences_load_and_unknown_styles_are_rejected() {
         let config: super::super::Config = serde_json::from_str(r#"{"model":"custom"}"#).unwrap();
         assert_eq!(config.personality, Personality::Default);
-        let config: super::super::Config =
-            serde_json::from_str(r#"{"model":"custom","personality":"future_style"}"#).unwrap();
-        assert_eq!(config.model, "custom");
-        assert_eq!(config.personality, Personality::Default);
+        assert!(
+            serde_json::from_str::<super::super::Config>(
+                r#"{"model":"custom","personality":"future_style"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

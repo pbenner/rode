@@ -14,7 +14,7 @@ The helper now derives its effective state directory independently and excludes 
 
 Direct and host-owned protocol regressions verify denied reads/edits/deletes, omitted directory entries and excluded search results while ordinary source edits still succeed. A separate helper regression omits all optional controller hints, verifying that its actual environment remains authoritative. Session protocol **15** and required helper capability `agent_private_state` select updated controllers for new jobs while preserving older jobs. **End and restart existing chats to acquire the fix**; reattaching an old controller does not replace its code or captured policy. These checks apply to native file tools; full command access retains the selected project policy. A trusted custom wrapper that changes `CODEX_HOME` internally must keep private state outside the editable tree or expose the setting to RODE before launch.
 
-Implementation: `crates/rode-host-core/src/agent_files.rs`, `crates/rode-host-core/src/command.rs`, `src/agent.rs`, `crates/rode-session/src/agents/transport.rs` and helper/service compatibility checks. Regression coverage: `tests/agent_files.rs`, shared file-tool/command unit tests and legacy-service upgrade tests.
+Implementation: `crates/rode-host-core/src/agent_files.rs`, `crates/rode-host-core/src/command.rs`, `src/agent.rs`, `crates/rode-session/src/agents/transport.rs` and helper/service compatibility checks. Regression coverage: `tests/agent_files.rs`, shared file-tool/command unit tests and authenticated current-protocol service tests.
 
 ### File-only tools could protect the wrong executable path
 

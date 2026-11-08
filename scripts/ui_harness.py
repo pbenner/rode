@@ -113,6 +113,20 @@ def click(x, y):
     time.sleep(0.2)
 
 
+def read_json_lines(path):
+    """Read complete fixture acknowledgements while a peer may still be appending.
+
+    Ignore only the unterminated final record, including a partial UTF-8 code
+    point. Malformed completed records remain errors rather than disappearing.
+    """
+    try:
+        data = Path(path).read_bytes()
+    except FileNotFoundError:
+        return []
+    complete = data[: data.rfind(b"\n") + 1]
+    return [json.loads(line) for line in complete.splitlines()]
+
+
 def window_geometry(window):
     """Return client origin and physical size, including windows moved by a window manager."""
     info = subprocess.check_output(

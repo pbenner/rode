@@ -1,11 +1,198 @@
 //! Pure path bookkeeping, async reply identity and modal focus regressions.
 use super::*;
+use std::collections::BTreeMap;
 
 fn entry(path: &str, dir: bool) -> Entry {
     Entry {
         path: path.into(),
         name: ssh::display_name(path).into(),
         dir,
+    }
+}
+
+struct Policies(String);
+impl eframe::Storage for Policies {
+    fn get_string(&self, key: &str) -> Option<String> {
+        (key == "project_preferences").then(|| self.0.clone())
+    }
+    fn set_string(&mut self, _: &str, _: String) {}
+    fn flush(&mut self) {}
+}
+
+#[test]
+fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() {
+    for remote in [false, true] {
+        for saved in [false, true] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            let inherited = sandbox::Options {
+                enabled: false,
+                share_network: false,
+                ..Default::default()
+            };
+            app.workspace = Some(Workspace {
+                root: "/project".into(),
+                remote: remote.then(|| {
+                    Remote::new(Profile {
+                        host: "picker-fixture.invalid".into(),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                }),
+                connected: true,
+                ready: true,
+                plan: Default::default(),
+                sandbox_options: inherited.clone(),
+            });
+            let path = "/project/selected folder";
+            let saved_options = sandbox::Options {
+                enabled: true,
+                backend: sandbox::Backend::Landlock,
+                read_only: vec!["/shared/tools".into()],
+                ..Default::default()
+            };
+            if saved {
+                let key = app.project_settings_key(path, remote);
+                let storage = Policies(
+                    serde_json::to_string(&BTreeMap::from([(
+                        key,
+                        serde_json::json!({"sandbox": saved_options}),
+                    )]))
+                    .unwrap(),
+                );
+                app.workbench = workbench::Workbench::load(Some(&storage));
+            }
+            app.new_file();
+            app.documents[0].text = "unsaved edits".into();
+            let token = app.project_token;
+            let defaults = app.sandbox_defaults.clone();
+            app.open_folder_dialog_at(path.into());
+            assert!(app.dialog == Dialog::Folder);
+            assert_eq!(app.dialog_input, path);
+            assert_eq!(app.folder_policy_path, path);
+            assert_eq!(app.folder_remote, remote);
+            assert!(app.folder_needs_load);
+            assert_eq!(
+                app.folder_sandbox,
+                if saved { saved_options } else { inherited }
+            );
+            assert_eq!(app.sandbox_defaults, defaults);
+            assert!(app.pending.is_none() && !app.preparing);
+            assert_eq!(app.project_token, token);
+            assert_eq!(app.workspace.as_ref().unwrap().root, "/project");
+            assert!(app.documents[0].dirty());
+
+            // Listing the prefilled folder must not replace choices made while
+            // that asynchronous request was in flight, even with saved settings.
+            let options = app.folder_sandbox.clone();
+            app.folder_sandbox.enabled = true;
+            app.folder_sandbox.share_network = false;
+            app.folder_sandbox.project_read_only = true;
+            let chosen = app.folder_sandbox.clone();
+            app.folder_needs_load = false;
+            app.folder_loading = true;
+            app.tx
+                .send(Event::Done {
+                    generation: app.generation,
+                    job: Job::Browse {
+                        remote,
+                        token: app.folder_token,
+                        path: path.into(),
+                        options,
+                    },
+                    result: Box::new(Ok(files::Response {
+                        path: path.into(),
+                        entries: vec![entry("/project/selected folder/child", true)],
+                        ..Default::default()
+                    })),
+                })
+                .unwrap();
+            app.poll(&ctx);
+            assert_eq!(app.folder_sandbox, chosen);
+            assert_eq!(app.folder_entries.len(), 1);
+
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1380., 1100.),
+                    )),
+                    events: vec![egui::Event::Key {
+                        key: Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::COMMAND,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.folder_dialog(ui, ctx));
+                },
+            );
+            assert!(
+                matches!(&app.pending, Some(Action::Project { path: selected, remote: selected_remote, options }) if selected == path && *selected_remote == remote && options == &chosen)
+            );
+            assert_eq!(app.project_token, token);
+            assert_eq!(app.workspace.as_ref().unwrap().root, "/project");
+            assert_eq!(app.documents[0].text, "unsaved edits");
+            assert!(!app.preparing);
+        }
+    }
+}
+
+#[test]
+fn canonical_folder_replies_restore_saved_policy_only_before_the_user_edits_it() {
+    for edited in [false, true] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let alias = "/project/linked-folder";
+        let canonical = "/shared/actual-folder";
+        let saved = sandbox::Options {
+            enabled: false,
+            share_network: true,
+            project_read_only: false,
+            ..Default::default()
+        };
+        let storage = Policies(
+            serde_json::to_string(&BTreeMap::from([(
+                app.project_settings_key(canonical, false),
+                serde_json::json!({"sandbox": saved}),
+            )]))
+            .unwrap(),
+        );
+        app.workbench = workbench::Workbench::load(Some(&storage));
+        app.open_folder_dialog_at(alias.into());
+        let options = app.folder_sandbox.clone();
+        if edited {
+            app.folder_sandbox.share_network = false;
+            app.folder_sandbox.project_read_only = true;
+        }
+        let chosen = app.folder_sandbox.clone();
+        app.folder_needs_load = false;
+        app.folder_loading = true;
+        app.tx
+            .send(Event::Done {
+                generation: app.generation,
+                job: Job::Browse {
+                    remote: false,
+                    token: app.folder_token,
+                    path: alias.into(),
+                    options,
+                },
+                result: Box::new(Ok(files::Response {
+                    path: canonical.into(),
+                    ..Default::default()
+                })),
+            })
+            .unwrap();
+        app.poll(&ctx);
+        assert_eq!(app.dialog_input, canonical);
+        assert_eq!(app.folder_policy_path, canonical);
+        assert_eq!(app.folder_sandbox, if edited { chosen } else { saved });
+        assert!(!app.folder_loading);
     }
 }
 
@@ -179,6 +366,31 @@ fn a_form_recovers_focus_lost_when_its_context_menu_closes() {
         );
     }
     assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("explorer-operation-name"))));
+}
+
+#[test]
+fn a_prefilled_project_dialog_recovers_focus_after_its_context_menu_closes() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.open_folder_dialog_at("/selected/folder".into());
+    app.folder_needs_load = false;
+    app.dialog_focus = false;
+    for _ in 0..2 {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1380., 900.),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.dialogs(ctx),
+        );
+    }
+    assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("project-dialog-path"))));
+    assert_eq!(app.dialog_input, "/selected/folder");
+    assert!(app.workspace.is_none() && app.pending.is_none());
 }
 
 #[test]

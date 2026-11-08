@@ -151,10 +151,6 @@ impl Store {
         let (input, commands) = mpsc::sync_channel(32);
         let info = Info {
             history_browser: spec.text.is_none(),
-            supports_attachments: true,
-            supports_queue: true,
-            supports_recovery: true,
-            automatic_queue: true,
             id: spec.id.clone(),
             name: spec.name.clone(),
             root: spec.plan.root.clone(),
@@ -553,18 +549,11 @@ fn run(
                             ))
                         } else {
                             let mut launch = launch.clone();
-                            launch.config = config;
+                            launch.config = *config;
                             let config = launch.config.clone();
                             chat.submit_with_attachments(launch, text, attachments, wake.clone())
                                 .map(|()| queued_config = config)
                         }
-                    }
-                    Action::Configure { config } => {
-                        let result = configure(&mut chat, &mut queued_config, &launch, config);
-                        if result.is_err() {
-                            queue.set_paused(true);
-                        }
-                        result
                     }
                     Action::Answer { id, result } => {
                         if chat.prompts.front().is_some_and(|p| p.id == id) {
@@ -723,15 +712,10 @@ fn configure(
     Ok(())
 }
 
-/// Find the service generation owning this captured ID and bridge bounded stdio
-/// messages through its authenticated local socket; require the original policy.
+/// Bridge bounded stdio messages through the current service's authenticated
+/// local socket; require the original policy.
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
-    let launcher = Launcher {
-        executable: current_executable()?,
-        prefix: vec![],
-    };
-    let dir = service_directories().into_iter().find(|dir| matches!(request_once(&Request::Agents, &launcher, dir), Ok(Response::Agents(infos)) if infos.iter().any(|info| info.id == id))).context("Background agent is no longer available; refresh the agent list")?;
-    let mut stream = connect_control(&dir)?;
+    let mut stream = connect_control(&directory())?;
     send_json(
         &mut stream,
         &Request::AttachAgent {

@@ -7,8 +7,7 @@ pub use rode_host_core::project::{
     parse_status, python_path, run, run_controlled, run_controlled_limited, run_controlled_stream,
 };
 /// Desktop/session composition of the shared request envelope.
-pub type Request =
-    rode_host_core::project::Request<crate::sessions::Operation, crate::sessions::Helper>;
+pub type Request = rode_host_core::project::Request<crate::sessions::Operation>;
 /// Desktop/session composition of the shared result envelope.
 pub type Response = rode_host_core::project::Response<crate::sessions::Reply>;
 /// Run inside the captured host policy; session administration is handled separately.

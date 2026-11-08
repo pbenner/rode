@@ -70,7 +70,7 @@ fn provider(ui: &mut egui::Ui, config: &mut Config, width: f32, busy: bool, queu
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.set_width(width);
-            egui::ComboBox::from_id_salt("agent-provider")
+            let menu = egui::ComboBox::from_id_salt("agent-provider")
                 .width(width)
                 .truncate()
                 .selected_text(config.provider.label())
@@ -79,15 +79,16 @@ fn provider(ui: &mut egui::Ui, config: &mut Config, width: f32, busy: bool, queu
                         let enabled = !busy
                             && !queued
                             && !(provider.is_acp() && config.native_tools());
-                        ui.add_enabled_ui(enabled, |ui| {
+                        let option = ui.add_enabled_ui(enabled, |ui| {
                             ui.selectable_value(&mut config.provider, provider, provider.label())
-                        })
-                        .response
-                        .on_disabled_hover_text("File-only and model-connection-only tools require Codex. Change those access/network settings before switching to Claude Code or ACP.");
+                        });
+                        ui_probe::button(ui, &format!("agent-provider-{provider:?}"), &option.inner);
+                        option.response.on_disabled_hover_text("File-only and model-connection-only tools require Codex. Change those access/network settings before switching to Claude Code or ACP.");
                     }
                 })
                 .response
                 .on_hover_text(config.provider.label());
+            ui_probe::button(ui, "agent-provider-menu", &menu);
         },
     );
     old != config.provider

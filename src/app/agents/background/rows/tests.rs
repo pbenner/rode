@@ -7,10 +7,6 @@ fn fixture() -> Vec<Info> {
     (0..4)
         .map(|index| Info {
             history_browser: false,
-            supports_attachments: true,
-            supports_queue: true,
-            supports_recovery: true,
-            automatic_queue: true,
             id: format!("agent-{index}"),
             name: if index == 1 {
                 "A long agent title with Unicode 🦀 and many details ".repeat(5)

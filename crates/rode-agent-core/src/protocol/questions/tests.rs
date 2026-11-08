@@ -81,14 +81,15 @@ fn selecting_one_async_answer_can_be_submitted_without_filling_the_other_questio
 }
 
 #[test]
-fn older_controllers_require_complete_answers_and_unknown_or_repeated_ids_are_rejected() {
+fn incomplete_views_and_unknown_or_repeated_answer_ids_are_rejected() {
     let (mut chat, _) = fixture();
     ask(&mut chat);
-    let mut legacy = serde_json::to_value(&chat.prompts[0]).unwrap();
-    legacy.as_object_mut().unwrap().remove("partial_answers");
-    let mut legacy: Prompt = serde_json::from_value(legacy).unwrap();
-    legacy.questions[1].answer.clear();
-    assert!(!legacy.partial_answers && legacy.answers().is_none());
+    let mut incomplete = serde_json::to_value(&chat.prompts[0]).unwrap();
+    incomplete
+        .as_object_mut()
+        .unwrap()
+        .remove("partial_answers");
+    assert!(serde_json::from_value::<Prompt>(incomplete).is_err());
     for answers in [json!({}), json!({"unknown":{"answers":["wrong"]}})] {
         assert!(chat.answer(json!({"answers":answers})).is_err());
         assert!(!chat.prompts[0].sending);

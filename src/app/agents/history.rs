@@ -100,18 +100,22 @@ pub(super) fn ui(
                 toolbar(ui, browser, can_resume, confirmation, &mut action, palette);
             },
         );
-        ui.add_sized(
+        let search = ui.add_sized(
             [ui.available_width(), 30.],
             egui::TextEdit::singleline(filter)
                 .desired_width(f32::INFINITY)
                 .hint_text("Filter loaded conversations…")
                 .char_limit(256),
         );
+        super::super::ui_probe::button(ui, "agent-history-filter", &search);
         ui.add_space(4.);
         let Some(browser) = browser else {
             ui.label(RichText::new("Loading saved conversations…").color(palette.muted));
             return;
         };
+        if !browser.busy {
+            super::super::ui_probe::button(ui, "agent-history-ready", &search);
+        }
         if !browser.busy && (!browser.can_resume || !browser.diagnostics().is_empty()) {
             // Keep backend diagnostics readable without allowing a
             // long traceback to displace the conversation list.
@@ -284,16 +288,16 @@ pub(super) fn ui(
                     });
                     ui.add_space(20.);
                 }
-                if browser.more
-                    && ui
-                        .add_enabled(
-                            !browser.busy,
-                            egui::Button::new("Load more conversations")
-                                .min_size(egui::vec2(ui.available_width(), 30.)),
-                        )
-                        .clicked()
-                {
-                    action.more = true;
+                if browser.more {
+                    let more = ui.add_enabled(
+                        !browser.busy,
+                        egui::Button::new("Load more conversations")
+                            .min_size(egui::vec2(ui.available_width(), 30.)),
+                    );
+                    super::super::ui_probe::button(ui, "agent-history-more", &more);
+                    if more.clicked() {
+                        action.more = true;
+                    }
                 }
             });
     });
@@ -495,6 +499,11 @@ fn conversation(
         });
         if availability == Availability::Saved {
             super::super::ui_probe::button(&interaction, "Restore conversation", &body);
+            super::super::ui_probe::button(
+                &interaction,
+                &format!("agent-history-restore:{}", entry.id),
+                &body,
+            );
         } else if availability == Availability::Current {
             super::super::ui_probe::button(&interaction, "Show current conversation", &body);
         }

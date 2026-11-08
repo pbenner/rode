@@ -22,6 +22,7 @@ from ui_harness import (
     text,
     wait_for_button,
     wait_for_project,
+    wait_for_ui_state,
     wait_for_window,
     x11,
     xtest,
@@ -227,10 +228,37 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             text(" dirty")
             menu(root / "another-project")
             button("explorer-open-project")
+            point("project-dialog-path", focused=True)
+            key("a", ("Control_L",))
+            key("c", ("Control_L",))
+            wait(
+                lambda: clipboard_matches(str(root / "another-project")),
+                "The project dialog did not prefill the selected folder",
+            )
+            assert not any(
+                item["name"].startswith("guard-")
+                for item in json.loads(state.read_text())["buttons"]
+            ), "Project switching began before confirming its options"
+            screenshot(window, "project-options.png")
+            button("project-dialog-cancel")
+            wait_for_ui_state(
+                process,
+                log.name,
+                state,
+                lambda layout: all(
+                    item["name"] != "project-dialog-path" for item in layout["buttons"]
+                ),
+                "Cancelling did not close the project dialog",
+            )
+            wait_for_project(window, process, log.name, root)
+            menu(root / "another-project")
+            button("explorer-open-project")
+            button("project-dialog-open")
             button("guard-keep-editing")
             wait_for_project(window, process, log.name, root)
             menu(root / "another-project")
             button("explorer-open-project")
+            button("project-dialog-open")
             button("guard-discard")
             wait_for_project(window, process, log.name, root / "another-project")
             idle()
@@ -241,7 +269,7 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             screenshot(window, "opened-child-project.png")
             close_window(window, process)
             print(
-                "Explorer: native context menus, create, rename with unsaved buffers, duplicate, confirmed deletion, copy paths, and guarded project opening passed."
+                "Explorer: native context menus, file operations, prefilled project options, cancellation and guarded local/SSH project opening passed."
             )
         except Exception:
             if state.exists():

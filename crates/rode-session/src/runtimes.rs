@@ -888,15 +888,10 @@ fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T>
     Ok(serde_json::from_slice(&bytes[1..])?)
 }
 
-/// Find the service generation owning this captured ID and bridge bounded stdio
-/// messages through its authenticated local socket; require the original policy.
+/// Bridge bounded stdio messages through the current service's authenticated
+/// local socket; require the original policy.
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
-    let launcher = Launcher {
-        executable: current_executable()?,
-        prefix: vec![],
-    };
-    let dir=service_directories().into_iter().find(|dir|matches!(request_once(&Request::Runtimes,&launcher,dir),Ok(Response::Runtimes(infos)) if infos.iter().any(|i|i.id==id))).context("Runtime is no longer available; refresh the running list")?;
-    let mut stream = connect_control(&dir)?;
+    let mut stream = connect_control(&directory())?;
     send_json(
         &mut stream,
         &Request::AttachRuntime {

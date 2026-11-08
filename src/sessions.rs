@@ -1,7 +1,7 @@
 //! Desktop discovery of the matching native session helper.
 use crate::project;
 use anyhow::{Context, Result, ensure};
-pub use rode_session::workspace::{Helper, Operation, Reply, fingerprint, initial_input};
+pub use rode_session::workspace::{Operation, Reply, fingerprint, initial_input};
 use std::path::PathBuf;
 /// Use the matching service executable without replacing existing jobs.
 pub fn local(operation: &Operation) -> Result<Reply> {
@@ -33,7 +33,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
         .context("Cannot check RODE_SESSION_HELPER; rebuild it with cargo xtask build-helper")?;
         ensure!(
             output.success() && output.stdout.trim() == rode_session::PROTOCOL.to_string(),
-            "RODE_SESSION_HELPER uses an older terminal protocol. Rebuild it with cargo xtask build-helper or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
+            "RODE_SESSION_HELPER uses a different terminal protocol. Rebuild it with cargo xtask build-helper or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."
         );
     }
     let launcher = match standalone {

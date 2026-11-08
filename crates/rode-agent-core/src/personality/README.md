@@ -4,12 +4,10 @@ These UTF-8 files are compiled into the agent core and sent as a separate text
 block on each applicable turn. They do not configure provider operating modes.
 
 Each personality has one current prompt: `default.txt` resets the agent's tone,
-and `lamb.txt` supplies the Lamb voice. Edit these files directly during
-pre-release development; no version numbers or historical snapshots are kept.
-Replay strips only the current exact hint suffixes and recognized preview
-prefixes, never arbitrary XML or assistant replies. Backends may retain earlier
-wording in their saved conversations; compatibility with those development
-snapshots is not maintained.
+`lamb.txt` supplies the Lamb voice, and `panne.txt` supplies the Panne voice. Edit
+these files directly during pre-release development; no version numbers or
+historical snapshots are kept. Replay recognizes generated style envelopes
+independently of their wording and preserves quoted blocks and assistant replies.
 
 The Lamb description is a compact, original interpretation of Apple's
 [character description](https://www.apple.com/tv-pr/originals/slow-horses/) and

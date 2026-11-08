@@ -24,8 +24,7 @@ pub struct Spec {
     pub config: Config,
     /// Actual host-side sandbox prefix and root.
     pub plan: Plan,
-    /// Full host policy for native file-only helpers; absent in older clients.
-    #[serde(default)]
+    /// Full host policy for native file-only helpers.
     pub file_tool_plan: Option<serde_json::Value>,
     /// Fully resolved installed executable, including a verified optional runtime.
     pub executable: String,
@@ -37,28 +36,14 @@ pub struct Spec {
     pub persistent: bool,
     /// First prompt, absent only for explicit history browsing.
     pub text: Option<String>,
-    /// Immutable file contents for the first prompt; absent for older clients.
-    #[serde(default)]
+    /// Immutable file contents for the first prompt.
     pub attachments: Vec<crate::attachment::Attachment>,
 }
 /// Discoverable live agent metadata, separate from backend-owned saved chats.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Info {
     /// A disposable history connection, retained for routing but hidden from Running.
-    #[serde(default)]
     pub history_browser: bool,
-    /// Whether this host controller accepts portable prompt attachments.
-    #[serde(default)]
-    pub supports_attachments: bool,
-    /// Whether queued prompts are held by this live controller.
-    #[serde(default)]
-    pub supports_queue: bool,
-    /// Whether failed transports can be explicitly recovered with their queue intact.
-    #[serde(default)]
-    pub supports_recovery: bool,
-    /// Whether this controller dispatches queued prompts independently of desktop views.
-    #[serde(default)]
-    pub automatic_queue: bool,
     /// Native agent identity.
     pub id: String,
     /// Display title.
@@ -88,15 +73,13 @@ pub struct Info {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatView {
     /// A failed backend is retained until explicit recovery or termination.
-    #[serde(default)]
     pub recoverable: bool,
     /// Backend conversation identity, used to protect open chats from history deletion.
-    #[serde(default)]
     pub conversation: String,
     /// Recent messages, never saved as RODE preferences.
     pub messages: VecDeque<Message>,
     /// Recent accepted/replayed prompts, independent of transcript eviction.
-    /// Absent on older services, or unchanged in a delta update.
+    /// Omitted when unchanged in a delta update.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_history: Option<Vec<String>>,
     /// Permission/questions waiting for explicit input.
@@ -107,8 +90,7 @@ pub struct ChatView {
     pub busy: bool,
     /// Completed turns used for clean-buffer refresh.
     pub completed: u64,
-    /// False for older services, failures and interrupted turns.
-    #[serde(default)]
+    /// False for failures and interrupted turns.
     pub last_turn_succeeded: bool,
     /// Backend-advertised models.
     pub models: Vec<controls::Model>,
@@ -127,12 +109,9 @@ pub struct HistoryView {
     /// Bounded saved-chat rows.
     pub entries: Vec<Entry>,
     /// Known owners on this host; other chats are checked when restored.
-    #[serde(default)]
     pub owners: BTreeMap<String, Owner>,
     /// Additional process output, kept separate from the operation failure.
-    /// None means separate output was not reported, as with older services.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend_output: Option<String>,
+    pub backend_output: String,
     /// Current support/load/error status.
     pub status: String,
     /// Whether listing/restoring is in progress.
@@ -140,10 +119,8 @@ pub struct HistoryView {
     /// Whether the backend supports restoring a row.
     pub can_resume: bool,
     /// Whether the backend provides saved-conversation deletion.
-    #[serde(default)]
     pub can_delete: bool,
     /// Whether an explicit delete operation is pending.
-    #[serde(default)]
     pub deleting: bool,
     /// Whether another page can be requested.
     pub more: bool,
@@ -152,7 +129,6 @@ pub struct HistoryView {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct State {
     /// Host-owned waiting prompts, excluding attachment data.
-    #[serde(default)]
     pub queue: crate::queue::View,
     /// Live worker identity and lifetime policy.
     pub info: Info,
@@ -183,6 +159,10 @@ impl Update {
             self.state.chat.input_history =
                 previous.and_then(|state| state.chat.input_history.clone());
         }
+        anyhow::ensure!(
+            self.state.chat.input_history.is_some(),
+            "Initial agent update is missing prompt history"
+        );
         let mut messages: BTreeMap<_, _> = previous
             .into_iter()
             .flat_map(|s| s.chat.messages.iter())
@@ -217,15 +197,9 @@ pub enum Command {
         /// Exact user message, bounded to PROMPT_LIMIT.
         text: String,
         /// File snapshots submitted with this turn.
-        #[serde(default)]
         attachments: Vec<crate::attachment::Attachment>,
         /// Current model, reply and permission settings.
-        config: Config,
-    },
-    /// Apply idle ACP selectors without a prompt.
-    Configure {
-        /// Idle controls to acknowledge before another prompt.
-        config: Config,
+        config: Box<Config>,
     },
     /// Answer exactly the displayed card, rejecting stale answers.
     Answer {

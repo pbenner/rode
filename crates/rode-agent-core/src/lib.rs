@@ -152,8 +152,6 @@ pub struct Config {
     pub claude_program: String,
     /// Literal arguments for the Claude ACP adapter; never shell-expanded.
     pub claude_arguments: Vec<String>,
-    /// Request read-only agent operation without widening the outer sandbox.
-    pub read_only: bool,
     /// Agent tool scope; the outer project sandbox always remains authoritative.
     pub access: Access,
     /// Whether additional permission requests require a user decision or are denied.
@@ -181,7 +179,6 @@ impl Default for Config {
             acp_arguments: vec![],
             claude_program: CLAUDE_ACP.into(),
             claude_arguments: vec![],
-            read_only: false,
             access: Access::default(),
             approval: Approval::default(),
             network: network::Network::default(),
@@ -243,17 +240,8 @@ impl Config {
 
     /// Whether only the host's confined file tools may change the project.
     pub fn files_only(&self) -> bool {
-        self.access() == Access::FilesOnly
+        self.access == Access::FilesOnly
     }
-    /// Preserve old read-only preferences while applying a new access selector.
-    pub fn access(&self) -> Access {
-        if self.read_only {
-            Access::ReadOnly
-        } else {
-            self.access
-        }
-    }
-
     /// Settings which require another executable/provider process, rather than a turn override.
     pub fn same_process(&self, next: &Self) -> bool {
         self.provider == next.provider
