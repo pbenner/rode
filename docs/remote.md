@@ -210,6 +210,20 @@ socket to a persistent agent on that host. Changing the desktop's key path does
 not change a remote tunnel's credentials. Error details include the underlying
 OS failure, without displaying private-key contents.
 
+If SSH login succeeds but the relay refuses the tunnel listener, the error
+includes a port-specific `ss -ltnp` command to run **on the relay**. A listener
+owned by `sshd-session` usually belongs to another SSH tunnel. Stop that tunnel
+at its source, or choose a different **Relay port** under **Port forwarding**;
+leave the relay's **SSH port** unchanged. If the port is free, have the relay
+administrator check `AllowTcpForwarding`, `DisableForwarding`, `PermitListen`
+and restrictions on the authorised key. SSH sends no reason for this refusal,
+so RODE reports these as possible causes rather than claiming a confirmed port
+conflict. Transport failures and request timeouts are reported separately.
+The service keeps retrying; stop the RODE tunnel before an `ssh -R` test on the
+same listener. **Copy error** copies the full displayed diagnostic for inspection
+or sharing, including errors returned by older services. Copying never starts
+a command or changes the relay's configuration.
+
 Already running session services keep their existing code after an editor
 update. Worker diagnostic improvements take effect after the owning service is
 restarted; restarting it ends its tunnels and must account for any retained work.

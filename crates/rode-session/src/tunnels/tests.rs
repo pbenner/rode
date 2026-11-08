@@ -4,7 +4,7 @@ use russh::{
     keys::{Algorithm, PrivateKey},
     server::{self, Server as _},
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -15,6 +15,7 @@ struct Relay {
     allowed: keys::PublicKey,
     handles: Arc<Mutex<Vec<server::Handle>>>,
     auths: Arc<AtomicUsize>,
+    deny_forwarding: Arc<AtomicBool>,
 }
 struct Peer {
     relay: Relay,
@@ -57,6 +58,9 @@ impl server::Handler for Peer {
         session: &mut server::Session,
     ) -> Result<bool> {
         ensure!(address == "127.0.0.1", "Non-loopback forwarding request");
+        if self.relay.deny_forwarding.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
         let Ok(listener) = TcpListener::bind((address, *port as u16)).await else {
             return Ok(false);
         };
@@ -113,6 +117,77 @@ async fn roundtrip(port: u16) {
     })
     .await
     .unwrap();
+}
+
+fn assert_listener_refusal(info: &Info) {
+    assert_eq!(info.status, Status::Reconnecting);
+    for detail in [
+        format!(
+            "SSH login as {} to relay {} succeeded",
+            info.spec.relay_user,
+            relay_endpoint(&info.spec)
+        ),
+        format!(
+            "refused tunnel listener 127.0.0.1:{}",
+            info.spec.listen_port
+        ),
+        "SSH did not report why".into(),
+        format!(
+            "On the relay, run: ss -ltnp 'sport = :{}'",
+            info.spec.listen_port
+        ),
+        "sshd-session".into(),
+        "Relay port under Port forwarding".into(),
+        "AllowTcpForwarding".into(),
+        "authorized_keys".into(),
+        "RODE will retry automatically".into(),
+        format!("SSH detail: {}", russh::Error::RequestDenied),
+    ] {
+        assert!(
+            info.error.contains(&detail),
+            "Missing {detail}: {}",
+            info.error
+        );
+    }
+}
+
+#[test]
+fn tunnel_forwarding_errors_distinguish_refusal_from_lost_transport() {
+    let settings = Spec {
+        relay_host: "2001:db8::1".into(),
+        relay_port: 8443,
+        ..spec()
+    };
+    let error = forwarding_error(&settings, russh::Error::Disconnect);
+    assert!(matches!(
+        error.downcast_ref::<russh::Error>(),
+        Some(russh::Error::Disconnect)
+    ));
+    let message = format!("{error:#}");
+    assert!(message.contains("[2001:db8::1]:8443"), "{message}");
+    assert!(message.contains("127.0.0.1:22022"), "{message}");
+    assert!(message.contains("could not complete"), "{message}");
+    assert!(
+        !message.contains("refused") && !message.contains("already in use"),
+        "{message}"
+    );
+
+    // Full diagnostics must survive the service's existing 2048-character limit,
+    // even with the largest allowed host and account names.
+    let settings = Spec {
+        relay_host: "h".repeat(253),
+        relay_user: "u".repeat(253),
+        ..settings
+    };
+    settings.validate().unwrap();
+    let error = forwarding_error(&settings, russh::Error::RequestDenied);
+    assert!(matches!(
+        error.downcast_ref::<russh::Error>(),
+        Some(russh::Error::RequestDenied)
+    ));
+    let message = format!("{error:#}");
+    assert!(message.chars().count() <= 2048, "{message}");
+    assert!(message.contains("SSH did not report why"));
 }
 #[test]
 fn validates_bounded_explicit_credentials_and_ports() {
@@ -262,6 +337,7 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
         allowed: identity.public_key().clone(),
         handles: Default::default(),
         auths: Default::default(),
+        deny_forwarding: Default::default(),
     };
     let mut server = relay.clone();
     let config = Arc::new(server::Config {
@@ -315,8 +391,17 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
     until(|| store.list()[0].status == Status::HostKeyRequired).await;
     assert!(store.list()[0].error.contains("CHANGED"));
     settings.relay_key = untrusted.observed_key;
+    let reserved = TcpListener::bind(("127.0.0.1", listen_port)).await.unwrap();
     store.start(id.clone(), settings.clone()).unwrap();
+    // Another process already owns the relay port. SSH supplies only a refusal,
+    // so report the successful login and diagnostics without inventing a cause.
+    until(|| store.list()[0].status == Status::Reconnecting).await;
+    assert_listener_refusal(&store.list()[0]);
+    assert!(relay.auths.load(Ordering::SeqCst) > 0);
+    // Keep retrying: releasing a conflicting listener must recover unattended.
+    drop(reserved);
     until(|| store.list()[0].status == Status::Connected).await;
+    assert!(store.list()[0].error.is_empty());
     assert!(store.live());
     roundtrip(listen_port).await;
     // Prefer the explicitly pinned ECDSA identity even when the relay also offers Ed25519.
@@ -332,12 +417,18 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
         attempts,
         "Repeated Start must be idempotent"
     );
-    assert!(
-        store
-            .start(crate::new_id().unwrap(), settings.clone())
-            .is_err(),
-        "Duplicate relay listener must be rejected"
-    );
+    let conflict = store
+        .start(crate::new_id().unwrap(), settings.clone())
+        .unwrap_err()
+        .to_string();
+    for detail in [
+        settings.name.clone(),
+        format!("127.0.0.1:{listen_port}"),
+        relay_endpoint(&settings),
+        "Relay port under Port forwarding".into(),
+    ] {
+        assert!(conflict.contains(&detail), "{conflict}");
+    }
     let handle = relay.handles.lock().unwrap().last().unwrap().clone();
     assert!(
         handle
@@ -351,6 +442,8 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
             .await
             .is_err()
     );
+    // A policy refusal is indistinguishable from a port conflict on the wire.
+    relay.deny_forwarding.store(true, Ordering::SeqCst);
     handle
         .disconnect(
             russh::Disconnect::ByApplication,
@@ -361,9 +454,17 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
         .unwrap();
     until(|| {
         let info = &store.list()[0];
+        info.attempts > attempts && info.status == Status::Reconnecting
+    })
+    .await;
+    assert_listener_refusal(&store.list()[0]);
+    relay.deny_forwarding.store(false, Ordering::SeqCst);
+    until(|| {
+        let info = &store.list()[0];
         info.attempts > attempts && info.status == Status::Connected
     })
     .await;
+    assert!(store.list()[0].error.is_empty());
     roundtrip(listen_port).await;
     let mut active = TcpStream::connect(("127.0.0.1", listen_port))
         .await

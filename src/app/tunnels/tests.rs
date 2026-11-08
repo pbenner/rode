@@ -1,6 +1,48 @@
 //! Headless tunnel-manager interactions and responsive layout regressions.
 use super::*;
 
+const LISTENER_ERROR: &str = "SSH login to relay login.example.org:8443 succeeded, but the relay refused tunnel listener 127.0.0.1:22022.\nSSH did not report why. Possible causes: the port is already in use, or forwarding is restricted on the relay.\nOn the relay, run: ss -ltnp 'sport = :22022' (use sudo to see all owners).\nAn sshd-session listener usually belongs to an existing SSH tunnel. Stop that tunnel at its source, or choose a different Relay port under Port forwarding.\nRODE will retry automatically.";
+
+#[test]
+fn tunnel_errors_can_be_copied_without_starting_host_work() {
+    for request_error in [true, false] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.dialog = Dialog::Tunnels;
+        if request_error {
+            app.tunnels.error = LISTENER_ERROR.into();
+        } else {
+            app.tunnels.available = vec![Info {
+                id: "failed-tunnel".into(),
+                hostname: "compute".into(),
+                spec: Spec {
+                    relay_host: "login.example.org".into(),
+                    ..Default::default()
+                },
+                status: Status::Reconnecting,
+                error: LISTENER_ERROR.into(),
+                observed_key: String::new(),
+                fingerprint: String::new(),
+                attempts: 2,
+            }];
+        }
+        let output = click(&mut app, &ctx, "Copy error");
+        assert!(
+            output
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| matches!(
+                    command, egui::OutputCommand::CopyText(text) if text == LISTENER_ERROR
+                ))
+        );
+        assert!(app.tunnels.pending.is_none());
+        assert!(app.dialog == Dialog::Tunnels);
+        assert_eq!(app.tunnels.page, Page::Tunnels);
+    }
+}
+
 #[test]
 fn tunnel_host_selection_supports_local_work_and_never_falls_back_from_remote() {
     assert!(matches!(Host::for_workspace(None).unwrap(), Host::Local));
@@ -457,12 +499,16 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                             relay_user: "researcher".into(),
                             ..Default::default()
                         },
-                        status: if n == 0 {
-                            Status::Connected
-                        } else {
-                            Status::HostKeyRequired
+                        status: match n {
+                            0 => Status::Connected,
+                            1 => Status::Reconnecting,
+                            _ => Status::HostKeyRequired,
                         },
-                        error: String::new(),
+                        error: if n == 1 {
+                            LISTENER_ERROR.into()
+                        } else {
+                            String::new()
+                        },
                         observed_key: String::new(),
                         fingerprint: format!("SHA256:{}", "A".repeat(43)),
                         attempts: 1,

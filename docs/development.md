@@ -40,6 +40,11 @@ conflicts, forced-disconnect recovery, credential attention, nonblocking identit
 validation and scoped shutdown.
 Credential regressions require the resolved identity/agent path, the corrective
 UI field and the original failure in errors, without private-key contents.
+Listener regressions occupy the requested port and refuse forwarding by policy,
+require an honest refusal diagnostic with the exact relay-side check, and verify
+automatic recovery with stale errors cleared. Transport failures must not be
+labelled as listener refusals; diagnostics retain their cause within the existing
+size limit. Duplicate retained listeners identify the owning tunnel and endpoint.
 It needs no installed SSH tools or display server.
 
 `cargo test --test ssh_client tunnel_return_route` checks a real native jump
@@ -65,6 +70,8 @@ layout matrix checks both tabs across compact/short viewports, interface scales
 and themes, with long relay names and retained tunnels. Pointer/keyboard tests
 check draft retention and editing during a pending status response; scroll checks
 keep navigation and Start/Close actions visible. These tests open no native window.
+They also cover long multiline diagnostics and copying request/tunnel errors
+without dispatching host work.
 
 The service now embeds russh and needs Rust 1.89. Rebuild the protocol-19 helper
 alongside the editor; existing daemon generations keep their own jobs. Validate

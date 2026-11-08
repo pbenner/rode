@@ -70,7 +70,7 @@ impl EditorApp {
             .show(ui, |ui| {
                 if !self.tunnels.error.is_empty() {
                     layout::card(ui, palette, |ui| {
-                        ui.colored_label(palette.error, &self.tunnels.error);
+                        tunnel_error(ui, ctx, &self.tunnels.error, palette.error);
                     });
                     ui.add_space(8.);
                 }
@@ -174,7 +174,7 @@ impl EditorApp {
         );
         if !info.error.is_empty() {
             ui.add_space(8.);
-            ui.add(egui::Label::new(RichText::new(&info.error).color(status_color)).wrap());
+            tunnel_error(ui, ctx, &info.error, status_color);
         }
         let busy = self.tunnels.pending.is_some();
         if info.status == Status::HostKeyRequired {
@@ -399,6 +399,17 @@ impl EditorApp {
                 ui.label(RichText::new("Updating…").small().color(palette.muted));
             }
         });
+    }
+}
+
+fn tunnel_error(ui: &mut egui::Ui, ctx: &egui::Context, error: &str, color: egui::Color32) {
+    ui.add(
+        egui::Label::new(RichText::new(error).color(color))
+            .wrap()
+            .selectable(true),
+    );
+    if ui.small_button("Copy error").clicked() {
+        ctx.copy_text(error.to_owned());
     }
 }
 

@@ -221,18 +221,22 @@ impl Store {
             entries.contains_key(&id) || entries.len() < MAX_TUNNELS,
             "At most {MAX_TUNNELS} tunnels may be retained"
         );
-        ensure!(
-            !entries.iter().any(|(other_id, e)| {
-                let other = &e.info.lock().unwrap().spec;
-                *other_id != id
-                    && (
-                        other.relay_host.as_str(),
-                        other.relay_port,
-                        other.listen_port,
-                    ) == (spec.relay_host.as_str(), spec.relay_port, spec.listen_port)
-            }),
-            "Another tunnel already uses that relay port"
-        );
+        if let Some(name) = entries.iter().find_map(|(other_id, e)| {
+            let other = &e.info.lock().unwrap().spec;
+            (*other_id != id
+                && (
+                    other.relay_host.as_str(),
+                    other.relay_port,
+                    other.listen_port,
+                ) == (spec.relay_host.as_str(), spec.relay_port, spec.listen_port))
+                .then(|| other.name.clone())
+        }) {
+            bail!(
+                "Tunnel {name:?} already reserves listener 127.0.0.1:{} on relay {}. Manage that tunnel in Tunnels, or choose a different Relay port under Port forwarding.",
+                spec.listen_port,
+                relay_endpoint(&spec)
+            );
+        }
         // Cancel and join the previous worker before replacing its listener.
         entries.remove(&id);
         let info = Arc::new(Mutex::new(Info {
@@ -392,7 +396,7 @@ impl client::Handler for Handler {
 }
 async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
     let spec = info.lock().unwrap().spec.clone();
-    let relay = format!("{}:{}", spec.relay_host, spec.relay_port);
+    let relay = relay_endpoint(&spec);
     let mut preferred = russh::Preferred::default();
     if !spec.relay_key.is_empty() {
         let key = keys::PublicKey::from_openssh(&spec.relay_key)?;
@@ -450,8 +454,8 @@ async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
         )
     })?;
     tokio::time::timeout(TIMEOUT, session.tcpip_forward("127.0.0.1", spec.listen_port.into())).await
-        .with_context(|| format!("Forwarding request for 127.0.0.1:{} on relay {relay} timed out", spec.listen_port))?
-        .with_context(|| format!("Relay {relay} refused listener 127.0.0.1:{}; check forwarding permissions or a port already in use", spec.listen_port))?;
+        .with_context(|| format!("SSH login to relay {relay} succeeded, but the request for tunnel listener 127.0.0.1:{} timed out. The relay did not confirm whether it created the listener. RODE will reconnect and retry.", spec.listen_port))?
+        .map_err(|error| forwarding_error(&spec, error))?;
     {
         let mut state = info.lock().unwrap();
         state.status = Status::Connected;
@@ -462,6 +466,39 @@ async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
         .with_context(|| format!("Relay {relay} disconnected"))?;
     Ok(())
 }
+
+fn relay_endpoint(spec: &Spec) -> String {
+    if spec.relay_host.contains(':') && !spec.relay_host.starts_with('[') {
+        format!("[{}]:{}", spec.relay_host, spec.relay_port)
+    } else {
+        format!("{}:{}", spec.relay_host, spec.relay_port)
+    }
+}
+
+fn forwarding_error(spec: &Spec, error: russh::Error) -> anyhow::Error {
+    let relay = relay_endpoint(spec);
+    let port = spec.listen_port;
+    // SSH_MSG_REQUEST_FAILURE carries no reason. Do not claim a port conflict
+    // without evidence, or mislabel a lost connection as a server refusal.
+    let message = if matches!(error, russh::Error::RequestDenied) {
+        format!(
+            "SSH login as {} to relay {relay} succeeded, but the relay refused tunnel listener 127.0.0.1:{port}.\n\
+             SSH did not report why. Possible causes: the port is already in use (including another tunnel), or forwarding is restricted on the relay.\n\
+             On the relay, run: ss -ltnp 'sport = :{port}' (use sudo to see all owners).\n\
+             An sshd-session listener usually belongs to an existing SSH tunnel. Stop that tunnel at its source, or choose a different Relay port under Port forwarding.\n\
+             If the port is free, ask the relay administrator to check AllowTcpForwarding, DisableForwarding, PermitListen and authorized_keys restrictions.\n\
+             RODE will retry automatically. Stop this tunnel before testing the same port with ssh -R.\n\
+             SSH detail",
+            spec.relay_user
+        )
+    } else {
+        format!(
+            "SSH login to relay {relay} succeeded, but the request for tunnel listener 127.0.0.1:{port} could not complete. RODE will reconnect and retry.\nSSH detail"
+        )
+    };
+    anyhow::Error::new(error).context(message)
+}
+
 async fn authenticate(
     session: &mut client::Handle<Handler>,
     spec: &Spec,
