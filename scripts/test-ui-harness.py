@@ -242,6 +242,30 @@ class ButtonReadinessTests(unittest.TestCase):
             click_button(0x123, self.process, "log", "state", "Install Codex")
             click.assert_called_once_with(190, 245)
 
+    def test_copy_click_wakes_idle_terminal_before_activating(self):
+        # Rejected terminal input need not schedule another frame. Only the
+        # pointer motion advances this snapshot and acknowledges Copy's hover.
+        self.state["buttons"][0].update(name="terminal-copy-output", hovered=False)
+        idle = json.dumps(self.state)
+        self.read.return_value = idle
+
+        def native_motion(*_):
+            self.assertEqual(self.read.return_value, idle)
+            self.read.return_value = json.dumps(
+                {
+                    **self.state,
+                    "pass": 11,
+                    "buttons": [dict(self.state["buttons"][0], hovered=True)],
+                }
+            )
+
+        self.move.side_effect = native_motion
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click_button(0x123, self.process, "log", "state", "terminal-copy-output")
+            self.move.assert_called_once_with(190, 245)
+            self.assertEqual(self.read.call_count, 2)
+            click.assert_called_once_with(190, 245)
+
     def test_modal_blocked_control_cannot_be_clicked_until_it_accepts_hover(self):
         blocked = dict(self.state, buttons=[dict(self.state["buttons"][0], enabled=False)])
         self.read.side_effect = [

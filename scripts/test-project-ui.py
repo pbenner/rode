@@ -518,16 +518,20 @@ def failed_connection():
                     ui.click("terminal-output-ended")
                     ui.control("terminal-output-ended", focused=True)
                     text("echo should-not-run\n")
-                    # Rejected input has no edit/file effect to acknowledge.
-                    # Finish its native frame before opening a palette, where
-                    # the terminal's pending Enter could select a command.
-                    before = ui.layout()["pass"]
-                    ui.control("terminal-output-ended", focused=True, after_pass=before)
-                    ui.command("Terminal: Copy output")
+                    # Copy's mouse-hover acknowledgement processes pending
+                    # terminal input without depending on an idle repaint or
+                    # opening a palette that could consume the rejected Enter.
+                    ui.click("terminal-copy-output")
 
                     def copied_error():
                         output = ui.clipboard()
-                        return output if output and "Connection refused" in output else None
+                        return (
+                            output
+                            if output
+                            and "Connection refused" in output
+                            and f"port {port}:" in output
+                            else None
+                        )
 
                     output = ui.wait(
                         copied_error, "Terminal copy did not expose the refused SSH diagnostic"
