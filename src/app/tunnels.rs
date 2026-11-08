@@ -1,6 +1,7 @@
 //! Explicit host administration for daemon-owned reverse SSH tunnels.
-//! Workers use the authenticated host connection; no project sandbox or local
-//! fallback is allowed. Closing this dialog or window never stops a tunnel.
+//! Workers use the local service or the workspace's authenticated host connection,
+//! outside the project sandbox. Remote failures never fall back to the local host.
+//! Closing this dialog or window never stops a tunnel.
 use super::*;
 use crate::project;
 use anyhow::Context;
@@ -9,13 +10,91 @@ use rode_session::{
     tunnels::{Info, Spec, Status},
 };
 
+mod ui;
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Hash)]
+enum Page {
+    #[default]
+    Tunnels,
+    New,
+}
+
 enum Outcome {
     Listed(Vec<Info>),
     Route(Box<Profile>),
 }
+
+/// Capture the selected host before dispatching work. An offline remote workspace
+/// is an error, not permission to administer the desktop's service instead.
+enum Host {
+    Local,
+    Remote { remote: Box<Remote>, root: String },
+}
+impl Host {
+    fn for_workspace(workspace: Option<&Workspace>) -> anyhow::Result<Self> {
+        if let Some(workspace) = workspace
+            && let Some(remote) = &workspace.remote
+        {
+            anyhow::ensure!(
+                workspace.connected,
+                "Reconnect SSH to manage this host's tunnels"
+            );
+            return Ok(Self::Remote {
+                remote: Box::new(remote.clone()),
+                root: workspace.root.clone(),
+            });
+        }
+        Ok(Self::Local)
+    }
+
+    fn request(&self, request: Control) -> anyhow::Result<rode_session::Response> {
+        let action = match &request {
+            Control::StartTunnel { .. } => "start SSH tunnel",
+            Control::StopTunnel { .. } => "stop SSH tunnel",
+            _ => "list SSH tunnels",
+        };
+        self.dispatch(request).with_context(|| match self {
+            Self::Local => format!("Cannot {action} on this computer"),
+            Self::Remote { remote, .. } => {
+                format!("Cannot {action} on SSH host {}", remote.profile.endpoint())
+            }
+        })
+    }
+
+    fn dispatch(&self, request: Control) -> anyhow::Result<rode_session::Response> {
+        let operation = crate::sessions::Operation::Tunnels {
+            request: Box::new(request),
+        };
+        let reply = match self {
+            Self::Local => crate::sessions::local(&operation)?,
+            Self::Remote { remote, root } => {
+                let response = remote
+                    .request_in(
+                        &Request::Tool {
+                            request: project::Request::Sessions {
+                                root: root.clone(),
+                                operation,
+                                directory: std::env::var("RODE_SESSION_DIR").ok(),
+                            },
+                        },
+                        None,
+                    )?
+                    .tool
+                    .context("Missing tunnel response")?;
+                let project::Response::Sessions(reply) = response else {
+                    anyhow::bail!("Unexpected tunnel response");
+                };
+                reply
+            }
+        };
+        reply.response.checked()
+    }
+}
 #[derive(Default)]
 pub(super) struct Tunnels {
     generation: Option<u64>,
+    page: Page,
+    draft_epoch: u64,
     spec: Spec,
     available: Vec<Info>,
     pending: Option<mpsc::Receiver<Result<Outcome, String>>>,
@@ -23,6 +102,28 @@ pub(super) struct Tunnels {
     error: String,
     relay_jump: String,
     stop: Option<String>,
+}
+impl Tunnels {
+    fn relay_jump(&self, info: &Info) -> String {
+        if !self.relay_jump.trim().is_empty() {
+            return self.relay_jump.trim().to_owned();
+        }
+        let host = &info.spec.relay_host;
+        let host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.clone()
+        };
+        format!("{}@{}:{}", info.spec.relay_user, host, info.spec.relay_port)
+    }
+
+    fn connection_details(&self, info: &Info) -> String {
+        format!(
+            "In Connect SSH on the other computer:\nHost: 127.0.0.1\nPort: {}\nJump / ProxyJump: {}\nUser: your login on the computer running the tunnel\n\nUse that computer's SSH credentials and verify its host key before accepting it.\n",
+            info.spec.listen_port,
+            self.relay_jump(info)
+        )
+    }
 }
 impl EditorApp {
     pub(super) fn tunnel_tick(&mut self, ctx: &egui::Context) {
@@ -48,7 +149,9 @@ impl EditorApp {
             self.tunnels.last = Some(Instant::now());
             match result {
                 Ok(Outcome::Listed(list)) => self.tunnels.available = list,
-                Ok(Outcome::Route(profile)) if self.dialog == Dialog::Tunnels => {
+                Ok(Outcome::Route(profile))
+                    if self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels =>
+                {
                     self.profile = *profile;
                     self.profile_baseline = None;
                     self.profile_form += 1;
@@ -59,6 +162,7 @@ impl EditorApp {
             }
         }
         if self.dialog == Dialog::Tunnels
+            && self.tunnels.page == Page::Tunnels
             && self.tunnels.pending.is_none()
             && self
                 .tunnels
@@ -67,7 +171,7 @@ impl EditorApp {
         {
             self.tunnel_request(Control::Tunnels, ctx);
         }
-        if self.dialog == Dialog::Tunnels {
+        if self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
@@ -75,13 +179,14 @@ impl EditorApp {
         if self.tunnels.pending.is_some() {
             return;
         }
-        let Some(workspace) = self.workspace.as_ref().filter(|w| w.connected) else {
-            return;
+        let host = match Host::for_workspace(self.workspace.as_ref()) {
+            Ok(host) => host,
+            Err(error) => {
+                self.tunnels.error = error.to_string();
+                self.tunnels.last = Some(Instant::now());
+                return;
+            }
         };
-        let Some(remote) = workspace.remote.clone() else {
-            return;
-        };
-        let root = workspace.root.clone();
         let (tx, rx) = mpsc::channel();
         self.tunnels.pending = Some(rx);
         self.tunnels.last = Some(Instant::now());
@@ -93,31 +198,10 @@ impl EditorApp {
         std::thread::spawn(move || {
             let _vault_work = vault_work;
             let result = (|| -> anyhow::Result<Outcome> {
-                let dispatch = |request: Control| -> anyhow::Result<rode_session::Response> {
-                    let response = remote
-                        .request_in(
-                            &Request::Tool {
-                                request: project::Request::Sessions {
-                                    root: root.clone(),
-                                    operation: crate::sessions::Operation::Tunnels {
-                                        request: Box::new(request),
-                                    },
-                                    directory: std::env::var("RODE_SESSION_DIR").ok(),
-                                },
-                            },
-                            None,
-                        )?
-                        .tool
-                        .context("Missing tunnel response")?;
-                    let project::Response::Sessions(reply) = response else {
-                        anyhow::bail!("Unexpected tunnel response");
-                    };
-                    reply.response.checked()
-                };
                 if !matches!(request, Control::Tunnels) {
-                    dispatch(request)?;
+                    host.request(request)?;
                 }
-                match dispatch(Control::Tunnels)? {
+                match host.request(Control::Tunnels)? {
                     rode_session::Response::Tunnels(list) => Ok(Outcome::Listed(list)),
                     _ => anyhow::bail!("Unexpected tunnel listing"),
                 }
@@ -137,17 +221,7 @@ impl EditorApp {
             profile.root = workspace.root.clone();
             profile.sandbox = workspace.sandbox_options.clone();
         }
-        let jump = if self.tunnels.relay_jump.trim().is_empty() {
-            let host = &info.spec.relay_host;
-            let host = if host.contains(':') {
-                format!("[{host}]")
-            } else {
-                host.clone()
-            };
-            format!("{}@{}:{}", info.spec.relay_user, host, info.spec.relay_port)
-        } else {
-            self.tunnels.relay_jump.trim().to_owned()
-        };
+        let jump = self.tunnels.relay_jump(info);
         let port = info.spec.listen_port;
         let (tx, rx) = mpsc::channel();
         self.tunnels.pending = Some(rx);
@@ -163,206 +237,7 @@ impl EditorApp {
             ctx.request_repaint();
         });
     }
-    pub(super) fn tunnels_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("SSH tunnels");
-        ui.label("The compute host’s session service maintains these tunnels after RODE disconnects. They end when stopped or when the service/node ends.");
-        let connected = self
-            .workspace
-            .as_ref()
-            .is_some_and(|w| w.connected && w.remote.is_some());
-        if !connected {
-            ui.label("Connect to the compute host first to manage its tunnels.");
-            return;
-        }
-        ui.label("Host administration · outside the project sandbox");
-        if !self.tunnels.error.is_empty() {
-            ui.colored_label(self.themes.active().palette.error, &self.tunnels.error);
-        }
-        let busy = self.tunnels.pending.is_some();
-        ui.add_enabled_ui(!busy, |ui| {
-            let mut action = None;
-            let mut route = None;
-            for info in self.tunnels.available.clone() {
-                ui.push_id(&info.id, |ui| {
-                    ui.separator();
-                    ui.strong(format!("{} — {}", info.spec.name, info.status.label()));
-                    ui.label(format!("{}@{}:{} · relay 127.0.0.1:{} → compute 127.0.0.1:{}",
-                        info.spec.relay_user, info.spec.relay_host, info.spec.relay_port, info.spec.listen_port, info.spec.ssh_port));
-                    if !info.error.is_empty() { ui.label(&info.error); }
-                    if info.status == Status::HostKeyRequired {
-                        ui.label("Verify this fingerprint through a trusted source before accepting it:");
-                        ui.monospace(&info.fingerprint);
-                        if ui.button(if info.spec.relay_key.is_empty() { "Trust relay key and start" } else { "Replace trusted relay key and restart" }).clicked() {
-                            let mut spec = info.spec.clone();
-                            spec.relay_key = info.observed_key.clone();
-                            action = Some(Control::StartTunnel { id: info.id.clone(), spec });
-                        }
-                    }
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.add_enabled(info.status == Status::Connected, egui::Button::new("Configure return route")).clicked() { route = Some(info.clone()); }
-                        if info.status == Status::Attention && ui.button("Retry").clicked() {
-                            action = Some(Control::StartTunnel { id: info.id.clone(), spec: info.spec.clone() });
-                        }
-                        if ui.button("Copy settings").clicked() {
-                            self.tunnels.spec = info.spec.clone();
-                        }
-                        if ui.button("Stop…").clicked() { self.tunnels.stop = Some(info.id.clone()); }
-                    });
-                    if self.tunnels.stop.as_deref() == Some(&info.id) {
-                        ui.label("Stopping closes all connections through this tunnel, including this workspace if it uses this route.");
-                        ui.horizontal(|ui| {
-                            if ui.button("Stop tunnel").clicked() {
-                                action = Some(Control::StopTunnel { id: info.id.clone() });
-                                self.tunnels.stop = None;
-                            }
-                            if ui.button("Cancel").clicked() { self.tunnels.stop = None; }
-                        });
-                    }
-                });
-            }
-            if let Some(action) = action { self.tunnel_request(action, ctx); }
-            else if let Some(info) = route { self.tunnel_route(&info, ctx); }
-        });
-        ui.separator();
-        ui.label("Desktop relay alias / jump chain (optional)");
-        ui.add(
-            egui::TextEdit::singleline(&mut self.tunnels.relay_jump)
-                .hint_text("Default: relay username, hostname and SSH port above"),
-        );
-        ui.small("Configure return route opens Connect SSH. Save that profile before leaving the direct connection. Desktop relay authentication uses your desktop SSH configuration.");
-        ui.collapsing("Start a new tunnel", |ui| {
-            ui.add_enabled_ui(self.tunnels.pending.is_none(), |ui| {
-                ui.label("These paths and credentials belong to the compute host. Use an unencrypted identity file or an explicitly selected persistent agent. Forwarded desktop agents cannot provide unattended recovery.");
-                let spec = &mut self.tunnels.spec;
-                for (label, value) in [("Name", &mut spec.name), ("Relay hostname / IP", &mut spec.relay_host), ("Relay username", &mut spec.relay_user), ("Compute identity file", &mut spec.identity), ("Compute persistent agent socket (optional)", &mut spec.agent_socket)] {
-                    ui.label(label);
-                    ui.add(egui::TextEdit::singleline(value).id_salt(("tunnel-field", label)).char_limit(4096).desired_width(f32::INFINITY));
-                }
-                for (label, value) in [("Relay SSH port", &mut spec.relay_port), ("Relay loopback port", &mut spec.listen_port), ("Compute SSH port", &mut spec.ssh_port)] {
-                    ui.horizontal(|ui| { ui.label(label); ui.add(egui::DragValue::new(value).range(1..=65535)); });
-                }
-                if !spec.relay_key.is_empty() { ui.small("Copied settings retain the verified relay key."); }
-                let validation = spec.validate();
-                if let Err(error) = &validation { ui.small(error.to_string()); }
-                if ui.add_enabled(validation.is_ok(), egui::Button::new("Start tunnel")).clicked() {
-                    let spec = spec.clone();
-                    match rode_session::new_id() {
-                        Ok(id) => self.tunnel_request(Control::StartTunnel { id, spec }, ctx),
-                        Err(error) => self.tunnels.error = error.to_string(),
-                    }
-                }
-            });
-        });
-    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tunnel_route_result_cannot_reopen_a_dismissed_dialog() {
-        for dialog in [Dialog::None, Dialog::Folder] {
-            let ctx = egui::Context::default();
-            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            let mut app = EditorApp::new(&cc, Startup::default());
-            let (tx, rx) = mpsc::channel();
-            app.profile.host = "current-compute".into();
-            app.tunnels.generation = Some(app.generation);
-            app.tunnels.pending = Some(rx);
-            app.dialog = dialog;
-            let expected = std::mem::discriminant(&app.dialog);
-            tx.send(Ok(Outcome::Route(Box::new(Profile {
-                host: "late-route".into(),
-                ..Default::default()
-            }))))
-            .unwrap();
-            app.tunnel_tick(&ctx);
-            assert_eq!(app.profile.host, "current-compute");
-            assert_eq!(std::mem::discriminant(&app.dialog), expected);
-            assert!(app.tunnels.pending.is_none());
-        }
-    }
-
-    #[test]
-    fn tunnel_results_from_an_old_workspace_cannot_replace_the_new_profile() {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        let (tx, rx) = mpsc::channel();
-        app.profile.host = "current-compute".into();
-        app.tunnels.generation = Some(app.generation);
-        app.tunnels.pending = Some(rx);
-        tx.send(Ok(Outcome::Route(Box::new(Profile {
-            host: "old-compute".into(),
-            ..Default::default()
-        }))))
-        .unwrap();
-        app.generation += 1;
-        app.tunnel_tick(&ctx);
-        assert_eq!(app.profile.host, "current-compute");
-        assert!(app.tunnels.pending.is_none());
-        assert!(app.dialog == Dialog::None);
-    }
-
-    #[test]
-    fn tunnel_controls_render_without_starting_workers_and_hidden_manager_does_not_poll() {
-        for width in [330., 500., 680.] {
-            let ctx = egui::Context::default();
-            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-            let mut app = EditorApp::new(&cc, Startup::default());
-            app.workspace = Some(crate::app::tests::remote_workspace());
-            app.tunnel_tick(&ctx);
-            assert!(
-                app.tunnels.pending.is_none(),
-                "Hidden manager must not poll"
-            );
-            app.tunnels.available = vec![Info {
-                id: "retained".into(),
-                spec: Spec {
-                    relay_host: "relay.example".into(),
-                    relay_user: "compute".into(),
-                    ..Default::default()
-                },
-                status: Status::HostKeyRequired,
-                error: "Verify the relay before trusting its host key".into(),
-                observed_key: String::new(),
-                fingerprint: "SHA256:abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTU".into(),
-                attempts: 1,
-            }];
-            for frame in 0..2 {
-                let _ = ctx.run(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(width, 1400.),
-                        )),
-                        time: Some(frame as f64),
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                            app.tunnels_dialog(ui, ctx);
-                            assert!(
-                                ui.min_rect().width() <= width,
-                                "Tunnel dialog overflows at {width}"
-                            );
-                        });
-                    },
-                );
-            }
-            assert!(
-                app.tunnels.pending.is_none(),
-                "Painting must not start a tunnel"
-            );
-            app.workspace
-                .as_ref()
-                .unwrap()
-                .remote
-                .as_ref()
-                .unwrap()
-                .cleanup();
-        }
-    }
-}
+mod tests;

@@ -107,9 +107,14 @@ launch unrestricted remote commands.
 
 ## Compute-node return tunnels
 
-Connect to the compute node with **Connect SSH**, then open **Tunnels** beside
-that button. The compute node must already run `sshd`. Its session service can
-maintain an outbound Rust SSH connection to a relay and request a reverse forward:
+Open **Tunnels** beside **Connect SSH**, from **File → SSH tunnels**, or from the
+command palette. With a local project or no project open, it manages **This
+computer** and needs no initial SSH connection. With an SSH workspace selected,
+it manages that remote host; a lost SSH connection never falls back to the local
+service. The dialog identifies which host owns the tunnels.
+
+The tunnel host must already run `sshd`. Its session service can maintain an
+outbound Rust SSH connection to a relay and request a reverse forward:
 
 ```text
 RODE desktop → relay SSH → relay 127.0.0.1:22022
@@ -117,7 +122,7 @@ RODE desktop → relay SSH → relay 127.0.0.1:22022
                           compute 127.0.0.1:22 → compute sshd
 ```
 
-1. Expand **Start a new tunnel**. Enter the relay's literal hostname/IP, SSH port
+1. Choose **New tunnel**. Enter the relay's literal hostname/IP, SSH port
    and username, a stable relay loopback port, and the compute node's SSH port.
    The outbound worker does not read SSH aliases or ProxyJump configuration.
 2. Choose credentials **on the compute node**: an unencrypted private-key file,
@@ -128,14 +133,42 @@ RODE desktop → relay SSH → relay 127.0.0.1:22022
    through a trusted source, then choose **Trust relay key and start**. This pin
    belongs to the retained tunnel; it does not edit `known_hosts`. A changed key
    stops retries until explicitly verified and replaced.
-4. Once connected, choose **Configure return route**. If the desktop reaches the
-   relay through a different SSH alias or jump chain, enter it in **Desktop relay
-   alias / jump chain** first. The default is the relay username, hostname and port.
+4. For a tunnel started through an SSH workspace, once connected, choose
+   **Configure return route**. If the desktop reaches the
+   relay through a different SSH alias or jump chain, expand **Return connection
+   settings** on the **Tunnels** tab and enter **Desktop relay alias / jump chain**
+   first. The default is the relay username, hostname and port.
 5. In **Connect SSH**, save the generated profile before leaving the direct
    connection. Reconnect with it to reach the same compute host and project
    through the relay. Desktop authentication to both relay and compute node stays
    interactive and uses the normal SSH configuration. The route supports either
    desktop backend; the daemon's outbound tunnel always uses Rust SSH.
+
+When starting locally, credentials and the compute SSH port refer to **this
+computer**, even on the welcome screen. No project, local `ssh` executable or
+existing service is required. Opening the manager only discovers tunnels;
+**Start tunnel** starts the matching local session service if needed.
+
+For a locally started tunnel, use **Copy connection details** once connected
+instead of **Configure return route**. On your other computer, open **Connect
+SSH**, set Host to `127.0.0.1`, Port to the relay listener port, Jump / ProxyJump
+to the supplied relay address (or your desktop relay alias), and User to your
+login on the tunnel host. Select that host's credentials and verify its SSH host
+key independently of the relay. Save the profile there. These manually entered
+profiles use the loopback host/port for known-host lookup; automatic return
+profiles from an existing SSH workspace retain its original host-key identity.
+
+The **Tunnels** tab shows each tunnel’s status in a separate card. **Tunnel**
+shows the relay hostname and tunnel listener port; **Destination** shows the
+compute hostname and SSH port it forwards to. The relay's SSH login port belongs
+in setup and connection details, not the card summary. A short note explains that
+the tunnel listener is loopback-only and reached through the relay's SSH connection.
+The compute name comes from the owning service. Older remote services use the
+selected SSH host/alias as a display fallback; local tunnels use this computer's
+hostname. These labels do not change the actual loopback forwarding addresses.
+**New tunnel** groups relay, forwarding and compute-host credentials;
+its draft survives tab switches. Status refreshes pause while setting up a tunnel.
+Tabs and the Start/Close controls remain visible while the form scrolls.
 
 Automatic return-profile creation currently requires desktop SSH configuration
 understood by the Rust backend, even when selecting OpenSSH for the resulting
@@ -168,6 +201,18 @@ Tunnels are retained in service memory, not restarted after a daemon restart,
 node reboot or allocation ending. **Stop tunnel** closes its forwarded streams;
 it leaves unrelated terminals, jobs and tunnels alone. Starting a tunnel does
 not grant persistence to project jobs or extend a scheduler allocation.
+
+Tunnel failures identify the operation and the relevant identity file, agent
+socket, relay address or listener port. Paths are resolved on the tunnel host;
+the default Identity file is `~/.ssh/id_ed25519`. If it is absent, select the
+private key that actually exists there, or clear Identity file and set Agent
+socket to a persistent agent on that host. Changing the desktop's key path does
+not change a remote tunnel's credentials. Error details include the underlying
+OS failure, without displaying private-key contents.
+
+Already running session services keep their existing code after an editor
+update. Worker diagnostic improvements take effect after the owning service is
+restarted; restarting it ends its tunnels and must account for any retained work.
 
 Unattended relay authentication currently supports plain private keys and
 agent-held keys/certificates. Passwords, keyboard-interactive/MFA, Kerberos,

@@ -38,6 +38,8 @@ TCP fixture: explicit host-key trust, changed-key refusal before credentials,
 real byte forwarding, unexpected-channel denial, idempotent starts, relay-port
 conflicts, forced-disconnect recovery, credential attention, nonblocking identity
 validation and scoped shutdown.
+Credential regressions require the resolved identity/agent path, the corrective
+UI field and the original failure in errors, without private-key contents.
 It needs no installed SSH tools or display server.
 
 `cargo test --test ssh_client tunnel_return_route` checks a real native jump
@@ -46,8 +48,23 @@ known-hosts identity and rejecting a changed compute key before authentication.
 `cargo test --test sessions retained_tunnels` checks that list-only discovery does
 not start a service, tunnel state survives both terminal End and last-view
 cleanup, idle timeout does not kill it, and shutdown requires explicit Stop.
+`cargo test --test sessions local_tunnels` exercises local discovery/start/list/stop
+from an empty directory with no SSH executable on `PATH`, using a private service
+runtime. Headless tunnel UI tests cover welcome-screen access, local host scope,
+copied return-connection details and refusal to fall back from a disconnected SSH
+workspace. Local controls do not depend on project readiness or sandbox settings.
+Endpoint rendering checks show the tunnel listener port and named compute
+destination, without confusing the listener with the relay's SSH login port.
+They include IPv6 and older services without hostname metadata. The service
+fixture checks that new replies report the owning hostname.
+The local-service fixture also checks that a missing helper override names the
+selected executable and `RODE_SESSION_HELPER` while preserving the OS cause.
 `cargo test --lib tunnel` covers saved profile arguments, UI state/layout and
-late results after a workspace change or dialog dismissal.
+late results after a workspace change or dialog dismissal. The tunnel-dialog
+layout matrix checks both tabs across compact/short viewports, interface scales
+and themes, with long relay names and retained tunnels. Pointer/keyboard tests
+check draft retention and editing during a pending status response; scroll checks
+keep navigation and Start/Close actions visible. These tests open no native window.
 
 The service now embeds russh and needs Rust 1.89. Rebuild the protocol-19 helper
 alongside the editor; existing daemon generations keep their own jobs. Validate

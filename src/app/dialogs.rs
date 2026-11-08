@@ -87,8 +87,10 @@ impl EditorApp {
                     });
                     ctx.request_repaint();
                 }
-                let width: f32 = if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions)
-                {
+                let width: f32 = if matches!(
+                    self.dialog,
+                    Dialog::Sessions | Dialog::AgentSessions | Dialog::Tunnels
+                ) {
                     680.
                 } else if self.dialog == Dialog::Connect {
                     500.
@@ -96,6 +98,15 @@ impl EditorApp {
                     540.
                 };
                 ui.set_width(width.min((ctx.content_rect().width() - 64.).max(1.)));
+                if self.dialog == Dialog::Tunnels {
+                    // The tunnel manager owns its scrolling body so tabs and
+                    // submit/close actions remain visible on short viewports.
+                    self.tunnels_dialog(ui, ctx);
+                    if sizing {
+                        self.dialog_focus = focus;
+                    }
+                    return;
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
                     .auto_shrink([false, true])
@@ -119,8 +130,6 @@ impl EditorApp {
                             self.help_dialog(ui);
                         } else if self.dialog == Dialog::Commands {
                             self.command_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Tunnels {
-                            self.tunnels_dialog(ui, ctx);
                         } else if self.dialog == Dialog::Sessions {
                             self.sessions_dialog(ui, ctx);
                         } else if self.dialog == Dialog::Slurm {

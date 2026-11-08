@@ -217,6 +217,12 @@ Use idempotent cleanup and identify owned groups/handles before sending signals.
 
 `crates/rode-session/src/tunnels.rs` owns bounded native SSH reverse forwards;
 `src/app/tunnels.rs` manages them over the existing authenticated host-admin path.
+Local projects and the welcome/file-only views use the matching local session
+service directly, without requiring a project or initial SSH connection. SSH
+workspaces retain their remote host and reject requests while disconnected;
+they never fall back locally. Workers capture their host before dispatch and
+workspace generation changes discard stale replies. Discovery does not start
+the service; only an explicit tunnel start can do so.
 The compute node already runs sshd. Each outbound connection requests a fixed
 loopback relay listener and accepts only forwarding channels naming that exact
 address/port, then connects to a fixed compute loopback SSH port. There is no
@@ -231,7 +237,9 @@ lock. State is memory-only and bounded to eight tunnels and 32 channels each.
 
 Return profiles retain the original compute alias, authentication and host-key
 identity while overriding only the final transport destination through the
-relay. Normal compute SSH verification, host operations and sandbox preparation
+relay. Locally started tunnels instead provide connection details for a profile
+on another computer, where credentials and compute host trust are chosen explicitly.
+Normal compute SSH verification, host operations and sandbox preparation
 remain in force. Specifications use bounded existing control frames; neither
 JSON settings nor credentials enter argv. See [setup and limits](remote.md#compute-node-return-tunnels).
 

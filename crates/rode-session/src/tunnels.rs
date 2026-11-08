@@ -23,6 +23,20 @@ use tokio::{
 const MAX_TUNNELS: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Read this machine's hostname for display without starting a process or doing
+/// DNS/filesystem work. An unavailable name must not be mistaken for a remote host.
+pub fn local_hostname() -> Option<String> {
+    let mut bytes = [0_u8; 256];
+    // SAFETY: gethostname receives a writable buffer of the stated length. Read
+    // only that buffer, even on platforms that omit the trailing NUL on truncation.
+    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
+        return None;
+    }
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    let hostname = String::from_utf8_lossy(&bytes[..end]).trim().to_owned();
+    (!hostname.is_empty() && !hostname.chars().any(char::is_control)).then_some(hostname)
+}
+
 /// Host-side tunnel settings. Paths and relay addresses are resolved on the compute host.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -141,6 +155,9 @@ impl Status {
 pub struct Info {
     /// Stable service-owned tunnel identity.
     pub id: String,
+    /// Hostname of the service owning this tunnel; absent in older service replies.
+    #[serde(default)]
+    pub hostname: String,
     /// Captured host-side settings.
     pub spec: Spec,
     /// Current connection state.
@@ -220,6 +237,7 @@ impl Store {
         entries.remove(&id);
         let info = Arc::new(Mutex::new(Info {
             id: id.clone(),
+            hostname: local_hostname().unwrap_or_default(),
             spec,
             status: Status::Connecting,
             error: String::new(),
@@ -245,9 +263,13 @@ impl Store {
                         });
                         runtime.shutdown_timeout(Duration::from_millis(100));
                     }
-                    Err(error) => attention(&state, &error.to_string()),
+                    Err(error) => attention(
+                        &state,
+                        &format!("Cannot create tunnel runtime on the tunnel host: {error}"),
+                    ),
                 }
-            })?;
+            })
+            .context("Cannot start the SSH tunnel worker on the tunnel host")?;
         let result = info.lock().unwrap().clone();
         entries.insert(
             id,
@@ -370,6 +392,7 @@ impl client::Handler for Handler {
 }
 async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
     let spec = info.lock().unwrap().spec.clone();
+    let relay = format!("{}:{}", spec.relay_host, spec.relay_port);
     let mut preferred = russh::Preferred::default();
     if !spec.relay_key.is_empty() {
         let key = keys::PublicKey::from_openssh(&spec.relay_key)?;
@@ -401,23 +424,42 @@ async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
         TcpStream::connect((spec.relay_host.as_str(), spec.relay_port)),
     )
     .await
-    .context("Relay TCP connection timed out")??;
+    .with_context(|| format!("TCP connection to relay {relay} timed out"))?
+    .with_context(|| {
+        format!(
+            "Cannot connect to relay {relay} from the tunnel host; check Relay host and SSH port"
+        )
+    })?;
     let mut session =
         tokio::time::timeout(TIMEOUT, client::connect_stream(config, stream, handler))
             .await
-            .context("Relay SSH handshake timed out")??;
+            .with_context(|| format!("SSH handshake with relay {relay} timed out"))?
+            .with_context(|| format!("SSH handshake with relay {relay} failed"))?;
     let authentication = tokio::time::timeout(TIMEOUT, authenticate(&mut session, &spec, &info))
         .await
-        .context("Relay authentication timed out")?;
-    authentication?;
-    tokio::time::timeout(TIMEOUT, session.tcpip_forward("127.0.0.1", spec.listen_port.into())).await.context("Relay forwarding request timed out")?
-        .context("Relay refused the loopback listener; check forwarding permissions or a port already in use")?;
+        .with_context(|| {
+            format!(
+                "Authentication as {} on relay {relay} timed out",
+                spec.relay_user
+            )
+        })?;
+    authentication.with_context(|| {
+        format!(
+            "Cannot authenticate as {} on relay {relay}",
+            spec.relay_user
+        )
+    })?;
+    tokio::time::timeout(TIMEOUT, session.tcpip_forward("127.0.0.1", spec.listen_port.into())).await
+        .with_context(|| format!("Forwarding request for 127.0.0.1:{} on relay {relay} timed out", spec.listen_port))?
+        .with_context(|| format!("Relay {relay} refused listener 127.0.0.1:{}; check forwarding permissions or a port already in use", spec.listen_port))?;
     {
         let mut state = info.lock().unwrap();
         state.status = Status::Connected;
         state.error.clear();
     }
-    session.await.context("Relay disconnected")?;
+    session
+        .await
+        .with_context(|| format!("Relay {relay} disconnected"))?;
     Ok(())
 }
 async fn authenticate(
@@ -425,17 +467,26 @@ async fn authenticate(
     spec: &Spec,
     info: &Mutex<Info>,
 ) -> Result<()> {
-    let hash = session.best_supported_rsa_hash().await?.flatten();
+    let hash = session
+        .best_supported_rsa_hash()
+        .await
+        .context("Cannot negotiate SSH authentication algorithms")?
+        .flatten();
     if !spec.agent_socket.is_empty() {
         let path = rode_host_core::files::expand_home(&spec.agent_socket);
-        let mut agent = keys::agent::client::AgentClient::connect_uds(path)
+        let mut agent = keys::agent::client::AgentClient::connect_uds(&path)
             .await
-            .context("Cannot connect to the explicit host agent")
+            .with_context(|| format!("Cannot connect to SSH agent socket {} on the tunnel host; check Agent socket and that its persistent agent is running", path.display()))
             .inspect_err(|e| attention(info, &format!("{e:#}")))?;
         if let Some(binding) = session.agent_session_binding() {
             let _ = agent.bind_session(binding, false).await;
         }
-        let identities = agent.request_identities().await?;
+        let identities = agent.request_identities().await.with_context(|| {
+            format!(
+                "Cannot list keys from SSH agent socket {} on the tunnel host",
+                path.display()
+            )
+        })?;
         ensure!(
             identities.len() <= 128,
             "Agent returned too many identities"
@@ -466,7 +517,8 @@ async fn authenticate(
     if !spec.identity.is_empty() {
         let path = rode_host_core::files::expand_home(&spec.identity);
         let key = tokio::task::spawn_blocking(move || read_identity(&path))
-            .await?
+            .await
+            .context("SSH identity reader failed on the tunnel host")?
             .inspect_err(|e| attention(info, &format!("{e:#}")))?;
         let result = session
             .authenticate_publickey(
@@ -491,17 +543,35 @@ fn read_identity(path: &Path) -> Result<keys::PrivateKey> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-        .open(path)?;
+        .open(path)
+        .with_context(|| format!("Cannot open SSH identity file {} on the tunnel host; check Identity file, or clear it to use only Agent socket", path.display()))?;
     ensure!(
-        file.metadata()?.is_file(),
-        "Identity must be a regular file"
+        file.metadata()
+            .with_context(|| format!(
+                "Cannot inspect SSH identity file {} on the tunnel host",
+                path.display()
+            ))?
+            .is_file(),
+        "SSH identity {} on the tunnel host must be a regular file",
+        path.display()
     );
     let mut encoded = zeroize::Zeroizing::new(String::new());
-    file.take(65537).read_to_string(&mut encoded)?;
-    ensure!(encoded.len() <= 65536, "SSH identity exceeds 64 KiB");
-    keys::decode_secret_key(&encoded, None).context(
-        "Cannot read identity; encrypted keys require an explicitly configured persistent agent",
-    )
+    file.take(65537)
+        .read_to_string(&mut encoded)
+        .with_context(|| {
+            format!(
+                "Cannot read SSH identity file {} on the tunnel host",
+                path.display()
+            )
+        })?;
+    ensure!(
+        encoded.len() <= 65536,
+        "SSH identity file {} on the tunnel host exceeds 64 KiB",
+        path.display()
+    );
+    keys::decode_secret_key(&encoded, None).with_context(|| format!(
+        "Cannot decode SSH identity file {} on the tunnel host; encrypted keys require an explicitly configured persistent Agent socket", path.display()
+    ))
 }
 
 #[cfg(test)]

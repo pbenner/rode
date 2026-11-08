@@ -165,6 +165,32 @@ fn validates_bounded_explicit_credentials_and_ports() {
 }
 
 #[test]
+fn tunnel_identity_errors_identify_the_file_and_preserve_the_cause() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing identity");
+    let error = read_identity(&missing).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    let message = format!("{error:#}");
+    assert!(message.contains(missing.to_str().unwrap()), "{message}");
+    assert!(
+        message.contains("Identity file") && message.contains("tunnel host"),
+        "{message}"
+    );
+    assert!(message.contains("Agent socket"), "{message}");
+
+    let invalid = directory.path().join("invalid-key");
+    let private_content = "invalid-private-key-content-must-not-be-displayed";
+    std::fs::write(&invalid, private_content).unwrap();
+    let message = format!("{:#}", read_identity(&invalid).unwrap_err());
+    assert!(message.contains(invalid.to_str().unwrap()), "{message}");
+    assert!(message.contains("decode"), "{message}");
+    assert!(!message.contains(private_content));
+}
+
+#[test]
 fn tunnel_identity_fifo_is_rejected_without_waiting_for_a_writer() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("identity-fifo");
@@ -258,6 +284,17 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
     store.start(id.clone(), settings.clone()).unwrap();
     until(|| store.list()[0].status == Status::HostKeyRequired).await;
     let untrusted = store.list().remove(0);
+    assert_eq!(untrusted.hostname, local_hostname().unwrap());
+    // New clients still accept retained tunnels from services started before
+    // hostname metadata was introduced, without restarting those services.
+    let mut legacy = serde_json::to_value(&untrusted).unwrap();
+    legacy.as_object_mut().unwrap().remove("hostname");
+    assert!(
+        serde_json::from_value::<Info>(legacy)
+            .unwrap()
+            .hostname
+            .is_empty()
+    );
     assert_eq!(
         relay.auths.load(Ordering::SeqCst),
         0,
@@ -355,9 +392,34 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
         .join("missing-key")
         .to_string_lossy()
         .into();
-    store.start(id.clone(), settings).unwrap();
+    store.start(id.clone(), settings.clone()).unwrap();
     until(|| store.list()[0].status == Status::Attention).await;
+    let failed = store.list().remove(0);
+    assert!(
+        failed.error.contains(&settings.identity),
+        "{}",
+        failed.error
+    );
+    assert!(failed.error.contains("Identity file"), "{}", failed.error);
     assert!(store.live(), "Attention states must remain discoverable");
+    // An unavailable persistent agent needs its exact socket and corrective field,
+    // not just the operating system's unhelpful ENOENT string.
+    settings.identity.clear();
+    settings.agent_socket = directory
+        .path()
+        .join("missing-agent.sock")
+        .to_string_lossy()
+        .into();
+    store.start(id.clone(), settings.clone()).unwrap();
+    until(|| store.list()[0].status == Status::Attention).await;
+    let failed = store.list().remove(0);
+    assert!(
+        failed.error.contains(&settings.agent_socket),
+        "{}",
+        failed.error
+    );
+    assert!(failed.error.contains("Agent socket"), "{}", failed.error);
+    assert!(failed.error.contains("tunnel host"), "{}", failed.error);
     store.stop(&id);
     server_task.abort();
     echo_task.abort();

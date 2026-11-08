@@ -239,7 +239,7 @@ pub enum Response {
     /// Discoverable daemon-owned reverse SSH tunnels.
     Tunnels(Vec<tunnels::Info>),
     /// Started/replaced tunnel, which may still be connecting.
-    Tunnel(tunnels::Info),
+    Tunnel(Box<tunnels::Info>),
     /// Exact protocol implemented by this service.
     Protocol(u32),
     /// Discoverable retained notebook/debugger controllers.
@@ -541,9 +541,12 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
                     Ok(())
                 });
             }
-            let mut child = command
-                .spawn()
-                .context("Cannot start native terminal service")?;
+            let mut child = command.spawn().with_context(|| {
+                format!(
+                    "Cannot start native session service executable {}",
+                    launcher.executable.display()
+                )
+            })?;
             // Reap our daemon if it exits while this client remains alive.
             std::thread::spawn(move || {
                 let _ = child.wait();
@@ -1194,7 +1197,7 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
                     !server.stop.load(Ordering::Acquire),
                     "Session service is stopping"
                 );
-                Response::Tunnel(server.tunnels.start(id, spec)?)
+                Response::Tunnel(Box::new(server.tunnels.start(id, spec)?))
             }
             Request::StopTunnel { id } => {
                 server.tunnels.stop(&id);
