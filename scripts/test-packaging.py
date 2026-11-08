@@ -153,6 +153,9 @@ class UserRuntime(unittest.TestCase):
 
     def test_concurrent_user_installs_select_complete_reusable_runtimes(self):
         with runtime_fixture() as (root, manifest):
+            # The installer must not repair the user's data directory. Create
+            # this ancestor privately regardless of the caller's umask.
+            (root / "user data").mkdir(mode=0o700)
             parent = root / "user data/rode"
             parent.mkdir(parents=True)
             parent.chmod(0o775)

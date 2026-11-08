@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Native interface scaling at 1x/2x DPI, independent text size and safe restart.
 
-Run with xvfb-run -a -s "-screen 0 3200x2200x24". The 2x case uses fixed
-menu targets and needs room for the doubled window without popup repositioning.
+Run with scripts/ui_display.py --screen 3200x2200x24. The 2x case needs
+room for the doubled window; controls use acknowledged native geometry.
 """
 
 import json
@@ -17,13 +17,16 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    click_button,
     close_window,
     display,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
+    wait_for_button,
+    wait_for_project,
     x11,
     xtest,
 )
@@ -61,17 +64,17 @@ def window_for(process):
 
 
 def command(title):
-    key("p", ("Control_L", "Shift_L"))
-    text(title)
-    key("Return")
-    time.sleep(0.15)
+    palette_command(window, process, log.name, state_path, title)
 
 
-def scale_menu(dpi, scale):
+def control(name):
+    click_button(window, process, log.name, state_path, name)
+
+
+def scale_menu(scale):
     """Open the real View submenu at the current monitor/interface scale."""
-    factor = dpi * scale
-    click(round(195 * factor), round(24 * factor))
-    click(round(290 * factor), round(104 * factor))
+    control("menu-view")
+    control(f"submenu:Interface scale: {round(scale * 100)}%")
 
 
 def header_height(filename, dpi):
@@ -100,12 +103,14 @@ with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
         root.mkdir()
         source = root / "main.txt"
         source.write_text("Original text\n")
+        state_path = root / "ui-state.json"
         environment = dict(
             os.environ,
             WINIT_UNIX_BACKEND="x11",
             WINIT_X11_SCALE_FACTOR=str(dpi),
             XDG_CONFIG_HOME=str(root / "config"),
             XDG_DATA_HOME=str(root / "data"),
+            RODE_UI_TEST_STATE=str(state_path),
         )
         saved = root / "data/rode/app.ron"
         with (ARTIFACTS / f"dpi-{dpi}.log").open("w") as log:
@@ -115,11 +120,12 @@ with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
             window = None
             try:
                 window = window_for(process)
+                wait_for_project(window, process, log.name, root)
                 key("p", ("Control_L",))
                 text("main.txt")
                 key("Return")
                 time.sleep(0.6)
-                click(430 * dpi, 138 * dpi)
+                control("source-editor")
                 key("End", ("Control_L",))
                 text("Unsaved text survives scaling\n")
                 screenshot(window, f"dpi-{dpi}-original.png")
@@ -131,11 +137,14 @@ with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
                 )
                 screenshot(window, f"dpi-{dpi}-font.png")
                 assert header_height(f"dpi-{dpi}-font.png", dpi) == original
-                scale_menu(dpi, 1)
+                scale_menu(1)
                 screenshot(window, f"dpi-{dpi}-scale-presets.png")
                 # A held pointer must not resize the GUI. Apply the preset only
                 # after release, so its target never moves during the click.
-                xtest.XTestFakeMotionEvent(display, -1, 480 * dpi, 210 * dpi, 0)
+                point = wait_for_button(
+                    window, process, log.name, state_path, "interface-scale-75", hovered=True
+                )
+                xtest.XTestFakeMotionEvent(display, -1, *point, 0)
                 xtest.XTestFakeButtonEvent(display, 1, 1, 0)
                 x11.XFlush(display)
                 time.sleep(0.3)
@@ -146,14 +155,14 @@ with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
                     lambda: preferences(saved).get("ui_scale") == "0.75",
                     "Percentage preset did not apply on release",
                 )
-                scale_menu(dpi, 0.75)
-                click(round(480 * dpi * 0.75), round(146 * dpi * 0.75))
+                scale_menu(0.75)
+                control("interface-larger")
                 wait_for(
                     lambda: preferences(saved).get("ui_scale") == "0.8",
                     "Larger action did not apply a 5% step",
                 )
-                scale_menu(dpi, 0.8)
-                click(round(480 * dpi * 0.8), round(121 * dpi * 0.8))
+                scale_menu(0.8)
+                control("interface-smaller")
                 wait_for(
                     lambda: preferences(saved).get("ui_scale") == "0.75",
                     "Smaller action did not apply a 5% step",
@@ -173,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
                 assert source.read_text() == "Original text\n", "Scaling saved a dirty buffer"
                 screenshot(window, f"dpi-{dpi}-75.png")
                 assert abs(header_height(f"dpi-{dpi}-75.png", dpi) - original * 0.75) <= 2
-                click(round(205 * dpi * 0.75), round(24 * dpi * 0.75))
+                control("menu-view")
                 screenshot(window, f"dpi-{dpi}-view-menu.png")
                 key("Escape")
                 key("0", ("Control_L",))
@@ -183,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
                 )
                 screenshot(window, f"dpi-{dpi}-reset.png")
                 assert header_height(f"dpi-{dpi}-reset.png", dpi) == original
-                click(430 * dpi, 138 * dpi)
+                control("source-editor")
                 key("s", ("Control_L",))
                 wait_for(
                     lambda: "Unsaved text survives scaling" in source.read_text(),

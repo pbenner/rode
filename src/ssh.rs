@@ -663,6 +663,110 @@ pub fn save_profile_at(
     previous: Option<&Profile>,
 ) -> Result<Vec<Profile>> {
     profile.validate()?;
+    update_profiles_at(path, |entries, profiles| {
+        let label = profile.label();
+        let original = previous.map_or_else(|| label.clone(), Profile::label);
+        anyhow::ensure!(
+            profiles.iter().filter(|p| p.label() == original).count() <= 1,
+            "Several saved connections have the label {original:?}; give them distinct names in connections.json before editing them."
+        );
+        let index = profiles.iter().position(|p| p.label() == original);
+        anyhow::ensure!(
+            previous.is_none() || index.is_some() || label != original,
+            "Saved connection {original:?} was removed or renamed in another window. Choose a new name to save a new connection, or reopen Connect SSH to reload existing profiles."
+        );
+        anyhow::ensure!(
+            label == original || !profiles.iter().any(|p| p.label() == label),
+            "A saved connection named {label:?} already exists. Choose a different name."
+        );
+        let before = previous
+            .map(serde_json::to_value)
+            .transpose()?
+            .unwrap_or(serde_json::to_value(Profile::default())?);
+        let changes = crate::persistence::changes(&before, &serde_json::to_value(profile)?);
+        if let Some(index) = index {
+            crate::persistence::apply(&mut entries[index], &changes);
+        } else {
+            entries.push(serde_json::to_value(profile)?);
+        }
+        Ok(true)
+    })
+}
+
+/// A targeted saved-list edit, applied to the latest file rather than a stale list snapshot.
+#[derive(Clone)]
+pub enum ProfileListEdit {
+    /// Remove this profile only if its known settings still match the displayed version.
+    Remove(Box<Profile>),
+    /// Move one existing profile relative to another, preserving all profile contents.
+    Move {
+        /// Label of the profile to move.
+        label: String,
+        /// Label of the row used as the insertion anchor.
+        relative_to: String,
+        /// Insert after the anchor when true, before it otherwise.
+        after: bool,
+    },
+}
+
+/// Remove or reorder a saved connection under the shared profile lock.
+pub fn edit_profiles(edit: &ProfileListEdit) -> Result<Vec<Profile>> {
+    edit_profiles_at(&config_path(), edit)
+}
+
+/// Apply a list edit at an explicit path, preserving concurrent edits and unknown fields.
+pub fn edit_profiles_at(path: &Path, edit: &ProfileListEdit) -> Result<Vec<Profile>> {
+    update_profiles_at(path, |entries, profiles| {
+        let index = |label: &str| -> Result<usize> {
+            let mut matches = profiles
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.label() == label);
+            let (index, _) = matches.next().with_context(|| format!(
+                "Saved connection {label:?} was removed or renamed in another window. Reopen Connect SSH to refresh the list."
+            ))?;
+            anyhow::ensure!(
+                matches.next().is_none(),
+                "Several saved connections have the label {label:?}; give them distinct names before managing them."
+            );
+            Ok(index)
+        };
+        match edit {
+            ProfileListEdit::Remove(profile) => {
+                let label = profile.label();
+                let index = index(&label)?;
+                anyhow::ensure!(
+                    serde_json::to_value(&profiles[index])? == serde_json::to_value(profile)?,
+                    "Saved connection {label:?} changed in another window. Reopen Connect SSH to review it before removing it."
+                );
+                entries.remove(index);
+            }
+            ProfileListEdit::Move {
+                label,
+                relative_to,
+                after,
+            } => {
+                let from = index(label)?;
+                let anchor = index(relative_to)?;
+                if from == anchor {
+                    return Ok(false);
+                }
+                let to = anchor - usize::from(from < anchor) + usize::from(*after);
+                if from == to {
+                    return Ok(false);
+                }
+                let entry = entries.remove(from);
+                entries.insert(to, entry);
+            }
+        }
+        Ok(true)
+    })
+}
+
+fn update_profiles_at(
+    path: &Path,
+    update: impl FnOnce(&mut Vec<serde_json::Value>, &[Profile]) -> Result<bool>,
+) -> Result<Vec<Profile>> {
     let path = path.canonicalize().unwrap_or_else(|_| path.into());
     crate::persistence::transaction(&path, |existed| {
         let mut raw: serde_json::Value = crate::persistence::read(&path, 1024 * 1024)?
@@ -672,19 +776,15 @@ pub fn save_profile_at(
             .unwrap_or(serde_json::json!([]));
         let profiles: Vec<Profile> = serde_json::from_value(raw.clone())
             .context("Invalid connection profiles; existing file was preserved")?;
-        let label = profile.label();
-        let before = previous
-            .map(serde_json::to_value)
-            .transpose()?
-            .unwrap_or(serde_json::to_value(Profile::default())?);
-        let changes = crate::persistence::changes(&before, &serde_json::to_value(profile)?);
+        anyhow::ensure!(
+            profiles.len() <= 128,
+            "At most 128 connection profiles are supported."
+        );
         let entries = raw
             .as_array_mut()
             .context("Invalid connection profile list")?;
-        if let Some(index) = profiles.iter().position(|p| p.label() == label) {
-            crate::persistence::apply(&mut entries[index], &changes);
-        } else {
-            entries.push(serde_json::to_value(profile)?);
+        if !update(entries, &profiles)? {
+            return Ok(profiles);
         }
         anyhow::ensure!(
             entries.len() <= 128,
@@ -708,6 +808,9 @@ pub fn display_name(path: &str) -> &str {
         .and_then(|name| name.to_str())
         .unwrap_or(path)
 }
+
+#[cfg(test)]
+mod profile_tests;
 
 #[cfg(test)]
 mod tests {

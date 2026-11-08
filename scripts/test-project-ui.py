@@ -299,6 +299,13 @@ def run(remote=False, fallback=False):
         if fallback:
             tools = base / "no-bwrap"
             tools.mkdir()
+            # Missing system bwrap now selects the bundled implementation. Make
+            # an installed backend fail to exercise visible normal-mode fallback.
+            backend = tools / "bwrap"
+            backend.write_text(
+                "#!/bin/sh\nprintf '%s\\n' 'Sandbox unavailable in project UI fixture' >&2\nexit 1\n"
+            )
+            backend.chmod(0o700)
             environment["PATH"] = str(tools)
         if remote:
             # An unprivileged fixture sshd cannot create/login a remote TTY.

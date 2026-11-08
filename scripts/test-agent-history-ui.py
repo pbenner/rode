@@ -19,14 +19,18 @@ from ui_harness import (
     BINARY,
     ROOT,
     assert_running,
-    click,
     click_button,
     close_window,
     display,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
     text,
+    wait_for_button,
+    wait_for_project,
+    wait_for_ui_state,
+    wait_for_window,
     x11,
 )
 
@@ -34,18 +38,84 @@ x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ct
 
 
 def resize(window, width, height):
+    before = rendered_pass()
     x11.XResizeWindow(display, window, width, height)
     x11.XFlush(display)
-    time.sleep(0.5)
+    wait_layout(
+        lambda state: (
+            state["pass"] > before
+            and any(button["name"] == "agent-history-filter" for button in state["buttons"])
+            and all(
+                abs(logical * state["pixels_per_point"] - physical) <= 2
+                for logical, physical in zip(state["size"], (width, height))
+            )
+        ),
+        f"The {width}x{height} history layout did not finish rendering",
+    )
 
 
 def wait(check, message):
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
+        assert_running(process, log_path)
         if result := check():
             return result
         time.sleep(0.05)
     raise AssertionError(message)
+
+
+def control(name, **guards):
+    return wait_for_button(window, process, log_path, state_path, name, timeout=15, **guards)
+
+
+def click_control(name):
+    """Activate once, after the native hit test acknowledges the named control."""
+    click_button(window, process, log_path, state_path, name, timeout=15)
+
+
+def rendered_pass():
+    return json.loads(state_path.read_text())["pass"]
+
+
+def wait_layout(check, message):
+    return wait_for_ui_state(process, log_path, state_path, check, message, timeout=15)
+
+
+def absent(name):
+    wait_layout(
+        lambda state: all(button["name"] != name for button in state["buttons"]),
+        name + " did not close",
+    )
+
+
+def replace_control(name, value):
+    click_control(name)
+    control(name, focused=True)
+    before = rendered_pass()
+    key("a", ("Control_L",))
+    if value:
+        text(value)
+    else:
+        key("BackSpace")
+    control(name, focused=True, changed_after=before)
+
+
+def preferences():
+    path = base / "data/rode/app.ron"
+    if not path.exists():
+        return {}
+    match = re.search(r'"agent_preferences"\s*:\s*("(?:\\.|[^"\\])*")', path.read_text())
+    return next(iter(json.loads(json.loads(match[1])).values()), {}) if match else {}
+
+
+def refresh_history(button="agent-history-refresh"):
+    before = sum(c.get("method") == "thread/list" for c in calls())
+    click_control(button)
+    wait(
+        lambda: sum(c.get("method") == "thread/list" for c in calls()) > before,
+        "History did not request the conversation list",
+    )
+    control("agent-history-ready")
 
 
 with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
@@ -88,17 +158,17 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
         pending.replace(root / "history-fixture.json")
 
     save_history()
+    state_path = base / "ui-state.json"
     env = dict(
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
-        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
+        RODE_UI_TEST_STATE=str(state_path),
     )
 
     def calls():
-        path = root / "agent-rpc.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return read_json_lines(root / "agent-rpc.jsonl")
 
     def deleted():
         path = root / "history-deleted.json"
@@ -124,33 +194,24 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             stderr=log,
         )
         try:
-
-            def mapped():
-                assert_running(process, log_path)
-                tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                match = re.search(r'(0x[0-9a-f]+) "RODE.*project', tree)
-                return int(match[1], 16) if match and "[Opening project]" not in match[0] else None
-
-            window = wait(mapped, "No prepared project window")
-            time.sleep(0.8)
+            window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, root)
             focus_window(window)
-            info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-            header = 157 if "[Sandbox]" in info else 187
-            if "[Sandbox]" not in info:
-                click(1331, 820)
+            state = wait_layout(lambda _: True, "No native layout")
+            if any(button["name"] == "notice-dismiss" for button in state["buttons"]):
+                click_control("notice-dismiss")
+                absent("notice-dismiss")
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.4)
-            click(1213, header)
-            click(1110, header + 94)
-            key("a", ("Control_L",))
-            text("./agent.py")
-            click(1213, header)
-            click(1340, header + 74)
+            click_control("agent-settings")
+            replace_control("agent-codex-executable", "./agent.py")
             wait(
-                lambda: any(c.get("method") == "thread/list" for c in calls()),
-                "History did not open",
+                lambda: preferences().get("codex") == "./agent.py",
+                "The complete fixture executable was not saved",
             )
-            time.sleep(0.4)
+            click_control("agent-settings")
+            absent("agent-codex-executable")
+            assert not calls(), "Settings started a backend before opening History"
+            refresh_history("agent-history")
             assert not running_agents(), "History browsing appeared as a running chat"
             screenshot(window, "list.png")
             # Long multiline backend titles must stay compact, including in a
@@ -158,65 +219,69 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             resize(window, 760, 900)
             screenshot(window, "compact.png")
             resize(window, 1380, 900)
-            click(1275, header + 279)
-            time.sleep(0.2)
+            click_control("agent-history-delete:saved-0")
+            control("agent-history-confirm-delete")
             screenshot(window, "confirm-one.png")
             assert not deleted(), "Opening deletion confirmation removed a chat"
-            click(420, header + 330)
-            time.sleep(0.2)
+            click_control("agent-history-cancel-delete")
+            absent("agent-history-confirm-delete")
             assert not deleted(), "Cancelling deletion removed a chat"
-            click(1275, header + 279)
-            time.sleep(0.2)
-            click(550, header + 330)
+            click_control("agent-history-delete:saved-0")
+            click_control("agent-history-confirm-delete")
             wait(
                 lambda: any(c.get("method") == "thread/delete" for c in calls()),
                 "Writer conflict was not requested",
             )
-            time.sleep(0.6)
+            control("agent-history-ready")
+            control("agent-history-error-details")
             screenshot(window, "writer-conflict.png")
             assert not deleted(), "Writer conflict removed an unacknowledged chat"
-            click(410, header + 289)  # The operation error, without startup warnings.
-            time.sleep(0.2)
+            click_control("agent-history-error-details")
+            control("agent-history-error-expanded")
             screenshot(window, "writer-details.png")
-            click(410, header + 289)
-            click(450, header + 323)  # Startup warnings have their own collapsed section.
-            time.sleep(0.2)
+            click_control("agent-history-error-details")
+            control("agent-history-error-collapsed")
+            click_control("agent-history-backend-output")
+            control("agent-history-output-expanded")
             screenshot(window, "writer-startup-warnings.png")
-            click(450, header + 323)
+            click_control("agent-history-backend-output")
+            control("agent-history-output-collapsed")
             # Ending another process is left to the user; clearing the fixture
             # lock simulates that action before explicitly refreshing and retrying.
             del history["delete_error"]
             save_history()
-            listed_before = sum(c.get("method") == "thread/list" for c in calls())
-            click(1190, header + 113)
-            wait(
-                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
-                "History did not refresh after the writer conflict",
-            )
-            time.sleep(0.4)
-            click(1275, header + 279)
-            time.sleep(0.2)
-            click(550, header + 330)
+            refresh_history()
+            click_control("agent-history-delete:saved-0")
+            click_control("agent-history-confirm-delete")
             wait(lambda: deleted() == ["saved-0"], "Individual chat deletion was not acknowledged")
-            time.sleep(0.3)
+            control("agent-history-ready")
+            absent("agent-history-delete:saved-0")
             screenshot(window, "deleted-one.png")
             # A filter does not turn Delete all into Delete visible rows. Grow
             # the backend snapshot past one page after the initial four-row view.
             history["count"] = 40
             save_history()
-            click(700, header + 179)
-            text("no matching chats")
+            replace_control("agent-history-filter", "no matching chats")
+            wait_layout(
+                lambda state: (
+                    not any(
+                        button["name"].startswith("agent-history-delete:")
+                        for button in state["buttons"]
+                    )
+                ),
+                "The history filter did not hide nonmatching conversations",
+            )
             screenshot(window, "filtered-empty.png")
-            click(1280, header + 113)
-            time.sleep(0.2)
+            click_control("agent-history-delete-all")
+            control("agent-history-confirm-delete")
             screenshot(window, "confirm-all.png")
-            click(550, header + 330)
+            click_control("agent-history-confirm-delete")
             expected = sorted(["archived-1"] + [f"saved-{n}" for n in range(40) if n != 3])
             wait(
                 lambda: deleted() == expected,
                 "Delete all missed unloaded, archived or protected chats",
             )
-            time.sleep(0.3)
+            control("agent-history-ready")
             screenshot(window, "deleted-all.png")
             assert all(
                 c.get("method") not in ("thread/start", "thread/resume", "turn/start")
@@ -227,18 +292,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             history["active"] = []
             history["resume_error"] = "saved-3"
             save_history()
-            click(700, header + 179)
-            key("a", ("Control_L",))
-            key("BackSpace")
-            listed_before = sum(c.get("method") == "thread/list" for c in calls())
-            click(1190, header + 113)
-            wait(
-                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
-                "History did not refresh",
-            )
-            time.sleep(0.5)
+            replace_control("agent-history-filter", "")
+            refresh_history()
             screenshot(window, "saved-chat-row.png")
-            click_button(window, process, log_path, base / "ui-state.json", "Restore conversation")
+            click_control("agent-history-restore:saved-3")
             wait(
                 lambda: any(
                     c.get("method") == "thread/resume" and c["params"]["threadId"] == "saved-3"
@@ -246,28 +303,25 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
                 ),
                 "Conversation card did not resume the selected chat",
             )
-            time.sleep(0.5)
+            control("agent-history-ready")
+            control("agent-history-error-details")
             screenshot(window, "restore-writer-conflict.png")
-            click(950, header + 113)  # Running agents shortcut on a restore conflict.
-            time.sleep(0.4)
+            click_control("agent-history-running")
+            control("agent-running-refresh")
             screenshot(window, "restore-running-agents.png")
             assert not running_agents(), "A failed history browser appeared as a running chat"
             key("Escape")
+            absent("agent-running-refresh")
             del history["resume_error"]
             save_history()
-            listed_before = sum(c.get("method") == "thread/list" for c in calls())
-            click(1190, header + 113)
-            wait(
-                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
-                "History did not refresh after the restore writer conflict",
-            )
-            time.sleep(0.5)
-            click_button(window, process, log_path, base / "ui-state.json", "Restore conversation")
+            refresh_history()
+            click_control("agent-history-restore:saved-3")
             wait(
                 lambda: any(c.get("method") == "thread/turns/list" for c in calls()),
                 "Conversation did not restore after the writer lock was released",
             )
-            time.sleep(0.5)
+            absent("agent-history-filter")
+            control("agent-composer")
             screenshot(window, "resumed.png")
             assert any(agent["alive"] for agent in running_agents()), (
                 "The restored chat was missing from Running"
@@ -278,34 +332,29 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
             # Selecting the current chat returns to the existing connection;
             # a second resume would contend with its own active writer.
             resumes_before = sum(c.get("method") == "thread/resume" for c in calls())
-            listed_before = sum(c.get("method") == "thread/list" for c in calls())
-            click(1340, header + 74)
-            wait(
-                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
-                "History did not reopen for the current chat",
-            )
-            time.sleep(0.5)
+            refresh_history("agent-history")
             screenshot(window, "current-chat-row.png")
-            click_button(
-                window, process, log_path, base / "ui-state.json", "Show current conversation"
-            )
-            time.sleep(0.5)
+            click_control("Show current conversation")
+            absent("agent-history-filter")
+            control("agent-composer")
             assert sum(c.get("method") == "thread/resume" for c in calls()) == resumes_before, (
                 "Selecting the open chat tried to acquire a second writer"
             )
             screenshot(window, "returned-to-open-chat.png")
             history["refresh_error"] = True
             save_history()
-            listed_before = sum(c.get("method") == "thread/list" for c in calls())
-            click(1340, header + 74)
-            wait(
-                lambda: sum(c.get("method") == "thread/list" for c in calls()) > listed_before,
-                "History did not show the failed backend refresh",
-            )
-            time.sleep(0.4)
+            refresh_history("agent-history")
             screenshot(window, "backend-error.png")
             close_window(window, process)
         except Exception:
+            for source, name in (
+                (state_path, "failure-state.json"),
+                (root / "agent-rpc.jsonl", "failure-rpc.jsonl"),
+                (root / "history-deleted.json", "failure-deleted.json"),
+                (root / "history-fixture.json", "failure-fixture.json"),
+            ):
+                if source.exists():
+                    shutil.copy2(source, ARTIFACTS / name)
             if window and process.poll() is None:
                 screenshot(window, "failure.png")
             raise

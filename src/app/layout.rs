@@ -108,17 +108,20 @@ pub(super) fn subtitle(ui: &mut egui::Ui, text: &str, palette: Palette) {
 /// Reserve a readable label column in a form grid. Compact forms put the field
 /// on the following row, retaining the same widget IDs and editing state.
 pub(super) fn field_label(ui: &mut egui::Ui, text: &str, stacked: bool) {
-    let width = if stacked { ui.available_width() } else { 128. };
-    ui.allocate_ui_with_layout(
-        egui::vec2(width.max(1.), 0.),
-        Layout::top_down(Align::Min),
-        |ui| {
-            ui.set_width(width.max(1.));
-            ui.label(text);
-        },
-    );
     if stacked {
+        ui.add(egui::Label::new(text).wrap());
         ui.end_row();
+    } else {
+        // Measure wrapped labels before Grid positions the cell. A nested UI
+        // that grows after allocation shifts its text away from the input centre.
+        let text = egui::WidgetText::from(text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Wrap),
+            128.,
+            egui::TextStyle::Body,
+        );
+        let height = control_height(ui).max(text.size().y.ceil());
+        ui.add_sized([128., height], egui::Label::new(text).halign(Align::Min));
     }
 }
 

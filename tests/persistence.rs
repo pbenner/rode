@@ -254,7 +254,48 @@ fn preference_child() {
         serde_json::from_str(&store.get_string("agent_preferences").unwrap()).unwrap();
     fs::write(root.join(format!("ready-{role}")), "").unwrap();
     wait(|| root.join("go").exists());
-    if scenario == "profiles" {
+    if scenario == "profile-list" {
+        let path = root.join("connections.json");
+        if role == "first" {
+            let before = Profile {
+                name: "b".into(),
+                host: "b.example".into(),
+                ..Default::default()
+            };
+            let mut edited = before.clone();
+            edited.user = "new-login".into();
+            ssh::save_profile_at(&path, &edited, Some(&before)).unwrap();
+            ssh::save_profile_at(
+                &path,
+                &Profile {
+                    name: "new".into(),
+                    host: "new.example".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+        } else {
+            ssh::edit_profiles_at(
+                &path,
+                &ssh::ProfileListEdit::Move {
+                    label: "c".into(),
+                    relative_to: "a".into(),
+                    after: false,
+                },
+            )
+            .unwrap();
+            ssh::edit_profiles_at(
+                &path,
+                &ssh::ProfileListEdit::Remove(Box::new(Profile {
+                    name: "d".into(),
+                    host: "d.example".into(),
+                    ..Default::default()
+                })),
+            )
+            .unwrap();
+        }
+    } else if scenario == "profiles" {
         let before = Profile {
             name: "shared".into(),
             host: "original".into(),
@@ -381,6 +422,40 @@ fn processes_merge_independent_fields_projects_and_manual_changes() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn saved_profile_management_merges_with_other_process_edits_and_additions() {
+    let root = tempfile::tempdir().unwrap();
+    seed(root.path());
+    let path = root.path().join("connections.json");
+    let profiles: Vec<Value> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|name| {
+            json!({
+                "name": name, "host": format!("{name}.example"), "future": {"keep": true}
+            })
+        })
+        .collect();
+    fs::write(&path, serde_json::to_vec(&profiles).unwrap()).unwrap();
+    let first = child(root.path(), "first", "profile-list");
+    let second = child(root.path(), "second", "profile-list");
+    wait(|| root.path().join("ready-first").exists() && root.path().join("ready-second").exists());
+    fs::write(root.path().join("go"), "").unwrap();
+    finish(first);
+    finish(second);
+    let result: Vec<Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        result
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["c", "a", "b", "new"]
+    );
+    assert_eq!(result[2]["user"], "new-login");
+    for item in &result[..3] {
+        assert_eq!(item["future"]["keep"], true);
+    }
 }
 
 #[test]

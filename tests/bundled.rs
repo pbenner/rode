@@ -5,7 +5,29 @@ use rode::{
     files, project,
 };
 use serde_json::{Value, json};
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
+use std::{
+    fs,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
+    path::Path,
+    process::Command,
+    time::Duration,
+};
+
+fn private_fixture() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
+
+fn private_directories(path: &Path) {
+    // Set every new ancestor's mode without changing the process-wide umask.
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .unwrap();
+}
 
 fn call(root: &Path, spec: &Value, input: Vec<u8>) -> project::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"));
@@ -16,7 +38,7 @@ fn call(root: &Path, spec: &Value, input: Vec<u8>) -> project::Output {
     project::run(command, bytes, Duration::from_secs(10)).unwrap()
 }
 fn fixture() -> (tempfile::TempDir, Vec<u8>, Value) {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_fixture();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let bytes = fs::read("/usr/bin/true").unwrap();
     let target = json!({"size":bytes.len(),"sha256":files::digest(&bytes)});
@@ -242,7 +264,7 @@ fn cache_symlinks_and_modified_executables_are_rejected() {
 #[test]
 fn a_changed_local_bundle_is_never_executed() {
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
+    let root = private_fixture();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let marker = root.path().join("executed");
     let binary = root.path().join("codex");
@@ -276,7 +298,7 @@ fn a_changed_local_bundle_is_never_executed() {
 }
 
 fn write_runtime(directory: &Path, architecture: &str) -> Value {
-    fs::create_dir_all(directory).unwrap();
+    private_directories(directory);
     fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
     let bytes = b"#!/bin/sh\nprintf 'optional-runtime-fixture\\n'\n";
     fs::write(directory.join("codex"), bytes).unwrap();
@@ -294,7 +316,7 @@ fn write_runtime(directory: &Path, architecture: &str) -> Value {
 
 #[test]
 fn user_runtime_discovery_rejects_a_writable_ancestor_before_execution() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_fixture();
     let editor = root.path().join("rode");
     fs::copy(env!("CARGO_BIN_EXE_rode"), &editor).unwrap();
     let shared = root.path().join("shared");
@@ -334,9 +356,9 @@ fn user_runtime_discovery_rejects_a_writable_ancestor_before_execution() {
 
 #[test]
 fn optional_package_selects_its_own_pinned_version_without_an_editor_rebuild() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_fixture();
     let bin = root.path().join("usr/bin");
-    fs::create_dir_all(&bin).unwrap();
+    private_directories(&bin);
     let editor = bin.join("rode");
     fs::copy(env!("CARGO_BIN_EXE_rode"), &editor).unwrap();
     let base = root.path().join("usr/lib/rode/codex");
@@ -383,10 +405,10 @@ fn optional_package_selects_its_own_pinned_version_without_an_editor_rebuild() {
 #[test]
 fn cargo_installed_editors_find_user_runtimes_and_reject_damaged_selectors() {
     for data_setting in [Some("absolute"), None, Some(""), Some("relative")] {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_fixture();
         // Cargo's install location has no relationship to the source-build cache.
         let bin = root.path().join("cargo install/bin");
-        fs::create_dir_all(&bin).unwrap();
+        private_directories(&bin);
         let editor = bin.join("rode");
         fs::copy(env!("CARGO_BIN_EXE_rode"), &editor).unwrap();
         let home = root.path().join("home");
@@ -444,7 +466,7 @@ fn cargo_installed_editors_find_user_runtimes_and_reject_damaged_selectors() {
 
 #[test]
 fn a_missing_runtime_architecture_preserves_installed_codex_fallback() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_fixture();
     let bundle = root.path().join("bundle");
     write_runtime(&bundle, "unsupported-fixture");
     let installed = root.path().join("bin");
@@ -485,7 +507,7 @@ fn a_missing_runtime_architecture_preserves_installed_codex_fallback() {
 
 #[test]
 fn host_discovery_needs_no_runtime_pin_and_does_not_modify_the_cache() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_fixture();
     let cache = root.path().join("absent-cache");
     let response: Value = serde_json::from_str(
         &call(&cache, &json!({"action":"host"}), vec![])

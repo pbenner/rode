@@ -15,7 +15,20 @@ Click **Connect SSH**. Every connection can configure:
 - An alternative SSH config file
 - An optional preinstalled remote helper path
 - X11 forwarding when available (enabled by default)
-- A friendly name for a saved connection profile
+- An optional **Connection name**, such as `Work cluster` or `Home server`, shown
+  in the Explorer and connection picker instead of the SSH address
+
+Saved profiles appear under **Connections** in the Explorer when no folder is
+open. Click a connection to connect, or right-click it to **Edit connection…**,
+**Rename…**, **Remove saved connection**, **Move up** or **Move down**. Rename opens
+the connection form with the name selected; type a name and click **Save profile**.
+The name is the first field and does not change the SSH address. You can also drag a row
+above or below another row; the insertion line shows where it will land. Escape
+cancels a drag. Changes are saved immediately and the connection picker uses the
+same order. Removal affects only RODE's saved profile, not SSH configuration,
+keys, known hosts or an existing connection.
+Editing a saved profile's name renames it in place; another profile with that
+name is preserved rather than overwritten.
 
 Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's agent-forwarding policy; agent forwarding remains off unless you enable it for that host.
 

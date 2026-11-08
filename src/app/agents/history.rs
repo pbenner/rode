@@ -2,7 +2,7 @@
 //! rendering filters only bounded cached metadata and never performs host I/O.
 use super::super::{
     icons::{Icon, IconButton},
-    layout,
+    layout, ui_probe,
 };
 use crate::{
     agent::history::{Browser, Entry, Owner},
@@ -113,9 +113,6 @@ pub(super) fn ui(
             ui.label(RichText::new("Loading saved conversations…").color(palette.muted));
             return;
         };
-        if !browser.busy {
-            super::super::ui_probe::button(ui, "agent-history-ready", &search);
-        }
         if !browser.busy && (!browser.can_resume || !browser.diagnostics().is_empty()) {
             // Keep backend diagnostics readable without allowing a
             // long traceback to displace the conversation list.
@@ -148,7 +145,7 @@ pub(super) fn ui(
             });
         }
         if !browser.diagnostics().is_empty() {
-            egui::CollapsingHeader::new("Error details")
+            let details = egui::CollapsingHeader::new("Error details")
                 .id_salt("history-backend-details")
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -162,12 +159,22 @@ pub(super) fn ui(
                             );
                         });
                 });
+            ui_probe::button(ui, "agent-history-error-details", &details.header_response);
+            ui_probe::button(
+                ui,
+                if details.body_response.is_some() {
+                    "agent-history-error-expanded"
+                } else {
+                    "agent-history-error-collapsed"
+                },
+                &details.header_response,
+            );
         }
         if !browser.busy
             && !browser.backend_output().is_empty()
             && (!browser.diagnostics().is_empty() || !browser.can_resume)
         {
-            egui::CollapsingHeader::new("Startup warnings and backend output")
+            let output = egui::CollapsingHeader::new("Startup warnings and backend output")
                 .id_salt("history-backend-output")
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -181,6 +188,16 @@ pub(super) fn ui(
                             );
                         });
                 });
+            ui_probe::button(ui, "agent-history-backend-output", &output.header_response);
+            ui_probe::button(
+                ui,
+                if output.body_response.is_some() {
+                    "agent-history-output-expanded"
+                } else {
+                    "agent-history-output-collapsed"
+                },
+                &output.header_response,
+            );
         }
         if !can_resume {
             ui.add(
@@ -300,6 +317,17 @@ pub(super) fn ui(
                     }
                 }
             });
+        // A click dispatches host work after rendering. Do not publish the old
+        // idle state in that frame as acknowledgement of the new operation.
+        if !browser.busy
+            && !action.refresh
+            && !action.more
+            && action.delete.is_none()
+            && action.resume.is_none()
+            && !action.close
+        {
+            ui_probe::button(ui, "agent-history-ready", &search);
+        }
     });
     action
 }
@@ -312,19 +340,20 @@ fn toolbar(
     action: &mut Action,
     palette: Palette,
 ) {
-    if ui.add_enabled(
+    let delete = ui.add_enabled(
         can_resume && browser.is_some_and(|b| b.can_delete && !b.busy),
         egui::Button::new(RichText::new("Delete all…").color(palette.error)),
-    ).on_hover_text("Delete saved chats for this host, project and backend, including unloaded pages. Open and active chats are kept.").clicked() {
+    ).on_hover_text("Delete saved chats for this host, project and backend, including unloaded pages. Open and active chats are kept.");
+    ui_probe::button(ui, "agent-history-delete-all", &delete);
+    if delete.clicked() {
         *confirmation = Some(Delete::All);
     }
-    if ui
-        .add_enabled(
-            browser.is_none_or(|b| !b.busy),
-            IconButton::new(Icon::Refresh, "Refresh"),
-        )
-        .clicked()
-    {
+    let refresh = ui.add_enabled(
+        browser.is_none_or(|b| !b.busy),
+        IconButton::new(Icon::Refresh, "Refresh"),
+    );
+    ui_probe::button(ui, "agent-history-refresh", &refresh);
+    if refresh.clicked() {
         action.refresh = true;
     }
     if ui
@@ -340,10 +369,12 @@ fn toolbar(
     {
         action.close = true;
     }
-    if browser.is_some_and(|browser| !browser.diagnostics().is_empty())
-        && ui.button("Running agents…").clicked()
-    {
-        action.running = true;
+    if browser.is_some_and(|browser| !browser.diagnostics().is_empty()) {
+        let running = ui.button("Running agents…");
+        ui_probe::button(ui, "agent-history-running", &running);
+        if running.clicked() {
+            action.running = true;
+        }
     }
 }
 
@@ -371,12 +402,16 @@ fn confirm(
             ui.add(egui::Label::new(RichText::new("Codex also deletes spawned child chats. This cannot be undone here.").small().color(palette.muted)).wrap());
             ui.add_space(4.);
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Cancel deletion").clicked() {
+                let cancel = ui.button("Cancel deletion");
+                ui_probe::button(ui, "agent-history-cancel-delete", &cancel);
+                if cancel.clicked() {
                     *confirmation = None;
                 }
-                if ui.add_enabled(can_resume && browser.can_delete && !browser.busy,
+                let confirm = ui.add_enabled(can_resume && browser.can_delete && !browser.busy,
                     egui::Button::new(RichText::new(match selected { Delete::All => "Confirm delete all", _ => "Confirm delete chat" }).color(palette.error)),
-                ).clicked() {
+                );
+                ui_probe::button(ui, "agent-history-confirm-delete", &confirm);
+                if confirm.clicked() {
                     action.delete = confirmation.take();
                 }
             });
@@ -520,6 +555,7 @@ fn conversation(
             .on_disabled_hover_text(
                 "Open and active chats are kept; the backend must support deletion",
             );
+        ui_probe::button(ui, &format!("agent-history-delete:{}", entry.id), &button);
         delete = button.clicked();
         hovered |= button.hovered();
     });
@@ -533,3 +569,6 @@ fn conversation(
 fn single_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+#[cfg(test)]
+mod tests;

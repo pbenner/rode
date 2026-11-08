@@ -14,6 +14,27 @@ Settings saves lock the configuration, read its latest contents, apply only the 
 
 Existing windows keep their current in-memory settings. Other windows' changes are loaded on a new launch; the SSH connection picker reloads saved profiles when opened. RODE does not watch configuration files continuously or change an active sandbox/agent behind your back. Window size/layout uses the last saved GUI state as the default for future launches.
 
+Manage saved SSH profiles from the Explorer's **Connections** list: right-click
+to rename, edit, remove or move a profile, or drag rows to reorder them. An optional
+**Connection name** labels it in the Explorer and picker without changing the SSH
+address. **Rename…** selects that field; **Save profile** applies the change. The order is the
+array order in `connections.json`. Reordering moves one current record relative
+to another under the same writer lock, preserving other windows' additions,
+settings and unknown fields. Removal refuses a profile whose settings changed
+since it was displayed. A stale profile save cannot recreate a removed record;
+reopen **Connect SSH** to refresh before choosing a new action. Failed writes
+leave the displayed list intact and report an error. List changes do not alter
+active workspaces, authentication state or unsaved connection drafts.
+Renaming a loaded profile preserves its position and merges other field edits;
+an existing destination name is rejected rather than overwritten.
+If manually edited storage contains duplicate labels, saves and list edits refuse
+the ambiguous records. Give those records distinct names in `connections.json`
+before editing them through the picker.
+
+Empty connection fields show muted hints, such as an example identity-file path.
+Hints are not saved or passed to SSH. Entered values use normal text colour;
+leaving an optional field blank retains its documented default behaviour.
+
 Configuration writes run in the background. New files use owner-only permissions. Stable adjacent `.lock` files coordinate writers and remain in place; they do not mean a process is still running. The OS releases locks on process exit, including a crash. Do not remove lock files while RODE is running. GUI state is written through private temporary snapshots so the GUI framework cannot overwrite shared configuration using an old snapshot.
 
 Malformed, oversized, or unwritable configuration is preserved and a save error is reported. After correcting the file or permissions, edit the setting again to retry retained changes. Preferences are limited to 8 MiB, agent settings to 128 entries / 256 KiB, and SSH profiles to 128 entries / 1 MiB. All concurrently running instances need the updated writer; older builds do not participate in this coordination.

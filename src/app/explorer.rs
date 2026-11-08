@@ -634,23 +634,7 @@ impl EditorApp {
                 ui.separator();
                 ui.add_space(12.0);
                 ui.label(palette.tag("CONNECTIONS"));
-                let profiles = self.profiles.clone();
-                for profile in profiles {
-                    let label = profile.label();
-                    if ui
-                        .add_sized(
-                            action_size,
-                            IconButton::new(Icon::Remote, &label)
-                                .color(palette.accent)
-                                .truncate(),
-                        )
-                        .on_hover_text(&label)
-                        .clicked()
-                    {
-                        self.profile = profile;
-                        self.guarded(Action::Remote(self.profile.clone()), ctx);
-                    }
-                }
+                self.saved_connections_ui(ui, ctx);
                 if self.profiles.is_empty() {
                     ui.label(
                         RichText::new("Saved SSH profiles appear here.")

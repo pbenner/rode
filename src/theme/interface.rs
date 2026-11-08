@@ -208,7 +208,9 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style.visuals.window_fill = palette.panel;
     style.visuals.extreme_bg_color = palette.background;
     style.visuals.faint_bg_color = palette.raised;
-    style.visuals.override_text_color = Some(palette.text);
+    // Widget foregrounds below already supply the primary text colour. A global
+    // override also bakes it into TextEdit hints, defeating their muted fallback.
+    style.visuals.override_text_color = None;
     style.visuals.weak_text_color = Some(palette.muted);
     style.visuals.selection.bg_fill = palette.selection;
     style.visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
@@ -286,4 +288,67 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
         ui.install(&mut style, palette);
     }
     ctx.set_style(style);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_field_hints_are_muted_while_identical_entered_values_keep_text_colour() {
+        let ctx = egui::Context::default();
+        // Reuse the context to cover switching themes as well as initial installation.
+        for theme in crate::theme::Theme::builtins() {
+            install(&ctx, theme.palette);
+            let mut value = String::new();
+            for entered in [false, true] {
+                if entered {
+                    value = "~/.ssh/id_ed25519".into();
+                }
+                let output = ctx.run(Default::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.label("Identity file");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut value).hint_text("~/.ssh/id_ed25519"),
+                        );
+                    });
+                });
+                let expected = if entered {
+                    theme.palette.text
+                } else {
+                    theme.palette.muted
+                };
+                for label in ["Identity file", "~/.ssh/id_ed25519"] {
+                    let text = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == label => Some(text),
+                            _ => None,
+                        })
+                        .unwrap();
+                    for section in &text.galley.job.sections {
+                        let colour = text.override_text_color.unwrap_or_else(|| {
+                            if section.format.color == egui::Color32::PLACEHOLDER {
+                                text.fallback_color
+                            } else {
+                                section.format.color
+                            }
+                        });
+                        assert_eq!(
+                            colour,
+                            if label == "Identity file" {
+                                theme.palette.text
+                            } else {
+                                expected
+                            },
+                            "{}: {label}, entered={entered}",
+                            theme.id
+                        );
+                    }
+                }
+                assert_eq!(value.is_empty(), !entered, "A hint must not become a value");
+            }
+        }
+    }
 }

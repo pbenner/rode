@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -15,22 +16,34 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     assert_running,
-    click,
+    click_button,
     close_window,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
     wait_for_button,
+    wait_for_project,
     wait_for_window,
 )
 
 
 def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.3)
+    palette_command(window, process, log_path, state_path, name)
+
+
+def click_control(name):
+    click_button(window, process, log_path, state_path, name)
+
+
+def replace_control(name, value):
+    click_control(name)
+    wait_for_button(window, process, log_path, state_path, name, focused=True)
+    before = json.loads(state_path.read_text())["pass"]
+    key("a", ("Control_L",))
+    text(value)
+    wait_for_button(window, process, log_path, state_path, name, changed_after=before)
 
 
 with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
@@ -49,11 +62,12 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
         "    result.replace('task.json')\n"
     )
     runtime.chmod(0o755)
+    state_path = base / "ui-state.json"
     environment = dict(
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
-        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
+        RODE_UI_TEST_STATE=str(state_path),
     )
     log_path = ARTIFACTS / "environment.log"
     preferences = base / "data/rode/app.ron"
@@ -107,6 +121,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 )
 
             window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus_window(window)
             command("Open file by path")
             text("main.js")
@@ -114,13 +129,10 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             time.sleep(0.4)
             command("Environment: Runtimes and project variables")
             screenshot(window, "environment.png")
-            click(560, 282)  # Node.js executable override in the runtime table.
-            key("a", ("Control_L",))
-            text(str(runtime))
-            click(700, 620)  # Literal project variables.
-            text("PROJECT_MODE=first")
+            replace_control("environment-runtime-node", str(runtime))
+            replace_control("environment-variables", "PROJECT_MODE=first")
             applied_status(False)
-            click(430, 702)  # Apply environment in the Project variables card.
+            click_control("environment-apply")
             wait(
                 lambda: settings().get("variables", {}).get("PROJECT_MODE") == "first",
                 "Environment settings were not saved",
@@ -129,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             assert settings()["runtimes"]["node"] == str(runtime)
             command("Tasks: Run, build and test")
             screenshot(window, "tasks.png")
-            click(440, 242)  # Run the active JavaScript file with the selected runtime.
+            click_control("task-run-current")
             wait(lambda: (project / "task.json").exists(), "Tasks did not use the selected runtime")
             result = json.loads((project / "task.json").read_text())
             assert result["mode"] == "first" and result["argv"] == [str(project / "main.js")], (
@@ -137,11 +149,9 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             )
             assert shell_record("first.txt") == "first"
             command("Environment: Runtimes and project variables")
-            click(700, 620)
-            key("a", ("Control_L",))
-            text("PROJECT_MODE=second")
+            replace_control("environment-variables", "PROJECT_MODE=second")
             applied_status(False)
-            click(430, 702)
+            click_control("environment-apply")
             wait(
                 lambda: settings().get("variables", {}).get("PROJECT_MODE") == "second",
                 "Updated project variables were not saved",
@@ -154,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
             )
             (project / "task.json").unlink()
             command("Tasks: Run, build and test")
-            click(440, 242)
+            click_control("task-run-current")
             wait(lambda: (project / "task.json").exists(), "Updated task environment was not used")
             assert json.loads((project / "task.json").read_text())["mode"] == "second"
             assert shell_record("after-task.txt") == "first", "Task exports escaped their subshell"
@@ -168,6 +178,7 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 [str(BINARY), str(project)], env=environment, stdout=log, stderr=log
             )
             window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus_window(window)
             time.sleep(0.5)
             key("t", ("Control_L", "Shift_L"))
@@ -178,6 +189,12 @@ with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
                 "Environment overrides, task execution, new/existing shells and restart persistence passed."
             )
         except BaseException:
+            for source, name in [
+                (state_path, "failure-state.json"),
+                (preferences, "failure-preferences.ron"),
+            ]:
+                if source.exists():
+                    shutil.copy2(source, ARTIFACTS / name)
             if window and process.poll() is None:
                 screenshot(window, "failure.png")
             raise

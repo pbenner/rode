@@ -32,6 +32,9 @@ rode --ssh user@host --remote-path '~/project'
 
 Use **Project: Settings and sandbox access** in the command palette for categorised [project settings](docs/configuration.md#project-settings): code tools, sandbox access, monitoring, LaTeX and presentations. Each category saves its own changes.
 
+Manage saved SSH connections directly in the Explorer: right-click to rename,
+edit or remove a connection, and drag rows to save your preferred order.
+
 Files normally use their containing folder as the workspace. With sandbox defaults enabled, a file directly in your home directory opens in **File mode · Normal mode** instead: no project or project tools are started, and your sandbox preferences stay unchanged. Explicit `--sandbox` requests and saved folder policies still apply. See [file startup](docs/getting-started.md#run).
 
 Linux is the validated platform. Build with Rust 1.89+ and the native build prerequisites; the source installer builds the editor and installs a static host/session helper beside it. RODE discovers that helper automatically, including on remote hosts with older glibc. Remote access requires an SSH server and a POSIX shell on the remote host; the desktop uses embedded `russh` by default. RODE uses a verified native Rust helper for SSH host operations; Python is not required for ordinary editing, terminals or sandbox enforcement. Python/Jupyter features retain their own dependencies. See [remote prerequisites](docs/remote.md#host-service-backends) and [static helper setup](docs/terminals.md#remote-helper-and-packaging); no tmux/screen is required. Python checks use `uvx ruff` by default. PDF previews require desktop Poppler tools (`poppler-utils`).

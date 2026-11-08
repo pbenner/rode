@@ -29,6 +29,8 @@ struct Peer {
     forward_port: Arc<AtomicUsize>,
     method: Method,
     calls: Arc<AtomicUsize>,
+    uploads: std::collections::HashMap<ChannelId, sha2::Sha256>,
+    echoes: std::collections::HashSet<ChannelId>,
 }
 impl server::Server for Peer {
     type Handler = Self;
@@ -129,14 +131,58 @@ impl server::Handler for Peer {
     async fn exec_request(
         &mut self,
         channel: ChannelId,
-        _: &[u8],
+        command: &[u8],
         session: &mut server::Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
+        if command == b"upload-sha256" {
+            use sha2::Digest;
+            self.uploads.insert(channel, sha2::Sha256::new());
+            return Ok(());
+        }
+        if command == b"echo-upload" {
+            self.echoes.insert(channel);
+            return Ok(());
+        }
         session.data(channel, b"authenticated".to_vec())?;
         session.exit_status_request(channel, 0)?;
         session.eof(channel)?;
         session.close(channel)?;
+        Ok(())
+    }
+    async fn data(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        use sha2::Digest;
+        if let Some(hash) = self.uploads.get_mut(&channel) {
+            hash.update(data);
+            tokio::task::yield_now().await;
+        }
+        if self.echoes.contains(&channel) {
+            session.data(channel, data.to_vec())?;
+        }
+        Ok(())
+    }
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        use sha2::Digest;
+        if let Some(hash) = self.uploads.remove(&channel) {
+            session.data(channel, format!("{:x}", hash.finalize()).into_bytes())?;
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
+        if self.echoes.remove(&channel) {
+            session.exit_status_request(channel, 0)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
         Ok(())
     }
 }
@@ -182,6 +228,9 @@ impl Fixture {
             methods: methods.into(),
             auth_rejection_time: Duration::ZERO,
             auth_rejection_time_initial: Some(Duration::ZERO),
+            // Upload regressions must repeatedly exhaust and replenish credit.
+            window_size: 64 * 1024,
+            maximum_packet_size: 8 * 1024,
             ..Default::default()
         });
         let calls = Arc::new(AtomicUsize::new(0));
@@ -190,6 +239,8 @@ impl Fixture {
             forward_port: forward_port.clone(),
             method,
             calls: calls.clone(),
+            uploads: Default::default(),
+            echoes: Default::default(),
         };
         let (stop, stopping) = tokio::sync::oneshot::channel();
         let thread = std::thread::spawn(move || {
@@ -303,6 +354,50 @@ impl Drop for Connection {
         drop(self.login.take());
         self.remote.cleanup();
     }
+}
+
+#[test]
+fn rust_ssh_parallel_uploads_preserve_bytes_across_small_channel_windows() {
+    use sha2::Digest;
+    use std::{io::Read, sync::atomic::AtomicBool};
+    let fixture = Fixture::new(Method::Password);
+    fixture.trust(&fixture.key);
+    let connection = Connection::new(fixture.profile("yes"));
+    connection.wait("password:");
+    connection.answer("private-password");
+    connection.ready();
+    std::thread::scope(|scope| {
+        for (value, echo) in [(0x35, false), (0xa7, false), (b'x', true)] {
+            let mut command = connection.remote.command();
+            command.arg(if echo { "echo-upload" } else { "upload-sha256" });
+            scope.spawn(move || {
+                const SIZE: u64 = 24 * 1024 * 1024;
+                let mut hash = sha2::Sha256::new();
+                for _ in 0..SIZE / 8192 {
+                    hash.update([value; 8192]);
+                }
+                let output = rode::project::run_controlled_stream(
+                    command,
+                    std::io::repeat(value).take(SIZE),
+                    Duration::from_secs(30),
+                    &AtomicBool::new(false),
+                    false,
+                    SIZE + 1024,
+                    Duration::ZERO,
+                )
+                .unwrap()
+                .checked()
+                .unwrap();
+                if echo {
+                    assert_eq!(output.len(), SIZE as usize);
+                    assert!(output.bytes().all(|byte| byte == value));
+                } else {
+                    assert_eq!(output, format!("{:x}", hash.finalize()));
+                }
+            });
+        }
+    });
+    assert!(connection.remote.connected());
 }
 
 #[test]

@@ -40,7 +40,7 @@ impl EditorApp {
                     if ui.add(IconButton::new(Icon::Exit, "Quit")).clicked() { self.guarded(Action::Quit, ctx); ui.close(); }
                 });
                 self.navigation_menu(&file_menu.response);
-                ui.menu_button("View", |ui| {
+                let view_menu = ui.menu_button("View", |ui| {
                     icons::submenu(ui, Icon::Palette, "Color theme", |ui| {
                         self.theme_menu(ui, ctx);
                     });
@@ -65,6 +65,7 @@ impl EditorApp {
                     if ui.checkbox(&mut self.show_hidden, "Show hidden files").changed() { self.tree_dirty = true; }
                     self.font_save_pending |= ui.add(egui::Slider::new(&mut self.font_size, 10.0..=26.0).text("Editor font size")).changed();
                 });
+                ui_probe::button(ui, "menu-view", &view_menu.response);
                 ui.menu_button("Code", |ui| {
                     if ui.add(IconButton::new(Icon::Format, "Format document").shortcut("Shift+Alt+F")).clicked() { self.format_active(true,false,ctx); ui.close(); }
                     if ui.add(IconButton::new(Icon::Check, "Check document")).clicked() { self.format_active(false,false,ctx); ui.close(); }

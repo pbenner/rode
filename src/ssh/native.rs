@@ -358,7 +358,9 @@ async fn relay(
         loop {
             let (kind, bytes) = read_packet(&mut local_input).await?;
             match kind {
-                b'D' => input.data(bytes.as_slice()).await?,
+                // Preserve bounded owned frames through russh's credit-aware
+                // send path instead of creating an AsyncWrite for every frame.
+                b'D' => input.data_bytes(bytes).await?,
                 b'F' if bytes.is_empty() => {
                     input.eof().await?;
                 }

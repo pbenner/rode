@@ -103,7 +103,7 @@ def connection_form(window, name):
     control(window, "ssh-field-Host / alias")
     key("a", ("Control_L",))
     text(name + ".invalid")
-    control(window, "ssh-field-Profile name")
+    control(window, "ssh-field-Connection name")
     key("a", ("Control_L",))
     text(name)
 
@@ -175,8 +175,8 @@ with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
             )
             key("Escape")
             connection_form(windows[1], "computer-final")
-            # Closing while a save is queued must wait for it. Keep its lock
-            # busy until after the close request, then release from the fixture.
+            # Renaming the loaded profile updates it in place. Closing while
+            # that save is queued must wait for the lock and preserve its order.
             lock_file = open(connections.with_name("connections.json.lock"), "r+")
             fcntl.flock(lock_file, fcntl.LOCK_EX)
             save_profile(windows[1])
@@ -190,9 +190,11 @@ with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
             screenshot(windows[1], "second-window.png")
             close_window(windows[1], processes[1])
             timer.join()
-            assert len(json.loads(connections.read_text())) == 3, (
-                "Queued profile save was lost on exit"
-            )
+            profiles = json.loads(connections.read_text())
+            assert [(profile["name"], profile["host"]) for profile in profiles] == [
+                ("computer-one", "computer-one.invalid"),
+                ("computer-final", "computer-final.invalid"),
+            ], f"Queued profile rename was lost or changed another connection: {profiles!r}"
             wait_for(lambda: preferences(saved).get("color_theme") == "carbon", "Stale theme won")
             assert preferences(saved)["font_size"] == expected_font
             focus(windows[0])
@@ -222,6 +224,8 @@ with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
         except Exception:
             if saved.exists():
                 (ARTIFACTS / "failed-preferences.ron").write_bytes(saved.read_bytes())
+            if connections.exists():
+                (ARTIFACTS / "failed-connections.json").write_bytes(connections.read_bytes())
             for window, process in zip(windows, processes):
                 if process.poll() is None:
                     focus(window)

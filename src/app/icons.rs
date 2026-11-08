@@ -410,6 +410,7 @@ pub(super) struct IconButton<'a> {
     tint: Option<Color32>,
     size: f32,
     min_size: Vec2,
+    sense: egui::Sense,
 }
 impl<'a> IconButton<'a> {
     /// Create a labeled accessible icon button; sizing follows the containing UI style.
@@ -424,6 +425,7 @@ impl<'a> IconButton<'a> {
             tint: None,
             size: 16.,
             min_size: Vec2::ZERO,
+            sense: egui::Sense::click(),
         }
     }
     /// The accessible label also supplies the tooltip; callers should not add another one.
@@ -463,6 +465,11 @@ impl<'a> IconButton<'a> {
         self.min_size = size;
         self
     }
+    /// Choose pointer interaction, for example a row that can be clicked or dragged.
+    pub(super) fn sense(mut self, sense: egui::Sense) -> Self {
+        self.sense = sense;
+        self
+    }
 }
 impl Widget for IconButton<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
@@ -478,6 +485,7 @@ impl Widget for IconButton<'_> {
             Button::new((icon, text))
         }
         .selected(self.selected)
+        .sense(self.sense)
         .min_size(self.min_size);
         if self.truncate {
             button = button.truncate();
@@ -558,6 +566,7 @@ pub(super) fn submenu<R>(
     if let Some(rect) = output.rect(arrow_id) {
         Icon::ChevronRight.paint(ui.painter(), rect, color);
     }
+    super::ui_probe::button(ui, &format!("submenu:{label}"), &output.response);
     egui::containers::menu::SubMenu::new().show(ui, &output.response, contents);
 }
 

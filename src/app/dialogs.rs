@@ -218,14 +218,19 @@ impl EditorApp {
                 .show(ui, |ui| {
                     for (label, field, hint) in [
                         (
+                            "Connection name",
+                            &mut self.profile.name,
+                            "e.g. Work cluster or Home server (optional)",
+                        ),
+                        (
                             "Host / alias",
                             &mut self.profile.host,
-                            "workstation or user@host.example.org",
+                            "e.g. workstation or user@host.example.org",
                         ),
                         (
                             "Remote folder",
                             &mut self.profile.root,
-                            "~/projects/my-project",
+                            "e.g. ~/projects/my-project",
                         ),
                         ("Username", &mut self.profile.user, "From SSH config"),
                         (
@@ -236,12 +241,12 @@ impl EditorApp {
                         (
                             "Identity file",
                             &mut self.profile.identity,
-                            "~/.ssh/id_ed25519 (optional)",
+                            "Optional; e.g. ~/.ssh/id_ed25519",
                         ),
                         (
                             "Jump host(s)",
                             &mut self.profile.jump,
-                            "user@login-host (optional, comma-separated)",
+                            "Optional; e.g. user@login-host",
                         ),
                         (
                             "SSH config file",
@@ -253,30 +258,48 @@ impl EditorApp {
                             &mut self.profile.remote_helper,
                             "Auto, or /path/to/rode-sessiond",
                         ),
-                        (
-                            "Profile name",
-                            &mut self.profile.name,
-                            "Optional friendly name",
-                        ),
                     ] {
                         layout::field_label(ui, label, compact);
+                        let id = egui::Id::new(("connection-field", label));
+                        let initial_focus = if self.profile_name_focus {
+                            "Connection name"
+                        } else {
+                            "Host / alias"
+                        };
+                        if self.dialog_focus && label == initial_focus {
+                            ui.memory_mut(|memory| memory.request_focus(id));
+                            if self.profile_name_focus {
+                                let mut state =
+                                    egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(0),
+                                        egui::text::CCursor::new(field.chars().count()),
+                                    )));
+                                state.store(ctx, id);
+                            }
+                            self.dialog_focus = false;
+                        }
                         let response = ui.add(
                             egui::TextEdit::singleline(field)
                                 // Loading saved profiles can insert a dropdown above
                                 // these fields while the user is already typing.
-                                .id(egui::Id::new(("connection-field", label)))
+                                .id(id)
                                 .hint_text(hint)
                                 .desired_width(field_width),
                         );
                         ui_probe::button(ui, &format!("ssh-field-{label}"), &response);
-                        if self.dialog_focus && label == "Host / alias" {
-                            response.request_focus();
-                            self.dialog_focus = false;
-                        }
                         ui.end_row();
                     }
                 });
         });
+        ui.small(
+            "The connection name labels your saved entry. Leave it blank to use the SSH address.",
+        );
+        ui.small(
+            "Muted text in empty fields shows examples or defaults; it is not an entered value.",
+        );
         if let Some(route) = &self.profile.tunnel {
             ui.label(format!(
                 "Tunnel route: relay loopback port {} · verified as {}",
@@ -355,11 +378,7 @@ impl EditorApp {
                     self.notify(error.to_string(), true);
                 } else {
                     let profile = self.profile.clone();
-                    let previous = self
-                        .profile_baseline
-                        .as_ref()
-                        .filter(|p| p.label() == profile.label())
-                        .cloned();
+                    let previous = self.profile_baseline.clone();
                     let form = self.profile_form;
                     self.profiles_loading = None;
                     let tx = self.tx.clone();

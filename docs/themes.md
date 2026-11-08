@@ -33,6 +33,8 @@ Choose **View → Terminal colors…**, or **Terminal: Colors and contrast** in 
 
 Navigation, command menus, and toolbar controls share a theme-aware outline icon style. Icon-only controls show descriptive tooltips; menus retain text labels and aligned keyboard shortcuts. Icons are drawn directly in Rust without an icon font or additional runtime dependencies.
 
+Empty input fields show examples and default behaviour in the theme's muted text colour. These hints are not entered values. Typed, saved and prefilled values use the normal text colour, even when they match a hint. Form labels align vertically with their controls; narrow forms place labels above the inputs.
+
 The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber**, and the other built-in/custom choices. Changes apply immediately without restarting the session. An independently selected syntax theme keeps its code colors. UI selections are flushed to local preferences as soon as they change and restored on startup; closing the application is not required to save them. On Linux the preference file is `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`.
 
 ```sh

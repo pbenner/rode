@@ -363,6 +363,17 @@ impl std::fmt::Display for ControlAuthentication {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct ControlDisconnected;
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for ControlDisconnected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Terminal service disconnected during control authentication")
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn connect_authenticated(
     dir: &Path,
     address: &std::os::unix::net::SocketAddr,
@@ -370,8 +381,35 @@ fn connect_authenticated(
     let mut stream = UnixStream::connect_addr(address)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    control_auth::authenticate(&mut stream, dir).context(ControlAuthentication)?;
+    control_auth::authenticate(&mut stream, dir)
+        .map_err(|error| control_authentication_error(&stream, error))
+        .context(ControlAuthentication)?;
     Ok(stream)
+}
+
+#[cfg(target_os = "linux")]
+fn control_authentication_error(stream: &UnixStream, error: anyhow::Error) -> anyhow::Error {
+    // An exiting service can lose access to its proc descriptor before the
+    // kernel closes its sockets. Retry only after that connected peer has
+    // actually disconnected; a live service's capability denial stays fatal.
+    if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+        )
+    }) {
+        let mut fd = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLRDHUP,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut fd, 1, 100) } > 0
+            && fd.revents & (libc::POLLHUP | libc::POLLRDHUP) != 0
+        {
+            return error.context(ControlDisconnected);
+        }
+    }
+    error
 }
 
 /// Authenticate control and require the current protocol in a private runtime directory.
@@ -424,6 +462,10 @@ pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
                 | Request::Runtimes
                 | Request::Tunnels
         ) && result.as_ref().err().is_some_and(|error| {
+            #[cfg(target_os = "linux")]
+            if error.downcast_ref::<ControlDisconnected>().is_some() {
+                return true;
+            }
             error.to_string() == "Session service is stopping"
                 || error.chain().any(|cause| {
                     cause.downcast_ref::<std::io::Error>().is_some_and(|io| {

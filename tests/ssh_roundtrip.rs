@@ -1870,6 +1870,11 @@ fn actual_bundled_codex_roundtrip(remote: &Remote, root: &std::path::Path) {
     use rode::agent::{Config, Event, Launch, Provider, Session};
     use serde_json::{Value, json};
     use std::sync::Arc;
+    // Direct and ProxyJump cases share the fixture host's runtime cache. A
+    // complete first upload can exceed the cache's bounded lock wait; isolate
+    // these optional real-runtime checks without serializing transport tests.
+    static RUNTIME_CACHE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _cache = RUNTIME_CACHE.lock().unwrap();
     let home = std::env::var("RODE_TEST_CODEX_REMOTE_HOME").expect("Use scripts/test-ssh.sh");
     for isolated in [false, true] {
         let plan = remote

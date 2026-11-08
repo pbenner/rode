@@ -19,6 +19,14 @@ The architecture guide's [operation reference](architecture.md#following-an-oper
 
 Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
 
+`cargo test --lib saved_connection` checks Explorer profile context menus,
+dragging in both directions, Escape cancellation, ordinary clicks and failed
+write acknowledgements without opening windows or connecting to a host.
+`cargo test --lib saved_profile` checks persisted ordering, removal, stale
+deletion/save protection, unknown fields and malformed storage.
+`cargo test --test persistence` includes real concurrent profile edits,
+additions, removals and reordering from separate processes.
+
 Use the [release checklist](release.md) before tagging a version. `mise run check` runs lint and ordinary Rust tests; it does not establish native UI, real-tool, sandbox or package coverage on its own.
 
 The project settings regressions exercise category navigation, retained drafts,
@@ -26,6 +34,13 @@ isolated text-field undo, validation, category-scoped saves/discards and direct 
 layout matrix renders every settings category across compact/detached widths,
 themes and interface scales. The native workbench fixture uses reported control
 geometry for settings navigation and verifies discarded/saved edits and persistence.
+
+Headless form regressions compare painted label and input centres across all
+built-in themes and interface scales, including wrapped labels, numeric inputs,
+the SSH dialog's compact layout and runtime version columns. Theme tests compare
+the actual painted colours of empty hints and identical entered values; changing
+themes must keep hints muted without changing field contents. These checks run
+in `cargo test -p rode --lib` without opening a window.
 
 ## Process launch changes
 
@@ -79,6 +94,11 @@ the static musl helper against the existing 24 MiB deployment limit. Native UI
 checks must use the isolated headless display workflow below.
 
 ## Native SSH validation
+
+Native client regressions stream concurrent uploads and echo traffic through
+small SSH windows, checking complete digests and payloads after repeated
+flow-control pauses. Session-control regressions distinguish a disconnected
+daemon's disappearing capability from a live daemon's authentication denial.
 
 The default transport is embedded russh. `cargo test --test ssh_client` uses an
 in-process Rust server and real login PTYs to check trust confirmation, changed
@@ -171,6 +191,15 @@ Real LLDB regressions report language, desktop/headless transport, requested san
 UI fixtures can opt into `RODE_UI_TEST_STATE` to locate named controls in the current rendered layout, including menus and SSH profile fields. They still click with native X11 input and verify persisted settings, process activity and real file effects; snapshots contain control geometry, availability, final focus, composer emptiness and the last native edit's frame number, without chat or document text. Focus/edit barriers keep dependent actions such as New file → Paste → Save As in separate processed frames on busy runners. The chat draft regression waits for an empty composer after cleanup, copies each draft through the real clipboard before sending, and requires an enabled Send control before pressing Enter. A missed focus or incomplete edit therefore fails before submitting an unintended prompt; exact expected/actual fixture text is retained on failure. Prompt-recall checks wait for an unselected caret at the beginning of the composer and for the accepted turn to finish, then verify each recalled prompt through Copy before editing or navigating again. Headless composer tests deliberately batch arrows and edits into one frame to catch lost input independently of runner speed. On failure, the native agent fixture also retains its backend request log and submitted prompts. Use a separate snapshot path for each process in multi-window tests. Prefer these controls over fixed menu coordinates or counts of Tab presses, which change when forms gain fields or sandbox options. Test log names include the script, for example `02-test-agent-file-only-ui.log`, so the failing check is identifiable in the job summary.
 
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
+
+The history deletion fixture also uses named controls for setup, filtering,
+refresh, confirmation, diagnostics and restore. It checks the saved executable
+before opening History and waits for completed host operations and resized
+layouts. Row actions identify the conversation, so Delete cannot accidentally
+hit Restore after a layout change. Failures retain the UI snapshot, backend RPC
+log and fixture deletion state. Headless history row checks cover compact widths,
+display scaling and protected chats. Native input checks still require Xvfb;
+CI deadlines and one-click activation remain unchanged.
 
 Project fixtures use named controls and completed directory listings for folder selection, confirm complete paths and editor buffers through the real clipboard, and wait for native save acknowledgements after checking file effects. Project switches and SSH reconnects verify the displayed terminal's native session ID, project root, live attachment and input focus before continuing. Resize checks require the new rendered size; refused SSH login checks require an ended terminal before testing read-only diagnostics. They click Copy directly, using its mouse-hover acknowledgement to process pending rejected input, and require the current connection's port in the copied error. Waiting for an unsolicited extra frame can stall an idle, read-only terminal. The fixture retains its final layout snapshot on failure. Its explicit sleeps only poll bounded conditions; CI command deadlines are unchanged and activating input is not retried.
 
@@ -550,6 +579,16 @@ Style regressions use `cargo test --lib navigation`: preset validation/isolation
 The ignored `background_agents_survive_ssh_disconnect_and_keep_their_sandbox` check in `tests/ssh_roundtrip.rs` runs through `scripts/test-ssh.sh`. It covers direct/ProxyJump SSH, normal/actual bwrap operation, work while disconnected, fresh-master reattachment and explicit End. Use `RODE_SSH_TEST_FILTER=background_agents_survive_ssh scripts/test-ssh.sh` for that check alone; build the standalone helper first as described above.
 
 ### Complete Codex runtimes
+
+Installer, runtime-discovery and executable-path fixtures create protected
+directories explicitly, including their ancestors. They must pass under a
+group-writable caller umask without relaxing production verification or changing
+the process-wide umask while Rust tests run concurrently.
+
+Optional full-runtime SSH checks serialize their shared fixture cache's initial
+upload; the remaining transport tests still run concurrently. Missing system
+bubblewrap selects the bundled implementation, so normal-mode UI fixtures must
+simulate an unavailable backend rather than merely remove `bwrap` from `PATH`.
 
 The pinned Codex release needs `codex-code-mode-host` and `codex-exec-server` alongside `codex`. Runtime tests check multi-executable transfers, executable permissions, incomplete/corrupt transfers, distinct cache identities for main-only versus complete deployments, and explicit repair that preserves the original main binary and previous selector on download failure. `python3 scripts/test-packaging.py` exercises the same missing-helper repair through the preparation script.
 

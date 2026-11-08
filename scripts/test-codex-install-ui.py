@@ -120,6 +120,9 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
     )
     environment.pop("HOME", None)
     base = root / "data/rode/codex"
+    # Only the application's preference directory is repairable; the user's
+    # data-directory ancestor must already be protected under any caller umask.
+    (root / "data").mkdir(mode=0o700)
     base.parent.mkdir(parents=True)
     base.parent.chmod(0o775)  # An older preferences directory with a shared umask.
     preferences_marker = base.parent / "unrelated-settings"
