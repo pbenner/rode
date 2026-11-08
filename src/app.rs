@@ -871,6 +871,9 @@ impl EditorApp {
             self.notify("SSH connection ended before the project was opened.", true);
             return;
         }
+        let settings_draft = keep_buffers
+            .then(|| self.settings_draft_for(&response.path, remote))
+            .flatten();
         let encrypted = self
             .vaults
             .take_project(&response.path, connection.as_ref());
@@ -904,6 +907,9 @@ impl EditorApp {
         self.tree_dirty = true;
         self.preparing = false;
         self.load_project_tools(ctx);
+        if let Some(draft) = settings_draft {
+            self.restore_settings_draft(draft);
+        }
         self.status = format!(
             "{} project · {}",
             if remote { "SSH" } else { "Local" },

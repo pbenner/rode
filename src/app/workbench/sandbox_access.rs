@@ -193,8 +193,11 @@ impl Columns {
     }
 
     fn path_width(self, ui: &egui::Ui) -> f32 {
-        (ui.available_width() - self.access - self.action - 2. * ui.spacing().item_spacing.x)
-            .max(1.)
+        let width =
+            ui.available_width() - self.access - self.action - 2. * ui.spacing().item_spacing.x;
+        // Leave one physical pixel for independently rounded cell boundaries at fractional scales.
+        let scale = ui.ctx().pixels_per_point();
+        ((width * scale).floor() - 1.).max(scale) / scale
     }
 }
 

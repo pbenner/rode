@@ -55,7 +55,7 @@ run = "python3 scripts/ci.py time --timeout 600 editor-build -- cargo build --lo
 [tasks."test-ui"]
 description = "Run the workspace UI suite on an isolated X display; requires system UI dependencies"
 depends = ["build"]
-run = "RODE_TEST_BINARY=\"$PWD/target/ci/rode\" RODE_TEST_SESSION_HELPER=\"$PWD/target/ci/rode-sessiond\" LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1100x24' python3 scripts/ci.py run workspace"
+run = "RODE_TEST_BINARY=\"$PWD/target/ci/rode\" RODE_TEST_SESSION_HELPER=\"$PWD/target/ci/rode-sessiond\" python3 scripts/ui_display.py -- python3 scripts/ci.py run workspace"
 
 [tasks.check]
 description = "Run lint and ordinary Rust tests using the shared CI commands"

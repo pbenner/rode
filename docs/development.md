@@ -21,6 +21,12 @@ Large desktop regression suites are adjacent to their implementations: `src/app/
 
 Use the [release checklist](release.md) before tagging a version. `mise run check` runs lint and ordinary Rust tests; it does not establish native UI, real-tool, sandbox or package coverage on its own.
 
+The project settings regressions exercise category navigation, retained drafts,
+isolated text-field undo, validation, category-scoped saves/discards and direct LaTeX/Marp links. The tool-page
+layout matrix renders every settings category across compact/detached widths,
+themes and interface scales. The native workbench fixture uses reported control
+geometry for settings navigation and verifies discarded/saved edits and persistence.
+
 ## Process launch changes
 
 New and changed launchers must follow the [compact process argument contract](architecture.md#compact-process-arguments). Review the complete local or remote process chain, including intermediate shell and sandbox arguments. Keep generated payloads off `argv`; reuse the shared handoff mechanisms and retain the full policy internally. Add regressions for the affected transport, input framing, descriptor/file lifetime and enforcement, including actual process-argument inspection. Document any external-tool constraint that requires an inline payload at the adapter that owns it.
@@ -175,6 +181,19 @@ bash scripts/test-ssh.sh
 This requires `openssh-server`, `ssh-keygen`, and Python 3. The tests use a local login PTY and binary channels to the remote helper, which owns real project PTYs. Raw SSH PTY channels are also checked when the fixture daemon has permission to allocate them. Direct and ProxyJump sessions check real authentication/multiplexing, switching project folders without disconnecting, terminal working directories, quoted Unicode paths, multi-megabyte reads/writes, save conflicts, sandbox file operations, and disconnection.
 
 For native UI checks on Debian/Ubuntu, install `xvfb`, `xauth`, `x11-utils`, `imagemagick`, `libxtst6`, `libxkbcommon-x11-0`, `libegl1`, `libegl-mesa0`, `libglx-mesa0` and `libgl1-mesa-dri`. The scripts use `xwininfo` from `x11-utils` to find and inspect windows, ImageMagick to capture/inspect screenshots, and libXtst to send input. The editor dynamically loads the X11 keyboard library, so installing `libxkbcommon-dev` alone does not provide its X11 runtime. CI explicitly installs the runtime libraries, selects Mesa software rendering and uses a 1600×1100 virtual screen so the fixtures’ 1380×900 windows fit without being clamped by the window system. Set `LIBGL_ALWAYS_SOFTWARE=1`, `__GLX_VENDOR_LIBRARY_NAME=mesa` and `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` when reproducing CI on a host with vendor GPU drivers. Early debugger-window failures print the exit code and the last 16 KiB of the captured startup log directly in the Actions output; the full log remains in the `native-ui-smoke` artifact.
+
+Use `python3 scripts/ui_display.py -- python3 scripts/test-workbench-ui.py` for
+local UI validation. The launcher requires Xvfb, removes inherited X11/Wayland
+desktop routes, creates a headless display and cleans up its own process group.
+`mise run test-ui` uses the same launcher. Use `--screen 3000x2000x24` before `--`
+for the scale fixture. `python3 scripts/test-ui-display.py` checks launch refusal,
+desktop-environment removal and interruption cleanup without opening a window.
+
+Never run automated UI input on the user's desktop or start a visible Xephyr
+window as a fallback. If headless dependencies are unavailable, report that the
+native UI check could not run; do not install tools automatically or substitute a
+visible test session. The direct `xvfb-run` commands below are also headless; unset
+inherited `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` when using them outside CI.
 
 ```sh
 cargo build

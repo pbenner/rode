@@ -153,7 +153,7 @@ fn tool_pages_fit_compact_and_detached_widths() {
                     "long-directory/".repeat(20)
                 )];
                 app.workbench.draft.sandbox.read_write = vec!["~/results".into()];
-                for tab in if panel == Panel::Git {
+                let tabs = if panel == Panel::Git {
                     vec![
                         GitTab::Changes,
                         GitTab::History,
@@ -167,25 +167,62 @@ fn tool_pages_fit_compact_and_detached_widths() {
                     ]
                 } else {
                     vec![GitTab::Changes]
-                } {
+                };
+                let categories = if panel == Panel::Settings {
+                    SettingsSection::ALL.to_vec()
+                } else {
+                    vec![SettingsSection::CodeTools]
+                };
+                for (tab, category) in tabs
+                    .iter()
+                    .flat_map(|tab| categories.iter().map(move |category| (*tab, *category)))
+                {
                     app.workbench.git.git_tab = tab;
+                    app.workbench.settings_section = category;
                     for _ in 0..3 {
-                        let output = ctx.run(egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 700.))),
-                        ..Default::default()
-                    }, |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            let available = ui.available_rect_before_wrap();
-                            let content = ui.scope(|ui| app.panel_content(panel, ui, ctx)).response.rect;
-                            assert!(content.right() <= available.right() + 1.,
-                                "{theme}: {panel:?}/{tab:?} overflows at {width}, scale {scale}: {content:?} vs {available:?}");
-                        });
-                    });
+                        let mut bounds = None;
+                        let output = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 700.),
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    let available = ui.available_rect_before_wrap();
+                                    let content = ui
+                                        .scope(|ui| app.panel_content(panel, ui, ctx))
+                                        .response
+                                        .rect;
+                                    bounds = Some((content, available));
+                                });
+                            },
+                        );
+                        let (content, available) = bounds.unwrap();
+                        assert!(
+                            content.right() <= available.right() + 1.,
+                            "{theme}: {panel:?}/{tab:?}/{category:?} overflows at {width}, scale {scale}: {content:?} vs {available:?}; text: {:?}",
+                            output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text)
+                                        if text.pos.x + text.galley.size().x
+                                            > available.right() - 12. =>
+                                        Some((text.galley.text(), text.pos, text.galley.size())),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                        );
                         layout::tests::assert_button_alignment(
                             &output,
                             app.themes.active().palette,
                             ctx.pixels_per_point(),
-                            &format!("{theme}/{panel:?}/{tab:?} at {width}, scale {scale}"),
+                            &format!(
+                                "{theme}/{panel:?}/{tab:?}/{category:?} at {width}, scale {scale}"
+                            ),
                         );
                     }
                 }
@@ -450,6 +487,9 @@ fn fresh_formatter_result_updates_buffer_and_diagnostics_without_saving_it() {
 fn applying_a_local_project_policy_keeps_unsaved_buffers() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
+    app.load_project_tools(&ctx);
+    app.workbench.draft.latex.program = "unfinished-tool".into();
+    app.workbench.settings_section = SettingsSection::Sandbox;
     app.new_file();
     app.documents[0].text = "keep unsaved work".into();
     let id = app.documents[0].id;
@@ -471,6 +511,10 @@ fn applying_a_local_project_policy_keeps_unsaved_buffers() {
     assert_eq!(app.documents[0].id, id);
     assert_eq!(app.documents[0].text, "keep unsaved work");
     assert!(app.documents[0].dirty());
+    assert_eq!(app.workbench.draft.latex.program, "unfinished-tool");
+    assert_ne!(app.workbench.prefs.latex.program, "unfinished-tool");
+    assert_eq!(app.workbench.settings_section, SettingsSection::Sandbox);
+    assert!(app.settings_draft_for("/another-project", false).is_none());
 }
 #[test]
 fn missing_one_formatter_does_not_disable_other_languages() {
@@ -551,4 +595,189 @@ fn project_settings_flush_immediately_and_restore_per_project_values() {
     assert_eq!(prefs.python, "/project/.venv/bin/python");
     assert!(prefs.sandbox.project_read_only);
     assert_eq!(prefs.sandbox.overrides["~/.cargo"], sandbox::Access::Hidden);
+}
+
+/// Drive the real settings form, including its category selector and scoped actions.
+fn settings_frame(
+    app: &mut EditorApp,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    ctx.run(
+        egui::RawInput {
+            time: Some(ctx.input(|input| input.time) + 0.1),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(760., 700.),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| app.settings_ui(ui, ctx));
+        },
+    )
+}
+
+#[test]
+fn settings_text_undo_stays_with_its_category() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, ctx) = app(root.path());
+    app.workbench.draft.ruff = "/original/ruff".into();
+    app.workbench.draft.marp.theme_css = "slides.css".into();
+    let key = |key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    };
+    click_settings(&mut app, &ctx, "/original/ruff");
+    settings_frame(
+        &mut app,
+        &ctx,
+        vec![key(egui::Key::A), egui::Event::Text("/changed/ruff".into())],
+    );
+    assert_eq!(app.workbench.draft.ruff, "/changed/ruff");
+    click_settings(&mut app, &ctx, "Presentations •");
+    click_settings(&mut app, &ctx, "slides.css");
+    settings_frame(&mut app, &ctx, vec![key(egui::Key::Z)]);
+    assert_eq!(
+        app.workbench.draft.marp.theme_css, "slides.css",
+        "Undo must not copy another category's field into this one"
+    );
+    click_settings(&mut app, &ctx, "Code tools •");
+    click_settings(&mut app, &ctx, "/changed/ruff");
+    settings_frame(&mut app, &ctx, vec![key(egui::Key::Z)]);
+    assert_eq!(
+        app.workbench.draft.ruff, "/original/ruff",
+        "Returning to a category must retain its own undo history"
+    );
+}
+
+fn click_settings(app: &mut EditorApp, ctx: &egui::Context, label: &str) {
+    settings_frame(app, ctx, vec![]);
+    let output = settings_frame(app, ctx, vec![]);
+    let pos = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                Some(text.pos + text.galley.size() / 2.)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "Missing settings control: {label}; visible text: {:?}",
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            )
+        });
+    for pressed in [true, false] {
+        settings_frame(
+            app,
+            ctx,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+    }
+}
+
+#[test]
+fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, ctx) = app(root.path());
+    app.workbench.key = "settings-fixture".into();
+    let saved = serde_json::to_value(&app.workbench.prefs).unwrap();
+    // Other forms may contain incomplete edits. Saving code settings must not
+    // publish them or take an unrelated environment, debugger or tool setting.
+    app.workbench.draft.latex.program.clear();
+    app.workbench.draft.marp.program = "another-marp".into();
+    app.workbench.draft.sandbox.enabled = !app.workbench.prefs.sandbox.enabled;
+    app.workbench.draft.monitor_interval = 25;
+    app.workbench.draft.python = "/unfinished/python".into();
+    app.workbench.draft.slurm_queue = "another-queue".into();
+    click_settings(&mut app, &ctx, "Format supported files on save");
+    assert!(!app.workbench.draft.format_on_save);
+    assert!(app.workbench.prefs.format_on_save);
+    click_settings(&mut app, &ctx, "LaTeX •");
+    assert_eq!(app.workbench.settings_section, SettingsSection::Latex);
+    click_settings(&mut app, &ctx, "Save changes");
+    assert_eq!(
+        serde_json::to_value(&app.workbench.prefs).unwrap(),
+        saved,
+        "An invalid LaTeX draft must not be applied"
+    );
+    click_settings(&mut app, &ctx, "Code tools •");
+    assert!(
+        !app.workbench.draft.format_on_save,
+        "Changing category lost an edit"
+    );
+    click_settings(&mut app, &ctx, "Save changes");
+    let mut expected = saved;
+    expected["format_on_save"] = false.into();
+    assert_eq!(
+        serde_json::to_value(&app.workbench.prefs).unwrap(),
+        expected
+    );
+    assert_eq!(
+        serde_json::to_value(&app.workbench.preferences["settings-fixture"]).unwrap(),
+        expected
+    );
+    assert!(app.workbench.draft.latex.program.is_empty());
+    assert_eq!(app.workbench.draft.monitor_interval, 25);
+    click_settings(&mut app, &ctx, "Monitoring •");
+    click_settings(&mut app, &ctx, "Discard changes");
+    assert_eq!(
+        app.workbench.draft.monitor_interval,
+        app.workbench.prefs.monitor_interval
+    );
+    assert!(
+        app.workbench.draft.latex.program.is_empty(),
+        "Discard must be category-scoped too"
+    );
+    click_settings(&mut app, &ctx, "LaTeX •");
+    app.workbench.draft.latex.program = "xelatex".into();
+    click_settings(&mut app, &ctx, "Save changes");
+    assert_eq!(app.workbench.prefs.latex.program, "xelatex");
+    assert_eq!(app.workbench.draft.marp.program, "another-marp");
+    assert_ne!(app.workbench.draft.sandbox, app.workbench.prefs.sandbox);
+    assert!(
+        !app.preparing,
+        "Saving tool settings must not start a sandbox probe"
+    );
+}
+
+#[test]
+fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, ctx) = app(root.path());
+    app.workbench.surface = Surface::Tools;
+    app.workbench.panel = Some(Panel::Settings);
+    app.workbench.draft.ruff = "/unfinished/ruff".into();
+    for category in [
+        SettingsSection::Latex,
+        SettingsSection::Presentations,
+        SettingsSection::Presentations,
+    ] {
+        app.reveal_settings(category, &ctx);
+        assert_eq!(app.workbench.settings_section, category);
+        assert_eq!(app.workbench.panel, Some(Panel::Settings));
+        assert_eq!(app.workbench.surface, Surface::Tools);
+        assert_eq!(app.workbench.draft.ruff, "/unfinished/ruff");
+    }
 }

@@ -18,6 +18,26 @@ Configuration writes run in the background. New files use owner-only permissions
 
 Malformed, oversized, or unwritable configuration is preserved and a save error is reported. After correcting the file or permissions, edit the setting again to retry retained changes. Preferences are limited to 8 MiB, agent settings to 128 entries / 256 KiB, and SSH profiles to 128 entries / 1 MiB. All concurrently running instances need the updated writer; older builds do not participate in this coordination.
 
+## Project settings
+
+Open **Project: Settings and sandbox access** from the command palette. The tab
+has five categories: **Code tools**, **Sandbox**, **Monitoring**, **LaTeX** and
+**Presentations**. Category navigation and save controls stay visible while the
+selected form scrolls, including in compact or detached tool panes. The host and
+project path identify the scope; these settings are saved per project.
+
+A dot marks categories with unsaved changes. Switching categories keeps their
+drafts. **Save changes** and **Discard changes** affect only the selected category;
+incomplete edits elsewhere are retained. LaTeX and presentation Settings buttons
+open their corresponding category directly.
+
+**Apply sandbox settings** validates the requested policy and probes enforcement
+before activating it. The displayed sandbox status reports the actual current
+mode. Applying restarts the project shell and keeps editor buffers open; it retains
+drafts from other categories without applying them. Applied rules also become the
+defaults for projects without a saved policy. Monitoring has its own refresh interval
+and remains paused while the system monitor is hidden.
+
 ## Editing the same document
 
 Local and SSH file writers coordinate revision checking and atomic replacement using advisory file locks. If two RODE windows save conflicting changes based on the same revision, one succeeds and the other reports a save conflict, preserving its buffer. Simultaneous Save As operations cannot overwrite a file another process just created. Document saves create no permanent per-file lock files in source folders.

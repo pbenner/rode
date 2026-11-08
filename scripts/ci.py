@@ -95,6 +95,7 @@ def remote(group, transport=False):
 # their job's private sshd. Local and remote variants are deliberately separate.
 SUITES = {
     "workspace": [
+        ([sys.executable, "scripts/test-ui-display.py"], {}, 30),
         ([sys.executable, "scripts/test-ui-harness.py"], {}, 30),
         ui("project", RODE_PROJECT_UI_CASE="failure"),
         ([sys.executable, "scripts/test-ui.py"], {}, 180),

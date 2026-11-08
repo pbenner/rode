@@ -58,7 +58,7 @@ See [Programming languages](languages.md) for Go, JS/TS/web, C-family, and shell
 
 Formatting/checking on save and supported-language checks after a 900 ms typing pause are enabled by default, with switches in Project settings. Checks use the current in-memory buffer. Issues appear as colored underlines, gutter marks/tooltips, and clickable entries in **Problems** / **Ctrl+Shift+M**. Live checks cover the active supported buffer up to 512 KiB; manual checks retain a separate 8 MiB tool-input limit. Larger buffers bypass automatic save hooks and use the ordinary revision-checked save directly. File opening/saving has no fixed byte-size ceiling, and failed/skipped tooling still allows saving the submitted source. Formatting results are applied only if the buffer and settings still match the submitted version. If new edits arrive, they remain intact. Missing/failed tools leave the buffer editable and allow the submitted save without formatting; Python syntax errors still produce diagnostics when Ruff can check them.
 
-**Save tool settings** flushes changes to local app preferences immediately. Python issues use Ruff; Go, Prettier-supported formats, and shell files have parser syntax diagnostics. A general LSP client and Rust compiler diagnostics are not implemented.
+**Project settings → Code tools → Save changes** flushes that category to local app preferences immediately. The monitor refresh interval is under **Monitoring**, with its own save action. Python issues use Ruff; Go, Prettier-supported formats, and shell files have parser syntax diagnostics. A general LSP client and Rust compiler diagnostics are not implemented.
 
 ## Host monitor
 
