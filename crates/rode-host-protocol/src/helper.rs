@@ -37,6 +37,7 @@ pub const CAPABILITIES: &[&str] = &[
     "agent_async_questions",
     "agent_partial_answers",
     "bundled_bwrap",
+    "compact_sandbox_arguments",
     "explorer_mutations",
     "large_document_transfer",
 ];

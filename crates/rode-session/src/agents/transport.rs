@@ -93,9 +93,8 @@ impl rode_agent_core::Factory for Factory {
         // A normal-mode plan may still carry an optional environment launcher.
         let mut argv_with_policy = self.spec.plan.controller_prefix(launch.config.network)?;
         argv_with_policy.extend(argv);
-        let mut command = ProcessCommand::new(&argv_with_policy[0]);
+        let mut command = rode_host_core::command::from_argv(&argv_with_policy)?;
         command
-            .args(&argv_with_policy[1..])
             .current_dir(&self.spec.plan.root)
             .env_clear()
             .envs(&self.spec.env)

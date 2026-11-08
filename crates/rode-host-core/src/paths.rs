@@ -79,7 +79,10 @@ mod tests {
 
     #[test]
     fn protected_leaves_cannot_hide_writable_ancestors_or_aliases() {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let shared = root.path().join("shared");
         fs::create_dir(&shared).unwrap();
         fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();

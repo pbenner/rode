@@ -11,6 +11,8 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
+mod arguments;
+pub use arguments::{compact_pty, from_argv};
 /// Quote one argument for a POSIX remote shell, including embedded single quotes.
 pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))

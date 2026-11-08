@@ -19,9 +19,131 @@ The architecture guide's [operation reference](architecture.md#following-an-oper
 
 Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
 
+`cargo test --lib saved_connection` checks Explorer profile context menus,
+dragging in both directions, Escape cancellation, ordinary clicks and failed
+write acknowledgements without opening windows or connecting to a host.
+`cargo test --lib saved_profile` checks persisted ordering, removal, stale
+deletion/save protection, unknown fields and malformed storage.
+`cargo test --test persistence` includes real concurrent profile edits,
+additions, removals and reordering from separate processes.
+
 Use the [release checklist](release.md) before tagging a version. `mise run check` runs lint and ordinary Rust tests; it does not establish native UI, real-tool, sandbox or package coverage on its own.
 
+The project settings regressions exercise category navigation, retained drafts,
+isolated text-field undo, validation, category-scoped saves/discards and direct LaTeX/Marp links. The tool-page
+layout matrix renders every settings category across compact/detached widths,
+themes and interface scales. The native workbench fixture uses reported control
+geometry for settings navigation and verifies discarded/saved edits and persistence.
+
+Headless form regressions compare painted label and input centres across all
+built-in themes and interface scales, including wrapped labels, numeric inputs,
+the SSH dialog's compact layout and runtime version columns. Theme tests compare
+the actual painted colours of empty hints and identical entered values; changing
+themes must keep hints muted without changing field contents. These checks run
+in `cargo test -p rode --lib` without opening a window.
+
+## Process launch changes
+
+New and changed launchers must follow the [compact process argument contract](architecture.md#compact-process-arguments). Review the complete local or remote process chain, including intermediate shell and sandbox arguments. Keep generated payloads off `argv`; reuse the shared handoff mechanisms and retain the full policy internally. Add regressions for the affected transport, input framing, descriptor/file lifetime and enforcement, including actual process-argument inspection. Document any external-tool constraint that requires an inline payload at the adapter that owns it.
+
+## Reverse tunnel validation
+
+`cargo test -p rode-session tunnels` runs a private Rust relay and compute-side
+TCP fixture: explicit host-key trust, changed-key refusal before credentials,
+real byte forwarding, unexpected-channel denial, idempotent starts, relay-port
+conflicts, forced-disconnect recovery, credential attention, nonblocking identity
+validation and scoped shutdown.
+Credential regressions require the resolved identity/agent path, the corrective
+UI field and the original failure in errors, without private-key contents.
+Listener regressions occupy the requested port and refuse forwarding by policy,
+require an honest refusal diagnostic with the exact relay-side check, and verify
+automatic recovery with stale errors cleared. Transport failures must not be
+labelled as listener refusals; diagnostics retain their cause within the existing
+size limit. Duplicate retained listeners identify the owning tunnel and endpoint.
+It needs no installed SSH tools or display server.
+
+`cargo test --test ssh_client tunnel_return_route` checks a real native jump
+connection to an otherwise unreachable compute alias, retaining its original
+known-hosts identity and rejecting a changed compute key before authentication.
+`cargo test --test sessions retained_tunnels` checks that list-only discovery does
+not start a service, tunnel state survives both terminal End and last-view
+cleanup, idle timeout does not kill it, and shutdown requires explicit Stop.
+`cargo test --test sessions local_tunnels` exercises local discovery/start/list/stop
+from an empty directory with no SSH executable on `PATH`, using a private service
+runtime. Headless tunnel UI tests cover welcome-screen access, local host scope,
+copied return-connection details and refusal to fall back from a disconnected SSH
+workspace. Local controls do not depend on project readiness or sandbox settings.
+Endpoint rendering checks show the tunnel listener port and named compute
+destination, without confusing the listener with the relay's SSH login port.
+They include IPv6 and older services without hostname metadata. The service
+fixture checks that new replies report the owning hostname.
+The local-service fixture also checks that a missing helper override names the
+selected executable and `RODE_SESSION_HELPER` while preserving the OS cause.
+`cargo test --lib tunnel` covers saved profile arguments, UI state/layout and
+late results after a workspace change or dialog dismissal. The tunnel-dialog
+layout matrix checks both tabs across compact/short viewports, interface scales
+and themes, with long relay names and retained tunnels. Pointer/keyboard tests
+check draft retention and editing during a pending status response; scroll checks
+keep navigation and Start/Close actions visible. These tests open no native window.
+They also cover long multiline diagnostics and copying request/tunnel errors
+without dispatching host work.
+
+The service now embeds russh and needs Rust 1.89. Rebuild the protocol-19 helper
+alongside the editor; existing daemon generations keep their own jobs. Validate
+the static musl helper against the existing 24 MiB deployment limit. Native UI
+checks must use the isolated headless display workflow below.
+
 ## Native SSH validation
+
+Native client regressions stream concurrent uploads and echo traffic through
+small SSH windows, checking complete digests and payloads after repeated
+flow-control pauses. Session-control regressions distinguish a disconnected
+daemon's disappearing capability from a live daemon's authentication denial.
+
+The default transport is embedded russh. `cargo test --test ssh_client` uses an
+in-process Rust server and real login PTYs to check trust confirmation, changed
+host refusal, password/encrypted-key/MFA input, early command exit, and denial of
+control access from local Landlock/bubblewrap sandboxes. It needs no OpenSSH tools.
+It also checks supported authentication with GSSAPI defaults enabled, preservation
+of disabled methods, and a clear configuration diagnostic for Kerberos-only servers.
+Multi-key servers exercise known-host algorithm preference, RSA SHA-2 signatures
+and rejection of a changed preferred key without accepting another key type.
+
+Launch regressions check private, consumed SSH profile files and streamed bootstrap
+scripts with binary stdin, literal arguments and truncated input. Shared host tests
+exercise compact bubblewrap arguments through ordinary pipes and real PTYs,
+including repeated spawns with independent file offsets. Sandbox, session and agent
+integration tests retain their actual isolation and persistence checks; use
+`RODE_TEST_REQUIRE_SANDBOX=1` when namespace support is required.
+
+`python3 scripts/test-kerberos.py` creates a private MIT Kerberos realm and two
+loopback SSH servers for `tests/ssh_kerberos.rs`. It requires development/test
+installations of `krb5-kdc`, `krb5-admin-server`, `krb5-user` and `openssh-server`;
+it does not install tools or modify the user's SSH/Kerberos files. Tests exercise
+Kerberos-only direct/ProxyJump login with an empty client `PATH`, channel reuse,
+explicit credential delegation, expired/missing tickets with and without key
+fallback, disabled Kerberos, host verification and Kerberos-plus-public-key MFA.
+The fast SSH CI job runs this fixture using its prebuilt test binary.
+The normal SSH unit suite covers absent-library errors and malformed/bounded
+GSSAPI exchanges without needing a KDC. The runtime library is loaded dynamically,
+so neither building RODE nor ordinary key/password SSH requires Kerberos headers
+or libraries. Only Linux MIT Kerberos is covered by the real-realm fixture.
+
+The `rust_client_works_without_client_path_and_preserves_channel_status` test in
+the isolated SSH suite runs a child with an empty `PATH`, exercising direct and
+ProxyJump connections, file revisions, concurrent channels and large stdin.
+The suite also checks the explicit OpenSSH backend, agent and X11 forwarding.
+Agent forwarding checks destination-restricted keys against a real private
+OpenSSH agent: a key restricted to another host must be absent from forwarded
+channels, Git and native terminal listings, on direct and ProxyJump connections.
+
+The private sshd fixture probes remote PTY availability with OpenSSH before testing
+RODE. Unprivileged/container sshd instances may lack login-record permissions;
+set `RODE_TEST_REQUIRE_SSH_PTY=1` to make that limitation fatal. Native session
+PTYs and binary attachment streams remain exercised regardless. The fixture
+uses a private umask so caller defaults cannot create unsafe runtime ancestors.
+`RODE_TEST_SSH_CLIENT` identifies the actual editor executable for relocated
+Cargo test harnesses; it is a test override, not automatic executable discovery.
 
 Build the headless helper independently of desktop dependencies, then test it explicitly:
 
@@ -69,6 +191,15 @@ Real LLDB regressions report language, desktop/headless transport, requested san
 UI fixtures can opt into `RODE_UI_TEST_STATE` to locate named controls in the current rendered layout, including menus and SSH profile fields. They still click with native X11 input and verify persisted settings, process activity and real file effects; snapshots contain control geometry, availability, final focus, composer emptiness and the last native edit's frame number, without chat or document text. Focus/edit barriers keep dependent actions such as New file → Paste → Save As in separate processed frames on busy runners. The chat draft regression waits for an empty composer after cleanup, copies each draft through the real clipboard before sending, and requires an enabled Send control before pressing Enter. A missed focus or incomplete edit therefore fails before submitting an unintended prompt; exact expected/actual fixture text is retained on failure. Prompt-recall checks wait for an unselected caret at the beginning of the composer and for the accepted turn to finish, then verify each recalled prompt through Copy before editing or navigating again. Headless composer tests deliberately batch arrows and edits into one frame to catch lost input independently of runner speed. On failure, the native agent fixture also retains its backend request log and submitted prompts. Use a separate snapshot path for each process in multi-window tests. Prefer these controls over fixed menu coordinates or counts of Tab presses, which change when forms gain fields or sandbox options. Test log names include the script, for example `02-test-agent-file-only-ui.log`, so the failing check is identifiable in the job summary.
 
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
+
+The history deletion fixture also uses named controls for setup, filtering,
+refresh, confirmation, diagnostics and restore. It checks the saved executable
+before opening History and waits for completed host operations and resized
+layouts. Row actions identify the conversation, so Delete cannot accidentally
+hit Restore after a layout change. Failures retain the UI snapshot, backend RPC
+log and fixture deletion state. Headless history row checks cover compact widths,
+display scaling and protected chats. Native input checks still require Xvfb;
+CI deadlines and one-click activation remain unchanged.
 
 Project fixtures use named controls and completed directory listings for folder selection, confirm complete paths and editor buffers through the real clipboard, and wait for native save acknowledgements after checking file effects. Project switches and SSH reconnects verify the displayed terminal's native session ID, project root, live attachment and input focus before continuing. Resize checks require the new rendered size; refused SSH login checks require an ended terminal before testing read-only diagnostics. They click Copy directly, using its mouse-hover acknowledgement to process pending rejected input, and require the current connection's port in the copied error. Waiting for an unsolicited extra frame can stall an idle, read-only terminal. The fixture retains its final layout snapshot on failure. Its explicit sleeps only poll bounded conditions; CI command deadlines are unchanged and activating input is not retried.
 
@@ -123,9 +254,22 @@ cargo xtask build-helper
 bash scripts/test-ssh.sh
 ```
 
-This requires `openssh-server`, `ssh-keygen`, and Python 3. The tests use a local PTY and remote non-TTY project channels because an unprivileged test daemon cannot write system login records for a remote TTY. Production project terminals request a remote TTY. Direct and ProxyJump sessions check real authentication/multiplexing, switching project folders without disconnecting, terminal working directories, quoted Unicode paths, multi-megabyte reads/writes, save conflicts, sandbox file operations, and disconnection.
+This requires `openssh-server`, `ssh-keygen`, and Python 3. The tests use a local login PTY and binary channels to the remote helper, which owns real project PTYs. Raw SSH PTY channels are also checked when the fixture daemon has permission to allocate them. Direct and ProxyJump sessions check real authentication/multiplexing, switching project folders without disconnecting, terminal working directories, quoted Unicode paths, multi-megabyte reads/writes, save conflicts, sandbox file operations, and disconnection.
 
 For native UI checks on Debian/Ubuntu, install `xvfb`, `xauth`, `x11-utils`, `imagemagick`, `libxtst6`, `libxkbcommon-x11-0`, `libegl1`, `libegl-mesa0`, `libglx-mesa0` and `libgl1-mesa-dri`. The scripts use `xwininfo` from `x11-utils` to find and inspect windows, ImageMagick to capture/inspect screenshots, and libXtst to send input. The editor dynamically loads the X11 keyboard library, so installing `libxkbcommon-dev` alone does not provide its X11 runtime. CI explicitly installs the runtime libraries, selects Mesa software rendering and uses a 1600×1100 virtual screen so the fixtures’ 1380×900 windows fit without being clamped by the window system. Set `LIBGL_ALWAYS_SOFTWARE=1`, `__GLX_VENDOR_LIBRARY_NAME=mesa` and `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` when reproducing CI on a host with vendor GPU drivers. Early debugger-window failures print the exit code and the last 16 KiB of the captured startup log directly in the Actions output; the full log remains in the `native-ui-smoke` artifact.
+
+Use `python3 scripts/ui_display.py -- python3 scripts/test-workbench-ui.py` for
+local UI validation. The launcher requires Xvfb, removes inherited X11/Wayland
+desktop routes, creates a headless display and cleans up its own process group.
+`mise run test-ui` uses the same launcher. Use `--screen 3000x2000x24` before `--`
+for the scale fixture. `python3 scripts/test-ui-display.py` checks launch refusal,
+desktop-environment removal and interruption cleanup without opening a window.
+
+Never run automated UI input on the user's desktop or start a visible Xephyr
+window as a fallback. If headless dependencies are unavailable, report that the
+native UI check could not run; do not install tools automatically or substitute a
+visible test session. The direct `xvfb-run` commands below are also headless; unset
+inherited `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` when using them outside CI.
 
 ```sh
 cargo build
@@ -435,6 +579,16 @@ Style regressions use `cargo test --lib navigation`: preset validation/isolation
 The ignored `background_agents_survive_ssh_disconnect_and_keep_their_sandbox` check in `tests/ssh_roundtrip.rs` runs through `scripts/test-ssh.sh`. It covers direct/ProxyJump SSH, normal/actual bwrap operation, work while disconnected, fresh-master reattachment and explicit End. Use `RODE_SSH_TEST_FILTER=background_agents_survive_ssh scripts/test-ssh.sh` for that check alone; build the standalone helper first as described above.
 
 ### Complete Codex runtimes
+
+Installer, runtime-discovery and executable-path fixtures create protected
+directories explicitly, including their ancestors. They must pass under a
+group-writable caller umask without relaxing production verification or changing
+the process-wide umask while Rust tests run concurrently.
+
+Optional full-runtime SSH checks serialize their shared fixture cache's initial
+upload; the remaining transport tests still run concurrently. Missing system
+bubblewrap selects the bundled implementation, so normal-mode UI fixtures must
+simulate an unavailable backend rather than merely remove `bwrap` from `PATH`.
 
 The pinned Codex release needs `codex-code-mode-host` and `codex-exec-server` alongside `codex`. Runtime tests check multi-executable transfers, executable permissions, incomplete/corrupt transfers, distinct cache identities for main-only versus complete deployments, and explicit repair that preserves the original main binary and previous selector on download failure. `python3 scripts/test-packaging.py` exercises the same missing-helper repair through the preparation script.
 

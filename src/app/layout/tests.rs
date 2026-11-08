@@ -1,6 +1,144 @@
 //! Inspect painted control frames so nested rows cannot hide vertical drift.
 use super::*;
 
+#[test]
+fn form_labels_align_with_text_and_numeric_controls_across_themes() {
+    for theme in crate::theme::Theme::builtins() {
+        for scale in [1., 1.25, 1.5] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx, theme.palette);
+            ctx.set_pixels_per_point(scale);
+            let mut value = String::new();
+            let mut number = 22;
+            let mut bounds = Vec::new();
+            let mut output = None;
+            for _ in 0..4 {
+                bounds.clear();
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(650., 500.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            egui::Grid::new("form-alignment")
+                                .num_columns(2)
+                                .show(ui, |ui| {
+                                    for label in ["Identity file", "Memory per node (GB)"] {
+                                        field_label(ui, label, false);
+                                        bounds.push((
+                                            label,
+                                            ui.text_edit_singleline(&mut value).rect,
+                                        ));
+                                        ui.end_row();
+                                    }
+                                    field_label(ui, "SSH port", false);
+                                    bounds.push((
+                                        "SSH port",
+                                        ui.add(egui::DragValue::new(&mut number)).rect,
+                                    ));
+                                    ui.end_row();
+                                });
+                        });
+                    },
+                ));
+            }
+            let output = output.unwrap();
+            for (label, control) in &bounds {
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == *label => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                let label_center = text.pos.y + text.galley.rect.center().y;
+                assert!(
+                    (label_center - control.center().y).abs() <= 1. / scale + 0.1,
+                    "{} at {scale}: {label} centre {label_center}, control {control:?}",
+                    theme.id
+                );
+            }
+        }
+    }
+}
+
+pub(in crate::app) fn text_bounds(output: &egui::FullOutput, label: &str) -> egui::Rect {
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => {
+                Some(text.galley.rect.translate(text.pos.to_vec2()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing text {label:?}"))
+}
+
+#[test]
+fn ssh_form_labels_align_beside_fields_and_stack_above_them_in_narrow_windows() {
+    use crate::app::{EditorApp, Startup};
+    for theme in crate::theme::Theme::builtins() {
+        for width in [430., 700.] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(
+                &cc,
+                Startup {
+                    theme: Some(theme.id.clone()),
+                    ..Default::default()
+                },
+            );
+            app.profiles.clear();
+            app.aliases.clear();
+            app.profile.identity = "entered-identity".into();
+            app.profile.config = "entered-config".into();
+            let mut output = None;
+            for _ in 0..4 {
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 1400.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| app.connect_dialog(ui, ctx));
+                    },
+                ));
+            }
+            let output = output.unwrap();
+            for (label, value) in [
+                ("Identity file", "entered-identity"),
+                ("SSH config file", "entered-config"),
+            ] {
+                let text = text_bounds(&output, label);
+                let control = button_frame(&output, value).0;
+                if width < 460. {
+                    assert!(
+                        text.bottom() <= control.top(),
+                        "{}: {label} must stack above its field",
+                        theme.id
+                    );
+                } else {
+                    assert!(
+                        (text.center().y - control.center().y).abs() <= 1.1,
+                        "{}: {label} {text:?}, field {control:?}",
+                        theme.id
+                    );
+                }
+            }
+            assert_eq!(app.profile.identity, "entered-identity");
+        }
+    }
+}
+
 /// Pair each label with its smallest enclosing painted control and clip bounds.
 pub(in crate::app) fn button_frames(
     output: &egui::FullOutput,

@@ -159,9 +159,9 @@ fn x11_forwarding_reaches_native_terminals_and_survives_view_reattachment() {
             })
             .unwrap();
             let log = root.path().join("login.log");
-            let mut command = Command::new("ssh");
+            let mut command = Command::new(remote.client_program());
             command
-                .args(remote.master_args())
+                .args(remote.master_args().unwrap())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(fs::File::create(&log).unwrap());
@@ -184,7 +184,7 @@ fn x11_forwarding_reaches_native_terminals_and_survives_view_reattachment() {
                 std::thread::sleep(Duration::from_millis(20));
             }
             // Probes and other short-lived work must not capture an X listener.
-            let output = Command::new("ssh")
+            let output = Command::new(remote.client_program())
                 .args(remote.channel_args(false))
                 .arg("printf '%s' \"${DISPLAY:-}\"")
                 .output()

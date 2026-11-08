@@ -515,7 +515,7 @@ fn remote_call(
         data.len() < 96 * 1024,
         "Codex deployment metadata exceeds its limit"
     );
-    let mut command = Command::new("ssh");
+    let mut command = Command::new(remote.client_program());
     command.args(remote.channel_args(false)).arg(format!(
         "exec {} --runtime-cache",
         ssh::quote(&remote.native.client(remote)?.executable)

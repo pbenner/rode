@@ -188,6 +188,13 @@ mod tests {
             ..Default::default()
         };
         app.profiles = vec![profile.clone()];
+        // Replacing an unrelated edited form must also replace its save identity,
+        // or a later Save could rename the wrong profile.
+        app.profile_baseline = Some(Profile {
+            name: "Other profile".into(),
+            host: "other.invalid".into(),
+            ..Default::default()
+        });
         let mut frame = |events| {
             ctx.run(
                 egui::RawInput {
@@ -233,6 +240,10 @@ mod tests {
         );
         assert_eq!(app.documents[0].text, "unsaved local edits");
         assert!(app.workspace.is_none());
+        assert_eq!(
+            app.profile_baseline.as_ref().unwrap().label(),
+            profile.label()
+        );
     }
 
     fn remote_buffer() -> (EditorApp, egui::Context) {

@@ -6,7 +6,8 @@ use super::*;
 const TOKEN_FILE: &str = "control.capability";
 const TOKEN_BYTES: usize = 32;
 
-pub(super) struct Token {
+/// An owner-process capability shared by native local control transports.
+pub struct Token {
     bytes: [u8; TOKEN_BYTES],
     // Keep the anonymous inode alive for this service generation only.
     _file: File,
@@ -36,7 +37,7 @@ fn memory_file_with(mut create: impl FnMut(u32) -> std::io::Result<File>) -> std
 
 impl Token {
     /// Rotate before publishing a listener; the service lock serializes writers.
-    pub(super) fn publish(dir: &Path) -> Result<Self> {
+    pub fn publish(dir: &Path) -> Result<Self> {
         let mut bytes = [0; TOKEN_BYTES];
         File::open("/dev/urandom")?.read_exact(&mut bytes)?;
         let mut file = memory_file().context("Cannot create terminal control capability")?;
@@ -70,7 +71,7 @@ impl Token {
     }
 
     /// Check a fixed-size frame before reading any request or attaching a view.
-    pub(super) fn verify(&self, stream: &mut UnixStream) -> Result<()> {
+    pub fn verify(&self, stream: &mut UnixStream) -> Result<()> {
         let mut size = [0; 4];
         stream.read_exact(&mut size)?;
         ensure!(
@@ -94,7 +95,7 @@ impl Token {
 /// Landlock's ptrace boundary (present since ABI 1) prevents sandboxed clients
 /// from opening the service's proc descriptor, even with a runtime-path grant.
 /// Never put the token in arguments, environment or a named filesystem inode.
-pub(super) fn authenticate(stream: &mut UnixStream, dir: &Path) -> Result<()> {
+pub fn authenticate(stream: &mut UnixStream, dir: &Path) -> Result<()> {
     let reference = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)

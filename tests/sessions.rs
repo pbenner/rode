@@ -699,6 +699,12 @@ fn stale_service_sockets_do_not_hide_sessions_or_prevent_safe_startup() {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        if let Ok(Response::Tunnels(tunnels)) = self.rpc(&Request::Tunnels) {
+            for tunnel in tunnels {
+                let _ = self.rpc(&Request::StopTunnel { id: tunnel.id });
+            }
+        }
+
         for (id, policy) in &self.ids {
             let _ = self.rpc(&Request::End {
                 id: id.clone(),
@@ -1339,4 +1345,153 @@ fn immediate_restart_after_ending_the_last_terminal_is_safe_and_create_is_idempo
             })
             .unwrap();
     }
+}
+
+#[test]
+fn local_tunnels_need_neither_a_project_nor_an_ssh_client() {
+    const CHILD: &str = "RODE_TEST_LOCAL_TUNNEL_CONTROL";
+    if std::env::var_os(CHILD).is_some() {
+        let runtime = PathBuf::from(std::env::var_os("RODE_SESSION_DIR").unwrap());
+        if std::env::var(CHILD).as_deref() == Ok("missing-helper") {
+            let error = sessions::local(&sessions::Operation::Tunnels {
+                request: Box::new(Request::Tunnels),
+            })
+            .unwrap_err();
+            let message = format!("{error:#}");
+            let helper = std::env::var("RODE_SESSION_HELPER").unwrap();
+            assert!(message.contains(&helper), "{message}");
+            assert!(message.contains("RODE_SESSION_HELPER"), "{message}");
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert!(!runtime.join("socket").exists());
+            return;
+        }
+        let control = |request| {
+            sessions::local(&sessions::Operation::Tunnels {
+                request: Box::new(request),
+            })
+            .unwrap()
+            .response
+            .checked()
+            .unwrap()
+        };
+        assert!(matches!(control(Request::Tunnels), Response::Tunnels(list) if list.is_empty()));
+        assert!(
+            !runtime.join("socket").exists(),
+            "Discovery must not start sessiond"
+        );
+        // Reserve a loopback port without accepting SSH. This keeps the service's
+        // native worker in a connection attempt, independently of host credentials.
+        let relay = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let id = rode_session::new_id().unwrap();
+        let spec = rode_session::tunnels::Spec {
+            relay_host: "127.0.0.1".into(),
+            relay_port: relay.local_addr().unwrap().port(),
+            relay_user: "fixture".into(),
+            ..Default::default()
+        };
+        assert!(
+            matches!(control(Request::StartTunnel { id: id.clone(), spec }), Response::Tunnel(info) if info.id == id && !info.hostname.is_empty())
+        );
+        assert!(runtime.join("socket").exists());
+        assert!(
+            matches!(control(Request::Tunnels), Response::Tunnels(list) if list.len() == 1 && list[0].id == id)
+        );
+        control(Request::StopTunnel { id });
+        assert!(matches!(control(Request::Tunnels), Response::Tunnels(list) if list.is_empty()));
+        return;
+    }
+    for mode in ["service", "missing-helper"] {
+        let fixture = Fixture::new();
+        let helper = if mode == "missing-helper" {
+            fixture.root.path().join("missing-session-helper")
+        } else {
+            PathBuf::from(env!("CARGO_BIN_EXE_rode-sessiond"))
+        };
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "local_tunnels_need_neither_a_project_nor_an_ssh_client",
+                "--nocapture",
+            ])
+            .env(CHILD, mode)
+            .env("RODE_SESSION_DIR", &fixture.runtime)
+            .env("RODE_SESSION_HELPER", helper)
+            .env("PATH", "")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .current_dir(fixture.root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn retained_tunnels_keep_sessiond_alive_after_last_terminal_and_stop_explicitly() {
+    let mut fixture = Fixture::new();
+    fixture.standalone = true;
+    let vacant = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = vacant.local_addr().unwrap().port();
+    drop(vacant);
+    let id = rode_session::new_id().unwrap();
+    let spec = rode_session::tunnels::Spec {
+        relay_host: "127.0.0.1".into(),
+        relay_port: port,
+        relay_user: "fixture".into(),
+        ..Default::default()
+    };
+    assert!(
+        matches!(fixture.rpc(&Request::Tunnels).unwrap(), Response::Tunnels(list) if list.is_empty())
+    );
+    assert!(
+        !fixture.runtime.join("socket").exists(),
+        "Listing must not launch a service"
+    );
+    fixture
+        .rpc(&Request::StartTunnel {
+            id: id.clone(),
+            spec,
+        })
+        .unwrap();
+    // Both explicit End and last-view cleanup must retain a tunnel-only daemon.
+    let info = fixture.create(&fixture.plan());
+    fixture
+        .rpc(&Request::End {
+            id: info.id.clone(),
+            policy: info.policy.clone(),
+        })
+        .unwrap();
+    let info = fixture.create_with_persistence(&fixture.plan(), false);
+    let terminal = fixture.attach(&info);
+    wait(|| {
+        fixture
+            .direct_list()
+            .iter()
+            .any(|session| session.id == info.id && session.clients == 1)
+    });
+    drop(terminal);
+    wait(|| fixture.direct_list().is_empty());
+    assert!(
+        fixture
+            .rpc(&Request::Shutdown)
+            .unwrap_err()
+            .to_string()
+            .contains("tunnels")
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    assert!(
+        matches!(fixture.rpc(&Request::Tunnels).unwrap(), Response::Tunnels(list) if list.len() == 1 && list[0].id == id)
+    );
+    let service = std::fs::read_to_string(fixture.runtime.join("service.log")).unwrap_or_default();
+    assert!(!service.contains("panicked"));
+    fixture.rpc(&Request::StopTunnel { id }).unwrap();
+    fixture.rpc(&Request::Shutdown).unwrap();
 }

@@ -59,6 +59,37 @@ fn authentication_disconnects_preserve_the_transport_error_for_restart_retries()
 }
 
 #[test]
+fn capability_errors_allow_restart_retries_only_after_the_connected_peer_disconnects() {
+    for disconnected in [false, true] {
+        for errno in [libc::EACCES, libc::EPERM, libc::ENOENT] {
+            let (client, server) = UnixStream::pair().unwrap();
+            let _server = (!disconnected).then_some(server);
+            let error = control_authentication_error(
+                &client,
+                std::io::Error::from_raw_os_error(errno).into(),
+            )
+            .context(ControlAuthentication);
+            assert!(
+                !service_offline(&error),
+                "Authentication never proves service absence"
+            );
+            assert_eq!(
+                error.downcast_ref::<ControlDisconnected>().is_some(),
+                disconnected
+            );
+            assert!(
+                error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.raw_os_error() == Some(errno))
+                }),
+                "The original capability error must remain available"
+            );
+        }
+    }
+}
+
+#[test]
 fn control_never_uses_unauthenticated_endpoints() {
     for protected in [false, true] {
         let dir = tempfile::tempdir().unwrap();

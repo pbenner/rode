@@ -971,6 +971,8 @@ impl EditorApp {
                     rode_session::Response::Ok => {}
                     rode_session::Response::Error(error) => self.notify(error, true),
                     rode_session::Response::Protocol(_)
+                    | rode_session::Response::Tunnels(_)
+                    | rode_session::Response::Tunnel(_)
                     | rode_session::Response::Agents(_)
                     | rode_session::Response::Agent(_)
                     | rode_session::Response::Runtimes(_)

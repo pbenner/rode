@@ -5,7 +5,9 @@ import ctypes
 import json
 import os
 import shutil
+import signal
 import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -297,6 +299,13 @@ def run(remote=False, fallback=False):
         if fallback:
             tools = base / "no-bwrap"
             tools.mkdir()
+            # Missing system bwrap now selects the bundled implementation. Make
+            # an installed backend fail to exercise visible normal-mode fallback.
+            backend = tools / "bwrap"
+            backend.write_text(
+                "#!/bin/sh\nprintf '%s\\n' 'Sandbox unavailable in project UI fixture' >&2\nexit 1\n"
+            )
+            backend.chmod(0o700)
             environment["PATH"] = str(tools)
         if remote:
             # An unprivileged fixture sshd cannot create/login a remote TTY.
@@ -436,21 +445,16 @@ def run(remote=False, fallback=False):
                     # unexpected transport loss rather than a palette action.
                     sockets = list(Path(tempfile.gettempdir()).glob(f"rode-{process.pid}-*/ssh"))
                     assert len(sockets) == 1, sockets
-                    subprocess.run(
-                        [
-                            "ssh",
-                            "-F",
-                            os.environ["RODE_TEST_SSH_CONFIG"],
-                            "-S",
-                            str(sockets[0]),
-                            "-O",
-                            "exit",
-                            "rode-test",
-                        ],
-                        check=True,
-                        capture_output=True,
-                        timeout=10,
-                    )
+                    with socket.socket(socket.AF_UNIX) as control:
+                        control.connect(str(sockets[0]))
+                        owner, uid, _ = struct.unpack(
+                            "3i", control.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                        )
+                        assert uid == os.getuid()
+                        arguments = Path(f"/proc/{owner}/cmdline").read_bytes().split(b"\0")
+                        assert b"--ssh-client-master" in arguments, arguments
+                        assert str(sockets[0]).encode() in arguments, arguments
+                        os.kill(owner, signal.SIGTERM)
                     ui.disconnected()
                     screenshot(window, "ssh-lost-local-mode.png")
                     ui.open_project(local)
@@ -558,7 +562,7 @@ def failed_connection():
                     assert "[SSH" not in ui.title(), ui.title()
                     close_window(window, process)
                     print(
-                        "SSH failure: retained read-only OpenSSH error, Copy and local opening passed."
+                        "SSH failure: retained read-only client error, Copy and local opening passed."
                     )
                 except Exception:
                     if ui is not None:

@@ -26,6 +26,7 @@ impl EditorApp {
                     if ui.add(IconButton::new(Icon::Folder, "Open local folder…")).clicked() { self.open_local_folder_dialog(); ui.close(); }
                     if ui.add(IconButton::new(Icon::Folder, "Open encrypted project…")).clicked() { self.encrypted_dialog(); ui.close(); }
                     if ui.add(IconButton::new(Icon::Remote, "Connect via SSH…")).clicked() { self.set_dialog(Dialog::Connect); ui.close(); }
+                    if ui.add(IconButton::new(Icon::Remote, "SSH tunnels…")).clicked() { self.set_dialog(Dialog::Tunnels); ui.close(); }
                     ui.separator();
                     if ui.add(IconButton::new(Icon::Save, "Save").shortcut(self.editing_hint("Ctrl+S"))).clicked() { self.save_active(ctx, false); ui.close(); }
                     if ui.add(IconButton::new(Icon::SaveAs, "Save as…").shortcut(self.editing_hint("Ctrl+Shift+S"))).clicked() { self.save_active(ctx, true); ui.close(); }
@@ -39,7 +40,7 @@ impl EditorApp {
                     if ui.add(IconButton::new(Icon::Exit, "Quit")).clicked() { self.guarded(Action::Quit, ctx); ui.close(); }
                 });
                 self.navigation_menu(&file_menu.response);
-                ui.menu_button("View", |ui| {
+                let view_menu = ui.menu_button("View", |ui| {
                     icons::submenu(ui, Icon::Palette, "Color theme", |ui| {
                         self.theme_menu(ui, ctx);
                     });
@@ -64,6 +65,7 @@ impl EditorApp {
                     if ui.checkbox(&mut self.show_hidden, "Show hidden files").changed() { self.tree_dirty = true; }
                     self.font_save_pending |= ui.add(egui::Slider::new(&mut self.font_size, 10.0..=26.0).text("Editor font size")).changed();
                 });
+                ui_probe::button(ui, "menu-view", &view_menu.response);
                 ui.menu_button("Code", |ui| {
                     if ui.add(IconButton::new(Icon::Format, "Format document").shortcut("Shift+Alt+F")).clicked() { self.format_active(true,false,ctx); ui.close(); }
                     if ui.add(IconButton::new(Icon::Check, "Check document")).clicked() { self.format_active(false,false,ctx); ui.close(); }
@@ -80,11 +82,13 @@ impl EditorApp {
                 ui.add_space(12.0);
                 let label = self.workspace.as_ref().map(|w| format!("{}  /  {}", if w.remote.is_some() { "SSH" } else { "LOCAL" }, ssh::display_name(&w.root))).unwrap_or_else(|| "Your next workspace starts here".into());
                 let roomy = ctx.content_rect().width() >= 1180.;
-                let workspace_width = (ui.available_width()-if roomy {250.} else {150.}).clamp(90.,360.);
+                let workspace_width = (ui.available_width()-if roomy {250.} else {230.}).clamp(90.,360.);
                 if ui.add_sized([workspace_width,28.],egui::Button::new(RichText::new(&label).color(palette.muted)).truncate()).on_hover_text(format!("{label}\nOpen command palette · Ctrl+Shift+P")).clicked() { self.set_dialog(Dialog::Commands); }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.add(IconButton::new(Icon::Remote, "Connect SSH").color(palette.accent)).clicked() { self.set_dialog(Dialog::Connect); }
-                    if roomy { ui.label(palette.tag("NATIVE / RUST")); }
+                    let tunnels = ui.button("Tunnels").on_hover_text("Manage SSH tunnels on the current host, or this computer when no SSH workspace is selected.");
+                    ui_probe::button(ui, "open-tunnels", &tunnels);
+                    if tunnels.clicked() { self.set_dialog(Dialog::Tunnels); }
                 });
             });
         });

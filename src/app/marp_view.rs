@@ -199,7 +199,7 @@ impl EditorApp {
             }
         }
         if settings {
-            self.toggle_panel(Panel::Settings, ctx);
+            self.reveal_settings(workbench::SettingsSection::Presentations, ctx);
         }
         if let Some(format) = export {
             self.marp_export(id, format);

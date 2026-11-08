@@ -117,7 +117,7 @@ impl Client {
             remote.connected(),
             "SSH is disconnected; reconnect to start the native host channel"
         );
-        let mut probe = Command::new("ssh");
+        let mut probe = Command::new(remote.client_program());
         probe
             .args(remote.channel_args(false))
             .arg("uname -s; uname -m");
@@ -137,7 +137,7 @@ impl Client {
             !remote.native.closed.load(Ordering::Acquire),
             "SSH disconnected during native helper deployment"
         );
-        let mut command = Command::new("ssh");
+        let mut command = Command::new(remote.client_program());
         command
             // Native terminal creation captures this gateway's environment.
             // Keep its forwarded display alive for the connection, rather than

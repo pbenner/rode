@@ -49,6 +49,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/notebook/`, `src/notebook.rs`, `crates/rode-host-core/src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` and `crates/rode-host-core/src/` modules | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
+| `crates/rode-session/src/tunnels.rs`, `src/app/tunnels.rs`, `src/ssh.rs` | Daemon-owned reverse SSH forwarding, reconnect/trust state, explicit host controls and return profiles preserving compute identity |
 | `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
 | `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
@@ -84,9 +85,9 @@ The Rust/egui application keeps the editor independent of an embedded browser ap
 
 One UI-thread owner avoids concurrent mutation of source buffers. Cancellation alone cannot revoke a result already queued, so generation/source checks remain necessary even for cancellable jobs. Stable tab/cell IDs preserve ownership across reordering, while positional indices are presentation state. See [worker results](#worker-results-and-version-checks).
 
-### OpenSSH and remote service peers
+### SSH clients and remote service peers
 
-System OpenSSH preserves the user's aliases, keys, jump hosts, agents and authentication workflow. A separate authentication master lets independent file/tool/project-shell channels reuse the same connection. Multiplex-only slave arguments prevent a lost socket from starting an unexpected fresh login; disconnect is handled as an explicit state transition with recoverable buffers.
+The default embedded russh client owns a connection process with interactive authentication in a real PTY. Common OpenSSH configuration, keys, agents and native jump-host channels are supported; an explicitly selected OpenSSH backend preserves advanced configuration compatibility. File/tool/project-shell subprocesses attach to the existing connection through bounded local frames. Linux control endpoints reuse the sealed process capability and reject foreign mount namespaces. Neither backend starts a fresh login when a channel loses its master; disconnect preserves recoverable buffers. Native client implementation and compatibility limits live in `src/ssh/native/` and [remote connections](remote.md#client-compatibility).
 
 Native SSH deploys a small verified helper and reuses the same Rust services as local execution. Its distribution and protocol checks replace the general interpreter prerequisite. Persistent sessions have a separate process owner because their jobs must survive a gateway or editor exit. Rationale lives in `src/ssh.rs` and `crates/rode-session/src/lib.rs`; [remote setup](remote.md) records the prerequisites.
 
@@ -158,9 +159,9 @@ Normal unmount must succeed after jobs/other references stop. Lazy unmount could
 
 Paths are interpreted on the host captured for an operation. For an SSH workspace, `localhost` in agent settings also means the remote host. Avoid using a desktop filesystem lookup to resolve a remote source or executable.
 
-The SSH master owns interactive authentication and its private ControlMaster socket. Slave channels use that socket with fresh-login fallback disabled. Losing a connection invalidates its workspace; retained documents become unbound recovery buffers. Only an explicit same-host/project reconnect restores their bindings. Local Save As creates a separate copy.
+The SSH master owns interactive authentication and its private control socket. Rust channels use authenticated bounded IPC; the optional OpenSSH backend uses ControlMaster. Neither can fall back to a new login. Losing a connection invalidates its workspace; retained documents become unbound recovery buffers. Only an explicit same-host/project reconnect restores their bindings. Local Save As creates a separate copy.
 
-Native terminal attachments can receive shell diagnostics before the first binary frame because OpenSSH's stderr shares the view's PTY. `src/terminal/framing.rs` publishes complete diagnostic lines while waiting, with a total prelude limit of 64 KiB, and then switches to strict frame decoding. Startup failure text remains visible when no frame arrives. This tolerance applies to terminal attachments only: the native host RPC channel still requires its exact handshake and silent stdout.
+Native terminal attachments can receive shell diagnostics before the first binary frame because the SSH client's stderr shares the view's PTY. `src/terminal/framing.rs` publishes complete diagnostic lines while waiting, with a total prelude limit of 64 KiB, and then switches to strict frame decoding. Startup failure text remains visible when no frame arrives. This tolerance applies to terminal attachments only: the native host RPC channel still requires its exact handshake and silent stdout.
 
 Sandbox options express requested access; `Plan::active` records whether the complete host probe succeeded. Active plans prefix project file/tool/agent/debugger/kernel execution. A failed active operation stays failed. Project-folder discovery intentionally reads the selected host so another project can be chosen; ordinary file/hex/Save As browsing uses the current project plan. Monitoring intentionally samples read-only host counters outside the project sandbox. Encrypted-mount management is a separate host-filesystem operation before a decrypted project can be prepared.
 
@@ -211,6 +212,48 @@ Runtime attachments use explicit preparing, connecting, attached, offline and en
 Confirmed runtime terminations use a bounded worker separate from read-only discovery. Requests capture their original host and policy, survive project-view resets and drain even when the browser drops. Normal application exit waits for their results; a failed termination cancels that exit and remains visible across discovery refreshes. This costs a separate queue but prevents a slow listing from silently discarding an approved mutation.
 
 Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Hidden monitors stop scheduling samples; hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
+
+### Daemon-owned reverse SSH tunnels
+
+`crates/rode-session/src/tunnels.rs` owns bounded native SSH reverse forwards;
+`src/app/tunnels.rs` manages them over the existing authenticated host-admin path.
+Local projects and the welcome/file-only views use the matching local session
+service directly, without requiring a project or initial SSH connection. SSH
+workspaces retain their remote host and reject requests while disconnected;
+they never fall back locally. Workers capture their host before dispatch and
+workspace generation changes discard stale replies. Discovery does not start
+the service; only an explicit tunnel start can do so.
+The compute node already runs sshd. Each outbound connection requests a fixed
+loopback relay listener and accepts only forwarding channels naming that exact
+address/port, then connects to a fixed compute loopback SSH port. There is no
+public session-service endpoint or general forwarding proxy.
+
+Workers retain explicit compute-host credentials and a pinned relay public key,
+not desktop attachments. Network failures retry with capped exponential delay;
+unknown/changed host keys and credential failures require an explicit action.
+Stop cancels the worker and its streams. Retained tunnels participate in idle,
+last-terminal and shutdown checks, and creation shares the existing service-stop
+lock. State is memory-only and bounded to eight tunnels and 32 channels each.
+
+Return profiles retain the original compute alias, authentication and host-key
+identity while overriding only the final transport destination through the
+relay. Locally started tunnels instead provide connection details for a profile
+on another computer, where credentials and compute host trust are chosen explicitly.
+Normal compute SSH verification, host operations and sandbox preparation
+remain in force. Specifications use bounded existing control frames; neither
+JSON settings nor credentials enter argv. See [setup and limits](remote.md#compute-node-return-tunnels).
+
+### Compact process arguments
+
+RODE-owned launchers must keep OS-visible command lines short and useful for process inspection. This applies to local and remote execution, intermediate shells, sandbox wrappers, helpers, agents, tools and terminals. Increasing a profile, policy, script or document payload must not increase the launch command line by embedding that payload in `argv`.
+
+- Keep the executable, operation, ordinary target arguments and short identifiers, paths or integrity digests in `argv`. Do not put generated script bodies, serialized profiles/requests, document contents, credentials or full sandbox mount lists there. An ordinary user-supplied command retains its intended arguments; do not truncate or rewrite it to meet this rule.
+- Carry payloads through existing framed stdin, authenticated private sockets or explicitly passed file descriptors. Use an owner-only file when those transports conflict with interactive stdin or PTY descriptor handling. Do not introduce a network listener merely to shorten arguments. Base64 encoding, moving a large payload into an environment variable or changing the displayed process name is not a substitute for a payload transport.
+- Preserve protocol bounds, deadlines and binary framing. A script prelude must not consume the following upload or interactive input. Validate file ownership/type/mode and bind sensitive launch data to the intended snapshot, such as with a digest supplied separately from the file. Clean up only the owning operation's files and descriptors, including on failed startup or cancellation.
+- Compact arguments at the launch boundary. Keep the complete captured policy for enforcement, session fingerprints and mount translation. Preserve authentication, host verification, sandbox grants and process ownership; transport failure must not trigger an unsandboxed retry. Descriptor handoffs must handle PTY descriptor closure and concurrent spawns without leaking descriptors to unrelated children.
+- Prefer the shared launch helpers over another shell wrapper. Current implementations are `crates/rode-host-core/src/command/arguments.rs` for bubblewrap argument files, `src/ssh.rs` / `src/ssh/native.rs` for the private profile handoff, and `src/host/native/helper.rs` for streamed bootstrap scripts. A third-party tool that requires inline data needs a documented, bounded exception at its adapter; it does not establish a default for other launchers.
+
+For new or changed launch paths, inspect the actual process arguments, including intermediate processes on the execution host. Regressions should establish that payloads are absent from `argv`, literal arguments and binary/interactive stdin survive, and cleanup and the original access policy still hold. Cover the affected pipe, PTY and SSH paths. See [launch validation](development.md#process-launch-changes).
 
 ## Protocols and feature adapters
 
@@ -266,12 +309,12 @@ For a design choice, record the motivating constraint, the selected approach and
 
 ## Native host architecture
 
-OpenSSH owns authentication, host verification and multiplexed channels. `rode-sessiond` owns native host commands independently of the persistent session service. There is one Rust host implementation and no alternative interpreter transport.
+The selected SSH client owns authentication, host verification and multiplexed channels. `rode-sessiond` owns native host commands independently of the persistent session service. There is one Rust host implementation and no alternative interpreter transport.
 
 ### Process and dependency boundaries
 
 ```text
-Desktop worker -> OpenSSH master -> connection-owned host-rpc gateway
+Desktop worker -> SSH connection process -> connection-owned host-rpc gateway
                                        |                   |
                           captured project context    narrow administration
                                        |                   |
@@ -315,10 +358,10 @@ Maintain `rode_host_protocol::helper::API` for incompatible changes to helper CL
 - The bounded `framing::read/write` entry points retain a 64 MiB control-envelope limit. The authenticated host RPC channel uses `read_document/write_document` with the same wire format, 64 KiB physical frames, streaming JSON serialization/deserialization and no whole-file byte ceiling. The `large_document_transfer` helper capability prevents reuse of an older capped helper. Tool/attachment/decoded-raster contracts retain their independent limits; document snapshots are accounted outside the raster pixel budget. Version 1 still uses JSON/base64 file payloads rather than a separate binary payload protocol.
 - The desktop allows four pending calls; the gateway has four workers and four queued requests. Replies carry request IDs and may arrive out of order. A worker handles one operation, then exits.
 - RPC writes have a 45-second deadline and responses a 160-second deadline. Gateway input EOF cancels owned transient commands. Process/build streams keep their existing narrower operation limits and cancellation paths.
-- Terminal and long-lived process streams use separate channels on the same master. They retain their own bounded queues and cannot be blocked behind a bulk RPC response. Host OpenSSH channel limits still apply.
+- Terminal and long-lived process streams use separate channels on the same master. They retain their own bounded queues and cannot be blocked behind a bulk RPC response. Host SSH server channel limits still apply.
 - Lost acknowledgements are uncertain outcomes. RODE does not replay a save, Git mutation, deployment or session creation after channel loss. Revision checks and explicit reconnect/reattach provide recovery; there is no exactly-once guarantee across gateway restarts.
 
-The implementation uses existing threads and bounded channels, with no new async runtime. Physical transport buffers and pending-call counts remain bounded. Document fields and editor snapshots are loaded into RAM, so their sizes and concurrent copies determine peak memory use; document messages have no whole-file byte ceiling.
+Host services use threads and bounded channels. The desktop SSH client uses Tokio in its separate connection/channel processes. Explicit daemon-owned reverse tunnels each use a current-thread Tokio worker in the session service; no tunnel runtime starts during ordinary service discovery. Physical transport buffers and pending-call counts remain bounded. Document fields and editor snapshots are loaded into RAM, so their sizes and concurrent copies determine peak memory use; document messages have no whole-file byte ceiling.
 
 A text save passes one submitted snapshot between its worker request and acknowledgement instead of retaining a duplicate in each. The editable document stays independent so typing during I/O remains unsaved. Native RPC envelopes borrow their file payload during synchronous serialization; they do not clone the whole document to submit an operation.
 

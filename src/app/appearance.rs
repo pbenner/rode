@@ -57,10 +57,17 @@ impl EditorApp {
                     ),
                     (Icon::ChevronRight, "Larger (5%)", 0.05, self.ui_scale < 2.0),
                 ] {
-                    if ui
-                        .add_enabled(enabled, IconButton::new(icon, label))
-                        .clicked()
-                    {
+                    let response = ui.add_enabled(enabled, IconButton::new(icon, label));
+                    ui_probe::button(
+                        ui,
+                        if step < 0. {
+                            "interface-smaller"
+                        } else {
+                            "interface-larger"
+                        },
+                        &response,
+                    );
+                    if response.clicked() {
                         self.set_ui_scale(self.ui_scale + step, ctx);
                         ui.close();
                     }
@@ -75,7 +82,9 @@ impl EditorApp {
                             } else {
                                 format!("{preset}%")
                             };
-                            if ui.selectable_label(percent == preset, label).clicked() {
+                            let response = ui.selectable_label(percent == preset, label);
+                            ui_probe::button(ui, &format!("interface-scale-{preset}"), &response);
+                            if response.clicked() {
                                 self.set_ui_scale(f32::from(preset) / 100., ctx);
                                 ui.close();
                             }

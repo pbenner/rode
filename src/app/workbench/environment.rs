@@ -216,7 +216,7 @@ impl EditorApp {
                 }
                 for (program, label) in environment::TOOLS {
                     layout::field_label(ui, label, compact);
-                    ui.add(
+                    let field = ui.add(
                         egui::TextEdit::singleline(
                             state.draft.runtimes.entry((*program).into()).or_default(),
                         )
@@ -226,6 +226,7 @@ impl EditorApp {
                         .char_limit(4096)
                         .hint_text(format!("auto ({program}) or /path/to/{program}")),
                     );
+                    ui_probe::button(ui, &format!("environment-runtime-{program}"), &field);
                     if compact {
                         ui.end_row();
                     }
@@ -304,16 +305,18 @@ impl EditorApp {
             ui.small(
             "One NAME=value per line. Values are literal and saved in local project preferences.",
         );
-            ui.add(
+            let variables = ui.add(
                 egui::TextEdit::multiline(&mut state.variables)
                     .desired_rows(4)
                     .desired_width(f32::INFINITY)
                     .char_limit(65536)
                     .hint_text("APP_MODE=development\nDATA_DIR=/scratch/data"),
             );
+            ui_probe::button(ui, "environment-variables", &variables);
             let unapplied = state.unapplied(&self.workbench.prefs.environment);
             let apply = ui.horizontal_wrapped(|ui| {
-                let apply = ui.button("Apply environment").clicked();
+                let apply = ui.button("Apply environment");
+                ui_probe::button(ui, "environment-apply", &apply);
                 let status = ui.label(RichText::new(if unapplied {
                     "Unapplied environment changes"
                 } else {
@@ -321,7 +324,7 @@ impl EditorApp {
                 }).small().color(if unapplied { palette.accent } else { palette.muted }))
                     .on_hover_text("Runtime versions describe the applied environment. New terminals and tasks receive applied settings; existing sessions keep their captured environment.");
                 ui_probe::button(ui, if unapplied { "environment-unapplied" } else { "environment-applied" }, &status);
-                apply
+                apply.clicked()
             }).inner;
             if apply {
                 match state.settings() {
@@ -396,13 +399,12 @@ impl EditorApp {
                 );
             }
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        language_tools && language.is_some_and(|l| l.run.is_some()),
-                        egui::Button::new("Run current file / project"),
-                    )
-                    .clicked()
-                {
+                let run = ui.add_enabled(
+                    language_tools && language.is_some_and(|l| l.run.is_some()),
+                    egui::Button::new("Run current file / project"),
+                );
+                ui_probe::button(ui, "task-run-current", &run);
+                if run.clicked() {
                     self.run_active(false, ctx);
                 }
                 if ui
@@ -474,6 +476,67 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::layout::tests::{button_frame, text_bounds};
+
+    #[test]
+    fn environment_runtime_names_and_versions_align_with_their_override_fields() {
+        use crate::app::{EditorApp, Startup};
+        for theme in crate::theme::Theme::builtins() {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(
+                &cc,
+                Startup {
+                    theme: Some(theme.id.clone()),
+                    ..Default::default()
+                },
+            );
+            for (program, _) in crate::environment::TOOLS {
+                app.workbench
+                    .prefs
+                    .environment
+                    .runtimes
+                    .insert((*program).into(), format!("/fixture/{program}"));
+            }
+            let mut output = None;
+            for _ in 0..4 {
+                output = Some(ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000., 1600.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| app.environment_ui(ui, ctx));
+                    },
+                ));
+            }
+            let output = output.unwrap();
+            let versions: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Not checked" => {
+                        Some(text.pos.y + text.galley.rect.center().y)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(versions.len(), crate::environment::TOOLS.len());
+            for ((program, label), version) in crate::environment::TOOLS.iter().zip(versions) {
+                let control = button_frame(&output, &format!("/fixture/{program}")).0;
+                for centre in [text_bounds(&output, label).center().y, version] {
+                    assert!(
+                        (centre - control.center().y).abs() <= 1.1,
+                        "{}: {label} centre {centre}, field {control:?}",
+                        theme.id
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn environment_status_compares_effective_values_and_keeps_invalid_edits_unapplied() {

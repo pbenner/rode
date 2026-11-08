@@ -168,13 +168,12 @@ impl EditorApp {
             "Live chats on this host · attach with their original project and sandbox",
             palette,
             |ui| {
-                if ui
-                    .add_enabled(
-                        self.agents.running.pending.is_none(),
-                        egui::Button::new("Refresh"),
-                    )
-                    .clicked()
-                {
+                let refresh = ui.add_enabled(
+                    self.agents.running.pending.is_none(),
+                    egui::Button::new("Refresh"),
+                );
+                super::super::ui_probe::button(ui, "agent-running-refresh", &refresh);
+                if refresh.clicked() {
                     self.refresh_background_agents(None, ctx);
                 }
                 if self.agents.running.pending.is_some() {

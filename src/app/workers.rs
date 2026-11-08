@@ -466,6 +466,33 @@ impl EditorApp {
                         Err(error) => self.notify(error, true),
                     }
                 }
+                Event::ProfilesChanged { result, removed } => {
+                    if let Some(worker) = self.profile_writer.take() {
+                        let _ = worker.join();
+                    }
+                    self.profile_saving = false;
+                    match result {
+                        Ok(profiles) => {
+                            self.profiles = profiles;
+                            if removed.as_ref().is_some_and(|label| {
+                                self.profile_baseline
+                                    .as_ref()
+                                    .is_some_and(|p| p.label() == *label)
+                            }) {
+                                self.profile_baseline = None;
+                            }
+                            self.notify(
+                                if removed.is_some() {
+                                    "Saved connection removed."
+                                } else {
+                                    "Saved connection order updated."
+                                },
+                                false,
+                            );
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                }
                 Event::Latex {
                     generation,
                     token,

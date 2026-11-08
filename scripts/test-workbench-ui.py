@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real native Git/Ruff/venv/monitor/settings checks on an isolated X display."""
 
+import ctypes
 import json
 import os
 import re
@@ -13,7 +14,22 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/workbench-ui"
 )
-from ui_harness import ARTIFACTS, BINARY, click, close_window, focus_window, key, screenshot, text
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    click,
+    click_button,
+    close_window,
+    display,
+    focus_window,
+    key,
+    screenshot,
+    text,
+    wait_for_ui_state,
+    x11,
+)
+
+x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
 def wait_for(check, message, timeout=10):
@@ -58,8 +74,12 @@ def run(remote=False):
         git("config", "user.email", "rode@example.invalid")
         git("add", ".")
         git("commit", "-m", "Initial project")
+        state_path = base / "ui-state.json"
         environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data-home")
+            os.environ,
+            XDG_CONFIG_HOME=str(base / "config"),
+            XDG_DATA_HOME=str(base / "data-home"),
+            RODE_UI_TEST_STATE=str(state_path),
         )
         if remote:
             tools = base / "ssh-fixture"
@@ -179,8 +199,41 @@ def run(remote=False):
                 )
                 command("Project: Settings and sandbox access")
                 screenshot(window, label + "-settings.png")
-                tool_click(373, 310)  # Disable format-on-save in the Code tools card.
-                tool_click(430, 474)  # Save tool settings.
+                log_path = ARTIFACTS / (label + ".log")
+
+                def settings_click(name):
+                    click_button(window, process, log_path, state_path, name)
+
+                settings_click("settings-format-on-save")
+                # Categories retain an edit until explicitly saved or discarded.
+                for category in ("LaTeX", "Presentations", "Monitoring", "Sandbox", "Code tools"):
+                    settings_click("settings-category-" + category)
+                    screenshot(
+                        window, label + "-settings-" + category.replace(" ", "-").lower() + ".png"
+                    )
+                # Navigation/actions remain reachable at the compact native window size.
+                x11.XResizeWindow(display, window, 850, 560)
+                x11.XFlush(display)
+                for category in ("Presentations", "Sandbox", "Code tools"):
+                    settings_click("settings-category-" + category)
+                    screenshot(
+                        window,
+                        label + "-settings-compact-" + category.replace(" ", "-").lower() + ".png",
+                    )
+                settings_click("settings-discard")
+                wait_for_ui_state(
+                    process,
+                    log_path,
+                    state_path,
+                    lambda state: any(
+                        b["name"] == "settings-save" and not b["enabled"] for b in state["buttons"]
+                    ),
+                    "Discard did not clear the pending code-tool edit",
+                )
+                settings_click("settings-format-on-save")
+                settings_click("settings-save")
+                x11.XResizeWindow(display, window, 1380, 900)
+                x11.XFlush(display)
                 preferences = base / "data-home/rode/app.ron"
                 wait_for(
                     preferences.exists, "Project settings were not saved while the app was open"

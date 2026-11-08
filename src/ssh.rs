@@ -1,4 +1,4 @@
-//! OpenSSH configuration, one-window ControlMaster ownership and bounded channels.
+//! Configurable Rust/OpenSSH clients, connection ownership and bounded channels.
 //!
 //! The interactive master alone handles authentication and host verification.
 //! File/tool channels reuse its private socket and cannot initiate a replacement
@@ -7,8 +7,8 @@
 //!
 //! # Design decisions
 //!
-//! System OpenSSH remains the connection authority so host aliases, keys, jump
-//! hosts, agents and interactive authentication use the user's existing setup.
+//! The embedded russh client is the default; OpenSSH remains an explicit option
+//! for configurations requiring its complete compatibility surface.
 //! A separate master lets file/tool channels share that authenticated identity
 //! without tying it to the lifetime of a project shell or collecting credentials
 //! in the editor. The native backend deploys a verified headless helper sharing
@@ -28,13 +28,52 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[cfg(unix)]
+mod native;
+
+/// SSH client implementation. Native connections do not execute a system SSH client.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    /// Embedded Rust SSH client, sharing one authenticated connection.
+    #[default]
+    Russh,
+    /// Explicit compatibility mode using the installed OpenSSH client.
+    #[serde(rename = "openssh", alias = "open_ssh")]
+    OpenSsh,
+}
+
+/// Dispatch internal Rust SSH subprocesses before desktop initialization.
+pub fn client_cli(args: &[String]) -> Result<i32> {
+    #[cfg(unix)]
+    {
+        native::cli(args)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = args;
+        bail!("RODE SSH clients currently require Unix")
+    }
+}
+
 static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(0);
+
+/// Alternate network route to a compute host, retaining its original SSH identity.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TunnelRoute {
+    /// Loopback port on the last ProxyJump host.
+    pub port: u16,
+    /// Original known-hosts token, including a nonstandard SSH port if applicable.
+    pub host_key_alias: String,
+}
 
 /// User-managed OpenSSH settings, without passwords, private-key contents or cached
 /// credentials.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Profile {
+    /// Client transport; omitted fields in older profiles select Rust.
+    pub backend: Backend,
     /// Optional friendly profile name.
     pub name: String,
     /// OpenSSH host alias or destination host.
@@ -45,14 +84,16 @@ pub struct Profile {
     pub port: String,
     /// Optional identity-file path on the desktop.
     pub identity: String,
-    /// Optional ProxyJump specification interpreted by OpenSSH.
+    /// Optional comma-separated ProxyJump chain.
     pub jump: String,
+    /// Optional daemon-owned reverse tunnel reached through the configured jump host.
+    pub tunnel: Option<Box<TunnelRoute>>,
     /// Optional alternative SSH config file on the desktop.
     pub config: String,
     /// Optional preinstalled helper on the remote host; empty enables discovery/deployment.
     pub remote_helper: String,
-    /// Request X11 forwarding when the desktop has a display. OpenSSH still owns
-    /// authentication, trust/timeout policy and server capability negotiation.
+    /// Request X11 forwarding when the desktop has a display, using configured
+    /// trust/timeout policy and server capability negotiation.
     pub x11_forwarding: bool,
     /// Initial project directory on the remote host.
     pub root: String,
@@ -63,12 +104,14 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            backend: Backend::default(),
             name: String::new(),
             host: String::new(),
             user: String::new(),
             port: String::new(),
             identity: String::new(),
             jump: String::new(),
+            tunnel: None,
             config: String::new(),
             remote_helper: String::new(),
             x11_forwarding: true,
@@ -82,6 +125,21 @@ impl Profile {
     /// Validate input bounds and SSH option values before constructing a command.
     pub fn validate(&self) -> Result<()> {
         self.sandbox.validate()?;
+        if let Some(route) = &self.tunnel {
+            anyhow::ensure!(
+                route.port > 0 && !self.jump.is_empty() && self.jump != "none",
+                "A tunnel route requires a relay jump host and a nonzero port"
+            );
+            anyhow::ensure!(
+                !route.host_key_alias.is_empty()
+                    && route.host_key_alias.len() <= 1024
+                    && !route
+                        .host_key_alias
+                        .chars()
+                        .any(|c| c.is_whitespace() || c.is_control()),
+                "Invalid compute host key alias"
+            );
+        }
         if self.host.trim().is_empty() {
             bail!("Enter an SSH alias or hostname.");
         }
@@ -149,7 +207,20 @@ impl Profile {
                 files::expand_home(&self.config).to_string_lossy().into(),
             ]);
         }
+        if let Some(route) = &self.tunnel {
+            args.extend([
+                "-o".into(),
+                "HostName=127.0.0.1".into(),
+                "-o".into(),
+                format!("HostKeyAlias={}", route.host_key_alias),
+                "-p".into(),
+                route.port.to_string(),
+            ]);
+        }
         for (flag, value) in [("-l", &self.user), ("-p", &self.port), ("-J", &self.jump)] {
+            if flag == "-p" && self.tunnel.is_some() {
+                continue;
+            }
             if !value.is_empty() {
                 args.extend([flag.into(), value.clone()]);
             }
@@ -162,9 +233,28 @@ impl Profile {
         }
         args
     }
+
+    /// Construct a return route without changing the compute host's authentication settings.
+    /// Reads SSH configuration; call on a worker, not the UI thread.
+    #[cfg(unix)]
+    pub fn through_tunnel(&self, jump: String, port: u16) -> Result<Self> {
+        let alias = match &self.tunnel {
+            Some(route) => route.host_key_alias.clone(),
+            None => native::host_token(self)?,
+        };
+        let mut profile = self.clone();
+        profile.jump = jump;
+        profile.tunnel = Some(Box::new(TunnelRoute {
+            port,
+            host_key_alias: alias,
+        }));
+        profile.name = format!("{} via tunnel", self.label());
+        profile.validate()?;
+        Ok(profile)
+    }
 }
 
-/// One window's authenticated connection identity and private ControlMaster socket. Clones
+/// One window's authenticated connection identity and private control socket. Clones
 /// share that identity; the owning workspace controls cleanup.
 #[derive(Clone)]
 pub struct Remote {
@@ -181,12 +271,46 @@ pub fn quote(value: &str) -> String {
 }
 
 impl Remote {
+    /// Executable for connection and channel subprocesses, without PATH lookup in Rust mode.
+    pub fn client_program(&self) -> PathBuf {
+        if self.profile.backend == Backend::OpenSsh {
+            return "ssh".into();
+        }
+        if let Some(executable) = std::env::var_os("RODE_TEST_SSH_CLIENT") {
+            return executable.into();
+        }
+        let executable =
+            rode_session::current_executable().unwrap_or_else(|_| PathBuf::from("/proc/self/exe"));
+        // Cargo test harnesses cannot dispatch internal CLI flags. Cargo builds the
+        // actual desktop alongside integration tests; never search PATH for it.
+        if let Some(directory) = executable.parent()
+            && directory.file_name().is_some_and(|name| name == "deps")
+            && executable
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.rsplit_once('-'))
+                .is_some_and(|(_, hash)| {
+                    hash.len() == 16 && hash.bytes().all(|c| c.is_ascii_hexdigit())
+                })
+            && let Some(parent) = directory.parent()
+        {
+            return parent.join("rode");
+        }
+        executable
+    }
+
+    /// Start a noninteractive channel on this connection, never a new login.
+    pub fn command(&self) -> Command {
+        let mut command = Command::new(self.client_program());
+        command.args(self.channel_args(false));
+        command
+    }
     /// Allocate a private connection runtime after validating the profile; authentication
     /// starts separately.
     pub fn new(profile: Profile) -> Result<Self> {
         profile.validate()?;
         #[cfg(not(unix))]
-        bail!("Remote workspaces currently require Unix OpenSSH ControlMaster (Linux or macOS).");
+        bail!("Remote workspaces currently require Unix; Linux is the validated platform.");
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
@@ -208,8 +332,30 @@ impl Remote {
         }
     }
 
-    /// Arguments for the interactive authentication master, retaining normal host-key checks.
-    pub fn master_args(&self) -> Vec<String> {
+    /// Prepare private launch data and arguments for the interactive authentication master.
+    pub fn master_args(&self) -> Result<Vec<String>> {
+        if self.profile.backend == Backend::Russh {
+            use sha2::{Digest, Sha256};
+            use std::io::Write;
+            let directory = self
+                .socket
+                .parent()
+                .context("Missing SSH runtime directory")?;
+            let bytes = serde_json::to_vec(&self.profile)?;
+            anyhow::ensure!(bytes.len() <= 128 * 1024, "SSH profile exceeds limit");
+            // The login PTY must remain available for authentication. Hand over
+            // its configuration in the existing private runtime directory instead.
+            let mut file = tempfile::NamedTempFile::new_in(directory)?;
+            file.write_all(&bytes)?;
+            file.persist(directory.join("profile.json"))?;
+            return Ok(vec![
+                "--ssh-client-master".into(),
+                self.socket.to_string_lossy().into(),
+                // Bind the handoff to this snapshot even if a same-UID sandbox
+                // was explicitly granted write access to the runtime directory.
+                format!("{:x}", Sha256::digest(&bytes)),
+            ]);
+        }
         let mut args = self.profile.options();
         args.push(self.x11_flag().into());
         args.extend([
@@ -222,11 +368,15 @@ impl Remote {
             "--".into(),
             self.profile.host.clone(),
         ]);
-        args
+        Ok(args)
     }
 
-    /// Ask OpenSSH whether this private master is alive; this is a blocking control operation.
+    /// Ask the selected client whether its master is alive; this is a blocking control operation.
     pub fn connected(&self) -> bool {
+        #[cfg(unix)]
+        if self.profile.backend == Backend::Russh {
+            return native::connected(&self.socket);
+        }
         self.socket.exists()
             && Command::new("ssh")
                 .args([
@@ -276,6 +426,14 @@ impl Remote {
     }
 
     fn channel_args_with_x11(&self, tty: bool, x11: bool) -> Vec<String> {
+        if self.profile.backend == Backend::Russh {
+            return vec![
+                "--ssh-client-channel".into(),
+                self.socket.to_string_lossy().into(),
+                if tty { "pty" } else { "pipe" }.into(),
+                if x11 { "x11" } else { "none" }.into(),
+            ];
+        }
         vec![
             "-F".into(),
             "/dev/null".into(),
@@ -350,8 +508,7 @@ impl Remote {
             self.connected(),
             "SSH is disconnected; reconnect to run an extension."
         );
-        let mut command = Command::new("ssh");
-        command.args(self.channel_args(false));
+        let mut command = self.command();
         let prefix = plan
             .map(|p| {
                 Ok::<_, anyhow::Error>(
@@ -372,8 +529,13 @@ impl Remote {
     /// Close only this connection's master and remove its private socket directory.
     pub fn cleanup(&self) {
         self.native.close();
+        #[cfg(unix)]
+        if self.profile.backend == Backend::Russh {
+            native::stop(&self.socket);
+        }
         let _ = std::fs::remove_file(&self.socket);
         if let Some(parent) = self.socket.parent() {
+            let _ = std::fs::remove_file(parent.join("profile.json"));
             let _ = std::fs::remove_dir(parent);
         }
     }
@@ -388,8 +550,7 @@ impl Remote {
             self.connected(),
             "SSH is disconnected; reconnect to build LaTeX."
         );
-        let mut command = Command::new("ssh");
-        command.args(self.channel_args(false));
+        let mut command = self.command();
         let prefix = plan
             .execution_prefix("")?
             .iter()
@@ -412,8 +573,7 @@ impl Remote {
             self.connected(),
             "SSH is disconnected; reconnect to render Marp slides."
         );
-        let mut command = Command::new("ssh");
-        command.args(self.channel_args(false));
+        let mut command = self.command();
         let prefix = plan
             .map(|p| p.execution_prefix(""))
             .transpose()?
@@ -503,6 +663,110 @@ pub fn save_profile_at(
     previous: Option<&Profile>,
 ) -> Result<Vec<Profile>> {
     profile.validate()?;
+    update_profiles_at(path, |entries, profiles| {
+        let label = profile.label();
+        let original = previous.map_or_else(|| label.clone(), Profile::label);
+        anyhow::ensure!(
+            profiles.iter().filter(|p| p.label() == original).count() <= 1,
+            "Several saved connections have the label {original:?}; give them distinct names in connections.json before editing them."
+        );
+        let index = profiles.iter().position(|p| p.label() == original);
+        anyhow::ensure!(
+            previous.is_none() || index.is_some() || label != original,
+            "Saved connection {original:?} was removed or renamed in another window. Choose a new name to save a new connection, or reopen Connect SSH to reload existing profiles."
+        );
+        anyhow::ensure!(
+            label == original || !profiles.iter().any(|p| p.label() == label),
+            "A saved connection named {label:?} already exists. Choose a different name."
+        );
+        let before = previous
+            .map(serde_json::to_value)
+            .transpose()?
+            .unwrap_or(serde_json::to_value(Profile::default())?);
+        let changes = crate::persistence::changes(&before, &serde_json::to_value(profile)?);
+        if let Some(index) = index {
+            crate::persistence::apply(&mut entries[index], &changes);
+        } else {
+            entries.push(serde_json::to_value(profile)?);
+        }
+        Ok(true)
+    })
+}
+
+/// A targeted saved-list edit, applied to the latest file rather than a stale list snapshot.
+#[derive(Clone)]
+pub enum ProfileListEdit {
+    /// Remove this profile only if its known settings still match the displayed version.
+    Remove(Box<Profile>),
+    /// Move one existing profile relative to another, preserving all profile contents.
+    Move {
+        /// Label of the profile to move.
+        label: String,
+        /// Label of the row used as the insertion anchor.
+        relative_to: String,
+        /// Insert after the anchor when true, before it otherwise.
+        after: bool,
+    },
+}
+
+/// Remove or reorder a saved connection under the shared profile lock.
+pub fn edit_profiles(edit: &ProfileListEdit) -> Result<Vec<Profile>> {
+    edit_profiles_at(&config_path(), edit)
+}
+
+/// Apply a list edit at an explicit path, preserving concurrent edits and unknown fields.
+pub fn edit_profiles_at(path: &Path, edit: &ProfileListEdit) -> Result<Vec<Profile>> {
+    update_profiles_at(path, |entries, profiles| {
+        let index = |label: &str| -> Result<usize> {
+            let mut matches = profiles
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.label() == label);
+            let (index, _) = matches.next().with_context(|| format!(
+                "Saved connection {label:?} was removed or renamed in another window. Reopen Connect SSH to refresh the list."
+            ))?;
+            anyhow::ensure!(
+                matches.next().is_none(),
+                "Several saved connections have the label {label:?}; give them distinct names before managing them."
+            );
+            Ok(index)
+        };
+        match edit {
+            ProfileListEdit::Remove(profile) => {
+                let label = profile.label();
+                let index = index(&label)?;
+                anyhow::ensure!(
+                    serde_json::to_value(&profiles[index])? == serde_json::to_value(profile)?,
+                    "Saved connection {label:?} changed in another window. Reopen Connect SSH to review it before removing it."
+                );
+                entries.remove(index);
+            }
+            ProfileListEdit::Move {
+                label,
+                relative_to,
+                after,
+            } => {
+                let from = index(label)?;
+                let anchor = index(relative_to)?;
+                if from == anchor {
+                    return Ok(false);
+                }
+                let to = anchor - usize::from(from < anchor) + usize::from(*after);
+                if from == to {
+                    return Ok(false);
+                }
+                let entry = entries.remove(from);
+                entries.insert(to, entry);
+            }
+        }
+        Ok(true)
+    })
+}
+
+fn update_profiles_at(
+    path: &Path,
+    update: impl FnOnce(&mut Vec<serde_json::Value>, &[Profile]) -> Result<bool>,
+) -> Result<Vec<Profile>> {
     let path = path.canonicalize().unwrap_or_else(|_| path.into());
     crate::persistence::transaction(&path, |existed| {
         let mut raw: serde_json::Value = crate::persistence::read(&path, 1024 * 1024)?
@@ -512,19 +776,15 @@ pub fn save_profile_at(
             .unwrap_or(serde_json::json!([]));
         let profiles: Vec<Profile> = serde_json::from_value(raw.clone())
             .context("Invalid connection profiles; existing file was preserved")?;
-        let label = profile.label();
-        let before = previous
-            .map(serde_json::to_value)
-            .transpose()?
-            .unwrap_or(serde_json::to_value(Profile::default())?);
-        let changes = crate::persistence::changes(&before, &serde_json::to_value(profile)?);
+        anyhow::ensure!(
+            profiles.len() <= 128,
+            "At most 128 connection profiles are supported."
+        );
         let entries = raw
             .as_array_mut()
             .context("Invalid connection profile list")?;
-        if let Some(index) = profiles.iter().position(|p| p.label() == label) {
-            crate::persistence::apply(&mut entries[index], &changes);
-        } else {
-            entries.push(serde_json::to_value(profile)?);
+        if !update(entries, &profiles)? {
+            return Ok(profiles);
         }
         anyhow::ensure!(
             entries.len() <= 128,
@@ -550,13 +810,69 @@ pub fn display_name(path: &str) -> &str {
 }
 
 #[cfg(test)]
+mod profile_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tunnel_profiles_roundtrip_and_keep_openssh_identity_separate_from_destination() {
+        let profile = Profile {
+            host: "compute".into(),
+            port: "2222".into(),
+            user: "worker".into(),
+            identity: "/keys/compute".into(),
+            jump: "relay".into(),
+            tunnel: Some(Box::new(TunnelRoute {
+                port: 22022,
+                host_key_alias: "[compute.example]:2222".into(),
+            })),
+            ..Default::default()
+        };
+        profile.validate().unwrap();
+        let saved: Profile =
+            serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+        assert_eq!(saved.tunnel, profile.tunnel);
+        let args = saved.options();
+        assert!(args.iter().any(|s| s == "HostName=127.0.0.1"));
+        assert!(
+            args.iter()
+                .any(|s| s == "HostKeyAlias=[compute.example]:2222")
+        );
+        assert_eq!(args.iter().filter(|s| *s == "-p").count(), 1);
+        assert!(args.windows(2).any(|s| s == ["-p", "22022"]));
+        assert!(args.windows(2).any(|s| s == ["-i", "/keys/compute"]));
+        assert_eq!(saved.endpoint(), "worker@compute");
+        assert!(
+            Profile {
+                jump: String::new(),
+                ..profile
+            }
+            .validate()
+            .is_err()
+        );
+    }
+    #[test]
+    fn old_profiles_default_to_rust_and_explicit_openssh_survives_serialization() {
+        let profile: Profile = serde_json::from_str(r#"{"host":"cluster"}"#).unwrap();
+        assert_eq!(profile.backend, Backend::Russh);
+        let profile = Profile {
+            backend: Backend::OpenSsh,
+            ..profile
+        };
+        let value = serde_json::to_value(&profile).unwrap();
+        assert_eq!(value["backend"], "openssh");
+        assert_eq!(
+            serde_json::from_value::<Profile>(value).unwrap().backend,
+            Backend::OpenSsh
+        );
+    }
     #[test]
     fn display_channels_keep_multiplex_only_policy_and_profile_preference() {
         for enabled in [false, true] {
             let profile = Profile {
                 host: "cluster".into(),
+                backend: Backend::OpenSsh,
                 x11_forwarding: enabled,
                 ..Default::default()
             };
@@ -565,7 +881,7 @@ mod tests {
             assert_eq!(saved.x11_forwarding, enabled);
             let remote = Remote::new(saved).unwrap();
             let flag = if enabled { "-X" } else { "-x" };
-            assert!(remote.master_args().iter().any(|arg| arg == flag));
+            assert!(remote.master_args().unwrap().iter().any(|arg| arg == flag));
             for tty in [false, true] {
                 let args = remote.display_channel_args(tty);
                 assert!(args.iter().any(|arg| arg == flag));

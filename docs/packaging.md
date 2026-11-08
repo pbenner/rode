@@ -23,7 +23,7 @@ This produces downloadable workflow artifacts. Installing packages or publishing
 
 ## Build
 
-Install Rust 1.88+ with rustup and the native [build prerequisites](getting-started.md). Debian packaging additionally uses `dpkg-dev`, binutils, and Python 3. Desktop validation is provided by `desktop-file-utils`:
+Install Rust 1.89+ with rustup and the native [build prerequisites](getting-started.md). Debian packaging additionally uses `dpkg-dev`, binutils, and Python 3. Desktop validation is provided by `desktop-file-utils`:
 
 ```sh
 sudo apt install build-essential pkg-config musl-tools dpkg-dev binutils python3 \
@@ -73,7 +73,7 @@ Only these explicit assets are packaged. Local development guides, project files
 
 The separate `rode-codex` package installs native Codex under `/usr/lib/rode/codex/VERSION/ARCH/`, with its manifest and complete upstream notices. A protected `/usr/lib/rode/codex/manifest.json` selects that package's pinned version without an editor rebuild. Its documentation and assembled `CODEX-NOTICES.gz` live under `/usr/share/doc/rode-codex/`. It owns no editor, launcher, terminal helper or settings files, and has no dependency on `rode`. `rode --codex` forwards CLI commands such as `login` and `--version` when a runtime is available.
 
-Linked-library version requirements come from [`dpkg-shlibdeps`](https://manpages.debian.org/trixie/dpkg-dev/dpkg-shlibdeps.1.en.html). X11, Wayland, keyboard and OpenGL libraries loaded dynamically are declared separately. OpenSSH, Git and Poppler are recommended packages; bubblewrap, Python/venv and process-monitor tools are suggested. Individual project toolchains, agents, model servers and Ruff/uv remain user-managed.
+Linked-library version requirements come from [`dpkg-shlibdeps`](https://manpages.debian.org/trixie/dpkg-dev/dpkg-shlibdeps.1.en.html). X11, Wayland, keyboard and OpenGL libraries loaded dynamically are declared separately. Git and Poppler are recommended packages. OpenSSH, Kerberos runtime/client tools, bubblewrap, Python/venv and process-monitor tools are suggested. The Rust SSH backend loads GSSAPI only for enabled Kerberos authentication; neither the editor nor ordinary SSH requires it at startup. Kerberos realm configuration and tickets remain user-managed, as do individual project toolchains, agents, model servers and Ruff/uv.
 
 Build on the oldest Debian/Ubuntu release you intend to support. Building on a newer system can require newer libc/library versions; the package metadata records those requirements. A `.deb` extension alone does not make a binary compatible with every Debian-derived distribution. The SSH helper is static and does not impose the desktop's glibc requirement on the remote host.
 
@@ -110,3 +110,13 @@ The override replaces only automatic ELF dependency scanning; the declared displ
 ## Validation
 
 `scripts/test-deb.py` inspects metadata, architecture, payload allowlists, ownership/modes, checksums, launcher syntax, notices, the extracted editor CLI, and a real shell started by the extracted native helper. It verifies that the core contains no Codex files and works without a runtime. Add `--gui` under `xvfb-run` to exercise the extracted desktop application too. Use `--codex-package PATH` to additionally inspect the optional component, overlay it and check verified discovery, version and app-server support. Everything runs in temporary directories; no system package is installed or removed. The **Package Debian** workflow runs this validation before uploading release-tag or manually requested packages.
+
+## Reverse SSH tunnel support
+
+The headless session helper includes the russh client for explicitly started
+[compute-node return tunnels](remote.md#compute-node-return-tunnels). Both editor
+and helper require Rust 1.89; no system SSH client or GSSAPI library is needed for
+that key/agent-authenticated outbound connection. The static musl helper retains
+its existing deployment size/ABI checks. Session protocol 19 must match the
+editor; rebuild both packages together. Existing daemon generations and their
+jobs are not replaced or migrated during installation.

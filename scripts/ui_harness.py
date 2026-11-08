@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Native UI smoke test. Run on an isolated X display of at least 1380x900,
-e.g. xvfb-run -a -s "-screen 0 1600x1100x24".
+"""Native UI smoke test. Run on a headless X display of at least 1380x900,
+e.g. python3 scripts/ui_display.py -- python3 scripts/test-ui.py.
+
+Never use the user's desktop or a visible Xephyr fallback for automated input.
 
 Requires Linux, libX11, libXtst, `xwininfo` (x11-utils), and ImageMagick's `import`.
 Uses only Python's standard library. Keyboard events and screenshots target this test's window.

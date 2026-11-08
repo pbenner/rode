@@ -51,8 +51,10 @@ mod notebook_view;
 mod pdf_view;
 mod project_dialog;
 mod sandbox_presets;
+mod saved_connections;
 mod sessions;
 mod terminal_colors;
+mod tunnels;
 mod ui_probe;
 mod vaults;
 mod workbench;
@@ -303,6 +305,10 @@ enum Event {
         submitted: Box<Profile>,
         form: u64,
     },
+    ProfilesChanged {
+        result: Result<Vec<Profile>, String>,
+        removed: Option<String>,
+    },
     Tool {
         generation: u64,
         job: Box<ToolJob>,
@@ -355,6 +361,7 @@ enum Dialog {
     Save(u64),
     Commands,
     Sessions,
+    Tunnels,
     Slurm,
     AgentSessions,
     TerminalExit,
@@ -401,6 +408,7 @@ pub struct EditorApp {
     opening: HashSet<String>,
     terminal: Option<Terminal>,
     sessions: sessions::Sessions,
+    tunnels: tunnels::Tunnels,
     ssh_master: Option<Terminal>,
     preparing: bool,
     project_token: u64,
@@ -433,6 +441,7 @@ pub struct EditorApp {
     profiles_loading: Option<mpsc::Receiver<Result<Vec<Profile>, String>>>,
     profile_baseline: Option<Profile>,
     profile_form: u64,
+    profile_name_focus: bool,
     profile_saving: bool,
     profile_writer: Option<std::thread::JoinHandle<()>>,
     aliases: Vec<String>,
@@ -545,6 +554,7 @@ impl EditorApp {
             opening: HashSet::new(),
             terminal: None,
             sessions: Default::default(),
+            tunnels: Default::default(),
             ssh_master: None,
             preparing: false,
             project_token: 0,
@@ -580,6 +590,7 @@ impl EditorApp {
             profiles_loading: None,
             profile_baseline: None,
             profile_form: 0,
+            profile_name_focus: false,
             profile_saving: false,
             profile_writer: None,
             aliases: ssh::aliases(),
@@ -872,6 +883,9 @@ impl EditorApp {
             self.notify("SSH connection ended before the project was opened.", true);
             return;
         }
+        let settings_draft = keep_buffers
+            .then(|| self.settings_draft_for(&response.path, remote))
+            .flatten();
         let encrypted = self
             .vaults
             .take_project(&response.path, connection.as_ref());
@@ -883,6 +897,14 @@ impl EditorApp {
         let connection = connection.map(|mut r| {
             r.profile.root = response.path.clone();
             r.profile.sandbox = options.clone();
+            if self.profile.label() != r.profile.label() {
+                self.profile_baseline = self
+                    .profiles
+                    .iter()
+                    .find(|saved| saved.label() == r.profile.label())
+                    .cloned();
+                self.profile_form += 1;
+            }
             self.profile = r.profile.clone();
             r
         });
@@ -905,6 +927,9 @@ impl EditorApp {
         self.tree_dirty = true;
         self.preparing = false;
         self.load_project_tools(ctx);
+        if let Some(draft) = settings_draft {
+            self.restore_settings_draft(draft);
+        }
         self.status = format!(
             "{} project · {}",
             if remote { "SSH" } else { "Local" },
@@ -1225,7 +1250,7 @@ impl EditorApp {
         if self.dialog == Dialog::Encrypted && dialog != Dialog::Encrypted && !self.vaults.locking {
             self.cancel_encrypted_dialog();
         }
-        if dialog == Dialog::Connect && self.profiles_loading.is_none() {
+        if dialog == Dialog::Connect && self.profiles_loading.is_none() && !self.profile_saving {
             let (tx, rx) = mpsc::channel();
             self.profiles_loading = Some(rx);
             let vault_work = self.vaults.work();
@@ -1242,6 +1267,7 @@ impl EditorApp {
         self.dialog_events.clear();
         self.dialog_viewport = self.ui_viewport;
         self.dialog_focus = true;
+        self.profile_name_focus = false;
         self.dialog_input = match self.dialog {
             Dialog::Folder => {
                 self.folder_token += 1;
@@ -2055,6 +2081,7 @@ impl eframe::App for EditorApp {
         self.marp_tick();
         self.workbench_tick(ctx);
         self.session_tick(ctx);
+        self.tunnel_tick(ctx);
         self.handle_close_request(ctx);
         self.replay_style_input(ctx);
         self.navigation_shortcuts(ctx);

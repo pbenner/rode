@@ -5,7 +5,7 @@ use crate::{project, sandbox::Plan};
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, process::Command, sync::atomic::AtomicBool, time::Duration};
+use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,9 +48,8 @@ pub fn run(
         "Command timeout must be between 1 and 120 seconds"
     );
     let argv = plan.execution_prefix("")?;
-    let mut command = Command::new(&argv[0]);
+    let mut command = crate::command::from_argv(&argv)?;
     command
-        .args(&argv[1..])
         .args(["/bin/sh", "-c", &args.command])
         .current_dir(&plan.root)
         .env_clear()

@@ -280,7 +280,7 @@ impl EditorApp {
                         self.latex.output_open = true;
                     }
                     if ui.button("Settings").clicked() {
-                        self.toggle_panel(Panel::Settings, ctx);
+                        self.reveal_settings(workbench::SettingsSection::Latex, ctx);
                     }
                     if self.latex.busy {
                         ui.spinner();

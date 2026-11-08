@@ -18,6 +18,7 @@ use super::*;
 use crate::project::{self, Diagnostic};
 pub(super) use sandbox_access::{options_ui as sandbox_options_ui, rules_ui as sandbox_rules_ui};
 use serde::{Deserialize, Serialize};
+pub(super) use settings::SettingsSection;
 use std::collections::BTreeMap;
 pub(super) use workspace::{Surface, ToolTab};
 
@@ -212,6 +213,8 @@ pub(super) struct Workbench {
     prefs: Preferences,
     /// Editable form state; invalid or unapplied edits must not affect running jobs.
     draft: Preferences,
+    /// Selected settings category; changing it must not replace unsaved drafts.
+    settings_section: SettingsSection,
     /// Tool-setting generation paired with document versions on analysis requests.
     epoch: u64,
     python: python::State,
@@ -416,6 +419,10 @@ impl EditorApp {
                     );
                     return;
                 }
+                if panel == Panel::Settings {
+                    self.settings_ui(ui, ctx);
+                    return;
+                }
                 egui::ScrollArea::vertical()
                     .id_salt(("workbench-content", panel.title()))
                     .auto_shrink([false, false])
@@ -425,8 +432,7 @@ impl EditorApp {
                         Panel::Problems => self.problems_ui(ui, ctx),
                         Panel::Environment => self.environment_ui(ui, ctx),
                         Panel::Tasks => self.tasks_ui(ui, ctx),
-                        Panel::Settings => self.settings_ui(ui, ctx),
-                        Panel::Agent | Panel::Debug => unreachable!(),
+                        Panel::Settings | Panel::Agent | Panel::Debug => unreachable!(),
                     });
             },
         );

@@ -35,7 +35,7 @@ npm install --save-dev @marp-team/marp-cli
 
 RODE checks the project's `node_modules/.bin/marp`, then `marp` on PATH. It never uses npx, downloads tools/browsers, uploads an executable, or falls back from SSH to desktop execution. **HTML export** needs the CLI. **Slide preview, PDF and PowerPoint export** also need an installed browser supported by Marp. Slide display needs desktop Poppler (`pdfinfo` and `pdftoppm`, normally `poppler-utils`), as for [PDF previews](pdf.md).
 
-Use **Marp settings** in Slides or **Project settings → Marp presentations** to select the CLI executable, browser type/path and optional custom theme CSS. **Save Marp settings** persists them per host/project. Paths refer to that host; relative settings paths resolve from the project root. Open a project to save custom settings; standalone files can use default PATH tools.
+Use **Marp settings** in Slides or **Project settings → Presentations** to select the CLI executable, browser type/path and optional custom theme CSS. **Save changes** persists them per host/project. Paths refer to that host; relative settings paths resolve from the project root. Open a project to save custom settings; standalone files can use default PATH tools.
 
 The deck's directory is the base for slide assets, including unsaved snapshots and read-only projects. No temporary Markdown file is written into the project. Enable **Allow local slide assets** when a trusted deck needs local images/fonts; access still follows the sandbox. Explicit browser rendering can fetch external resources only within that policy's network access. Ordinary native Markdown preview continues to block automatic external image downloads.
 

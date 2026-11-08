@@ -35,7 +35,7 @@ fn connect(config: &str, helper: &str, jump: &str) -> (Remote, Terminal) {
 }
 
 fn shell(remote: &Remote, command: &str) -> String {
-    let mut child = Command::new("ssh");
+    let mut child = Command::new(remote.client_program());
     child.args(remote.channel_args(false)).arg(command);
     rode::project::run(child, vec![], Duration::from_secs(10))
         .unwrap()
@@ -62,6 +62,7 @@ fn preinstalled_helpers_are_discovered_pinned_and_version_checked_over_ssh() {
         )
         .unwrap();
         let status = Command::new(test_binary)
+            .env("RODE_TEST_SSH_CLIENT", env!("CARGO_BIN_EXE_rode"))
             .args(["installed_helpers::preinstalled_helpers_are_discovered_pinned_and_version_checked_over_ssh", "--exact", "--ignored", "--nocapture"])
             .env("RODE_INSTALLED_HELPER_CHILD", "1")
             .env_remove("RODE_HOST_HELPER").env_remove("RODE_SESSION_HELPER")

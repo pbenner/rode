@@ -5,7 +5,8 @@ pub use rode_session::workspace::{Operation, Reply, fingerprint, initial_input};
 use std::path::PathBuf;
 /// Use the matching service executable without replacing existing jobs.
 pub fn local(operation: &Operation) -> Result<Reply> {
-    let exe = rode_session::current_executable()?;
+    let exe = rode_session::current_executable()
+        .context("Cannot locate RODE's session-service executable on this computer")?;
     // The editor's embedded service always matches its client. A sibling
     // binary can be stale after cargo build or an unpackaged update.
     let standalone = std::env::var_os("RODE_SESSION_HELPER").map(PathBuf::from);
@@ -30,7 +31,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
             4096,
             std::time::Duration::ZERO,
         )
-        .context("Cannot check RODE_SESSION_HELPER; rebuild it with cargo xtask build-helper")?;
+        .with_context(|| format!("Cannot check session helper {} from RODE_SESSION_HELPER on this computer; correct or unset that override", path.display()))?;
         ensure!(
             output.success() && output.stdout.trim() == rode_session::PROTOCOL.to_string(),
             "RODE_SESSION_HELPER uses a different terminal protocol. Rebuild it with cargo xtask build-helper or unset RODE_SESSION_HELPER to use the editor's matching service. Existing jobs were not touched."

@@ -518,6 +518,15 @@ mod tests {
     const BINARY: &[u8] = b"#!/bin/sh\necho installer-fixture\n";
     const LICENSES: &[(&str, &[u8])] = &[("LICENSE", b"fixture license")];
 
+    fn private_fixture() -> tempfile::TempDir {
+        // Runtime verification deliberately rejects group-writable ancestors.
+        // The fixture must satisfy that contract regardless of the caller's umask.
+        tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
+
     fn archive(members: &[(&str, tar::EntryType)]) -> Vec<u8> {
         let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         let mut tar = tar::Builder::new(gzip);
@@ -570,7 +579,7 @@ mod tests {
     fn missing_helpers_are_repaired_without_replacing_the_running_binary_or_an_old_selector_on_failure()
      {
         for corrupt in [false, true] {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_fixture();
             let base = root.path().join("rode/codex");
             let bytes = archive(&[("codex-fixture", tar::EntryType::Regular)]);
             let (old, download) = fixture(&bytes);
@@ -659,7 +668,7 @@ mod tests {
 
     #[test]
     fn concurrent_installers_publish_once_reuse_verified_files_and_never_execute_them() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_fixture();
         let base = root.path().join("user data/rode/codex");
         private_directory(base.parent().unwrap()).unwrap();
         fs::write(
@@ -742,7 +751,7 @@ mod tests {
             "hardlink",
             "extra",
         ] {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_fixture();
             let base = root.path().join("rode/codex");
             private_directory(&base).unwrap();
             fs::write(base.join("manifest.json"), b"previous selection").unwrap();
@@ -801,7 +810,7 @@ mod tests {
     #[test]
     fn cancellation_cleans_partial_downloads_and_extraction_without_changing_selection() {
         for phase in ["Downloading Codex…", "Extracting Codex…"] {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_fixture();
             let base = root.path().join("rode/codex");
             private_directory(&base).unwrap();
             fs::write(base.join("manifest.json"), b"previous selection").unwrap();
@@ -838,7 +847,7 @@ mod tests {
     #[test]
     fn installation_rejects_symlinked_directories_locks_and_damaged_existing_runtimes() {
         for problem in ["base", "lock", "destination", "damaged", "writable"] {
-            let root = tempfile::tempdir().unwrap();
+            let root = private_fixture();
             let base = root.path().join("rode/codex");
             private_directory(&base).unwrap();
             let victim = root.path().join("victim");
@@ -892,7 +901,7 @@ mod tests {
 
     #[test]
     fn waiting_for_a_shared_install_lock_can_be_cancelled() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_fixture();
         let first = install_lock(root.path(), &AtomicBool::new(false)).unwrap();
         let cancel = AtomicBool::new(false);
         std::thread::scope(|scope| {
@@ -915,7 +924,7 @@ mod tests {
     #[test]
     #[ignore = "explicit HTTPS download of the pinned upstream runtime; no credentials or model"]
     fn official_native_download_installs_a_working_runtime_without_a_source_installer() {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_fixture();
         let package = pinned(std::env::consts::ARCH).unwrap();
         let installed = install_to(
             &root.path().join("rode/codex"),

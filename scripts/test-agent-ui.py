@@ -819,7 +819,8 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             )
             wait_for(
                 lambda: (
-                    agent_preferences(preferences).get("access")
+                    # Unchanged defaults may be omitted by the preference writer.
+                    agent_preferences(preferences).get("access", "project")
                     == ("project" if sandboxed else "full")
                 ),
                 "Tool access was not persisted",

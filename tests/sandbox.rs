@@ -253,6 +253,31 @@ fn bundled_bwrap_is_available_without_path_from_both_native_entry_points() {
             String::from_utf8(output.stdout).unwrap().trim(),
             "bubblewrap 0.13.1 (bundled with RODE)"
         );
+        // Argument-file parsing must also work through the bundled dispatch,
+        // independently of whether this machine allows namespace creation.
+        let argv = [
+            binary,
+            "--bwrap-launch",
+            "--unshare-all",
+            "--die-with-parent",
+            "--version",
+            "--",
+        ]
+        .map(str::to_owned);
+        let output = rode_host_core::command::from_argv(&argv)
+            .unwrap()
+            .env("PATH", tools.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap().trim(),
+            "bubblewrap 0.13.1 (bundled with RODE)"
+        );
     }
 }
 

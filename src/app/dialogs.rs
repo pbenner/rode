@@ -87,8 +87,10 @@ impl EditorApp {
                     });
                     ctx.request_repaint();
                 }
-                let width: f32 = if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions)
-                {
+                let width: f32 = if matches!(
+                    self.dialog,
+                    Dialog::Sessions | Dialog::AgentSessions | Dialog::Tunnels
+                ) {
                     680.
                 } else if self.dialog == Dialog::Folder {
                     720.
@@ -100,6 +102,10 @@ impl EditorApp {
                 ui.set_width(width.min((ctx.content_rect().width() - 64.).max(1.)));
                 if self.dialog == Dialog::Folder {
                     self.folder_dialog(ui, ctx);
+                } else if self.dialog == Dialog::Tunnels {
+                    // Like the project picker, the tunnel manager owns its
+                    // scrolling body and keeps its actions visible.
+                    self.tunnels_dialog(ui, ctx);
                 } else {
                     egui::ScrollArea::vertical()
                         .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
@@ -167,7 +173,7 @@ impl EditorApp {
         layout::heading(
             ui,
             "Connect via SSH",
-            "OpenSSH under the hood. Your existing configuration works here.",
+            "Rust SSH is built in. OpenSSH is available for advanced configurations.",
             palette,
         );
         if !self.profiles.is_empty() || !self.aliases.is_empty() {
@@ -211,14 +217,19 @@ impl EditorApp {
                 .show(ui, |ui| {
                     for (label, field, hint) in [
                         (
+                            "Connection name",
+                            &mut self.profile.name,
+                            "e.g. Work cluster or Home server (optional)",
+                        ),
+                        (
                             "Host / alias",
                             &mut self.profile.host,
-                            "workstation or user@host.example.org",
+                            "e.g. workstation or user@host.example.org",
                         ),
                         (
                             "Remote folder",
                             &mut self.profile.root,
-                            "~/projects/my-project",
+                            "e.g. ~/projects/my-project",
                         ),
                         ("Username", &mut self.profile.user, "From SSH config"),
                         (
@@ -229,12 +240,12 @@ impl EditorApp {
                         (
                             "Identity file",
                             &mut self.profile.identity,
-                            "~/.ssh/id_ed25519 (optional)",
+                            "Optional; e.g. ~/.ssh/id_ed25519",
                         ),
                         (
                             "Jump host(s)",
                             &mut self.profile.jump,
-                            "user@login-host (optional, comma-separated)",
+                            "Optional; e.g. user@login-host",
                         ),
                         (
                             "SSH config file",
@@ -246,31 +257,79 @@ impl EditorApp {
                             &mut self.profile.remote_helper,
                             "Auto, or /path/to/rode-sessiond",
                         ),
-                        (
-                            "Profile name",
-                            &mut self.profile.name,
-                            "Optional friendly name",
-                        ),
                     ] {
                         layout::field_label(ui, label, compact);
+                        let id = egui::Id::new(("connection-field", label));
+                        let initial_focus = if self.profile_name_focus {
+                            "Connection name"
+                        } else {
+                            "Host / alias"
+                        };
+                        if self.dialog_focus && label == initial_focus {
+                            ui.memory_mut(|memory| memory.request_focus(id));
+                            if self.profile_name_focus {
+                                let mut state =
+                                    egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(0),
+                                        egui::text::CCursor::new(field.chars().count()),
+                                    )));
+                                state.store(ctx, id);
+                            }
+                            self.dialog_focus = false;
+                        }
                         let response = ui.add(
                             egui::TextEdit::singleline(field)
                                 // Loading saved profiles can insert a dropdown above
                                 // these fields while the user is already typing.
-                                .id(egui::Id::new(("connection-field", label)))
+                                .id(id)
                                 .hint_text(hint)
                                 .desired_width(field_width),
                         );
                         ui_probe::button(ui, &format!("ssh-field-{label}"), &response);
-                        if self.dialog_focus && label == "Host / alias" {
-                            response.request_focus();
-                            self.dialog_focus = false;
-                        }
                         ui.end_row();
                     }
                 });
         });
+        ui.small(
+            "The connection name labels your saved entry. Leave it blank to use the SSH address.",
+        );
+        ui.small(
+            "Muted text in empty fields shows examples or defaults; it is not an entered value.",
+        );
+        if let Some(route) = &self.profile.tunnel {
+            ui.label(format!(
+                "Tunnel route: relay loopback port {} · verified as {}",
+                route.port, route.host_key_alias
+            ));
+            ui.small("Host / alias and identity settings still describe the compute host. Jump host(s) reach the relay.");
+            if ui.button("Remove tunnel route").clicked() {
+                self.profile.tunnel = None;
+            }
+        }
         ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label("SSH client");
+            egui::ComboBox::from_id_salt("ssh-backend")
+                .selected_text(match self.profile.backend {
+                    ssh::Backend::Russh => "Rust (default)",
+                    ssh::Backend::OpenSsh => "OpenSSH",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.profile.backend,
+                        ssh::Backend::Russh,
+                        "Rust (default)",
+                    );
+                    ui.selectable_value(
+                        &mut self.profile.backend,
+                        ssh::Backend::OpenSsh,
+                        "OpenSSH",
+                    );
+                });
+        });
         ui.checkbox(
             &mut self.profile.x11_forwarding,
             "Forward X11 when available",
@@ -318,11 +377,7 @@ impl EditorApp {
                     self.notify(error.to_string(), true);
                 } else {
                     let profile = self.profile.clone();
-                    let previous = self
-                        .profile_baseline
-                        .as_ref()
-                        .filter(|p| p.label() == profile.label())
-                        .cloned();
+                    let previous = self.profile_baseline.clone();
                     let form = self.profile_form;
                     self.profiles_loading = None;
                     let tx = self.tx.clone();

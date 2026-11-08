@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, Read, Write},
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -102,9 +102,8 @@ pub fn serve() -> Result<()> {
         .into_owned();
     }
     let argv = spec.prefix.into_iter().chain(spec.argv).collect::<Vec<_>>();
-    let mut command = Command::new(&argv[0]);
+    let mut command = crate::command::from_argv(&argv)?;
     command
-        .args(&argv[1..])
         .current_dir(&root)
         .env("NO_COLOR", "1")
         .envs(crate::project::environment_variables(

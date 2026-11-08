@@ -15,6 +15,7 @@ enum PaletteAction {
     Open,
     Folder,
     Connect,
+    Tunnels,
     Reconnect,
     Disconnect,
     Encrypted,
@@ -94,6 +95,11 @@ impl EditorApp {
             (PaletteAction::Open, "Open file by path", "Ctrl+P"),
             (PaletteAction::Folder, "Open project folder", "Ctrl+Shift+O"),
             (PaletteAction::Connect, "Remote: Connect via SSH", ""),
+            (
+                PaletteAction::Tunnels,
+                "SSH: Manage tunnels on this host",
+                "",
+            ),
             (PaletteAction::Reconnect, "Remote: Reconnect SSH", ""),
             (PaletteAction::Disconnect, "Remote: Disconnect SSH", ""),
             (
@@ -354,6 +360,7 @@ impl EditorApp {
                 PaletteAction::Open => self.set_dialog(Dialog::Open),
                 PaletteAction::Folder => self.set_dialog(Dialog::Folder),
                 PaletteAction::Connect => self.set_dialog(Dialog::Connect),
+                PaletteAction::Tunnels => self.set_dialog(Dialog::Tunnels),
                 PaletteAction::Disconnect => self.disconnect_ssh(ctx),
                 PaletteAction::Encrypted => self.encrypted_dialog(),
                 PaletteAction::LockEncrypted => self.guarded(Action::LockEncrypted, ctx),
