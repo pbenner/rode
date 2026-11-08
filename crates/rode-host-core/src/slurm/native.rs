@@ -244,11 +244,8 @@ pub fn compute(arguments: &[String], inside: bool) -> Result<()> {
                 arguments[0].clone(),
             ])
             .collect::<Vec<_>>();
-        return Err(Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(root)
-            .exec())
-        .context("Cannot apply compute sandbox");
+        return Err(crate::command::from_argv(&argv)?.current_dir(root).exec())
+            .context("Cannot apply compute sandbox");
     }
     if spec.debugger {
         return crate::debugger::bridge::coordinator();

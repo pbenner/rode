@@ -161,10 +161,10 @@ impl Terminal {
         Self::spawn(ctx, command, format!("LOCAL / {}", plan.label()))
     }
 
-    /// Start the interactive OpenSSH authentication master in a real local PTY.
+    /// Start the selected SSH client authentication master in a real local PTY.
     pub fn remote(ctx: &egui::Context, remote: &Remote) -> Result<Self> {
-        let mut command = CommandBuilder::new("ssh");
-        command.args(remote.master_args());
+        let mut command = CommandBuilder::new(remote.client_program());
+        command.args(remote.master_args()?);
         Self::spawn(
             ctx,
             command,
@@ -182,7 +182,7 @@ impl Terminal {
             remote.socket.exists(),
             "SSH connection is offline. Reconnect before starting a terminal."
         );
-        let mut command = CommandBuilder::new("ssh");
+        let mut command = CommandBuilder::new(remote.client_program());
         command.args(remote.display_channel_args(true));
         command.arg(remote.shell_command(plan));
         Self::spawn(
@@ -224,8 +224,8 @@ impl Terminal {
                 remote.socket.exists(),
                 "Reconnect SSH before attaching a terminal"
             );
-            let mut command = CommandBuilder::new("ssh");
-            command.args(remote.channel_args(true));
+            let mut command = CommandBuilder::new(remote.client_program());
+            command.args(remote.channel_args(false));
             let mut argv = vec![reply.executable.clone()];
             argv.extend(args);
             command.arg(
@@ -287,6 +287,7 @@ impl Terminal {
                 }
             }
         }
+        let arguments = rode_host_core::command::compact_pty(&mut command)?;
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -374,6 +375,7 @@ impl Terminal {
         let wait_ctx = ctx.clone();
         std::thread::spawn(move || {
             let _ = child.wait();
+            drop(arguments);
             // The attachment process may exit while its final PTY frames are
             // still buffered. Publish completion only after the parser drains
             // them; bound the wait for descendants retaining a slave handle.

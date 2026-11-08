@@ -56,7 +56,7 @@ use std::{
 
 mod agents;
 #[cfg(target_os = "linux")]
-mod control_auth;
+pub mod control_auth;
 mod runtimes;
 
 /// Required service protocol and runtime-directory generation.
@@ -812,6 +812,7 @@ impl Server {
                 }
                 command.env("TERM", "xterm-256color");
                 command.env("COLORTERM", "truecolor");
+                let arguments = rode_host_core::command::compact_pty(&mut command)?;
                 let child = pair.slave.spawn_command(command)?;
                 drop(pair.slave);
                 let fd = pair
@@ -887,13 +888,13 @@ impl Server {
                     killer: Mutex::new(child.clone_killer()),
                     stop: Mutex::new(stop),
                 });
-                Ok((session, reader, stop_read, child))
+                Ok((session, reader, stop_read, child, arguments))
             })();
             match setup {
                 Err(error) => {
                     let _ = ready_tx.send(Err(format!("{error:#}")));
                 }
-                Ok((session, mut reader, stop_read, mut child)) => {
+                Ok((session, mut reader, stop_read, mut child, arguments)) => {
                     let read_session = session.clone();
                     let (drained_tx, drained_rx) = mpsc::sync_channel(1);
                     std::thread::spawn(move || {
@@ -941,6 +942,7 @@ impl Server {
                     });
                     let _ = ready_tx.send(Ok(session.clone()));
                     let status = child.wait();
+                    drop(arguments);
                     // Drain final output before publishing exit. Descendants may
                     // retain the slave, so bound this wait and keep the spawning
                     // supervisor thread alive for bwrap PDEATHSIG semantics.

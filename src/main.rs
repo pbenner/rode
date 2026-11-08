@@ -8,6 +8,18 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| matches!(arg.as_str(), "--ssh-client-master" | "--ssh-client-channel"))
+    {
+        match rode::ssh::client_cli(&args) {
+            Ok(code) => std::process::exit(code),
+            Err(error) => {
+                eprintln!("{error:#}");
+                std::process::exit(255);
+            }
+        }
+    }
     if args.first().is_some_and(|arg| arg == "--bwrap-launch") {
         // SAFETY: This is a fresh process; no GUI, workers or services have
         // been initialized. Bubblewrap takes ownership of process setup/exit.
@@ -145,7 +157,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--remote-helper PATH] [--no-x11] [--sandbox]\n\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nSSH aliases and settings from ~/.ssh/config are honored.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: phosphor (default), carbon, carbon-edge, code-dark, matrix, amber, ice, neon, afterglow, knight-rider, hologram, telemetry, studio, studio-neutral, studio-hacker, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
+            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--ssh-backend russh|openssh] [--remote-helper PATH] [--no-x11] [--sandbox]\n\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nRust SSH is the default and needs no local ssh executable.\nCommon ~/.ssh/config settings are supported; select openssh for advanced configurations.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: phosphor (default), carbon, carbon-edge, code-dark, matrix, amber, ice, neon, afterglow, knight-rider, hologram, telemetry, studio, studio-neutral, studio-hacker, or custom:FILENAME.\nSyntax themes: ui (follow UI), dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
         );
         println!(
             "\nOptional Codex runtime: rode --codex [ARGUMENTS], e.g. rode --codex login.\nInstall rode-codex or supply an installed Codex executable."
@@ -183,6 +195,7 @@ fn main() -> eframe::Result {
                 | "--identity"
                 | "--jump"
                 | "--ssh-config"
+                | "--ssh-backend"
                 | "--remote-helper"
         ) {
             i += 1;
@@ -199,6 +212,16 @@ fn main() -> eframe::Result {
                 "--identity" => profile.identity.clone_from(value),
                 "--jump" => profile.jump.clone_from(value),
                 "--ssh-config" => profile.config.clone_from(value),
+                "--ssh-backend" => {
+                    profile.backend = match value.as_str() {
+                        "russh" => rode::ssh::Backend::Russh,
+                        "openssh" => rode::ssh::Backend::OpenSsh,
+                        _ => {
+                            eprintln!("SSH backend must be russh or openssh");
+                            std::process::exit(2);
+                        }
+                    }
+                }
                 "--remote-helper" => profile.remote_helper.clone_from(value),
                 _ => unreachable!(),
             }
@@ -228,7 +251,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         persistence_path: Some(native_state.path.clone()),
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("RODE · Rust / OpenSSH / Development Environment")
+            .with_title("RODE · Rust / SSH / Development Environment")
             .with_inner_size([1380.0, 900.0])
             .with_min_inner_size([850.0, 560.0]),
         renderer: eframe::Renderer::Glow,

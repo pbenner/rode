@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Test the real SSH transport without using or modifying ~/.ssh.
 set -euo pipefail
+# All fixture caches and credentials must stay private under permissive caller umasks.
+umask 077
 cd "$(dirname "$0")/.."
 test_dir=$(mktemp -d /tmp/rode-ssh-test.XXXXXX)
 mkdir -m 700 "$test_dir/codex-home" "$test_dir/home"
@@ -19,6 +21,9 @@ sshd_bin=$(command -v sshd || true)
 if [[ -z "$sshd_bin" && -x /usr/sbin/sshd ]]; then sshd_bin=/usr/sbin/sshd; fi
 if [[ -z "$sshd_bin" ]]; then echo 'Install openssh-server to run the isolated SSH integration test.' >&2; exit 1; fi
 ssh-keygen -q -t ed25519 -N '' -f "$test_dir/host"
+# Offer Ed25519 as well as the ECDSA key recorded in known_hosts. Clients must
+# negotiate the trusted type instead of reporting an unrelated key as changed.
+ssh-keygen -q -t ecdsa -b 256 -N '' -f "$test_dir/host-known"
 ssh-keygen -q -t ed25519 -N '' -f "$test_dir/client"
 test_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 test_user=$(id -un)
@@ -107,6 +112,7 @@ cat > "$test_dir/sshd_config" <<EOF
 Port $test_port
 ListenAddress 127.0.0.1
 HostKey $test_dir/host
+HostKey $test_dir/host-known
 PidFile $test_dir/sshd.pid
 AuthorizedKeysFile $test_dir/client.pub
 StrictModes no
@@ -125,7 +131,7 @@ SetEnv "PATH=$test_path"
 # Keep helper deployment and tool preferences out of the real user's home.
 ForceCommand $test_dir/host-shell
 EOF
-read -r key_type key_data _ < "$test_dir/host.pub"
+read -r key_type key_data _ < "$test_dir/host-known.pub"
 printf '[127.0.0.1]:%s %s %s\n' "$test_port" "$key_type" "$key_data" > "$test_dir/known_hosts"
 cat > "$test_dir/ssh_config" <<EOF
 Host rode-test rode-jump
@@ -137,6 +143,8 @@ Host rode-test rode-jump
     UserKnownHostsFile $test_dir/known_hosts
     StrictHostKeyChecking yes
     BatchMode yes
+    # Common system default: enabling an optional method must not block keys.
+    GSSAPIAuthentication yes
     $client_xauth
     SetEnv CODEX_HOME=$test_dir/codex-home RODE_CODEX_CACHE=$test_dir/codex-cache
 EOF
@@ -166,6 +174,18 @@ export RODE_TEST_SSH_HOME="$test_dir/home"
 export RODE_TEST_SSH_X11="${RODE_SSH_TEST_X11:-yes}"
 if [[ -z "$xauth_bin" ]]; then export RODE_TEST_SSH_X11=no; fi
 export RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home"
+# A non-root sshd can accept commands yet lack permission to create login-recorded
+# PTYs in a container. Detect that fixture limitation independently of RODE.
+if timeout 10 ssh -F "$test_dir/ssh_config" -tt rode-test true </dev/null >"$test_dir/pty-probe.log" 2>&1; then
+    export RODE_TEST_SSH_PTY=1
+else
+    export RODE_TEST_SSH_PTY=0
+    if [[ "${RODE_TEST_REQUIRE_SSH_PTY:-0}" == 1 ]]; then
+        cat "$test_dir/pty-probe.log" >&2
+        exit 1
+    fi
+    echo 'Fixture SSH PTY unavailable; native session PTYs are still exercised.' >&2
+fi
 case "${RODE_SSH_RUN_TRANSPORT:-1}" in
     1)
         if [[ -n "${RODE_SSH_TEST_BINARY:-}" ]]; then

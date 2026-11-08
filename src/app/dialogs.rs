@@ -163,7 +163,7 @@ impl EditorApp {
         layout::heading(
             ui,
             "Connect via SSH",
-            "OpenSSH under the hood. Your existing configuration works here.",
+            "Rust SSH is built in. OpenSSH is available for advanced configurations.",
             palette,
         );
         if !self.profiles.is_empty() || !self.aliases.is_empty() {
@@ -267,6 +267,26 @@ impl EditorApp {
                 });
         });
         ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label("SSH client");
+            egui::ComboBox::from_id_salt("ssh-backend")
+                .selected_text(match self.profile.backend {
+                    ssh::Backend::Russh => "Rust (default)",
+                    ssh::Backend::OpenSsh => "OpenSSH",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.profile.backend,
+                        ssh::Backend::Russh,
+                        "Rust (default)",
+                    );
+                    ui.selectable_value(
+                        &mut self.profile.backend,
+                        ssh::Backend::OpenSsh,
+                        "OpenSSH",
+                    );
+                });
+        });
         ui.checkbox(
             &mut self.profile.x11_forwarding,
             "Forward X11 when available",

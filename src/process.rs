@@ -96,7 +96,7 @@ impl Control {
         let pid = self.pid.load(Ordering::Acquire);
         if pid != 0 && self.alive.load(Ordering::Acquire) {
             // Each process owns a fresh group. This never targets the project
-            // terminal or the shared OpenSSH authentication master.
+            // terminal or the shared SSH authentication master.
             unsafe {
                 libc::kill(-(pid as i32), signal);
             }
@@ -308,7 +308,7 @@ fn run_session(
             remote.connected(),
             "SSH is offline. Reconnect before starting an process."
         );
-        let mut command = Command::new("ssh");
+        let mut command = Command::new(remote.client_program());
         command.args(remote.channel_args(false));
         command.arg(format!(
             "exec {} --process",
@@ -355,8 +355,8 @@ fn run_session(
         let _ = control.executable.set([program, host]);
         let prefix = launch.plan.execution_prefix(&launch.python)?;
         let mut command = if !prefix.is_empty() {
-            let mut command = Command::new(&prefix[0]);
-            command.args(&prefix[1..]).args(&argv);
+            let mut command = rode_host_core::command::from_argv(&prefix)?;
+            command.args(&argv);
             command
         } else {
             let mut command = Command::new(&argv[0]);

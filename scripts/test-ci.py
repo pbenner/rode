@@ -474,6 +474,11 @@ class SshFixtureTests(unittest.TestCase):
                 "Path(path+'.pub').write_text('ssh-ed25519 Zml4dHVyZQ== fixture\\n')\n"
             )
             keygen.chmod(0o755)
+            # This server only opens a TCP port; it does not speak SSH. Keep
+            # the fixture's PTY capability probe out of the real ssh client.
+            ssh = base / "ssh"
+            ssh.write_text("#!/bin/sh\nexit 1\n")
+            ssh.chmod(0o755)
             for tool in ("uv", "uvx"):
                 path = base / tool
                 path.write_text("#!/bin/sh\nprintf 'fixture tool\\n'\n")

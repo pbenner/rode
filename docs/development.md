@@ -21,7 +21,56 @@ Large desktop regression suites are adjacent to their implementations: `src/app/
 
 Use the [release checklist](release.md) before tagging a version. `mise run check` runs lint and ordinary Rust tests; it does not establish native UI, real-tool, sandbox or package coverage on its own.
 
+## Process launch changes
+
+New and changed launchers must follow the [compact process argument contract](architecture.md#compact-process-arguments). Review the complete local or remote process chain, including intermediate shell and sandbox arguments. Keep generated payloads off `argv`; reuse the shared handoff mechanisms and retain the full policy internally. Add regressions for the affected transport, input framing, descriptor/file lifetime and enforcement, including actual process-argument inspection. Document any external-tool constraint that requires an inline payload at the adapter that owns it.
+
 ## Native SSH validation
+
+The default transport is embedded russh. `cargo test --test ssh_client` uses an
+in-process Rust server and real login PTYs to check trust confirmation, changed
+host refusal, password/encrypted-key/MFA input, early command exit, and denial of
+control access from local Landlock/bubblewrap sandboxes. It needs no OpenSSH tools.
+It also checks supported authentication with GSSAPI defaults enabled, preservation
+of disabled methods, and a clear configuration diagnostic for Kerberos-only servers.
+Multi-key servers exercise known-host algorithm preference, RSA SHA-2 signatures
+and rejection of a changed preferred key without accepting another key type.
+
+Launch regressions check private, consumed SSH profile files and streamed bootstrap
+scripts with binary stdin, literal arguments and truncated input. Shared host tests
+exercise compact bubblewrap arguments through ordinary pipes and real PTYs,
+including repeated spawns with independent file offsets. Sandbox, session and agent
+integration tests retain their actual isolation and persistence checks; use
+`RODE_TEST_REQUIRE_SANDBOX=1` when namespace support is required.
+
+`python3 scripts/test-kerberos.py` creates a private MIT Kerberos realm and two
+loopback SSH servers for `tests/ssh_kerberos.rs`. It requires development/test
+installations of `krb5-kdc`, `krb5-admin-server`, `krb5-user` and `openssh-server`;
+it does not install tools or modify the user's SSH/Kerberos files. Tests exercise
+Kerberos-only direct/ProxyJump login with an empty client `PATH`, channel reuse,
+explicit credential delegation, expired/missing tickets with and without key
+fallback, disabled Kerberos, host verification and Kerberos-plus-public-key MFA.
+The fast SSH CI job runs this fixture using its prebuilt test binary.
+The normal SSH unit suite covers absent-library errors and malformed/bounded
+GSSAPI exchanges without needing a KDC. The runtime library is loaded dynamically,
+so neither building RODE nor ordinary key/password SSH requires Kerberos headers
+or libraries. Only Linux MIT Kerberos is covered by the real-realm fixture.
+
+The `rust_client_works_without_client_path_and_preserves_channel_status` test in
+the isolated SSH suite runs a child with an empty `PATH`, exercising direct and
+ProxyJump connections, file revisions, concurrent channels and large stdin.
+The suite also checks the explicit OpenSSH backend, agent and X11 forwarding.
+Agent forwarding checks destination-restricted keys against a real private
+OpenSSH agent: a key restricted to another host must be absent from forwarded
+channels, Git and native terminal listings, on direct and ProxyJump connections.
+
+The private sshd fixture probes remote PTY availability with OpenSSH before testing
+RODE. Unprivileged/container sshd instances may lack login-record permissions;
+set `RODE_TEST_REQUIRE_SSH_PTY=1` to make that limitation fatal. Native session
+PTYs and binary attachment streams remain exercised regardless. The fixture
+uses a private umask so caller defaults cannot create unsafe runtime ancestors.
+`RODE_TEST_SSH_CLIENT` identifies the actual editor executable for relocated
+Cargo test harnesses; it is a test override, not automatic executable discovery.
 
 Build the headless helper independently of desktop dependencies, then test it explicitly:
 
@@ -123,7 +172,7 @@ cargo xtask build-helper
 bash scripts/test-ssh.sh
 ```
 
-This requires `openssh-server`, `ssh-keygen`, and Python 3. The tests use a local PTY and remote non-TTY project channels because an unprivileged test daemon cannot write system login records for a remote TTY. Production project terminals request a remote TTY. Direct and ProxyJump sessions check real authentication/multiplexing, switching project folders without disconnecting, terminal working directories, quoted Unicode paths, multi-megabyte reads/writes, save conflicts, sandbox file operations, and disconnection.
+This requires `openssh-server`, `ssh-keygen`, and Python 3. The tests use a local login PTY and binary channels to the remote helper, which owns real project PTYs. Raw SSH PTY channels are also checked when the fixture daemon has permission to allocate them. Direct and ProxyJump sessions check real authentication/multiplexing, switching project folders without disconnecting, terminal working directories, quoted Unicode paths, multi-megabyte reads/writes, save conflicts, sandbox file operations, and disconnection.
 
 For native UI checks on Debian/Ubuntu, install `xvfb`, `xauth`, `x11-utils`, `imagemagick`, `libxtst6`, `libxkbcommon-x11-0`, `libegl1`, `libegl-mesa0`, `libglx-mesa0` and `libgl1-mesa-dri`. The scripts use `xwininfo` from `x11-utils` to find and inspect windows, ImageMagick to capture/inspect screenshots, and libXtst to send input. The editor dynamically loads the X11 keyboard library, so installing `libxkbcommon-dev` alone does not provide its X11 runtime. CI explicitly installs the runtime libraries, selects Mesa software rendering and uses a 1600×1100 virtual screen so the fixtures’ 1380×900 windows fit without being clamped by the window system. Set `LIBGL_ALWAYS_SOFTWARE=1`, `__GLX_VENDOR_LIBRARY_NAME=mesa` and `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` when reproducing CI on a host with vendor GPU drivers. Early debugger-window failures print the exit code and the last 16 KiB of the captured startup log directly in the Actions output; the full log remains in the `native-ui-smoke` artifact.
 

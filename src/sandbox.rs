@@ -92,9 +92,8 @@ impl PlanExt for Plan {
             "--file-helper".into(),
         ]);
         let command = if self.active {
-            let mut command = Command::new(&self.prefix[0]);
-            command.args(args);
-            command
+            args.insert(0, self.prefix[0].clone());
+            rode_host_core::command::from_argv(&args)?
         } else {
             let mut command = Command::new(&args[0]);
             command.args(&args[1..]);

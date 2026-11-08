@@ -332,8 +332,8 @@ pub fn prepare_with_helper(root: &str, options: &Options, executable: &Path) -> 
         let at = plan.prefix.len() - 1;
         plan.prefix
             .splice(at..at, ["--ro-bind".into(), path.clone(), path]);
-        let mut command = Command::new(&plan.prefix[0]);
-        command.args(&plan.prefix[1..]).arg("/bin/true");
+        let mut command = crate::command::from_argv(&plan.prefix)?;
+        command.arg("/bin/true");
         match crate::command::run_bounded(command, vec![], Duration::from_secs(10)) {
             Ok(_) => {
                 plan.active = true;
@@ -587,9 +587,8 @@ impl Plan {
             ]);
             args.extend(self.environment_prefix("")?);
             args.push(destination);
-            let mut cmd = Command::new(&self.prefix[0]);
-            cmd.args(args);
-            cmd
+            args.insert(0, self.prefix[0].clone());
+            crate::command::from_argv(&args)?
         } else {
             let mut argv = self.environment_prefix("")?;
             argv.push(executable.to_string_lossy().into_owned());

@@ -396,9 +396,8 @@ enum Controller {
 }
 fn launch(spec: &Spec) -> Result<Controller> {
     let argv: Vec<_> = spec.prefix.iter().chain(&spec.argv).cloned().collect();
-    let mut command = Command::new(&argv[0]);
+    let mut command = rode_host_core::command::from_argv(&argv)?;
     command
-        .args(&argv[1..])
         .current_dir(&spec.root)
         .env_clear()
         .envs(&spec.env)

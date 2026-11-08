@@ -8,6 +8,23 @@ pub(super) struct Selected {
     pub info: Option<wire::helper::Info>,
 }
 
+/// Send a fixed ASCII script before its binary stdin payload. `head` consumes
+/// exactly the frame, avoiding shell read-ahead into the uploaded executable.
+/// The sentinel preserves trailing newlines and detects truncated script input.
+fn streamed_script(script: &str, arguments: &[&str], payload: Vec<u8>) -> (String, Vec<u8>) {
+    assert!(script.is_ascii());
+    let loader = "code=$(head -c \"$1\" && printf .) || exit; [ \"${#code}\" -eq \"$(($1 + 1))\" ] || exit 1; shift; eval \"${code%.}\"";
+    let mut command = format!("exec sh -c {} sh {}", ssh::quote(loader), script.len());
+    for argument in arguments {
+        command.push(' ');
+        command.push_str(&ssh::quote(argument));
+    }
+    let mut input = Vec::with_capacity(script.len() + payload.len());
+    input.extend_from_slice(script.as_bytes());
+    input.extend(payload);
+    (command, input)
+}
+
 fn discovery(
     remote: &ssh::Remote,
     path: &str,
@@ -18,13 +35,10 @@ fn discovery(
         !remote.native.closed.load(Ordering::Acquire),
         "SSH disconnected during helper discovery"
     );
-    let mut command = Command::new("ssh");
-    command.args(remote.channel_args(false)).arg(format!(
-        "sh -c {} sh {}",
-        ssh::quote(include_str!("../installed.sh")),
-        ssh::quote(path),
-    ));
-    rode_host_core::command::run_bounded_limited(command, vec![], timeout, output_limit)
+    let mut command = Command::new(remote.client_program());
+    let (script, input) = streamed_script(include_str!("../installed.sh"), &[path], vec![]);
+    command.args(remote.channel_args(false)).arg(script);
+    rode_host_core::command::run_bounded_limited(command, input, timeout, output_limit)
 }
 
 fn probe(
@@ -154,17 +168,16 @@ fn publish(
         !remote.native.closed.load(Ordering::Acquire),
         "SSH disconnected during helper discovery"
     );
-    let mut install = Command::new("ssh");
-    install.args(remote.channel_args(false)).arg(format!(
-        "sh -c {} sh {} {} {}",
-        ssh::quote(include_str!("../bootstrap.sh")),
-        ssh::quote(digest),
-        size,
-        ssh::quote(source),
-    ));
+    let mut install = Command::new(remote.client_program());
+    let (script, input) = streamed_script(
+        include_str!("../bootstrap.sh"),
+        &[digest, &size.to_string(), source],
+        bytes,
+    );
+    install.args(remote.channel_args(false)).arg(script);
     let output = rode_host_core::command::run_bounded_limited(
         install,
-        bytes,
+        input,
         Duration::from_secs(60),
         4097,
     )?;
@@ -228,4 +241,43 @@ fn artifact(architecture: &str) -> Result<Vec<u8>> {
         "Selected helper does not match the remote architecture"
     );
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[test]
+    fn script_stream_preserves_literal_arguments_and_binary_payload() {
+        let script = format!(
+            "# {}\nprintf '%s\\000' \"$1\"\ncat\n",
+            "large fixed script ".repeat(8192)
+        );
+        let payload = (0..32768).map(|n| n as u8).collect::<Vec<_>>();
+        let argument = "literal 'quotes' $HOME\n🦀";
+        let (line, input) = streamed_script(&script, &[argument], payload.clone());
+        assert!(line.len() < 512);
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &line]);
+        let output =
+            rode_host_core::command::run_bounded(command, input, Duration::from_secs(5)).unwrap();
+        let mut expected = argument.as_bytes().to_vec();
+        expected.push(0);
+        expected.extend(payload);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn truncated_script_is_rejected_before_execution() {
+        let root = tempfile::tempdir().unwrap();
+        let script = "touch marker\n# trailing frame data\n";
+        let (line, mut input) = streamed_script(script, &[], vec![]);
+        input.truncate("touch marker\n".len());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &line]).current_dir(root.path());
+        assert!(
+            rode_host_core::command::run_bounded(command, input, Duration::from_secs(5)).is_err()
+        );
+        assert!(!root.path().join("marker").exists());
+    }
 }

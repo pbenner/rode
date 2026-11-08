@@ -21,6 +21,7 @@ TEST_BINARIES = {
     "files",
     "runtimes",
     "ssh_roundtrip",
+    "ssh_kerberos",
     "native_host",
     "debugger",
     "notebooks",
@@ -118,6 +119,11 @@ SUITES = {
     "terminals": [ui("sessions"), ui("slurm"), ui("codex-install")],
     "ssh": [
         rust("native_host"),
+        (
+            [sys.executable, "scripts/test-kerberos.py"],
+            {"RODE_KERBEROS_TEST_BINARY": "target/ci/tests/ssh_kerberos"},
+            180,
+        ),
         remote("remote-smoke", transport=True),
         (
             ["bash", "scripts/test-ssh.sh", sys.executable, "scripts/test-execution-modes-ui.py"],
@@ -355,6 +361,7 @@ def run_suite(name):
     """Validate the selected bundle tools, isolate host-specific settings and run each command with timing/deadline logs."""
     env = dict(os.environ)
     env.setdefault("RODE_TEST_BINARY", str(ROOT / "target/ci/rode"))
+    env.setdefault("RODE_TEST_SSH_CLIENT", env["RODE_TEST_BINARY"])
     env.setdefault("RODE_SSH_TEST_BINARY", str(ROOT / "target/ci/tests/ssh_roundtrip"))
     env.setdefault("RODE_TEST_SESSION_HELPER", str(ROOT / "target/ci/rode-sessiond-static"))
     # Transferred Rust tests live in tests/, away from the bundled helper.

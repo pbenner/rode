@@ -407,7 +407,7 @@ else:
     raise AssertionError('UDP allowed')
 "#,
         ));
-        let mut command = Command::new("ssh");
+        let mut command = Command::new(remote.client_program());
         command.args(remote.channel_args(false)).arg(format!(
             "EXPECTED_ROOT={} {}",
             rode::ssh::quote(root.to_str().unwrap()),
@@ -1328,7 +1328,7 @@ fn roundtrip(jump: &str) {
     assert!(remote.connected(), "{}", terminal.contents());
     // Separate RODE instances use separate masters even for the same SSH alias.
     let other = Remote::new(remote.profile.clone()).unwrap();
-    assert_ne!(remote.master_args(), other.master_args());
+    assert_ne!(remote.master_args().unwrap(), other.master_args().unwrap());
     let other_terminal = Terminal::remote(&eframe::egui::Context::default(), &other).unwrap();
     let start = Instant::now();
     while !other.connected()
@@ -1402,7 +1402,7 @@ fn roundtrip(jump: &str) {
             .unwrap();
         assert_eq!(response.path, directory.to_str().unwrap());
         let plan = response.project.unwrap();
-        let mut command = portable_pty::CommandBuilder::new("ssh");
+        let mut command = portable_pty::CommandBuilder::new(remote.client_program());
         command.args(remote.channel_args(false));
         command.arg(remote.shell_command(&plan));
         let shell = Terminal::spawn(
@@ -1836,7 +1836,7 @@ fn bundled_runtime_roundtrip(remote: &Remote, root: &std::path::Path) {
         .native_helper
         .unwrap();
     let call = |spec: &Value, bytes: Vec<u8>| {
-        let mut command = Command::new("ssh");
+        let mut command = Command::new(remote.client_program());
         command.args(remote.channel_args(false));
         command.arg(format!(
             "RODE_CODEX_CACHE={} {} --runtime-cache",
@@ -2136,7 +2136,7 @@ fn native_attach(
     reply: &rode::sessions::Reply,
     info: &rode_session::Info,
 ) -> Terminal {
-    let mut command = portable_pty::CommandBuilder::new("ssh");
+    let mut command = portable_pty::CommandBuilder::new(remote.client_program());
     command.args(remote.channel_args(false));
     let mut argv = vec![reply.executable.clone()];
     argv.extend(reply.prefix.clone());
@@ -3066,7 +3066,7 @@ fn native_generic_operations_need_no_remote_python() {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
-            Command::new("ssh")
+            Command::new(remote.client_program())
                 .args(remote.channel_args(false))
                 .arg("if command -v python3 >/dev/null 2>&1; then exit 99; fi")
                 .status()
@@ -3077,7 +3077,7 @@ fn native_generic_operations_need_no_remote_python() {
         let base = tempfile::tempdir().unwrap();
         if std::env::var("RODE_SSH_TEST_NO_BWRAP").as_deref() == Ok("1") {
             assert!(
-                Command::new("ssh")
+                Command::new(remote.client_program())
                     .args(remote.channel_args(false))
                     .arg("if command -v bwrap >/dev/null 2>&1; then exit 99; fi")
                     .status()
@@ -3307,4 +3307,153 @@ fn native_provider_and_terminal_without_python(remote: &Remote, mut plan: rode::
         id: info.id.clone(),
         policy: info.policy.clone(),
     });
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn rust_client_works_without_client_path_and_preserves_channel_status() {
+    if std::env::var_os("RODE_NO_SSH_CLIENT_CHILD").is_none() {
+        let empty_path = tempfile::tempdir().unwrap();
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "rust_client_works_without_client_path_and_preserves_channel_status",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("RODE_NO_SSH_CLIENT_CHILD", "1")
+            .env("PATH", empty_path.path())
+            .env_remove("DISPLAY")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    assert!(Command::new("ssh").arg("-V").output().is_err());
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").unwrap();
+    for jump in ["", "rode-jump"] {
+        let root = tempfile::tempdir().unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            x11_forwarding: false,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(remote.profile.backend, rode::ssh::Backend::Russh);
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(15);
+        while !remote.connected() {
+            assert!(
+                login.is_alive() && Instant::now() < until,
+                "{}",
+                login.contents()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let path = root
+            .path()
+            .join("rust 'client' 🦀.txt")
+            .to_string_lossy()
+            .into_owned();
+        let plan = remote
+            .request(&Request::Prepare {
+                path: root.path().to_string_lossy().into_owned(),
+                sandbox: Default::default(),
+            })
+            .unwrap()
+            .project
+            .unwrap();
+        let saved = remote
+            .request_in(
+                &Request::Write {
+                    path: path.clone(),
+                    text: "no client ssh required\n".into(),
+                    expected: None,
+                },
+                Some(&plan),
+            )
+            .unwrap();
+        let read = remote
+            .request_in(&Request::Read { path: path.clone() }, Some(&plan))
+            .unwrap();
+        assert_eq!(read.text, "no client ssh required\n");
+        assert_eq!(read.revision, saved.revision);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    let output = remote
+                        .command()
+                        .arg("printf stdout; printf stderr >&2; exit 37")
+                        .output()
+                        .unwrap();
+                    assert_eq!(output.status.code(), Some(37));
+                    assert_eq!(output.stdout, b"stdout");
+                    assert_eq!(output.stderr, b"stderr");
+                });
+            }
+        });
+        let mut echo = remote.command();
+        echo.arg("cat");
+        let bytes = vec![b'x'; 2 * 1024 * 1024];
+        let output = rode::project::run(echo, bytes.clone(), Duration::from_secs(20)).unwrap();
+        assert!(output.success(), "{output:?}");
+        assert_eq!(output.stdout.as_bytes(), bytes);
+        assert!(remote.connected());
+        drop(login);
+        let until = Instant::now() + Duration::from_secs(5);
+        while remote.connected() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!remote.connected());
+        assert!(
+            !remote
+                .command()
+                .arg("true")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn openssh_remains_an_explicit_compatibility_backend() {
+    let remote = Remote::new(Profile {
+        host: "rode-test".into(),
+        config: std::env::var("RODE_TEST_SSH_CONFIG").unwrap(),
+        backend: rode::ssh::Backend::OpenSsh,
+        ..Default::default()
+    })
+    .unwrap();
+    let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+    let until = Instant::now() + Duration::from_secs(10);
+    while !remote.connected() {
+        assert!(
+            login.is_alive() && Instant::now() < until,
+            "{}",
+            login.contents()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        remote
+            .command()
+            .arg("printf compatibility")
+            .output()
+            .unwrap()
+            .stdout,
+        b"compatibility"
+    );
+    drop(login);
+    remote.cleanup();
 }

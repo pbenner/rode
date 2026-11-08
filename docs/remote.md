@@ -1,7 +1,14 @@
 # Remote connections
 
+RODE uses an embedded Rust SSH client (`russh`) by default. The desktop needs no
+`ssh`, `scp` or `ssh-keygen` executable for connections, helper deployment, file
+operations or project terminals. The remote machine still needs a running SSH
+server and a POSIX shell. External programs such as Git-over-SSH retain their own
+client requirements.
+
 Click **Connect SSH**. Every connection can configure:
 
+- Client backend: **Rust (default)** or **OpenSSH**
 - SSH config alias, hostname, or `user@hostname`
 - Username, port, identity file, and remote folder
 - One or more comma-separated ProxyJump hosts
@@ -30,17 +37,83 @@ Or configure a direct connection with a jump host:
   --remote-path /scratch/researcher/simulation
 ```
 
-OpenSSH reads `~/.ssh/config`, including `Include` and `ProxyJump` settings. The connection picker discovers literal aliases in the main config file; aliases defined in included files can be entered manually. Use `--ssh-config FILE` to select an alternative configuration.
+The selected client reads `~/.ssh/config`, including `Include` and `ProxyJump` settings. The connection picker discovers literal aliases in the main config file; aliases defined in included files can be entered manually. Use `--ssh-config FILE` to select an alternative configuration.
+
+## Client compatibility
+
+The Rust backend supports `Host` patterns and negation, bounded `Include` files,
+`HostName`, `User`, `Port`, multiple `IdentityFile` entries, `IdentitiesOnly`,
+`IdentityAgent`, `ProxyJump`, `HostKeyAlias`, known-hosts files, `BatchMode`, public
+key/password/keyboard-interactive authentication, optional Linux Kerberos
+authentication, `ForwardAgent`, `SetEnv` and
+`SendEnv`. Explicit connection fields take precedence. Jump hosts use native SSH
+channels, including multiple hops, without starting another client executable.
+
+Unknown host keys require confirmation unless your configuration explicitly
+allows accepting new keys. Changed and revoked keys are always rejected, including
+with `StrictHostKeyChecking no`. Hashed known-host entries are supported; new keys
+are merged under a lock, with hashed entries by default. Secrets are entered in
+the login terminal and are not saved in profiles. User certificates are supported
+with a matching `IdentityFile` plus adjacent `-cert.pub`, or through an SSH agent.
+Agent authentication and forwarded agent sockets are bound to the SSH session
+so supporting agents can enforce destination restrictions.
+
+When a server offers several host-key types, Rust SSH prefers types already
+recorded for that host in the configured known-hosts files, including hashed
+entries and `HostKeyAlias`. RSA records also match RSA SHA-2 signature algorithms.
+The selected key must still match a trusted record exactly; choosing a known type
+does not accept a changed key or rewrite existing records.
+
+On Linux, `GSSAPIAuthentication yes` enables Kerberos ticket authentication
+(`gssapi-with-mic`) when the server offers it. RODE loads the system MIT/Heimdal
+GSSAPI library on demand and uses the existing credentials, including
+`KRB5CCNAME` and `KRB5_CONFIG`. The library is optional: missing libraries or
+unusable tickets fall back to other enabled authentication methods. Disabled
+methods stay disabled; a Kerberos-only login fails with a diagnostic.
+
+Install/configure the Kerberos runtime separately (for example,
+`libgssapi-krb5-2` on Debian/Ubuntu), and obtain or renew tickets through your
+normal login or `kinit` before connecting. RODE does not run `kinit`, ask for a
+Kerberos password, or install libraries. A client `ssh` executable is still
+unnecessary. For aliases, set `HostName` to the server name associated with its
+Kerberos `host` service principal; hostname canonicalisation and realm selection
+follow the system Kerberos configuration, independently of `HostKeyAlias`.
+
+Host keys are verified before Kerberos authentication. Each jump host uses its
+own SSH configuration and authenticates from the desktop's credentials.
+Credential delegation is off unless `GSSAPIDelegateCredentials yes` applies to
+that host; the ticket and server policy must also permit delegation. Delegation
+is separate from SSH agent forwarding. GSSAPI-authenticated key exchange is not
+implemented; normal SSH key exchange and host-key checks remain in use.
+
+Select **OpenSSH** in the connection form, or pass `--ssh-backend openssh`, for
+`Match`, `ProxyCommand`, host certificates/CA policies, GSSAPI key exchange, custom
+algorithm policy, arbitrary port forwarding or other unsupported directives.
+Unsupported settings fail with an explanation; RODE never silently switches
+clients. The Rust backend owns connection timeouts, keepalives, channel sharing
+and terminal allocation; OpenSSH process-management options do not control it.
+The backend is saved per profile. Older profiles without a backend use Rust.
+
+```sh
+rode --ssh workstation --ssh-backend openssh
+```
+
+Both clients keep one authenticated connection per window. Closing a project
+terminal does not close it. Connection loss ends its channels without attempting
+a fresh login or replaying uncertain writes; reconnect explicitly to continue.
+Rust control endpoints use the existing sealed process capability on Linux and
+reject different mount namespaces, so local sandboxed tools cannot use them to
+launch unrestricted remote commands.
 
 ## X11 applications
 
-**Forward X11 when available** in the connection form requests OpenSSH X11
-forwarding (`-X`). It is saved with the profile and works through ProxyJump.
+**Forward X11 when available** in the connection form requests X11
+forwarding (OpenSSH compatibility mode uses `-X`). It is saved with the profile and works through ProxyJump.
 The desktop running RODE needs an X server (or XWayland), a valid `DISPLAY` and
 `xauth`; the remote SSH server needs `X11Forwarding yes` and `xauth`. If these
 are unavailable, the connection and ordinary terminal still work.
 
-Open a new remote terminal and run an X application, such as `xclock`. OpenSSH
+Open a new remote terminal and run an X application, such as `xclock`. The SSH server
 sets the remote `DISPLAY` and manages authentication cookies; do not copy the
 desktop's display value to the remote shell. Local terminals already inherit
 the desktop display environment. Native Wayland forwarding is not included.
@@ -48,8 +121,11 @@ the desktop display environment. Native Wayland forwarding is not included.
 Clear the checkbox, or use `rode --ssh HOST --no-x11`, to disable forwarding
 even if your SSH config enables it. When checked, the profile explicitly
 requests forwarding; `ForwardX11Trusted`, `ForwardX11Timeout` and
-`XAuthLocation` still follow your desktop SSH config. RODE does not request
-trusted forwarding (`-Y`), disable authentication or change the timeout. See
+`XAuthLocation` still follow your desktop SSH config. The Rust backend accepts
+`ForwardX11Timeout` as a number of seconds. RODE does not enable trusted forwarding on its own. The Rust backend uses a
+connection-specific proxy cookie and requires successful untrusted-cookie
+generation when trusted forwarding is disabled; failure disables X11 while
+leaving ordinary SSH usable. See
 the [OpenSSH X11 settings](https://man.openbsd.org/ssh_config#ForwardX11) for
 trust and timeout behaviour.
 
@@ -98,16 +174,18 @@ Desktop `RODE_HOST_HELPER` selects a file or a directory containing `<architectu
 
 Both installed and uploaded helpers use the same verified private cache. Its home/cache must be writable by the owner and executable; no root access, remote compiler, GUI libraries or application port forwarding is needed. A `noexec` home, unsafe paths, missing utilities or incompatible runtime libraries produce explicit errors. Use a static helper for libc differences. A damaged cache entry is preserved and rejected, never silently replaced.
 
-One authenticated stdio channel owns the native gateway and up to four concurrent project operations. Project contexts capture the actual sandbox and cannot be weakened by an ordinary request. Terminal and process streams use separate channels on the same OpenSSH master. Disconnect cancels transient work; [persistent sessions](terminals.md) retain their separate owner. Native failure never retries through Python or outside an active sandbox. After a lost write acknowledgement, the write may have completed: reconnect and reconcile the remote revision before trying another save. A damaged helper cache fails verification without overwriting the suspect file.
+One authenticated stdio channel owns the native gateway and up to four concurrent project operations. Project contexts capture the actual sandbox and cannot be weakened by an ordinary request. Terminal and process streams use separate channels on the same authenticated connection. Disconnect cancels transient work; [persistent sessions](terminals.md) retain their separate owner. Native failure never retries through Python or outside an active sandbox. After a lost write acknowledgement, the write may have completed: reconnect and reconcile the remote revision before trying another save. A damaged helper cache fails verification without overwriting the suspect file.
 
 
 ## Connection and workspace lifetime
 
-Saved profiles live in `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json`. **Save profile** persists connection settings, not passwords. Clicking a saved connection in the explorer connects immediately using that profile; unsaved edits still require a decision before switching. Use **Connect SSH** to open the form for new connections or editing profiles. **Remote: Reconnect SSH** in the command palette restores the last connection. A dedicated OpenSSH master owns the authenticated connection; project terminals use separate channels. Hiding or detaching a project terminal leaves the connection available. **New** creates an independent shell with persistence off; **Sessions** discovers/reattaches existing ones. Enable **Persist: on** in the terminal header to leave work running when RODE closes without an exit prompt; tmux/screen is not required. See [terminal lifetime and remote helper setup](terminals.md).
+Saved profiles live in `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json`. **Save profile** persists connection settings, not passwords. Clicking a saved connection in the explorer connects immediately using that profile; unsaved edits still require a decision before switching. Use **Connect SSH** to open the form for new connections or editing profiles. **Remote: Reconnect SSH** in the command palette restores the last connection. A dedicated SSH client process owns the authenticated connection; project terminals use separate channels. Hiding or detaching a project terminal leaves the connection available. **New** creates an independent shell with persistence off; **Sessions** discovers/reattaches existing ones. Enable **Persist: on** in the terminal header to leave work running when RODE closes without an exit prompt; tmux/screen is not required. See [terminal lifetime and remote helper setup](terminals.md).
+
+The Rust SSH master receives its launch profile through an owner-only file in its private connection directory, which it removes after opening. Its process arguments contain only the internal mode, socket path and a SHA-256 digest that detects substituted profile data before authentication. Helper discovery and bootstrap scripts travel over the existing SSH input stream, followed by any executable upload; `ps` shows a short launcher instead of the full script. Host verification, interactive login and helper digest checks still apply. Restart the editor and reconnect to use these launch changes; existing processes keep their original arguments.
 
 Use **Disconnect** next to the SSH host in the top-left connection banner, or **Remote: Disconnect SSH** in the command palette. Disconnecting, losing the connection, or a failed login clears the selected host and project. The title and explorer return to the local, no-folder state; **Open project folder…** and **Open file…** work locally immediately. Open remote tabs and unsaved edits stay in memory as disconnected buffers. Use **Save As** for a local copy, or **Remote: Reconnect SSH** to reconnect to their original project and restore their file bindings. Their original paths are never used for local file access. Opening a local project follows the usual unsaved-change protection. Disconnect stops project kernels/builds and detaches agent/terminal views: **Persist: on** sessions continue, while **Persist: off** sessions end after their last view closes. Reattach agents through **Agent chat → Running** under their original project policy. Disconnect is briefly unavailable while terminal/agent startup or a persistence change is pending.
 
-If login fails or the connection ends unexpectedly, the terminal shows **SSH ERROR / host** and retains the login's output, including OpenSSH errors such as `Permission denied` or `Connection refused`. It is read-only: the SSH process is stopped, and this is not a local shell. Scroll to earlier output, use **Copy**, and choose **New** when you want a local shell. Folder/file opening already uses the local computer; **Remote: Reconnect SSH** starts a fresh attempt. The bounded terminal output stays only in this window's memory and is cleared when replaced by a new terminal/project or the window closes. RODE does not save the login output to preferences or a log file.
+If login fails or the connection ends unexpectedly, the terminal shows **SSH ERROR / host** and retains the login's output, including client errors such as `Permission denied` or `Connection refused`. It is read-only: the SSH process is stopped, and this is not a local shell. Scroll to earlier output, use **Copy**, and choose **New** when you want a local shell. Folder/file opening already uses the local computer; **Remote: Reconnect SSH** starts a fresh attempt. The bounded terminal output stays only in this window's memory and is cleared when replaced by a new terminal/project or the window closes. RODE does not save the login output to preferences or a log file.
 
 ## Project folders and sandbox mode
 

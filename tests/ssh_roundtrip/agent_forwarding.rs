@@ -62,6 +62,33 @@ fn configured_agent_forwarding_reaches_channels_git_and_native_terminals() {
     run(add).checked().unwrap();
     let expected = identities(&socket);
 
+    // A destination-restricted key is visible to local clients, but must not
+    // leak into forwarded listings on an unrelated host. This checks that the
+    // forwarding socket is session-bound before any remote agent request.
+    let restricted = fixture.path().join("restricted");
+    let mut generate = Command::new("ssh-keygen");
+    generate
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&restricted);
+    run(generate).checked().unwrap();
+    let hosts = fixture.path().join("restricted_hosts");
+    fs::write(
+        &hosts,
+        format!(
+            "only-other-host {}",
+            fs::read_to_string(restricted.with_extension("pub")).unwrap()
+        ),
+    )
+    .unwrap();
+    let mut add = Command::new("ssh-add");
+    add.arg("-H")
+        .arg(&hosts)
+        .args(["-h", "only-other-host"])
+        .arg(&restricted)
+        .env("SSH_AUTH_SOCK", &socket);
+    run(add).checked().unwrap();
+    assert_eq!(identities(&socket).lines().count(), 2);
+
     for jump in ["", "rode-jump"] {
         // An omitted setting must retain OpenSSH's default of no forwarding.
         for policy in ["yes", "no", ""] {
@@ -88,8 +115,8 @@ fn configured_agent_forwarding_reaches_channels_git_and_native_terminals() {
             // master's configured agent rather than the caller's environment.
             let log = root.path().join("login.log");
             let mut login = Process(
-                Command::new("ssh")
-                    .args(remote.master_args())
+                Command::new(remote.client_program())
+                    .args(remote.master_args().unwrap())
                     .env("SSH_AUTH_SOCK", &socket)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -107,7 +134,10 @@ fn configured_agent_forwarding_reaches_channels_git_and_native_terminals() {
                 std::thread::sleep(Duration::from_millis(20));
             }
             for tty in [false, true] {
-                let mut command = Command::new("ssh");
+                if tty && std::env::var("RODE_TEST_SSH_PTY").as_deref() == Ok("0") {
+                    continue;
+                }
+                let mut command = Command::new(remote.client_program());
                 // Test signing as well as discovery through the forwarded agent.
                 command.args(remote.channel_args(tty)).arg(format!(
                     "ssh-add -T {} && ssh-add -l",
