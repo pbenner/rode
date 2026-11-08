@@ -1,8 +1,10 @@
 # Project workspaces and optional sandboxing
 
-Choose **Open project folder** from the File menu, the workspace banner, or Ctrl+Shift+O. When connected to SSH, this browser lists the remote host's directories. Choose **Open local folder** explicitly to switch to the desktop machine. The picker displays which machine it is browsing and supports absolute paths, `~/`, Up, and clicking subfolders. Enter browses a typed path; Ctrl+Enter opens it as the project.
+Choose **Open project folder** from the File menu, the workspace banner, or Ctrl+Shift+O. When connected to SSH, this browser lists the remote host's directories. Choose **Open local folder** explicitly to switch to the desktop machine. The picker displays which machine it is browsing and supports absolute paths, `~/`, the parent-folder arrow, and clicking subfolders. **Show hidden** includes dot-prefixed folders. Enter browses a typed path; Ctrl+Enter opens it as the project.
 
 The project is validated before replacing the current workspace. Invalid paths leave the existing project and buffers intact. Unsaved changes require a discard decision before switching. Once opened, the explorer, relative paths, file saves, and terminal working directory all use the chosen project. Remote folder changes create a new project shell channel through the existing authenticated SSH master, without another login.
+
+The path, validation errors and **Open project** / **Cancel** actions stay visible while the folder list and options scroll. Expand **Access rules and presets** to review network and filesystem permissions or load a reusable sandbox preset.
 
 ## Choosing the execution mode
 

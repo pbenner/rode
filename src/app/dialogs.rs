@@ -90,49 +90,53 @@ impl EditorApp {
                 let width: f32 = if matches!(self.dialog, Dialog::Sessions | Dialog::AgentSessions)
                 {
                     680.
+                } else if self.dialog == Dialog::Folder {
+                    720.
                 } else if self.dialog == Dialog::Connect {
                     500.
                 } else {
                     540.
                 };
                 ui.set_width(width.min((ctx.content_rect().width() - 64.).max(1.)));
-                egui::ScrollArea::vertical()
-                    .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
-                    .auto_shrink([false, true])
-                    // The modal Area can retain a short command palette's
-                    // height. Give forms their viewport budget before measuring
-                    // content, then shrink short dialogs to their actual height.
-                    .min_scrolled_height((ctx.content_rect().height() - 80.).max(1.))
-                    .max_height((ctx.content_rect().height() - 80.).max(1.))
-                    .show(ui, |ui| {
-                        if self.dialog == Dialog::Extensions {
-                            self.extensions_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Explorer {
-                            self.explorer_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Encrypted {
-                            self.encrypted_ui(ui, ctx);
-                        } else if matches!(self.dialog, Dialog::MarpExport(..)) {
-                            self.marp_export_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Connect {
-                            self.connect_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Shortcuts {
-                            self.help_dialog(ui);
-                        } else if self.dialog == Dialog::Commands {
-                            self.command_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Sessions {
-                            self.sessions_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Slurm {
-                            self.slurm_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::AgentSessions {
-                            self.background_agents_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::TerminalExit {
-                            self.terminal_exit_dialog(ui, ctx);
-                        } else if self.dialog == Dialog::Folder {
-                            self.folder_dialog(ui, ctx);
-                        } else {
-                            self.path_dialog(ui, ctx);
-                        }
-                    });
+                if self.dialog == Dialog::Folder {
+                    self.folder_dialog(ui, ctx);
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
+                        .auto_shrink([false, true])
+                        // The modal Area can retain a short command palette's
+                        // height. Give forms their viewport budget before measuring
+                        // content, then shrink short dialogs to their actual height.
+                        .min_scrolled_height((ctx.content_rect().height() - 80.).max(1.))
+                        .max_height((ctx.content_rect().height() - 80.).max(1.))
+                        .show(ui, |ui| {
+                            if self.dialog == Dialog::Extensions {
+                                self.extensions_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::Explorer {
+                                self.explorer_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::Encrypted {
+                                self.encrypted_ui(ui, ctx);
+                            } else if matches!(self.dialog, Dialog::MarpExport(..)) {
+                                self.marp_export_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::Connect {
+                                self.connect_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::Shortcuts {
+                                self.help_dialog(ui);
+                            } else if self.dialog == Dialog::Commands {
+                                self.command_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::Sessions {
+                                self.sessions_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::Slurm {
+                                self.slurm_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::AgentSessions {
+                                self.background_agents_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::TerminalExit {
+                                self.terminal_exit_dialog(ui, ctx);
+                            } else {
+                                self.path_dialog(ui, ctx);
+                            }
+                        });
+                }
                 if sizing {
                     self.dialog_focus = focus;
                 }
@@ -350,171 +354,6 @@ impl EditorApp {
         self.file_dialog(ui, ctx);
     }
 
-    /// Render selected-host project discovery and requested sandbox options before project preparation.
-    pub(super) fn folder_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        let open_by_key = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::Enter));
-        if self.folder_needs_load {
-            self.folder_needs_load = false;
-            self.browse_folder(self.dialog_input.clone(), ctx);
-        }
-        let host = self
-            .workspace
-            .as_ref()
-            .and_then(|w| w.remote.as_ref())
-            .map(|r| r.profile.endpoint())
-            .unwrap_or_default();
-        let host = ui.label(palette.tag(if self.folder_remote {
-            format!("SSH · {host}")
-        } else {
-            "THIS MACHINE".into()
-        }));
-        ui_probe::button(
-            ui,
-            if self.folder_remote {
-                "project-dialog-host:ssh"
-            } else {
-                "project-dialog-host:local"
-            },
-            &host,
-        );
-        layout::heading(
-            ui,
-            if self.folder_remote {
-                "Open remote project folder"
-            } else {
-                "Open project folder"
-            },
-            "Browse folders, then open the project. Absolute paths and ~/ are supported.",
-            palette,
-        );
-        let input_id = egui::Id::new("project-dialog-path");
-        // Closing the context menu that opened this modal can discard its
-        // first focus request. Recover only while no control owns focus.
-        if self.dialog_focus || ui.memory(|memory| memory.focused().is_none()) {
-            ui.memory_mut(|memory| memory.request_focus(input_id));
-            self.dialog_focus = false;
-        }
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut self.dialog_input)
-                .id(input_id)
-                .desired_width(f32::INFINITY)
-                .hint_text("Project folder"),
-        );
-        ui_probe::button(ui, "project-dialog-path", &response);
-        let enter = (response.has_focus() || response.lost_focus())
-            && ui.input(|i| i.key_pressed(Key::Enter));
-        let mut browse = None;
-        ui.horizontal(|ui| {
-            if ui.button("Up").clicked() {
-                browse = Some(
-                    std::path::Path::new(&self.dialog_input)
-                        .parent()
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .map(|p| p.to_string_lossy().into())
-                        .unwrap_or_else(|| "/".into()),
-                );
-            }
-            let response = ui.button("Browse");
-            ui_probe::button(ui, "project-dialog-browse", &response);
-            if response.clicked() || enter {
-                browse = Some(self.dialog_input.clone());
-            }
-            if self.folder_loading {
-                ui.spinner();
-                ui.label(palette.tag("Loading folders…"));
-            }
-        });
-        if let Some(error) = &self.folder_error {
-            ui.label(RichText::new(error).color(palette.error));
-        }
-        let query = format!("folder:{}:{}", self.folder_token, self.show_hidden);
-        if let Some(action) = file_browser::rows(
-            ui,
-            "project-folder-browser",
-            &self.folder_entries,
-            self.show_hidden,
-            &mut self.navigation.list,
-            &query,
-            (0, false),
-            None,
-            !self.folder_loading,
-        ) {
-            browse = Some(match action {
-                file_browser::Choice::Parent => std::path::Path::new(&self.dialog_input)
-                    .parent()
-                    .filter(|p| !p.as_os_str().is_empty())
-                    .map_or_else(|| "/".into(), |p| p.to_string_lossy().into()),
-                file_browser::Choice::Select(entry) | file_browser::Choice::Open(entry) => {
-                    entry.path
-                }
-            });
-        }
-        if self
-            .folder_entries
-            .iter()
-            .all(|e| !self.show_hidden && e.name.starts_with('.'))
-            && !self.folder_loading
-        {
-            ui.label(palette.tag("No visible subfolders. You can open this folder."));
-        }
-        if let Some(path) = browse {
-            self.browse_folder(path, ctx);
-        }
-        if !self.folder_loading
-            && self.folder_error.is_none()
-            && self.dialog_input == self.folder_policy_path
-        {
-            ui_probe::button(ui, "project-dialog-ready", &response);
-        }
-        ui.separator();
-        ui.push_id("folder-sandbox-presets", |ui| {
-            self.sandbox_presets
-                .ui(ui, &mut self.folder_sandbox, palette);
-        });
-        workbench::sandbox_backend_ui(ui, &mut self.folder_sandbox);
-        if self.folder_sandbox.enabled {
-            ui.label(RichText::new("If sandboxing is unavailable on this host, the project opens in clearly labelled normal mode.").small().color(palette.muted));
-            ui.collapsing("Sandbox access rules", |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(260.)
-                    .show(ui, |ui| {
-                        ui.push_id("folder-sandbox-rules", |ui| {
-                            workbench::sandbox_rules_ui(ui, &mut self.folder_sandbox, palette)
-                        });
-                    });
-            });
-        }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let open = palette.primary(ui, "Open project  ·  Ctrl+Enter");
-            ui_probe::button(ui, "project-dialog-open", &open);
-            if open.clicked() || open_by_key {
-                let options = self.folder_sandbox.clone();
-                if let Err(error) = options.validate() {
-                    self.folder_error = Some(error.to_string());
-                } else {
-                    self.sandbox_defaults = options.clone();
-                    self.workbench.preferences_pending = true;
-                    self.dialog = Dialog::None;
-                    self.guarded(
-                        Action::Project {
-                            path: self.dialog_input.clone(),
-                            remote: self.folder_remote,
-                            options,
-                        },
-                        ctx,
-                    );
-                }
-            }
-            let cancel = ui.button("Cancel");
-            ui_probe::button(ui, "project-dialog-cancel", &cancel);
-            if cancel.clicked() {
-                self.dialog = Dialog::None;
-            }
-        });
-    }
-
     /// Render shortcut/navigation configuration using the same validated bindings as input routing.
     pub(super) fn help_dialog(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
@@ -591,9 +430,16 @@ impl EditorApp {
         }
         let text = message.clone();
         let error = *error;
+        // Project browsing owns the foreground until confirmation. Retain
+        // background notices without painting them over its fixed actions.
+        let order = if self.dialog == Dialog::Folder && self.dialog_viewport == ctx.viewport_id() {
+            egui::Order::Middle
+        } else {
+            egui::Order::Tooltip
+        };
         egui::Area::new(egui::Id::new("notification"))
             .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -42.0])
-            .order(egui::Order::Tooltip)
+            .order(order)
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(palette.raised)

@@ -179,7 +179,10 @@ pub(super) fn rows(
         reveal = true;
     }
     activate |= enabled && path_keys.1 && list.navigated;
-    let height = (ctx.content_rect().height() - 390.).clamp(70., 220.);
+    // Respect an enclosing browser's height as well as the viewport budget.
+    let height = (ctx.content_rect().height() - 390.)
+        .clamp(70., 220.)
+        .min(ui.available_height().max(1.));
     ui.interact(
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height)),
         host,
@@ -195,23 +198,25 @@ pub(super) fn rows(
         None
     };
     let scroll_id = ui.make_persistent_id(id);
+    let row_height = layout::control_height(ui).max(25.);
+    let row_pitch = row_height + 2.;
     let mut scroll = egui::ScrollArea::vertical()
         .id_salt(id)
         .max_height(height)
         .auto_shrink([false, false]);
     if reveal {
-        let top = list.index as f32 * 27.;
+        let top = list.index as f32 * row_pitch;
         let offset =
             egui::scroll_area::State::load(&ctx, scroll_id).map_or(0., |state| state.offset.y);
         if top < offset {
             scroll = scroll.vertical_scroll_offset(top);
-        } else if top + 27. > offset + height {
-            scroll = scroll.vertical_scroll_offset((top + 27. - height).max(0.));
+        } else if top + row_pitch > offset + height {
+            scroll = scroll.vertical_scroll_offset((top + row_pitch - height).max(0.));
         }
     }
     let spacing = ui.spacing().item_spacing.y;
     ui.spacing_mut().item_spacing.y = 2.;
-    scroll.show_rows(ui, 25., visible.len(), |ui, range| {
+    scroll.show_rows(ui, row_height, visible.len(), |ui, range| {
         // Disable stale entries while navigating, but retain the list's focus
         // host above so keyboard browsing survives asynchronous directory reads.
         if !ready {
@@ -228,7 +233,7 @@ pub(super) fn rows(
             let response = ui
                 .push_id(&entry.path, |ui| {
                     ui.add_sized(
-                        [ui.available_width(), 25.],
+                        [ui.available_width(), row_height],
                         egui::Button::selectable(
                             list.navigated && index == list.index,
                             (label, egui::Atom::grow()),

@@ -49,6 +49,7 @@ mod marp_view;
 mod navigation;
 mod notebook_view;
 mod pdf_view;
+mod project_dialog;
 mod sandbox_presets;
 mod sessions;
 mod terminal_colors;
