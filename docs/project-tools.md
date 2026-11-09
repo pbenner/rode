@@ -2,7 +2,7 @@
 
 ## Git source control
 
-Use the **Source control** activity icon, **View → Source control**, or **Ctrl+Shift+G**. Git runs on the project host using its installed Git and configuration. **Git sandbox: off / on** selects execution outside the sandbox or under the project policy. Git defaults to outside the sandbox because these are user-operated actions. The choice is remembered per host/project and applies to status, commits, network operations, configuration, hooks and **Git terminal**. SSH Git still runs on the SSH host. Agent Git commands retain the agent’s project policy. Switching modes waits for pending operations and authentication prompts to finish; an operation never retries automatically in a less restricted mode. The native panel provides:
+Use the **Source control** activity icon, **View → Workspace panels → Source control**, or **Ctrl+Shift+G**. Git runs on the project host using its installed Git and configuration. **Git sandbox: off / on** selects execution outside the sandbox or under the project policy. Git defaults to outside the sandbox because these are user-operated actions. The choice is remembered per host/project and applies to status, commits, network operations, configuration, hooks and **Git terminal**. SSH Git still runs on the SSH host. Agent Git commands retain the agent’s project policy. Switching modes waits for pending operations and authentication prompts to finish; an operation never retries automatically in a less restricted mode. The native panel provides:
 
 - Status, branch/upstream information, working/staged diffs, and file or individual text-hunk staging/unstaging.
 - Commits, amend, the latest 100 commits with patches, blame, cherry-pick, and revert.
@@ -62,7 +62,7 @@ Formatting/checking on save and supported-language checks after a 900 ms typing 
 
 ## Host monitor
 
-Use the **System monitor** activity icon, **View → System monitor**, or **System: Monitor** in the command palette. No project is required: the welcome screen can show your local computer's metrics. With an SSH workspace, it monitors that remote host once connected, even before a project folder is ready; offline SSH sessions show a reconnect message rather than local metrics.
+Use the **System monitor** activity icon, **View → Workspace panels → System monitor**, or **System: Monitor** in the command palette. No project is required: the welcome screen can show your local computer's metrics. With an SSH workspace, it monitors that remote host once connected, even before a project folder is ready; offline SSH sessions show a reconnect message rather than local metrics.
 
 The dashboard arranges CPU, memory and GPU cards in one, two or three columns as the window allows. Plots keep a 16:9 aspect ratio and cards have a bounded width, including in detached windows. Filled history plots show labelled percentage/time axes and current readings. CPU charts compare overall usage with the busiest core; GPU charts compare utilization with VRAM occupancy. Hover over a chart for sample values. Colours follow the selected theme. Swap, load/uptime, disk capacity, network throughput, and expandable core/process details below the charts are also available. Disk capacity describes the project's filesystem when a project is ready, or the host's root filesystem otherwise. The panel identifies the host, and changing hosts clears the previous samples.
 

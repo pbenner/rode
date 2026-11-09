@@ -42,7 +42,7 @@ impl EditorApp {
         // Scaling moves every widget. Use completed clicks and close the menu
         // before the next frame applies the zoom, rather than dragging a
         // control whose geometry changes underneath the pointer.
-        icons::submenu(
+        menus::submenu(
             ui,
             Icon::Settings,
             &format!("Interface scale: {percent}%"),
@@ -73,32 +73,30 @@ impl EditorApp {
                     }
                 }
                 ui.separator();
-                egui::ScrollArea::vertical()
-                    .max_height(260.)
-                    .show(ui, |ui| {
-                        for preset in [50, 75, 90, 100, 110, 125, 150, 175, 200] {
-                            let label = if preset == 100 {
-                                "100% (system default)".into()
-                            } else {
-                                format!("{preset}%")
-                            };
-                            let response = ui.selectable_label(percent == preset, label);
-                            ui_probe::button(ui, &format!("interface-scale-{preset}"), &response);
-                            if response.clicked() {
-                                self.set_ui_scale(f32::from(preset) / 100., ctx);
-                                ui.close();
-                            }
-                        }
-                    });
+                for preset in [50, 75, 90, 100, 110, 125, 150, 175, 200] {
+                    let label = if preset == 100 {
+                        "100% (system default)".into()
+                    } else {
+                        format!("{preset}%")
+                    };
+                    let response = ui.selectable_label(percent == preset, label);
+                    ui_probe::button(ui, &format!("interface-scale-{preset}"), &response);
+                    if response.clicked() {
+                        self.set_ui_scale(f32::from(preset) / 100., ctx);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                let reset = ui.add(
+                    IconButton::new(Icon::Refresh, "Reset to system default").shortcut("Ctrl+0"),
+                );
+                ui_probe::button(ui, "interface-reset", &reset);
+                if reset.clicked() {
+                    self.set_ui_scale(1., ctx);
+                    ui.close();
+                }
             },
         );
-        if ui
-            .add(IconButton::new(Icon::Refresh, "Reset interface scale (100%)").shortcut("Ctrl+0"))
-            .clicked()
-        {
-            self.set_ui_scale(1., ctx);
-            ui.close();
-        }
     }
 
     /// Render interface-theme choices and apply only an explicit changed selection.

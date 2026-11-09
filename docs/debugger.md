@@ -1,6 +1,6 @@
 # Interactive debugger
 
-Open **View → Debugger**, use the bug icon in the activity bar, or choose **Debug: Show debugger** in the command palette. Debugging is an optional bundled native feature (`rode.debugger`) in **Extensions**. Opening the panel starts no processes.
+Open **View → Workspace panels → Debugger**, use the bug icon in the activity bar, or choose **Debug: Show debugger** in the command palette. Debugging is an optional bundled native feature (`rode.debugger`) in **Extensions**. Opening the panel starts no processes.
 
 RODE uses installed [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/overview) (DAP) adapters. The same controls work in local and SSH projects: launch/attach, breakpoints, pause/continue, step over/into/out, threads, call stacks, expandable variables, watches and expression evaluation. Program input/output uses a real **Debug** terminal tab; adapter output and evaluation results appear in the panel's **Debug console**.
 

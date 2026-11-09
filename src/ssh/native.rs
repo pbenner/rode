@@ -135,7 +135,14 @@ pub(super) fn connected(socket: &Path) -> bool {
 pub(super) fn stop(socket: &Path) {
     // Capture the endpoint before Remote removes its name. Cleanup and token
     // authentication run off the GUI thread, including after a killed master.
-    let stream = std::os::unix::net::UnixStream::connect(socket);
+    let stream = (|| -> std::io::Result<std::os::unix::net::UnixStream> {
+        let stream = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+        stream.set_nonblocking(true)?;
+        // A stopped master can leave its listen backlog full. Capture an
+        // immediately available endpoint without ever waiting on the GUI thread.
+        stream.connect(&socket2::SockAddr::unix(socket)?)?;
+        Ok(stream.into())
+    })();
     let directory = socket.parent().map(Path::to_owned);
     std::thread::spawn(move || {
         let Some(directory) = directory else {
@@ -143,6 +150,9 @@ pub(super) fn stop(socket: &Path) {
         };
         let _cleanup = RuntimeDirectory(directory.clone());
         if let Ok(mut stream) = stream {
+            if stream.set_nonblocking(false).is_err() {
+                return;
+            }
             let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
             let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
             #[cfg(target_os = "linux")]
@@ -516,6 +526,80 @@ async fn channel_client(socket: &Path, command: &str, pty: bool, x11: bool) -> R
 #[cfg(test)]
 mod profile_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cleanup_does_not_wait_for_a_full_master_backlog() {
+        let remote = crate::ssh::Remote::new(crate::ssh::Profile {
+            host: "unused.invalid".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let socket =
+            socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None).unwrap();
+        socket
+            .bind(&socket2::SockAddr::unix(&remote.socket).unwrap())
+            .unwrap();
+        socket.listen(0).unwrap();
+        let listener: std::os::unix::net::UnixListener = socket.into();
+        let queued = std::os::unix::net::UnixStream::connect(&remote.socket).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            remote.cleanup();
+            tx.send(()).unwrap();
+        });
+        let completed = rx.recv_timeout(Duration::from_secs(1));
+        // Release a regressed blocking connect before asserting, so a failure
+        // cannot strand the cleanup thread or the test process.
+        drop(listener.accept().unwrap());
+        drop(queued);
+        drop(listener);
+        cleanup.join().unwrap();
+        completed.expect("SSH cleanup waited for the master to accept a connection");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cleanup_sends_stop_to_the_authenticated_master() {
+        let remote = crate::ssh::Remote::new(crate::ssh::Profile {
+            host: "unused.invalid".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let token =
+            rode_session::control_auth::Token::publish(remote.socket.parent().unwrap()).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&remote.socket).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            token.verify(&mut stream).unwrap();
+            let reply = serde_json::to_vec(&rode_session::Response::Ok).unwrap();
+            stream
+                .write_all(&((reply.len() + 1) as u32).to_be_bytes())
+                .unwrap();
+            stream.write_all(b"J").unwrap();
+            stream.write_all(&reply).unwrap();
+            let mut size = [0; 4];
+            stream.read_exact(&mut size).unwrap();
+            let length = u32::from_be_bytes(size) as usize;
+            assert!(length > 1 && length <= MAX_PACKET);
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            assert_eq!(body[0], b'J');
+            assert!(matches!(
+                serde_json::from_slice::<Request>(&body[1..]).unwrap(),
+                Request::Stop
+            ));
+            tx.send(()).unwrap();
+        });
+        remote.cleanup();
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("The master did not receive Stop");
+        peer.join().unwrap();
+    }
 
     #[test]
     fn login_profile_is_private_consumed_and_absent_from_arguments() {

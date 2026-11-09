@@ -46,6 +46,7 @@ mod layout;
 mod lifecycle;
 mod markdown;
 mod marp_view;
+mod menus;
 mod navigation;
 mod notebook_view;
 mod pdf_view;

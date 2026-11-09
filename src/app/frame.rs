@@ -16,69 +16,7 @@ impl EditorApp {
                 ui.label(RichText::new("[r]").monospace().size(22.0).strong().color(palette.accent));
                 ui.label(RichText::new("RODE").strong().size(16.0).color(palette.heading_color()));
                 ui.add_space(14.0);
-                let file_menu = ui.menu_button("File", |ui| {
-                    if ui.add(IconButton::new(Icon::NewFile, "New file").shortcut(self.editing_hint("Ctrl+N"))).clicked() { self.new_file(); ui.close(); }
-                    if ui.add(IconButton::new(Icon::NewFile,"New Jupyter notebook")).clicked() {self.new_notebook();ui.close();}
-                    if ui.add(IconButton::new(Icon::NewFile,"New Marp presentation")).clicked() {self.new_marp();ui.close();}
-                    if ui.add(IconButton::new(Icon::Files, "Open as hex / inspect binary…")).clicked() { self.set_dialog(Dialog::HexOpen); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Search, "Open file…").shortcut(self.editing_hint("Ctrl+P"))).clicked() { self.set_dialog(Dialog::Open); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Folder, "Open project folder…").shortcut("Ctrl+Shift+O")).clicked() { self.set_dialog(Dialog::Folder); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Folder, "Open local folder…")).clicked() { self.open_local_folder_dialog(); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Folder, "Open encrypted project…")).clicked() { self.encrypted_dialog(); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Remote, "Connect via SSH…")).clicked() { self.set_dialog(Dialog::Connect); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Remote, "SSH tunnels…")).clicked() { self.set_dialog(Dialog::Tunnels); ui.close(); }
-                    ui.separator();
-                    if ui.add(IconButton::new(Icon::Save, "Save").shortcut(self.editing_hint("Ctrl+S"))).clicked() { self.save_active(ctx, false); ui.close(); }
-                    if ui.add(IconButton::new(Icon::SaveAs, "Save as…").shortcut(self.editing_hint("Ctrl+Shift+S"))).clicked() { self.save_active(ctx, true); ui.close(); }
-                    if ui.add(IconButton::new(Icon::SaveAll, "Save all")).clicked() {
-                        let ids: Vec<_> = self.documents.iter().filter(|d| d.dirty() && d.path.is_some()).map(|d| (d.id, d.path.clone().unwrap_or_default())).collect();
-                        for (id, path) in ids { self.save_document(id, path, false, ctx); }
-                        if self.documents.iter().any(|d| d.path.is_none()) { self.notify("Save untitled files individually with Ctrl+S to choose their paths.", false); }
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.add(IconButton::new(Icon::Exit, "Quit")).clicked() { self.guarded(Action::Quit, ctx); ui.close(); }
-                });
-                self.navigation_menu(&file_menu.response);
-                let view_menu = ui.menu_button("View", |ui| {
-                    icons::submenu(ui, Icon::Palette, "Color theme", |ui| {
-                        self.theme_menu(ui, ctx);
-                    });
-                    icons::submenu(ui, Icon::Palette, "Syntax highlighting", |ui| self.syntax_theme_menu(ui, ctx));
-                    // Keep display sizing reachable even when system DPI makes menus large.
-                    self.ui_scale_menu(ui, ctx);
-                    if ui.add(IconButton::new(Icon::Palette, "Terminal colors…")).clicked() { self.terminal_colors.open = true; ui.close(); }
-                    ui.separator();
-                    for (panel,icon,label,shortcut) in [(Panel::Git,Icon::Git,"Source control","Ctrl+Shift+G"),(Panel::Monitor,Icon::Monitor,"System monitor",""),(Panel::Problems,Icon::Problems,"Problems","Ctrl+Shift+M"),(Panel::Environment,Icon::Environment,"Environment",""),(Panel::Tasks,Icon::Play,"Tasks",""),(Panel::Settings,Icon::Settings,"Project settings / sandbox access",""),(Panel::Agent,Icon::Chat,"Agent chat","Ctrl+Shift+A"),(Panel::Debug,Icon::Debug,"Debugger","F5")] {
-                        if ui.add(IconButton::new(icon,label).shortcut(shortcut)).clicked() { self.toggle_panel(panel, ctx); ui.close(); }
-                    }
-                    if ui.add(IconButton::new(Icon::Extensions,"Extensions…").shortcut("Ctrl+Shift+X")).clicked(){self.set_dialog(Dialog::Extensions);ui.close();}
-                    if ui.add(IconButton::new(Icon::Terminal,"Terminals & Slurm")).clicked(){self.open_sessions(ctx);ui.close();}
-                    if ui.add(IconButton::new(Icon::Settings,"Keyboard shortcuts / navigation…")).clicked() {self.set_dialog(Dialog::Shortcuts);ui.close();}
-                    ui.separator();
-                    ui.add(egui::Checkbox::new(&mut self.show_explorer, ("Explorer", egui::Atom::grow(), RichText::new("Ctrl+B").text_style(egui::TextStyle::Button).color(palette.muted))));
-                    if ui.add(IconButton::new(Icon::ChevronRight, "Toggle tools sidebar").shortcut("Ctrl+~")).clicked() { self.toggle_sidebar(ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Terminal, "Toggle terminal").shortcut("Ctrl+Shift+T")).clicked() { self.toggle_terminal(ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Files, "Markdown preview").shortcut("Ctrl+Shift+R")).clicked() { self.toggle_markdown(ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Play, "Marp slide preview")).clicked() { self.toggle_marp(ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Search, "Find / replace").shortcut(self.editing_hint("Ctrl+F"))).clicked() { self.markdown_source(); self.show_find = true; self.find_focus = true; ui.close(); }
-                    if ui.checkbox(&mut self.show_hidden, "Show hidden files").changed() { self.tree_dirty = true; }
-                    self.font_save_pending |= ui.add(egui::Slider::new(&mut self.font_size, 10.0..=26.0).text("Editor font size")).changed();
-                });
-                ui_probe::button(ui, "menu-view", &view_menu.response);
-                ui.menu_button("Code", |ui| {
-                    if ui.add(IconButton::new(Icon::Format, "Format document").shortcut("Shift+Alt+F")).clicked() { self.format_active(true,false,ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Check, "Check document")).clicked() { self.format_active(false,false,ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Fix, "Ruff: apply safe fixes")).clicked() { self.format_active(true,true,ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Play, "Run current file / project")).clicked() { self.run_active(false, ctx); ui.close(); }
-                    if ui.add(IconButton::new(Icon::Play, "Build current file / project")).clicked() { self.run_active(true,ctx); ui.close(); }
-                });
-                ui.menu_button("Debug",|ui|{
-                    if ui.add(IconButton::new(Icon::Debug,"Start / continue").shortcut("F5")).clicked(){self.start_debugger(ctx);ui.close();}
-                    for (icon,label,cmd,key) in [(Icon::Pause,"Pause","pause","F6"),(Icon::StepOver,"Step over","next","F10"),(Icon::StepIn,"Step into","stepIn","F11"),(Icon::StepOut,"Step out","stepOut","Shift+F11")] {if ui.add(IconButton::new(icon,label).shortcut(key)).clicked(){self.debug_control(cmd);ui.close();}}
-                    if ui.add(IconButton::new(Icon::Stop,"Stop / detach").shortcut("Shift+F5")).clicked(){self.stop_debugger();ui.close();}
-                    if ui.add(IconButton::new(Icon::Check,"Toggle breakpoint").shortcut("F9")).clicked(){self.toggle_cursor_breakpoint();ui.close();}
-                });
+                self.menus(ui, ctx);
                 ui.add_space(12.0);
                 let label = self.workspace.as_ref().map(|w| format!("{}  /  {}", if w.remote.is_some() { "SSH" } else { "LOCAL" }, ssh::display_name(&w.root))).unwrap_or_else(|| "Your next workspace starts here".into());
                 let roomy = ctx.content_rect().width() >= 1180.;

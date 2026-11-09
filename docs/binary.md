@@ -1,6 +1,6 @@
 # Hex editor and binary analysis
 
-Open a binary file normally, or use **File → Open as hex / inspect binary**, the explorer's right-click menu, or **Hex: Open file / inspect binary** in the command palette. An explicit hex open also works for text, images and PDFs. Save or close a file's unsaved text edits before changing its view to hex.
+Open a binary file normally, or use **File → Open binary / hex…**, the explorer's right-click menu, or **Hex: Open file / inspect binary** in the command palette. An explicit hex open also works for text, images and PDFs. Save or close a file's unsaved text edits before changing its view to hex.
 
 The **Hex & binary analysis** bundled extension is enabled by default. Binary data stays separate from text buffers, formatters, Markdown and code-run commands.
 

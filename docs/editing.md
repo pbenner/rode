@@ -84,7 +84,7 @@ Use Command for editor shortcuts on macOS; tab cycling with Control+Tab remains 
 
 Choose a percentage in **View → Interface scale** to resize the entire GUI, including menu text, icons, buttons, side panels and editor/terminal text. **Smaller (5%)** and **Larger (5%)** provide fine adjustments. Each action applies after a completed click and closes the menu; there is no slider to chase as the interface resizes. The 50–200% scale is relative to the operating system's monitor scaling: **100%** follows the system, **75%** makes the interface smaller, and **50%** compensates for a 2x display scale when you want a more compact layout. Changes apply immediately and are saved on the desktop computer, independently of the project or SSH host.
 
-**View → Editor font size** adjusts source/terminal text without resizing the menus and icons. **Ctrl+0** or **View → Reset interface scale (100%)** resets the whole-interface scale. The command palette offers **Interface: Zoom in**, **Interface: Zoom out**, and **Interface: Reset scale**. Interface scaling leaves buffers, terminal sessions, source font preferences and theme choices intact; it continues to follow monitor DPI when moving the window between displays.
+**View → Editor font size** adjusts source/terminal text without resizing the menus and icons. **Ctrl+0** or **View → Interface scale → Reset to system default** resets the whole-interface scale. The command palette offers **Interface: Zoom in**, **Interface: Zoom out**, and **Interface: Reset scale**. Interface scaling leaves buffers, terminal sessions, source font preferences and theme choices intact; it continues to follow monitor DPI when moving the window between displays.
 
 The explorer remains at the left. The workspace beside it switches between **Code**, **Terminal**, and project tools such as **Chat**, **Git**, and **Debugger**. Opening tools replaces the code view instead of shrinking it. Choose **Code** or open a file in the explorer to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 
@@ -96,7 +96,7 @@ The terminal fills this workspace rather than occupying a separate bottom panel.
 
 ## Keyboard pane navigation
 
-Choose **Standard**, **Emacs**, or **Vim** in **View → Keyboard shortcuts / navigation**, then **Apply bindings** (**Ctrl+Enter**). The command palette also offers **Keyboard style: Standard / Emacs / Vim**, which applies and saves immediately. Each style keeps its own configurable leader and action bindings. Switching styles preserves buffers, cursors and native undo history.
+Choose **Standard**, **Emacs**, or **Vim** in **View → Keyboard shortcuts…**, then **Apply bindings** (**Ctrl+Enter**). The command palette also offers **Keyboard style: Standard / Emacs / Vim**, which applies and saves immediately. Each style keeps its own configurable leader and action bindings. Switching styles preserves buffers, cursors and native undo history.
 
 | Style | Source editing | Pane/file command prefix |
 | --- | --- | --- |

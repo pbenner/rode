@@ -50,6 +50,7 @@ shell-words = "1"
 hmac = "0.12"
 sha1 = "0.10"
 zeroize = "1"
+socket2 = "0.6"
 
 [dev-dependencies]
 rand = "0.10"

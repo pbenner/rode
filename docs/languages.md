@@ -6,7 +6,7 @@ Detection recognizes common extension variants (`.pyi`, `.pyw`, `.mjs`, `.cjs`, 
 
 ## Formatting and issues
 
-Use **Code → Format document** (**Shift+Alt+F**), **Check document**, and **View → Problems** (**Ctrl+Shift+M**). Format on save, check on save, and checks after a typing pause are configurable in Project settings.
+Use **Code → Format document** (**Shift+Alt+F**), **Check document**, and **View → Workspace panels → Problems** (**Ctrl+Shift+M**). Format on save, check on save, and checks after a typing pause are configurable in Project settings.
 
 | Language | Formatter | Issues in editor |
 | --- | --- | --- |

@@ -567,7 +567,14 @@ pub(super) fn submenu<R>(
         Icon::ChevronRight.paint(ui.painter(), rect, color);
     }
     super::ui_probe::button(ui, &format!("submenu:{label}"), &output.response);
-    egui::containers::menu::SubMenu::new().show(ui, &output.response, contents);
+    // SubMenu tests hover against the trigger rectangle, independently of the
+    // scroll clip. Hidden rows must not open beneath the menu bar on reopening.
+    let mut trigger = output.response;
+    trigger.rect = trigger.rect.intersect(ui.clip_rect());
+    trigger.interact_rect = trigger.interact_rect.intersect(ui.clip_rect());
+    if trigger.rect.is_positive() {
+        egui::containers::menu::SubMenu::new().show(ui, &trigger, contents);
+    }
 }
 
 /// Render the open-editors overflow menu with a stable accessible button label.

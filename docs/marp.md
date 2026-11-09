@@ -1,6 +1,6 @@
 # Marp presentations
 
-Open Markdown and choose **Slides** beside **Edit / Preview**, or **View → Marp slide preview**. **Ctrl+Shift+R** toggles slides for `marp: true` front matter or `.marp.md` filenames. Ordinary Markdown keeps its existing preview shortcut.
+Open Markdown and choose **Slides** beside **Edit / Preview**, or **View → Previews → Marp slide preview**. **Ctrl+Shift+R** toggles slides for `marp: true` front matter or `.marp.md` filenames. Ordinary Markdown keeps its existing preview shortcut.
 
 **File → New Marp presentation** creates an unsaved starter deck. Save As defaults to `.marp.md`:
 

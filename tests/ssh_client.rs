@@ -674,7 +674,8 @@ fn tunnel_return_route_preserves_compute_identity_through_a_verified_relay() {
         .store(target.port.into(), Ordering::SeqCst);
     let config = target.root.path().join("route-config");
     let known_hosts = target.root.path().join("route-hosts");
-    std::fs::write(&config, format!("Host compute\n HostName compute.invalid\n Port 2222\nHost relay\n HostName 127.0.0.1\n Port {}\nHost *\n User fixture\n UserKnownHostsFile {}\n GlobalKnownHostsFile /nonexistent/rode-tunnel-fixture-global-hosts\n IdentityFile none\n IdentityAgent none\n StrictHostKeyChecking yes\n", relay.port, known_hosts.display())).unwrap();
+    let global_hosts = target.root.path().join("missing-global-hosts");
+    std::fs::write(&config, format!("Host compute\n HostName compute.invalid\n Port 2222\nHost relay\n HostName 127.0.0.1\n Port {}\nHost *\n User fixture\n UserKnownHostsFile {}\n GlobalKnownHostsFile {}\n IdentityFile none\n IdentityAgent none\n StrictHostKeyChecking yes\n", relay.port, known_hosts.display(), global_hosts.display())).unwrap();
     std::fs::write(
         &known_hosts,
         format!(

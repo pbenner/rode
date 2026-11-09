@@ -119,6 +119,125 @@ async fn roundtrip(port: u16) {
     .unwrap();
 }
 
+#[cfg(target_os = "linux")]
+fn local_forward_sockets(port: u16) -> usize {
+    let sockets: std::collections::HashSet<_> = std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| {
+            let target = std::fs::read_link(entry.ok()?.path()).ok()?;
+            Some(
+                target
+                    .to_str()?
+                    .strip_prefix("socket:[")?
+                    .strip_suffix(']')?
+                    .to_owned(),
+            )
+        })
+        .collect();
+    let suffix = format!(":{port:04X}");
+    std::fs::read_to_string("/proc/self/net/tcp")
+        .unwrap()
+        .lines()
+        .skip(1)
+        .filter(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            fields.len() > 9 && fields[2].ends_with(&suffix) && sockets.contains(fields[9])
+        })
+        .count()
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn relay_disconnect_releases_forwards_even_when_local_peers_stay_open() {
+    let directory = tempfile::tempdir().unwrap();
+    let identity = key();
+    let identity_path = directory.path().join("identity");
+    std::fs::write(
+        &identity_path,
+        identity
+            .to_openssh(keys::ssh_key::LineEnding::LF)
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
+    let host_key = key();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay_port = listener.local_addr().unwrap().port();
+    let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen_port = reserved.local_addr().unwrap().port();
+    drop(reserved);
+    let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ssh_port = target.local_addr().unwrap().port();
+    let relay = Relay {
+        allowed: identity.public_key().clone(),
+        handles: Default::default(),
+        auths: Default::default(),
+        deny_forwarding: Default::default(),
+    };
+    let mut server = relay.clone();
+    let config = Arc::new(server::Config {
+        keys: vec![host_key.clone()],
+        auth_rejection_time: Duration::ZERO,
+        ..Default::default()
+    });
+    let task = tokio::spawn(async move {
+        server.run_on_socket(config, &listener).await.unwrap();
+    });
+    let store = Store::default();
+    let id = crate::new_id().unwrap();
+    store
+        .start(
+            id.clone(),
+            Spec {
+                relay_port,
+                listen_port,
+                ssh_port,
+                identity: identity_path.to_string_lossy().into(),
+                relay_key: host_key.public_key().to_openssh().unwrap(),
+                ..spec()
+            },
+        )
+        .unwrap();
+    let mut clients = vec![];
+    let mut local_peers = vec![];
+    for _ in 0..3 {
+        until(|| store.list()[0].status == Status::Connected).await;
+        clients.push(
+            TcpStream::connect(("127.0.0.1", listen_port))
+                .await
+                .unwrap(),
+        );
+        local_peers.push(
+            tokio::time::timeout(Duration::from_secs(3), target.accept())
+                .await
+                .unwrap()
+                .unwrap()
+                .0,
+        );
+        assert_eq!(local_forward_sockets(ssh_port), 1);
+        let handles = std::mem::take(&mut *relay.handles.lock().unwrap());
+        for handle in handles {
+            handle
+                .disconnect(
+                    russh::Disconnect::ByApplication,
+                    "fixture reconnect".into(),
+                    "en".into(),
+                )
+                .await
+                .unwrap();
+        }
+        // Quiet peers deliberately retain their write half after remote EOF.
+        // Losing the parent SSH session must still release these local sockets
+        // before another connection gets its fresh forwarding-slot budget.
+        until(|| local_forward_sockets(ssh_port) == 0).await;
+    }
+    store.stop(&id);
+    assert_eq!(local_forward_sockets(ssh_port), 0);
+    drop(local_peers);
+    drop(clients);
+    task.abort();
+}
+
 fn assert_listener_refusal(info: &Info) {
     assert_eq!(info.status, Status::Reconnecting);
     for detail in [

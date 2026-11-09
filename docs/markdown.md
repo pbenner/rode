@@ -2,7 +2,7 @@
 
 Open a `.md`, `.markdown`, `.mdown`, or `.mkd` file, then choose **Preview** above the editor. **Edit** returns to the source in the same tab. Extensions are case-insensitive.
 
-You can also use **Ctrl+Shift+R**, **View → Markdown preview**, or **Markdown: Toggle preview** in the command palette. On macOS, use Command instead of Control.
+You can also use **Ctrl+Shift+R**, **View → Previews → Markdown preview**, or **Markdown: Toggle preview** in the command palette. On macOS, use Command instead of Control.
 
 The preview renders the **current buffer**, including unsaved changes. Switching views preserves the text editor's cursor and undo history. Previewing does not save or modify the document; **Ctrl+S** saves the original Markdown source from either view. Task checkboxes are read-only in Preview. **Ctrl+F** returns to Edit for the existing find/replace controls.
 

@@ -335,6 +335,7 @@ struct Handler {
     info: Arc<Mutex<Info>>,
     spec: Spec,
     slots: Arc<Semaphore>,
+    disconnected: watch::Receiver<()>,
 }
 impl client::Handler for Handler {
     type Error = anyhow::Error;
@@ -381,15 +382,21 @@ impl client::Handler for Handler {
             return Ok(());
         };
         let ssh_port = self.spec.ssh_port;
+        let mut disconnected = self.disconnected.clone();
         tokio::spawn(async move {
             let _slot = slot;
-            let Ok(Ok(mut local)) =
-                tokio::time::timeout(TIMEOUT, TcpStream::connect(("127.0.0.1", ssh_port))).await
-            else {
-                return;
-            };
-            reply.accept().await;
-            let _ = tokio::io::copy_bidirectional(&mut channel.into_stream(), &mut local).await;
+            tokio::select! {
+                _ = disconnected.changed() => {},
+                _ = async {
+                    let Ok(Ok(mut local)) =
+                        tokio::time::timeout(TIMEOUT, TcpStream::connect(("127.0.0.1", ssh_port))).await
+                    else {
+                        return;
+                    };
+                    reply.accept().await;
+                    let _ = tokio::io::copy_bidirectional(&mut channel.into_stream(), &mut local).await;
+                } => {},
+            }
         });
         Ok(())
     }
@@ -418,10 +425,14 @@ async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
         maximum_packet_size: 32768,
         ..Default::default()
     });
+    // Dropping this connection future closes the watch channel. Every forward
+    // then releases its local socket, even if that peer never finishes its EOF.
+    let (_connection, disconnected) = watch::channel(());
     let handler = Handler {
         info: info.clone(),
         spec: spec.clone(),
         slots: Arc::new(Semaphore::new(32)),
+        disconnected,
     };
     let stream = tokio::time::timeout(
         TIMEOUT,
