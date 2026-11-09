@@ -217,40 +217,35 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.spacing_mut().button_padding = egui::vec2(0., 2.);
-                let button_height = ((ui.available_height() - 68.) / 13. - 6.).clamp(22., 40.);
-                for (icon, hint, action) in [
-                    (Icon::Files, "Toggle explorer · Ctrl+B", 0),
-                    (Icon::Search, "Open file · Ctrl+P", 1),
-                    (Icon::Remote, "Connect via SSH", 2),
-                    (Icon::Terminal, "Toggle terminal · Ctrl+Shift+T", 3),
-                    (Icon::Git, "Source control · Ctrl+Shift+G", 4),
-                    (Icon::Monitor, "System monitor", 5),
-                    (Icon::Problems, "Problems · Ctrl+Shift+M", 6),
-                    (Icon::Environment, "Environment", 7),
-                    (Icon::Play, "Tasks", 12),
-                    (Icon::Settings, "Project settings / sandbox access", 8),
-                    (Icon::Chat, "Agent chat · Ctrl+Shift+A", 9),
-                    (Icon::Extensions, "Extensions · Ctrl+Shift+X", 10),
-                    (Icon::Debug, "Debugger · F5", 11),
-                ] {
-                    let selected = match action {
-                        0 => self.show_explorer,
-                        2 => self.dialog == Dialog::Connect,
-                        3 => self.terminal_any_visible(),
-                        4 => self.panel_visible(Panel::Git),
-                        5 => self.panel_visible(Panel::Monitor),
-                        6 => self.panel_visible(Panel::Problems),
-                        7 => self.panel_visible(Panel::Environment),
-                        8 => self.panel_visible(Panel::Settings),
-                        9 => self.panel_visible(Panel::Agent),
-                        10 => self.dialog == Dialog::Extensions,
-                        12 => self.panel_visible(Panel::Tasks),
-                        11 => self.panel_visible(Panel::Debug),
-                        _ => false,
+                let commands = [
+                    Command::Explorer,
+                    Command::Open,
+                    Command::Connect,
+                    Command::Terminal,
+                    Command::Panel(Panel::Git),
+                    Command::Panel(Panel::Monitor),
+                    Command::Panel(Panel::Problems),
+                    Command::Panel(Panel::Environment),
+                    Command::Panel(Panel::Tasks),
+                    Command::Panel(Panel::Settings),
+                    Command::Panel(Panel::Agent),
+                    Command::Extensions,
+                    Command::Panel(Panel::Debug),
+                ];
+                let button_height =
+                    ((ui.available_height() - 68.) / commands.len() as f32 - 6.).clamp(22., 40.);
+                for command in commands {
+                    let definition = command.definition();
+                    let shortcut = self.command_hint(command);
+                    let hint = if shortcut.is_empty() {
+                        definition.label.to_owned()
+                    } else {
+                        format!("{} · {shortcut}", definition.label)
                     };
+                    let selected = self.command_selected(command);
                     let response = ui.add_sized(
                         [36.0, button_height],
-                        IconButton::icon(icon, hint)
+                        IconButton::icon(definition.icon, &hint)
                             .icon_size(if button_height < 34. { 20. } else { 23. })
                             .selected(selected),
                     );
@@ -265,21 +260,7 @@ impl EditorApp {
                         );
                     }
                     if response.clicked() {
-                        match action {
-                            0 => self.show_explorer = !self.show_explorer,
-                            1 => self.set_dialog(Dialog::Open),
-                            2 => self.set_dialog(Dialog::Connect),
-                            3 => self.toggle_terminal(ctx),
-                            4 => self.toggle_panel(Panel::Git, ctx),
-                            5 => self.toggle_panel(Panel::Monitor, ctx),
-                            6 => self.toggle_panel(Panel::Problems, ctx),
-                            7 => self.toggle_panel(Panel::Environment, ctx),
-                            12 => self.toggle_panel(Panel::Tasks, ctx),
-                            8 => self.toggle_panel(Panel::Settings, ctx),
-                            9 => self.toggle_panel(Panel::Agent, ctx),
-                            11 => self.toggle_panel(Panel::Debug, ctx),
-                            _ => self.set_dialog(Dialog::Extensions),
-                        }
+                        self.execute_command(command, ctx);
                     }
                     ui.add_space(6.0);
                 }

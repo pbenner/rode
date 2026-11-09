@@ -223,3 +223,48 @@ fn compact_menus_scroll_to_last_actions_and_keep_view_toggles_open() {
         }
     }
 }
+
+#[test]
+fn opening_the_debugger_panel_does_not_advertise_or_start_its_f5_action() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = directory.path().join("ui.json");
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    ctx.style_mut(|style| style.animation_time = 0.);
+    ui_probe::install_at(&ctx, state.clone());
+    let size = egui::vec2(1380., 1000.);
+    frame(&mut app, &ctx, size, vec![]);
+    click(&mut app, &ctx, size, control(&state, "menu-view"));
+    click(
+        &mut app,
+        &ctx,
+        size,
+        control(&state, "submenu:Workspace panels"),
+    );
+    let output = frame(&mut app, &ctx, size, vec![]);
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "F5"
+    )));
+    app.notice = None;
+    click(&mut app, &ctx, size, control(&state, "menu-item:Debugger"));
+    assert_eq!(app.workbench.panel, Some(Panel::Debug));
+    assert!(app.debugger.client.is_none() && app.notice.is_none());
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: Key::F5,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        },
+        |ctx| app.shortcuts(ctx),
+    );
+    assert!(app.notice.as_ref().is_some_and(
+        |(message, _, _)| message == "Open a connected project to debug its programs."
+    ));
+    assert!(app.debugger.client.is_none());
+}

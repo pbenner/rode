@@ -68,7 +68,7 @@ impl EditorApp {
                         &response,
                     );
                     if response.clicked() {
-                        self.set_ui_scale(self.ui_scale + step, ctx);
+                        self.execute_command(Command::UiScaleStep(step), ctx);
                         ui.close();
                     }
                 }
@@ -87,12 +87,14 @@ impl EditorApp {
                     }
                 }
                 ui.separator();
+                let definition = Command::UiScaleReset.definition();
                 let reset = ui.add(
-                    IconButton::new(Icon::Refresh, "Reset to system default").shortcut("Ctrl+0"),
+                    IconButton::new(definition.icon, definition.label)
+                        .shortcut(&self.command_hint(Command::UiScaleReset)),
                 );
                 ui_probe::button(ui, "interface-reset", &reset);
                 if reset.clicked() {
-                    self.set_ui_scale(1., ctx);
+                    self.execute_command(Command::UiScaleReset, ctx);
                     ui.close();
                 }
             },

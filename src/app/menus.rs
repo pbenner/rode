@@ -94,97 +94,47 @@ impl EditorApp {
         top(ui, "Debug", |ui| self.debug_menu(ui, ctx));
     }
 
+    fn menu_commands(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, commands: &[Command]) {
+        for &command in commands {
+            let definition = command.definition();
+            if item(
+                ui,
+                definition.icon,
+                definition.label,
+                &self.command_hint(command),
+            ) {
+                self.execute_command(command, ctx);
+                ui.close();
+            }
+        }
+    }
+
     fn file_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         section(ui, "CREATE", true);
-        if item(ui, Icon::NewFile, "New file", self.editing_hint("Ctrl+N")) {
-            self.new_file();
-            ui.close();
-        }
-        if item(ui, Icon::NewFile, "New Jupyter notebook", "") {
-            self.new_notebook();
-            ui.close();
-        }
-        if item(ui, Icon::NewFile, "New Marp presentation", "") {
-            self.new_marp();
-            ui.close();
-        }
-        section(ui, "OPEN", false);
-        for (icon, label, shortcut, dialog) in [
-            (
-                Icon::Search,
-                "Open file…",
-                self.editing_hint("Ctrl+P"),
-                Dialog::Open,
-            ),
-            (
-                Icon::Folder,
-                "Open project folder…",
-                "Ctrl+Shift+O",
-                Dialog::Folder,
-            ),
-            (Icon::Files, "Open binary / hex…", "", Dialog::HexOpen),
-        ] {
-            if item(ui, icon, label, shortcut) {
-                self.set_dialog(dialog);
-                ui.close();
-            }
-        }
-        if item(ui, Icon::Folder, "Open local folder…", "") {
-            self.open_local_folder_dialog();
-            ui.close();
-        }
-        if item(ui, Icon::Folder, "Open encrypted project…", "") {
-            self.encrypted_dialog();
-            ui.close();
-        }
-        section(ui, "REMOTE", false);
-        for (label, dialog) in [
-            ("Connect via SSH…", Dialog::Connect),
-            ("SSH tunnels…", Dialog::Tunnels),
-        ] {
-            if item(ui, Icon::Remote, label, "") {
-                self.set_dialog(dialog);
-                ui.close();
-            }
-        }
-        section(ui, "SAVE", false);
-        if item(ui, Icon::Save, "Save", self.editing_hint("Ctrl+S")) {
-            self.save_active(ctx, false);
-            ui.close();
-        }
-        if item(
+        self.menu_commands(
             ui,
-            Icon::SaveAs,
-            "Save as…",
-            self.editing_hint("Ctrl+Shift+S"),
-        ) {
-            self.save_active(ctx, true);
-            ui.close();
-        }
-        if item(ui, Icon::SaveAll, "Save all", "") {
-            let ids: Vec<_> = self
-                .documents
-                .iter()
-                .filter(|d| d.dirty() && d.path.is_some())
-                .map(|d| (d.id, d.path.clone().unwrap_or_default()))
-                .collect();
-            for (id, path) in ids {
-                self.save_document(id, path, false, ctx);
-            }
-            if self.documents.iter().any(|d| d.path.is_none()) {
-                self.notify(
-                    "Save untitled files individually with Ctrl+S to choose their paths.",
-                    false,
-                );
-            }
-            ui.close();
-        }
+            ctx,
+            &[Command::New, Command::NewNotebook, Command::MarpNew],
+        );
+        section(ui, "OPEN", false);
+        self.menu_commands(
+            ui,
+            ctx,
+            &[
+                Command::Open,
+                Command::Folder,
+                Command::Hex,
+                Command::LocalFolder,
+                Command::Encrypted,
+            ],
+        );
+        section(ui, "REMOTE", false);
+        self.menu_commands(ui, ctx, &[Command::Connect, Command::Tunnels]);
+        section(ui, "SAVE", false);
+        self.menu_commands(ui, ctx, &[Command::Save, Command::SaveAs, Command::SaveAll]);
         ui.add_space(4.);
         ui.separator();
-        if item(ui, Icon::Exit, "Quit", "") {
-            self.guarded(Action::Quit, ctx);
-            ui.close();
-        }
+        self.menu_commands(ui, ctx, &[Command::Quit]);
     }
 
     fn view_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -196,10 +146,7 @@ impl EditorApp {
             self.syntax_theme_menu(ui, ctx)
         });
         self.ui_scale_menu(ui, ctx);
-        if item(ui, Icon::Palette, "Terminal colors…", "") {
-            self.terminal_colors.open = true;
-            ui.close();
-        }
+        self.menu_commands(ui, ctx, &[Command::TerminalColors]);
         submenu(ui, Icon::Format, "Editor font size", |ui| {
             ui.label(RichText::new("Editor text only").small().weak());
             self.font_save_pending |= ui
@@ -208,51 +155,21 @@ impl EditorApp {
         });
         section(ui, "WORKSPACE", false);
         submenu(ui, Icon::Environment, "Workspace panels", |ui| {
-            for (panel, icon, label, shortcut) in [
-                (Panel::Git, Icon::Git, "Source control", "Ctrl+Shift+G"),
-                (Panel::Monitor, Icon::Monitor, "System monitor", ""),
-                (Panel::Problems, Icon::Problems, "Problems", "Ctrl+Shift+M"),
-                (Panel::Environment, Icon::Environment, "Environment", ""),
-                (Panel::Tasks, Icon::Play, "Tasks", ""),
-                (Panel::Settings, Icon::Settings, "Project settings", ""),
-                (Panel::Agent, Icon::Chat, "Agent chat", "Ctrl+Shift+A"),
-                (Panel::Debug, Icon::Debug, "Debugger", "F5"),
-            ] {
-                if item(ui, icon, label, shortcut) {
-                    self.toggle_panel(panel, ctx);
-                    ui.close();
-                }
-            }
+            self.menu_commands(ui, ctx, Command::PANELS)
         });
-        if item(ui, Icon::Terminal, "Terminals & Slurm", "") {
-            self.open_sessions(ctx);
-            ui.close();
-        }
-        if item(ui, Icon::Extensions, "Extensions…", "Ctrl+Shift+X") {
-            self.set_dialog(Dialog::Extensions);
-            ui.close();
-        }
+        self.menu_commands(ui, ctx, &[Command::Sessions, Command::Extensions]);
         section(ui, "LAYOUT", false);
-        if check(ui, "Explorer", "Ctrl+B", self.show_explorer) {
-            self.show_explorer = !self.show_explorer;
+        if check(
+            ui,
+            Command::Explorer.definition().label,
+            &self.command_hint(Command::Explorer),
+            self.command_selected(Command::Explorer),
+        ) {
+            self.execute_command(Command::Explorer, ctx);
         }
-        if item(ui, Icon::ChevronRight, "Toggle tools sidebar", "Ctrl+~") {
-            self.toggle_sidebar(ctx);
-            ui.close();
-        }
-        if item(ui, Icon::Terminal, "Toggle terminal", "Ctrl+Shift+T") {
-            self.toggle_terminal(ctx);
-            ui.close();
-        }
+        self.menu_commands(ui, ctx, &[Command::Sidebar, Command::Terminal]);
         submenu(ui, Icon::Files, "Previews", |ui| {
-            if item(ui, Icon::Files, "Markdown preview", "Ctrl+Shift+R") {
-                self.toggle_markdown(ctx);
-                ui.close();
-            }
-            if item(ui, Icon::Play, "Marp slide preview", "") {
-                self.toggle_marp(ctx);
-                ui.close();
-            }
+            self.menu_commands(ui, ctx, &[Command::Markdown, Command::MarpSlides])
         });
         if check(ui, "Show hidden files", "", self.show_hidden) {
             self.show_hidden = !self.show_hidden;
@@ -260,76 +177,30 @@ impl EditorApp {
         }
         ui.add_space(4.);
         ui.separator();
-        if item(
-            ui,
-            Icon::Search,
-            "Find / replace",
-            self.editing_hint("Ctrl+F"),
-        ) {
-            self.markdown_source();
-            self.show_find = true;
-            self.find_focus = true;
-            ui.close();
-        }
-        if item(ui, Icon::Settings, "Keyboard shortcuts…", "") {
-            self.set_dialog(Dialog::Shortcuts);
-            ui.close();
-        }
+        self.menu_commands(ui, ctx, &[Command::Find, Command::Shortcuts]);
     }
 
     fn code_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         section(ui, "DOCUMENT", true);
-        for (icon, label, shortcut, format, fix) in [
-            (Icon::Format, "Format document", "Shift+Alt+F", true, false),
-            (Icon::Check, "Check document", "", false, false),
-            (Icon::Fix, "Ruff: apply safe fixes", "", true, true),
-        ] {
-            if item(ui, icon, label, shortcut) {
-                self.format_active(format, fix, ctx);
-                ui.close();
-            }
-        }
+        self.menu_commands(ui, ctx, &[Command::Format, Command::Check, Command::Fix]);
         section(ui, "EXECUTION", false);
-        for (label, build) in [
-            ("Run current file / project", false),
-            ("Build current file / project", true),
-        ] {
-            if item(ui, Icon::Play, label, "") {
-                self.run_active(build, ctx);
-                ui.close();
-            }
-        }
+        self.menu_commands(ui, ctx, &[Command::Run, Command::Build]);
     }
 
     fn debug_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         section(ui, "SESSION", true);
-        if item(ui, Icon::Debug, "Start / continue", "F5") {
-            self.start_debugger(ctx);
-            ui.close();
-        }
-        if item(ui, Icon::Pause, "Pause", "F6") {
-            self.debug_control("pause");
-            ui.close();
-        }
-        if item(ui, Icon::Stop, "Stop / detach", "Shift+F5") {
-            self.stop_debugger();
-            ui.close();
-        }
+        self.menu_commands(
+            ui,
+            ctx,
+            &[Command::DebugStart, Command::DebugPause, Command::DebugStop],
+        );
         section(ui, "STEPPING", false);
-        for (icon, label, command, shortcut) in [
-            (Icon::StepOver, "Step over", "next", "F10"),
-            (Icon::StepIn, "Step into", "stepIn", "F11"),
-            (Icon::StepOut, "Step out", "stepOut", "Shift+F11"),
-        ] {
-            if item(ui, icon, label, shortcut) {
-                self.debug_control(command);
-                ui.close();
-            }
-        }
+        self.menu_commands(
+            ui,
+            ctx,
+            &[Command::DebugOver, Command::DebugIn, Command::DebugOut],
+        );
         section(ui, "BREAKPOINTS", false);
-        if item(ui, Icon::Check, "Toggle breakpoint", "F9") {
-            self.toggle_cursor_breakpoint();
-            ui.close();
-        }
+        self.menu_commands(ui, ctx, &[Command::Breakpoint]);
     }
 }

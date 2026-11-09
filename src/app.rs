@@ -60,6 +60,7 @@ mod ui_probe;
 mod vaults;
 mod workbench;
 mod workers;
+use commands::Command;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
 use icons::{Icon, IconButton};
 use std::{
@@ -1400,6 +1401,29 @@ impl EditorApp {
         }
     }
 
+    /// Save named dirty documents through the same guarded host I/O from every UI entry point.
+    fn save_all(&mut self, ctx: &egui::Context) {
+        let files: Vec<_> = self
+            .documents
+            .iter()
+            .filter(|document| document.dirty())
+            .filter_map(|document| document.path.clone().map(|path| (document.id, path)))
+            .collect();
+        for (id, path) in files {
+            self.save_document(id, path, false, ctx);
+        }
+        if self
+            .documents
+            .iter()
+            .any(|document| document.path.is_none())
+        {
+            self.notify(
+                "Save untitled files individually with Ctrl+S to choose their paths.",
+                false,
+            );
+        }
+    }
+
     /// Submit the exact document snapshot/revision through protected host I/O. Save As
     /// creates without replacing unrelated files; acknowledgements update only the submitted
     /// baseline.
@@ -1498,21 +1522,15 @@ impl EditorApp {
         if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::P) {
             self.set_dialog(Dialog::Commands);
         }
-        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::O) {
-            self.set_dialog(Dialog::Folder);
-        }
-        if consume_extensions_shortcut(ctx) {
-            self.set_dialog(Dialog::Extensions);
-        }
+        self.consume_command(Command::Folder, ctx);
+        self.consume_command(Command::Extensions, ctx);
         if self.dialog != Dialog::None {
             return;
         }
-        if !egui::Popup::is_any_open(ctx) && consume(egui::Modifiers::CTRL, Key::Backtick) {
-            self.toggle_sidebar(ctx);
+        if !egui::Popup::is_any_open(ctx) {
+            self.consume_command(Command::Sidebar, ctx);
         }
-        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::T) {
-            self.toggle_terminal(ctx);
-        }
+        self.consume_command(Command::Terminal, ctx);
         self.debugger_shortcuts(ctx, terminal_focus);
         if consume(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Tab)
             || consume(egui::Modifiers::COMMAND, Key::PageUp)
@@ -1523,50 +1541,28 @@ impl EditorApp {
         {
             self.cycle_tab(1, ctx);
         }
-        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::G) {
-            self.toggle_panel(Panel::Git, ctx);
-        }
-        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::M) {
-            self.toggle_panel(Panel::Problems, ctx);
-        }
-        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::A) {
-            self.toggle_panel(Panel::Agent, ctx);
+        for panel in [Panel::Git, Panel::Problems, Panel::Agent] {
+            self.consume_command(Command::Panel(panel), ctx);
         }
         if !terminal_focus {
-            if consume(egui::Modifiers::ALT | egui::Modifiers::SHIFT, Key::F) {
-                self.format_active(true, false, ctx);
-            }
-            if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::S) {
-                self.save_active(ctx, true);
-            } else if consume(egui::Modifiers::COMMAND, Key::S) {
+            self.consume_command(Command::Format, ctx);
+            if !self.consume_command(Command::SaveAs, ctx) && Command::Save.consume(ctx) {
                 if self.navigation.bindings.style() == navigation::Style::Emacs {
                     self.show_find = true;
                     self.find_focus = true;
                 } else {
-                    self.save_active(ctx, false);
+                    self.execute_command(Command::Save, ctx);
                 }
             }
-            if consume(egui::Modifiers::COMMAND, Key::P) {
-                self.set_dialog(Dialog::Open);
-            }
-            if consume(egui::Modifiers::COMMAND, Key::N) {
-                self.new_file();
-            }
+            self.consume_command(Command::Open, ctx);
+            self.consume_command(Command::New, ctx);
             if consume(egui::Modifiers::COMMAND, Key::W)
                 && let Some(doc) = self.documents.get(self.active)
             {
                 self.guarded(Action::CloseTab(doc.id), ctx);
             }
-            if consume(egui::Modifiers::COMMAND, Key::B) {
-                self.show_explorer = !self.show_explorer;
-            }
-            if consume(egui::Modifiers::COMMAND, Key::F) {
-                self.markdown_source();
-                self.show_find = true;
-                self.find_focus = true;
-            }
-            if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::R) {
-                self.toggle_markdown(ctx);
+            for command in [Command::Explorer, Command::Find, Command::Markdown] {
+                self.consume_command(command, ctx);
             }
             if (consume(egui::Modifiers::COMMAND, Key::Equals)
                 || consume(egui::Modifiers::COMMAND, Key::Plus))
@@ -1581,9 +1577,7 @@ impl EditorApp {
                 self.font_size = (self.font_size - 1.0).max(10.0);
                 self.font_save_pending = true;
             }
-            if consume(egui::Modifiers::COMMAND, Key::Num0) {
-                self.set_ui_scale(1., ctx);
-            }
+            self.consume_command(Command::UiScaleReset, ctx);
         }
         if !terminal_focus && self.show_find && consume(egui::Modifiers::NONE, Key::Escape) {
             self.show_find = false;
@@ -2041,33 +2035,32 @@ impl EditorApp {
 /// Recognize the platform extension shortcut even when the native backend translates it
 /// into Cut, consuming only that exact modified shortcut rather than ordinary clipboard Cut.
 fn consume_extensions_shortcut(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|input| {
-        let shortcut = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
-        // egui-winit maps Command+X to Cut even with Shift held. If press and
-        // release arrive in one frame, only the release retains its modifiers.
-        let modifiers = input
-            .events
-            .iter()
-            .find_map(|event| match event {
-                egui::Event::Key {
-                    key: Key::X,
-                    modifiers,
-                    ..
-                } => Some(*modifiers),
-                _ => None,
-            })
-            .unwrap_or(input.modifiers);
-        let cut = modifiers.matches_exact(shortcut)
-            && input
+    Command::Extensions.shortcut().is_some_and(|binding| {
+        ctx.input_mut(|input| {
+            // egui-winit maps Command+X to Cut even with Shift held. A same-frame
+            // press/release may retain modifiers only on the release event.
+            let modifiers = input
                 .events
                 .iter()
-                .any(|event| matches!(event, egui::Event::Cut));
-        if cut {
-            input
-                .events
-                .retain(|event| !matches!(event, egui::Event::Cut));
-        }
-        input.consume_key(shortcut, Key::X) || cut
+                .find_map(|event| match event {
+                    egui::Event::Key { key, modifiers, .. } if *key == binding.logical_key => {
+                        Some(*modifiers)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(input.modifiers);
+            let cut = modifiers.matches_exact(binding.modifiers)
+                && input
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::Cut));
+            if cut {
+                input
+                    .events
+                    .retain(|event| !matches!(event, egui::Event::Cut));
+            }
+            input.consume_shortcut(&binding) || cut
+        })
     })
 }
 

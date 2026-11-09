@@ -923,21 +923,7 @@ impl EditorApp {
             agents.chat.notice(&error.to_string());
         }
         if save {
-            let files: Vec<_> = self
-                .documents
-                .iter()
-                .filter(|d| d.dirty() && d.path.is_some())
-                .map(|d| (d.id, d.path.clone().unwrap_or_default()))
-                .collect();
-            for (id, path) in files {
-                self.save_document(id, path, false, ctx);
-            }
-            if self.documents.iter().any(|d| d.path.is_none()) {
-                self.notify(
-                    "Save untitled files with Ctrl+S to choose their paths.",
-                    false,
-                );
-            }
+            self.save_all(ctx);
         }
         if attach {
             self.set_dialog(Dialog::AgentAttachLocal);

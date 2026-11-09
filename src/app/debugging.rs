@@ -309,25 +309,16 @@ impl EditorApp {
         {
             return;
         }
-        let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
-        if consume(egui::Modifiers::SHIFT, Key::F5) {
-            self.stop_debugger();
-        } else if consume(egui::Modifiers::NONE, Key::F5) {
-            self.start_debugger(ctx);
+        if !self.consume_command(Command::DebugStop, ctx) {
+            self.consume_command(Command::DebugStart, ctx);
         }
-        if consume(egui::Modifiers::NONE, Key::F6) {
-            self.debug_control("pause");
+        self.consume_command(Command::DebugPause, ctx);
+        if !terminal_focus {
+            self.consume_command(Command::Breakpoint, ctx);
         }
-        if !terminal_focus && consume(egui::Modifiers::NONE, Key::F9) {
-            self.toggle_cursor_breakpoint();
-        }
-        if consume(egui::Modifiers::NONE, Key::F10) {
-            self.debug_control("next");
-        }
-        if consume(egui::Modifiers::SHIFT, Key::F11) {
-            self.debug_control("stepOut");
-        } else if consume(egui::Modifiers::NONE, Key::F11) {
-            self.debug_control("stepIn");
+        self.consume_command(Command::DebugOver, ctx);
+        if !self.consume_command(Command::DebugOut, ctx) {
+            self.consume_command(Command::DebugIn, ctx);
         }
     }
     /// Return the paused selected frame's host source path and one-based line, or None if unavailable.

@@ -57,6 +57,17 @@ impl ToolTab {
     }
 }
 
+fn detached_builder(title: &str) -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title(format!("RODE · {title}"))
+        .with_inner_size([900., 760.])
+        .with_min_inner_size([640., 420.])
+}
+
+fn embedded_window(title: &str) -> egui::Window<'static> {
+    egui::Window::new(title).default_size([860., 700.])
+}
+
 impl EditorApp {
     /// Return the stable native viewport identity shared by detached project tools.
     pub(in crate::app) fn tools_viewport() -> egui::ViewportId {
@@ -419,8 +430,23 @@ impl EditorApp {
         }
     }
 
-    /// Render the existing live tools in a separate viewport; closing it follows docking/visibility
-    /// behavior rather than spawning or destroying another controller.
+    /// Scope controller/UI ownership without changing docking or reattachment policy.
+    fn in_tool_viewport(&mut self, ctx: &egui::Context, render: impl FnOnce(&mut Self)) {
+        let previous = self.ui_viewport;
+        self.ui_viewport = ctx.viewport_id();
+        render(self);
+        self.ui_viewport = previous;
+    }
+
+    /// Finish native tool viewports through the same modal, notice and focus boundary.
+    fn finish_tool_viewport(&mut self, ctx: &egui::Context) {
+        self.dialogs(ctx);
+        self.workbench_windows(ctx);
+        self.notice_ui(ctx);
+        self.navigation_finish(ctx);
+    }
+
+    /// Closing the whole tools window docks it, retaining its selected surface.
     pub(in crate::app) fn detached_tools(&mut self, ctx: &egui::Context) {
         if !self.workbench.detached {
             return;
@@ -429,14 +455,9 @@ impl EditorApp {
             self.dock_tools(ctx);
             return;
         }
-        let context = ctx.clone();
-        context.show_viewport_immediate(
+        ctx.show_viewport_immediate(
             Self::tools_viewport(),
-            egui::ViewportBuilder::default()
-                .with_title("RODE · Project tools")
-                .with_visible(!self.workbench.tools_hidden)
-                .with_inner_size([900., 760.])
-                .with_min_inner_size([640., 420.]),
+            detached_builder("Project tools").with_visible(!self.workbench.tools_hidden),
             |ctx, class| {
                 if self.workbench.tools_hidden {
                     return;
@@ -445,90 +466,80 @@ impl EditorApp {
                     self.dock_tools(ctx);
                     return;
                 }
-                self.ui_viewport = ctx.viewport_id();
-                if class == egui::ViewportClass::Embedded {
-                    let mut open = true;
-                    egui::Window::new("Project tools")
-                        .default_size([860., 700.])
-                        .open(&mut open)
-                        .show(ctx, |ui| {
-                            self.workspace_tabs(ui, ctx, true);
-                            ui.separator();
-                            self.surface_ui(ui, ctx);
-                        });
-                    if !open {
-                        self.dock_tools(ctx);
+                self.in_tool_viewport(ctx, |app| {
+                    if class == egui::ViewportClass::Embedded {
+                        let mut open = true;
+                        embedded_window("Project tools")
+                            .open(&mut open)
+                            .show(ctx, |ui| {
+                                app.workspace_tabs(ui, ctx, true);
+                                ui.separator();
+                                app.surface_ui(ui, ctx);
+                            });
+                        if !open {
+                            app.dock_tools(ctx);
+                        }
+                        // The root viewport already owns modal/notice finalization
+                        // for this embedded whole-sidebar fallback.
+                        app.workbench_windows(ctx);
+                    } else {
+                        app.detached_shortcuts(ctx);
+                        let palette = app.themes.active().palette;
+                        egui::TopBottomPanel::top("detached-tools-tabs")
+                            .frame(theme::frame(palette.panel))
+                            .show(ctx, |ui| app.workspace_tabs(ui, ctx, true));
+                        egui::CentralPanel::default()
+                            .frame(theme::frame(palette.panel))
+                            .show(ctx, |ui| app.surface_ui(ui, ctx));
+                        app.finish_tool_viewport(ctx);
                     }
-                    self.workbench_windows(ctx);
-                } else {
-                    self.detached_shortcuts(ctx);
-                    let palette = self.themes.active().palette;
-                    egui::TopBottomPanel::top("detached-tools-tabs")
-                        .frame(theme::frame(palette.panel))
-                        .show(ctx, |ui| self.workspace_tabs(ui, ctx, true));
-                    egui::CentralPanel::default()
-                        .frame(theme::frame(palette.panel))
-                        .show(ctx, |ui| self.surface_ui(ui, ctx));
-                    self.dialogs(ctx);
-                    self.workbench_windows(ctx);
-                    self.notice_ui(ctx);
-                    self.navigation_finish(ctx);
-                }
-                self.ui_viewport = egui::ViewportId::ROOT;
+                });
             },
         );
     }
 
-    /// Each detached tab has a stable viewport, rendering the same controller exactly once.
-    /// A snapshot permits reattachment while the viewport callback is running.
+    /// Each tab has a stable viewport; closing reattaches only that tab.
     pub(in crate::app) fn detached_tabs(&mut self, ctx: &egui::Context) {
         for tab in self.workbench.floating_tabs.clone() {
             ctx.show_viewport_immediate(
                 tab.viewport(),
-                egui::ViewportBuilder::default()
-                    .with_title(format!("RODE · {}", tab.label()))
-                    .with_inner_size([900., 760.])
-                    .with_min_inner_size([640., 420.]),
+                detached_builder(tab.label()),
                 |ctx, class| {
                     if ctx.input(|input| input.viewport().close_requested()) {
                         self.reattach_tool_tab(tab, ctx);
                         return;
                     }
-                    self.ui_viewport = ctx.viewport_id();
-                    if class == egui::ViewportClass::Embedded {
-                        let mut open = true;
-                        egui::Window::new(tab.label())
-                            .id(egui::Id::new(("detached-tab", tab)))
-                            .default_size([860., 700.])
-                            .open(&mut open)
-                            .show(ctx, |ui| {
-                                self.detached_tab_header(tab, ui, ctx);
-                                if self.tab_detached(tab) {
-                                    self.tab_content(tab, ui, ctx);
-                                }
-                            });
-                        if !open {
-                            self.reattach_tool_tab(tab, ctx);
+                    self.in_tool_viewport(ctx, |app| {
+                        if class == egui::ViewportClass::Embedded {
+                            let mut open = true;
+                            embedded_window(tab.label())
+                                .id(egui::Id::new(("detached-tab", tab)))
+                                .open(&mut open)
+                                .show(ctx, |ui| {
+                                    app.detached_tab_header(tab, ui, ctx);
+                                    if app.tab_detached(tab) {
+                                        app.tab_content(tab, ui, ctx);
+                                    }
+                                });
+                            if !open {
+                                app.reattach_tool_tab(tab, ctx);
+                            }
+                        } else {
+                            app.detached_shortcuts(ctx);
+                            let palette = app.themes.active().palette;
+                            egui::TopBottomPanel::top("detached-tab-header")
+                                .frame(theme::frame(palette.panel))
+                                .show(ctx, |ui| app.detached_tab_header(tab, ui, ctx));
+                            egui::CentralPanel::default()
+                                .frame(theme::frame(palette.panel))
+                                .show(ctx, |ui| {
+                                    if app.tab_detached(tab) {
+                                        app.tab_content(tab, ui, ctx);
+                                    }
+                                });
                         }
-                    } else {
-                        self.detached_shortcuts(ctx);
-                        let palette = self.themes.active().palette;
-                        egui::TopBottomPanel::top("detached-tab-header")
-                            .frame(theme::frame(palette.panel))
-                            .show(ctx, |ui| self.detached_tab_header(tab, ui, ctx));
-                        egui::CentralPanel::default()
-                            .frame(theme::frame(palette.panel))
-                            .show(ctx, |ui| {
-                                if self.tab_detached(tab) {
-                                    self.tab_content(tab, ui, ctx);
-                                }
-                            });
-                    }
-                    self.dialogs(ctx);
-                    self.workbench_windows(ctx);
-                    self.notice_ui(ctx);
-                    self.navigation_finish(ctx);
-                    self.ui_viewport = egui::ViewportId::ROOT;
+                        app.finish_tool_viewport(ctx);
+                    });
                 },
             );
         }
