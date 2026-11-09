@@ -701,11 +701,6 @@ impl EditorApp {
                         .documents
                         .get(self.active)
                         .is_some_and(|d| d.path.as_deref() == Some(&entry.path));
-                let label = if entry.dir {
-                    format!("{}  {}", if expanded { "⌄" } else { "›" }, entry.name)
-                } else {
-                    entry.name.clone()
-                };
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(ui.available_width(), 25.0), Sense::hover());
                 // Context menus and clicks belong to this entry even if an
@@ -734,9 +729,25 @@ impl EditorApp {
                 } else {
                     palette.muted
                 };
-                let x = rect.left() + depth as f32 * 13. + 6.;
+                let left = rect.left() + depth as f32 * 13. + 6.;
+                if entry.dir {
+                    let icon = if expanded {
+                        Icon::ChevronDown
+                    } else {
+                        Icon::ChevronRight
+                    };
+                    icon.paint(
+                        &painter,
+                        egui::Rect::from_center_size(
+                            egui::pos2(left + 7., rect.center().y),
+                            egui::vec2(14., 14.),
+                        ),
+                        color,
+                    );
+                }
+                let x = left + 18.;
                 let mut job = egui::text::LayoutJob::simple(
-                    label,
+                    entry.name.clone(),
                     FontId::proportional(13.),
                     color,
                     (rect.right() - x - 4.).max(1.),

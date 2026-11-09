@@ -133,6 +133,12 @@ The `rust_client_works_without_client_path_and_preserves_channel_status` test in
 the isolated SSH suite runs a child with an empty `PATH`, exercising direct and
 ProxyJump connections, file revisions, concurrent channels and large stdin.
 The suite also checks the explicit OpenSSH backend, agent and X11 forwarding.
+`RODE_SSH_TEST_FILTER=x11_forwarding_protocol bash scripts/test-ssh.sh` checks
+authenticated X11 protocol traffic through private TCP display endpoints without
+Xvfb or a desktop. It covers both SSH backends, direct and ProxyJump connections,
+explicit trust overrides, zero-timeout forwarding after a deliberate delay and
+native terminal reattachment. The separate real-X-server test still checks
+`xdpyinfo` and untrusted authorization generation under Xvfb.
 Agent forwarding checks destination-restricted keys against a real private
 OpenSSH agent: a key restricted to another host must be absent from forwarded
 channels, Git and native terminal listings, on direct and ProxyJump connections.

@@ -280,8 +280,18 @@ the desktop display environment. Native Wayland forwarding is not included.
 Clear the checkbox, or use `rode --ssh HOST --no-x11`, to disable forwarding
 even if your SSH config enables it. When checked, the profile explicitly
 requests forwarding; `ForwardX11Trusted`, `ForwardX11Timeout` and
-`XAuthLocation` still follow your desktop SSH config. The Rust backend accepts
-`ForwardX11Timeout` as a number of seconds. RODE does not enable trusted forwarding on its own. The Rust backend uses a
+`XAuthLocation` follow your desktop SSH config. **X11 trust** can explicitly
+override `ForwardX11Trusted` for either backend. **SSH configuration** preserves
+the selected client's default: Rust uses untrusted forwarding, while some
+OpenSSH installations default to trusted forwarding. If X applications work
+through your normal trusted SSH connection, choose **Trusted (full desktop
+access)** to request the same policy in RODE. This permits remote X applications
+to access other desktop windows and input; it must be an explicit choice.
+Reconnect SSH and open a new terminal after changing it. The Rust backend accepts
+`ForwardX11Timeout` as a number of seconds; zero keeps forwarding available for
+the connection's lifetime. A positive value stops accepting new X11 clients
+after that many seconds, even though an existing shell still has `DISPLAY` set.
+Reconnect SSH to renew an expired display. The Rust backend uses a
 connection-specific proxy cookie and requires successful untrusted-cookie
 generation when trusted forwarding is disabled; failure disables X11 while
 leaving ordinary SSH usable. See

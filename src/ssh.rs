@@ -43,6 +43,37 @@ pub enum Backend {
     OpenSsh,
 }
 
+/// Explicit desktop access policy for forwarded X11 applications.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum X11Trust {
+    /// Use SSH configuration and the selected client's default.
+    #[default]
+    Config,
+    /// Request restricted X11 authorization through the SECURITY extension.
+    Untrusted,
+    /// Explicitly permit remote applications full access to the desktop X server.
+    Trusted,
+}
+impl X11Trust {
+    /// User-visible connection setting.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Config => "SSH configuration",
+            Self::Untrusted => "Untrusted (restricted)",
+            Self::Trusted => "Trusted (full desktop access)",
+        }
+    }
+    /// Explicit override; absence leaves the selected client's defaults intact.
+    pub fn override_value(self) -> Option<bool> {
+        match self {
+            Self::Config => None,
+            Self::Untrusted => Some(false),
+            Self::Trusted => Some(true),
+        }
+    }
+}
+
 /// Dispatch internal Rust SSH subprocesses before desktop initialization.
 pub fn client_cli(args: &[String]) -> Result<i32> {
     #[cfg(unix)]
@@ -95,6 +126,8 @@ pub struct Profile {
     /// Request X11 forwarding when the desktop has a display, using configured
     /// trust/timeout policy and server capability negotiation.
     pub x11_forwarding: bool,
+    /// Optional override of ForwardX11Trusted; older profiles retain SSH configuration.
+    pub x11_trust: X11Trust,
     /// Initial project directory on the remote host.
     pub root: String,
     /// Requested sandbox defaults for this profile.
@@ -115,6 +148,7 @@ impl Default for Profile {
             config: String::new(),
             remote_helper: String::new(),
             x11_forwarding: true,
+            x11_trust: X11Trust::Config,
             root: "~".into(),
             sandbox: Default::default(),
         }
@@ -357,6 +391,12 @@ impl Remote {
             ]);
         }
         let mut args = self.profile.options();
+        if let Some(trusted) = self.profile.x11_trust.override_value() {
+            args.extend([
+                "-o".into(),
+                format!("ForwardX11Trusted={}", if trusted { "yes" } else { "no" }),
+            ]);
+        }
         args.push(self.x11_flag().into());
         args.extend([
             "-M".into(),
@@ -891,6 +931,41 @@ mod tests {
                 let work = remote.channel_args(tty);
                 assert!(work.iter().any(|arg| arg == "-x"));
                 assert!(!work.iter().any(|arg| arg == "-X"));
+            }
+            remote.cleanup();
+        }
+    }
+
+    #[test]
+    fn x11_trust_is_explicit_persisted_and_enforced_for_openssh() {
+        let old: Profile = serde_json::from_value(serde_json::json!({"host":"cluster"})).unwrap();
+        assert_eq!(old.x11_trust, X11Trust::Config);
+        for trust in [X11Trust::Config, X11Trust::Untrusted, X11Trust::Trusted] {
+            let profile = Profile {
+                host: "cluster".into(),
+                backend: Backend::OpenSsh,
+                x11_trust: trust,
+                ..Default::default()
+            };
+            let restored: Profile =
+                serde_json::from_value(serde_json::to_value(&profile).unwrap()).unwrap();
+            assert_eq!(restored.x11_trust, trust);
+            let remote = Remote::new(restored).unwrap();
+            let args = remote.master_args().unwrap();
+            let overrides: Vec<_> = args
+                .iter()
+                .filter(|arg| arg.starts_with("ForwardX11Trusted="))
+                .collect();
+            match trust.override_value() {
+                Some(value) => assert_eq!(
+                    overrides,
+                    [if value {
+                        "ForwardX11Trusted=yes"
+                    } else {
+                        "ForwardX11Trusted=no"
+                    }]
+                ),
+                None => assert!(overrides.is_empty()),
             }
             remote.cleanup();
         }

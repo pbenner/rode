@@ -35,6 +35,53 @@ class VendoredSandbox(unittest.TestCase):
             self.assertEqual(len(manifest[name]["sha256"]), 64)
 
 
+class DependencyNotices(unittest.TestCase):
+    def test_local_dependencies_keep_their_notices_without_including_workspace_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "packaging/licenses").mkdir(parents=True)
+            (root / "packaging/licenses/manifest.json").write_text("[]")
+            vendor = root / "vendor/parser"
+            vendor.mkdir(parents=True)
+            notice = "MIT license fixture; Copyright parser author"
+            (vendor / "LICENSE").write_text(notice)
+            metadata = {
+                "workspace_members": ["own-crate"],
+                "packages": [
+                    {"id": "own-crate", "name": "rode", "version": "0.1.0", "source": None},
+                    {
+                        "id": "local-parser",
+                        "name": "fixture-parser",
+                        "version": "1.2.3",
+                        "source": None,
+                        "manifest_path": str(vendor / "Cargo.toml"),
+                        "license": "MIT",
+                    },
+                    {"id": "unused", "name": "unused-parser", "version": "9", "source": None},
+                ],
+            }
+
+            def output(*command):
+                if "metadata" in command:
+                    return json.dumps(metadata)
+                if "tree" in command:
+                    return "rode v0.1.0\nfixture-parser v1.2.3 (local path)\n"
+                if "-vV" in command:
+                    return "host: fixture-host\n"
+                if "--print" in command:
+                    return str(root / "sysroot")
+                if command[-1] in ("--theme-licenses", "--syntax-licenses"):
+                    return "embedded fixture notices"
+                raise AssertionError(command)
+
+            with patch.dict(BUILDER["notices"].__globals__, ROOT=root, output=output):
+                result = BUILDER["notices"](root / "rode").decode()
+            self.assertIn("fixture-parser 1.2.3", result)
+            self.assertIn(notice, result)
+            self.assertNotIn("rode 0.1.0", result)
+            self.assertNotIn("unused-parser", result)
+
+
 @contextlib.contextmanager
 def runtime_fixture():
     """Exercise the real preparer with a tiny pinned archive and no internet/user data."""

@@ -6,8 +6,13 @@ use rode::{
 };
 use std::{
     fs,
+    io::{Read, Write},
     path::Path,
     process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -16,6 +21,207 @@ impl Drop for DisplayClient {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+/// Authenticated protocol traffic without a desktop, Xvfb or GPU. The private
+/// display accepts only the original cookie, so forwarding must replace the
+/// SSH proxy cookie rather than merely advertising DISPLAY.
+struct ProtocolDisplay {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl ProtocolDisplay {
+    fn new() -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(port >= 6000);
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let worker = std::thread::spawn(move || {
+            while !stopping.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut socket, _)) => {
+                        socket
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let mut setup = [0; 48];
+                        socket.read_exact(&mut setup).unwrap();
+                        assert_eq!(setup[0], b'l');
+                        assert_eq!(&setup[12..30], b"MIT-MAGIC-COOKIE-1");
+                        assert_eq!(&setup[32..], &[0x11; 16]);
+                        socket.write_all(b"RODE-X11-OK").unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("Private X11 display: {error}"),
+                }
+            }
+        });
+        Self {
+            port,
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+impl Drop for ProtocolDisplay {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let result = self.worker.take().unwrap().join();
+        if !std::thread::panicking() {
+            result.unwrap();
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires only the isolated sshd from scripts/test-ssh.sh; no X server"]
+fn x11_forwarding_protocol_reaches_native_sessions_without_a_desktop() {
+    use std::os::unix::fs::PermissionsExt;
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    if std::env::var("RODE_TEST_SSH_X11").as_deref() != Ok("yes") {
+        return;
+    }
+    for backend in [rode::ssh::Backend::Russh, rode::ssh::Backend::OpenSsh] {
+        for jump in ["", "rode-jump"] {
+            for (trusted, timeout) in [(true, 1200), (false, 1200), (false, 0)] {
+                let root = tempfile::tempdir().unwrap();
+                let display = ProtocolDisplay::new();
+                let xauth = root.path().join("xauth");
+                let xauth_log = root.path().join("xauth-calls");
+                fs::write(&xauth, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nprintf 'fixture/unix:0 MIT-MAGIC-COOKIE-1 11111111111111111111111111111111\\n'\n", rode::ssh::quote(&xauth_log.to_string_lossy()))).unwrap();
+                fs::set_permissions(&xauth, fs::Permissions::from_mode(0o700)).unwrap();
+                let profile = root.path().join("ssh_config");
+                // The profile's explicit trust choice must override opposite
+                // SSH configuration with either client backend.
+                fs::write(&profile, format!("Host rode-test\n ForwardX11Trusted {}\n ForwardX11Timeout {timeout}\n XAuthLocation {}\nHost *\n Include \"{config}\"\n", if trusted { "no" } else { "yes" }, xauth.display())).unwrap();
+                let remote = Remote::new(Profile {
+                    backend,
+                    x11_trust: if trusted {
+                        rode::ssh::X11Trust::Trusted
+                    } else {
+                        rode::ssh::X11Trust::Untrusted
+                    },
+                    host: "rode-test".into(),
+                    config: profile.to_string_lossy().into(),
+                    jump: jump.into(),
+                    ..Default::default()
+                })
+                .unwrap();
+                let log = root.path().join("login.log");
+                let mut connection = Connection {
+                    master: Command::new(remote.client_program())
+                        .args(remote.master_args().unwrap())
+                        .env("DISPLAY", format!("127.0.0.1:{}", display.port - 6000))
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(fs::File::create(&log).unwrap())
+                        .spawn()
+                        .unwrap(),
+                    remote,
+                    terminal: None,
+                };
+                let until = Instant::now() + Duration::from_secs(15);
+                while !connection.remote.connected() {
+                    assert!(
+                        connection.master.try_wait().unwrap().is_none() && Instant::now() < until,
+                        "{}",
+                        fs::read_to_string(&log).unwrap()
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                fs::write(root.path().join("x-probe.py"), r#"
+import os, socket, struct, subprocess
+display = os.environ['DISPLAY']
+records = subprocess.check_output(['xauth', 'list', display], text=True).splitlines()
+cookie = next(bytes.fromhex(line.split()[2]) for line in records if 'MIT-MAGIC-COOKIE-1' in line)
+number = int(display.rsplit(':', 1)[1].split('.')[0])
+with socket.create_connection(('localhost', 6000 + number), timeout=5) as client:
+    client.sendall(struct.pack('<BBHHHHH', ord('l'), 0, 11, 0, 18, len(cookie), 0) + b'MIT-MAGIC-COOKIE-1\0\0' + cookie)
+    result = bytearray()
+    while len(result) < 11:
+        chunk = client.recv(11 - len(result))
+        assert chunk, 'Forwarded X11 channel closed before the display replied'
+        result.extend(chunk)
+    assert result == b'RODE-X11-OK', result
+print('authenticated X11 roundtrip passed')
+"#).unwrap();
+                let remote = &connection.remote;
+                let plan = remote
+                    .request(&Request::Prepare {
+                        path: root.path().to_string_lossy().into(),
+                        sandbox: Default::default(),
+                    })
+                    .unwrap()
+                    .project
+                    .unwrap();
+                // OpenSSH prepares authorization when its first display
+                // channel opens, after master authentication has completed.
+                let calls = fs::read_to_string(&xauth_log).unwrap();
+                assert_eq!(
+                    calls
+                        .lines()
+                        .any(|line| line.split_whitespace().any(|arg| arg == "generate")),
+                    !trusted,
+                    "{backend:?}: trust override did not reach cookie generation"
+                );
+                if timeout == 0 {
+                    // Zero disables expiry; it must not become a one-second timer.
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                let response = remote
+                    .request(&Request::Tool {
+                        request: rode::project::Request::Sessions {
+                            root: plan.root.clone(),
+                            operation: rode::sessions::Operation::Create {
+                                id: rode_session::new_id().unwrap(),
+                                name: "X11 protocol".into(),
+                                policy: rode::sessions::fingerprint(&plan),
+                                plan: Box::new(plan.clone()),
+                                python: "off".into(),
+                                environment: Default::default(),
+                                persistent: true,
+                                allocation: None,
+                            },
+                            directory: Some(format!("{}/runtime", plan.root)),
+                        },
+                    })
+                    .unwrap();
+                let Some(rode::project::Response::Sessions(reply)) = response.tool else {
+                    panic!()
+                };
+                let rode_session::Response::Session(info) = &reply.response else {
+                    panic!()
+                };
+                connection.terminal = Some(info.clone());
+                for marker in ["first", "reattached"] {
+                    let terminal = Terminal::native_session(
+                        &eframe::egui::Context::default(),
+                        Some(remote),
+                        &reply,
+                        info,
+                    )
+                    .unwrap();
+                    terminal.send(format!("/usr/bin/python3 -I x-probe.py > result-{marker}.tmp 2>&1; mv result-{marker}.tmp result-{marker}\n").into_bytes()).unwrap();
+                    let result = root.path().join(format!("result-{marker}"));
+                    let until = Instant::now() + Duration::from_secs(15);
+                    while !result.exists() {
+                        assert!(Instant::now() < until, "{}", terminal.contents());
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    let result = fs::read_to_string(result).unwrap();
+                    assert!(
+                        result.contains("authenticated X11 roundtrip passed"),
+                        "Backend={backend:?}, jump={jump:?}, trusted={trusted}, timeout={timeout}: {result}\n{}",
+                        fs::read_to_string(&log).unwrap()
+                    );
+                }
+            }
+        }
     }
 }
 

@@ -71,5 +71,9 @@ debug = 0
 incremental = false
 
 [workspace]
+exclude = ["vendor/vt100"]
 members = ["crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core", "crates/rode-bwrap", "xtask"]
 default-members = ["crates/rode-host-protocol", "crates/rode-host-core", ".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
+
+[patch.crates-io]
+vt100 = { path = "vendor/vt100" }

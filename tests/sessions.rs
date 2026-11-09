@@ -1432,6 +1432,34 @@ fn immediate_restart_after_ending_the_last_terminal_is_safe_and_create_is_idempo
 }
 
 #[test]
+fn dec_graphics_survive_native_session_reattachment_and_continued_output() {
+    for standalone in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.standalone = standalone;
+        let info = fixture.create(&fixture.plan());
+        let terminal = fixture.attach(&info);
+        terminal
+            .send(b"printf '\\033)0\\016lqqk'\n".to_vec())
+            .unwrap();
+        wait(|| terminal.contents().contains("┌──┐"));
+        drop(terminal);
+        wait(|| {
+            fixture
+                .direct_list()
+                .iter()
+                .all(|session| session.clients == 0)
+        });
+        let terminal = fixture.attach(&info);
+        wait(|| terminal.contents().contains("┌──┐"));
+        terminal
+            .send(b"printf '\\r\\033[2Kqq\\017plain-q\\n'\n".to_vec())
+            .unwrap();
+        wait(|| terminal.contents().contains("──plain-q"));
+        drop(terminal);
+    }
+}
+
+#[test]
 fn local_tunnels_need_neither_a_project_nor_an_ssh_client() {
     const CHILD: &str = "RODE_TEST_LOCAL_TUNNEL_CONTROL";
     if std::env::var_os(CHILD).is_some() {

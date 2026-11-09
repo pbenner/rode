@@ -334,7 +334,28 @@ impl EditorApp {
             &mut self.profile.x11_forwarding,
             "Forward X11 when available",
         )
-        .on_hover_text("Launch remote X applications on your desktop. Requires a local X server and remote SSH X11 support. Trust and timeout follow your SSH config; sandbox restrictions still apply. Reconnect and open a new terminal after changing this setting.");
+        .on_hover_text("Launch remote X applications on your desktop. Requires a local X server and remote SSH X11 support. Sandbox restrictions still apply. Reconnect and open a new terminal after changing this setting.");
+        if self.profile.x11_forwarding {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("X11 trust");
+                egui::ComboBox::from_id_salt("ssh-x11-trust")
+                    .selected_text(self.profile.x11_trust.label())
+                    .show_ui(ui, |ui| {
+                        for trust in [
+                            ssh::X11Trust::Config,
+                            ssh::X11Trust::Untrusted,
+                            ssh::X11Trust::Trusted,
+                        ] {
+                            ui.selectable_value(&mut self.profile.x11_trust, trust, trust.label());
+                        }
+                    });
+            });
+            ui.label(RichText::new(match self.profile.x11_trust {
+                ssh::X11Trust::Config => "Uses SSH configuration. Rust defaults to untrusted; OpenSSH defaults can differ by system.",
+                ssh::X11Trust::Untrusted => "Restricted desktop access. Requires the X server's SECURITY extension.",
+                ssh::X11Trust::Trusted => "Remote X applications can access other windows and desktop input.",
+            }).small().color(palette.muted));
+        }
         ui.push_id("ssh-sandbox-presets", |ui| {
             self.sandbox_presets
                 .ui(ui, &mut self.profile.sandbox, palette);

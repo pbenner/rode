@@ -200,10 +200,13 @@ def notices(binary):
         for package in group["packages"]
     }
     sections = ["RODE third-party notices\n========================\n"]
+    workspace = set(metadata["workspace_members"])
     for package in sorted(
         metadata["packages"], key=lambda value: (value["name"], value["version"])
     ):
-        if (not package.get("source") and package["name"] != "rode-bwrap") or (
+        # A vendored/path dependency has no registry source either. Skip only
+        # our own workspace crates, keeping their third-party dependencies.
+        if (package["id"] in workspace and package["name"] != "rode-bwrap") or (
             package["name"],
             package["version"],
         ) not in active:

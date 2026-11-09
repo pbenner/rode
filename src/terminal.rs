@@ -1111,6 +1111,40 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn ncurses_borders_render_supported_glyphs_and_copy_unicode_contents() {
+        let ctx = egui::Context::default();
+        let (mut terminal, stream) = Terminal::stream(&ctx, "Borders".into(), |_| {});
+        stream.end();
+        terminal
+            .parser
+            .lock()
+            .unwrap()
+            .process(b"\x1b(0lqqk\r\nx  x\r\nmqqj\x1b(B\r\nplain-q");
+        assert_eq!(terminal.contents(), "┌──┐\n│  │\n└──┘\nplain-q");
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500., 300.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let font = FontId::monospace(14.);
+                    ui.fonts_mut(|fonts| {
+                        assert!(fonts.has_glyphs(&font, "┌┐└┘─│┬┴├┤┼▒▁▂▃▄▅▆▇█"));
+                    });
+                    assert!(terminal.ui(ui, 14., Palette::default()).is_none());
+                });
+            },
+        );
+        for glyph in ["┌", "─", "┐", "│", "└", "┘"] {
+            glyph_color(&output.shapes, glyph);
+        }
+    }
+
+    #[test]
     fn bash_prompt_bold_colors_follow_theme_with_normal_resets_and_backgrounds() {
         let ctx = egui::Context::default();
         let (mut terminal, stream) = Terminal::stream(&ctx, "Bash prompt".into(), |_| {});

@@ -11,6 +11,68 @@ fn entry(path: &str, dir: bool) -> Entry {
 }
 
 struct Policies(String);
+
+#[test]
+fn folder_disclosure_uses_vector_icons_and_aligned_filename_labels() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.directories.insert(
+        "/project".into(),
+        vec![
+            entry("/project/open", true),
+            entry("/project/shut", true),
+            entry("/project/file.rs", false),
+        ],
+    );
+    app.directories.insert("/project/open".into(), vec![]);
+    app.expanded.insert("/project/open".into());
+    for width in [180., 450.] {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 400.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.tree(ui, "/project", ctx));
+            },
+        );
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            labels
+                .iter()
+                .map(|text| text.galley.text())
+                .collect::<Vec<_>>(),
+            ["open", "shut", "file.rs"]
+        );
+        assert!(labels.iter().all(|text| text.pos.x == labels[0].pos.x));
+        let chevrons: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if path.points.len() == 3 => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chevrons.len(), 2);
+        assert!(chevrons.iter().all(|path| {
+            path.points
+                .iter()
+                .all(|point| ctx.content_rect().contains(*point))
+        }));
+    }
+}
+
 impl eframe::Storage for Policies {
     fn get_string(&self, key: &str) -> Option<String> {
         (key == "project_preferences").then(|| self.0.clone())

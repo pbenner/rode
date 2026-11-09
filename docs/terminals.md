@@ -1,5 +1,9 @@
 # Persistent terminals
 
+RODE renders the line-drawing borders used by ncurses terminal applications with
+its bundled monospace font. Borders and character-set selection are preserved
+when detaching and reattaching a session.
+
 RODE owns terminal sessions through a small native Rust service on the computer running the shell. It needs neither tmux nor screen. Local and SSH sessions support multiple terminals and simultaneous attachment from several RODE windows.
 
 ## Everyday use

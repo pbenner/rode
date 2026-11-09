@@ -26,6 +26,12 @@ RODE's native drawing module does not import that artwork, and this review found
 
 ## Font and distribution notices
 
+`vendor/vt100` contains the MIT-licensed `vt100` 0.16.2 parser with RODE's
+character-set support patch. Its original license is retained beside the source;
+`vendor/vt100/PATCH.md` records the upstream revision and modifications. The Cargo
+patch applies this same parser to the editor and host services. The notice
+collector includes its license from that local dependency source.
+
 The current [`epaint_default_fonts` dependency](https://github.com/emilk/egui/tree/0.33.3/crates/epaint_default_fonts/fonts) supplies complete notices for:
 
 | Font | Upstream notice |

@@ -10,7 +10,10 @@ pub(super) struct X11 {
     pub screen: u32,
 }
 fn unhex(value: &str) -> Result<[u8; 16]> {
-    ensure!(value.len() == 32, "Invalid X11 cookie length");
+    ensure!(
+        value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "Invalid X11 cookie; expected 32 hexadecimal characters"
+    );
     let mut bytes = [0; 16];
     for (i, byte) in bytes.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&value[2 * i..2 * i + 2], 16)?;
@@ -39,7 +42,15 @@ impl X11 {
                     "MIT-MAGIC-COOKIE-1",
                     "untrusted",
                     "timeout",
-                    &config.x11_timeout.to_string(),
+                    // The local authorization must not expire before this
+                    // connection starts refusing new X11 channels. Zero keeps
+                    // both lifetimes unlimited, as explicitly configured.
+                    &if config.x11_timeout == 0 {
+                        0
+                    } else {
+                        config.x11_timeout + 60
+                    }
+                    .to_string(),
                 ]);
                 rode_host_core::command::run_bounded_limited(
                     command,
@@ -82,7 +93,7 @@ impl X11 {
                 cookie,
                 fake,
                 screen,
-                expires: (!config.x11_trusted)
+                expires: (!config.x11_trusted && config.x11_timeout != 0)
                     .then(|| std::time::Instant::now() + Duration::from_secs(config.x11_timeout)),
             })
         })();
@@ -101,7 +112,7 @@ impl X11 {
         ensure!(
             self.expires
                 .is_none_or(|end| std::time::Instant::now() < end),
-            "X11 forwarding expired"
+            "X11 forwarding expired; reconnect SSH or adjust ForwardX11Timeout"
         );
         let handshake = tokio::time::timeout(IO_TIMEOUT, async {
             let mut header = [0; 12];
@@ -174,5 +185,46 @@ impl X11 {
             tokio::io::copy_bidirectional(&mut local, &mut remote).await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_expired_forward_refuses_connections_before_reading_authentication() {
+        let x11 = X11 {
+            display: "127.0.0.1:0".into(),
+            cookie: [0x11; 16],
+            fake: [0x22; 16],
+            expires: Some(std::time::Instant::now()),
+            screen: 0,
+        };
+        let (_client, channel) = tokio::io::duplex(64);
+        let error = tokio::time::timeout(Duration::from_secs(1), x11.forward(channel))
+            .await
+            .expect("An expired channel must be rejected immediately")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("X11 forwarding expired"));
+        assert!(error.contains("reconnect SSH"));
+    }
+
+    #[test]
+    fn invalid_x11_cookies_are_rejected_without_panicking_or_echoing_the_value() {
+        for value in [
+            String::new(),
+            "g".repeat(32),
+            "aé".repeat(10) + "aa",
+            "1".repeat(34),
+        ] {
+            let error = unhex(&value).unwrap_err().to_string();
+            assert!(error.contains("Invalid X11 cookie"));
+            if !value.is_empty() {
+                assert!(!error.contains(&value));
+            }
+        }
+        assert_eq!(unhex(&"ab".repeat(16)).unwrap(), [0xab; 16]);
     }
 }

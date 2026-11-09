@@ -441,11 +441,14 @@ impl Config {
             gssapi_delegate: yes("gssapidelegatecredentials", false)?,
             hash_hosts: yes("hashknownhosts", true)?,
             xauth: get("xauthlocation", "xauth"),
-            x11_trusted: yes("forwardx11trusted", false)?,
+            x11_trusted: match (target, profile.x11_trust.override_value()) {
+                (true, Some(trusted)) => trusted,
+                _ => yes("forwardx11trusted", false)?,
+            },
             x11_timeout: get("forwardx11timeout", "1200")
                 .parse::<u64>()
                 .context("Rust SSH ForwardX11Timeout must be seconds")?
-                .clamp(1, 86400),
+                .min(86400),
         })
     }
     pub fn host_token(&self) -> String {
@@ -465,6 +468,47 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn x11_trust_overrides_only_the_target_and_preserves_config_defaults() {
+        use crate::ssh::{Profile, X11Trust};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config");
+        for configured in [false, true] {
+            std::fs::write(
+                &path,
+                format!(
+                    "ForwardX11Trusted {}\n",
+                    if configured { "yes" } else { "no" }
+                ),
+            )
+            .unwrap();
+            for trust in [X11Trust::Config, X11Trust::Untrusted, X11Trust::Trusted] {
+                let profile = Profile {
+                    host: "host".into(),
+                    config: path.to_string_lossy().into(),
+                    x11_trust: trust,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    Config::resolve(&profile, "host", true).unwrap().x11_trusted,
+                    trust.override_value().unwrap_or(configured)
+                );
+                assert_eq!(
+                    Config::resolve(&profile, "jump", false)
+                        .unwrap()
+                        .x11_trusted,
+                    configured
+                );
+            }
+        }
+        std::fs::write(&path, "").unwrap();
+        let profile = Profile {
+            host: "host".into(),
+            config: path.to_string_lossy().into(),
+            ..Default::default()
+        };
+        assert!(!Config::resolve(&profile, "host", true).unwrap().x11_trusted);
+    }
     #[test]
     fn config_include_precedence_negation_and_literal_values() {
         let root = tempfile::tempdir().unwrap();
@@ -576,5 +620,20 @@ mod tests {
         };
         let config = Config::resolve(&profile, "host", true).unwrap();
         assert_eq!(config.environment, [("LANG".into(), "first".into())]);
+    }
+    #[test]
+    fn x11_timeout_zero_disables_expiry_without_rewriting_positive_values() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config");
+        let profile = super::super::super::Profile {
+            host: "host".into(),
+            config: path.to_string_lossy().into(),
+            ..Default::default()
+        };
+        for timeout in [0, 1, 1200, 86400] {
+            std::fs::write(&path, format!("ForwardX11Timeout {timeout}\n")).unwrap();
+            let resolved = Config::resolve(&profile, "host", true).unwrap();
+            assert_eq!(resolved.x11_timeout, timeout);
+        }
     }
 }
