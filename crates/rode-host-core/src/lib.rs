@@ -5,6 +5,7 @@ pub mod agent_files;
 /// Pinned bubblewrap fallback available through the native helper's early dispatch.
 pub use rode_bwrap as bwrap;
 pub mod command;
+pub mod connection;
 pub mod debugger;
 pub mod environment;
 pub mod extensions;

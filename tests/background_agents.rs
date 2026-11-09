@@ -3,7 +3,7 @@
 use rode_agent_core::{
     Config, Plan, Provider,
     history::Owner,
-    service::{Command as Action, Info, Spec, State},
+    service::{Command as Action, Info, Persistence, Spec, State},
 };
 use rode_session::{Request, Response};
 use std::{
@@ -73,13 +73,13 @@ impl Fixture {
         };
         infos
     }
-    fn create(&self, provider: Provider, persistent: bool, prompt: &str) -> Info {
+    fn create(&self, provider: Provider, persistent: impl Into<Persistence>, prompt: &str) -> Info {
         self.create_with_attachments(provider, persistent, prompt, vec![])
     }
     fn create_with_attachments(
         &self,
         provider: Provider,
-        persistent: bool,
+        persistent: impl Into<Persistence>,
         prompt: &str,
         attachments: Vec<rode_agent_core::attachment::Attachment>,
     ) -> Info {
@@ -88,7 +88,7 @@ impl Fixture {
     fn create_agent(
         &self,
         provider: Provider,
-        persistent: bool,
+        persistent: impl Into<Persistence>,
         prompt: Option<&str>,
         attachments: Vec<rode_agent_core::attachment::Attachment>,
     ) -> Info {
@@ -117,7 +117,7 @@ impl Fixture {
             file_tool_plan: None,
             env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
             python: "off".into(),
-            persistent,
+            persistent: persistent.into(),
             text: prompt.map(str::to_owned),
             attachments,
         };
@@ -132,15 +132,34 @@ impl Fixture {
         info
     }
     fn attach(&self, info: &Info) -> View {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
-            .args(["attach-agent", &info.id, &info.policy])
+        self.attach_transport(info, false)
+    }
+    fn attach_transport(&self, info: &Info, heartbeat: bool) -> View {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"));
+        if heartbeat {
+            command.arg("--process");
+        } else {
+            command.args(["attach-agent", &info.id, &info.policy]);
+        }
+        let mut child = command
             .env("RODE_SESSION_DIR", &self.runtime)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap();
-        let input = child.stdin.take().unwrap();
+        let mut input = child.stdin.take().unwrap();
+        if heartbeat {
+            writeln!(input, "{}", serde_json::json!({
+                "heartbeat": true,
+                "environment": {},
+                "root": self.root,
+                "prefix": [],
+                "argv": [env!("CARGO_BIN_EXE_rode-sessiond"), "attach-agent", &info.id, &info.policy],
+                "python": "off",
+                "python_program": false
+            })).unwrap();
+        }
         let stdout = child.stdout.take().unwrap();
         let (tx, events) = mpsc::channel();
         std::thread::spawn(move || {
@@ -164,6 +183,57 @@ impl Fixture {
             last: std::cell::RefCell::new(None),
         }
     }
+}
+
+#[test]
+fn abandoned_remote_agent_views_expire_without_ending_persistent_work() {
+    std::thread::scope(|scope| {
+        for persistent in [Persistence::Off, Persistence::Auto, Persistence::On] {
+            scope.spawn(move || {
+                let fixture = Fixture::new();
+                let info = fixture.create(Provider::Codex, persistent, "work");
+                let mut view = fixture.attach_transport(&info, true);
+                let state = view.until(|s| s.chat.connected && s.chat.busy);
+                let conversation = state.chat.conversation;
+                assert!(
+                    fixture
+                        .infos()
+                        .iter()
+                        .any(|i| i.id == info.id && i.attached)
+                );
+                // Keep stdin and stdout open: sshd has not detected the dead
+                // desktop, so neither EOF nor client-side SSH keepalives help.
+                let until = Instant::now()
+                    + rode_host_protocol::framing::CONNECTION_TIMEOUT
+                    + Duration::from_secs(5);
+                while view.child.try_wait().unwrap().is_none() {
+                    assert!(
+                        Instant::now() < until,
+                        "Abandoned agent bridge retained its controlling lease"
+                    );
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                assert!(Instant::now() < until);
+                drop(view);
+                if persistent.enabled() {
+                    wait(|| {
+                        fixture
+                            .infos()
+                            .iter()
+                            .any(|i| i.id == info.id && i.alive && !i.attached)
+                    });
+                    let view = fixture.attach(&info);
+                    let state = view.until(|s| s.chat.connected && s.chat.busy);
+                    assert_eq!(state.chat.conversation, conversation);
+                    fs::write(fixture.root.join("continue"), "").unwrap();
+                    view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+                } else {
+                    wait(|| fixture.infos().iter().all(|i| i.id != info.id));
+                    wait(|| !fixture.runtime.join("socket").exists());
+                }
+            });
+        }
+    });
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -478,7 +548,7 @@ fn native_tool_controller(model_only: bool) {
         executable: fixture.root.join("agent.py").to_string_lossy().into(),
         env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
         python: "off".into(),
-        persistent: true,
+        persistent: true.into(),
         text: Some("edit files".into()),
         attachments: vec![],
     };
@@ -933,8 +1003,10 @@ fn persistence_toggles_in_place_and_off_ends_the_last_view() {
     view.until(|s| s.chat.connected);
     wait(|| fixture.root.join("agent.pid").exists());
     let pid = fs::read_to_string(fixture.root.join("agent.pid")).unwrap();
-    view.send(Action::Persistence { persistent: true });
-    view.until(|s| s.info.persistent);
+    view.send(Action::Persistence {
+        persistent: true.into(),
+    });
+    view.until(|s| s.info.persistent == Persistence::On);
     drop(view);
     wait(|| {
         fixture
@@ -948,16 +1020,119 @@ fn persistence_toggles_in_place_and_off_ends_the_last_view() {
         fs::read_to_string(fixture.root.join("agent.pid")).unwrap(),
         pid
     );
-    view.send(Action::Persistence { persistent: false });
-    view.until(|s| !s.info.persistent);
+    view.send(Action::Persistence {
+        persistent: false.into(),
+    });
+    view.until(|s| s.info.persistent == Persistence::Off);
     drop(view);
     wait(|| fixture.infos().is_empty());
     assert!(!fixture.root.join("work-done").exists());
 }
+
+#[test]
+fn auto_persist_finishes_detached_work_and_its_queue_then_reaps_the_backend() {
+    use rode_agent_core::queue::Action as Queue;
+    for provider in Provider::ALL {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("record-inputs"), "").unwrap();
+        let info = fixture.create(provider, Persistence::Auto, "first task");
+        let mut view = fixture.attach(&info);
+        let state = view.until(|s| s.chat.connected && s.chat.busy);
+        assert_eq!(state.info.persistent, Persistence::Auto);
+        let pid: i32 = fs::read_to_string(fixture.root.join("agent.pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        view.queue(
+            "follow-up",
+            Queue::Push {
+                id: 1,
+                text: "second task".into(),
+                attachments: vec![],
+            },
+        );
+        drop(view);
+        wait(|| {
+            fixture
+                .infos()
+                .iter()
+                .any(|i| i.id == info.id && i.alive && !i.attached)
+        });
+        assert!(!fixture.root.join("work-done").exists());
+        fs::write(fixture.root.join("continue"), "").unwrap();
+        wait(|| fs::read_to_string(fixture.root.join("work-done")).is_ok_and(|done| done == "2"));
+        wait(|| fixture.infos().is_empty());
+        wait(|| unsafe { libc::kill(pid, 0) } != 0);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("recorded-inputs.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+        wait(|| !fixture.runtime.join("socket").exists());
+    }
+}
+
+#[test]
+fn auto_persist_keeps_attached_idle_chats_usable_and_closes_them_on_detach() {
+    let fixture = Fixture::new();
+    fs::write(fixture.root.join("continue"), "").unwrap();
+    let info = fixture.create(Provider::Codex, Persistence::Auto, "first task");
+    let mut view = fixture.attach(&info);
+    let state = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+    let pid = fs::read_to_string(fixture.root.join("agent.pid")).unwrap();
+    view.send(Action::Submit {
+        text: "second task".into(),
+        attachments: vec![],
+        config: Box::new(state.chat.config),
+    });
+    view.until(|s| s.chat.completed == 2 && !s.chat.busy);
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("agent.pid")).unwrap(),
+        pid
+    );
+    assert!(
+        fixture
+            .infos()
+            .iter()
+            .any(|i| i.id == info.id && i.alive && i.attached)
+    );
+    drop(view);
+    wait(|| fixture.infos().is_empty());
+    wait(|| !fixture.runtime.join("socket").exists());
+}
+
+#[test]
+fn switching_to_auto_preserves_active_work_without_restarting_the_backend() {
+    let fixture = Fixture::new();
+    let info = fixture.create(Provider::Codex, Persistence::Off, "work");
+    let mut view = fixture.attach(&info);
+    view.until(|s| s.chat.connected && s.chat.busy);
+    let pid = fs::read_to_string(fixture.root.join("agent.pid")).unwrap();
+    for mode in [Persistence::On, Persistence::Auto] {
+        view.send(Action::Persistence { persistent: mode });
+        view.until(|s| s.info.persistent == mode);
+        assert_eq!(
+            fs::read_to_string(fixture.root.join("agent.pid")).unwrap(),
+            pid
+        );
+    }
+    drop(view);
+    wait(|| {
+        fixture
+            .infos()
+            .iter()
+            .any(|i| i.id == info.id && !i.attached)
+    });
+    fs::write(fixture.root.join("continue"), "").unwrap();
+    wait(|| fixture.root.join("work-done").exists());
+    wait(|| fixture.infos().is_empty());
+}
 #[test]
 fn unanswered_questions_survive_detachment_and_hold_queued_work_until_an_explicit_answer() {
     let fixture = Fixture::new();
-    let info = fixture.create(Provider::Codex, true, "question");
+    let info = fixture.create(Provider::Codex, Persistence::Auto, "question");
     let mut view = fixture.attach(&info);
     let state = view.until(|s| s.chat.prompts.len() == 1);
     let question = state.chat.prompts[0].clone();
@@ -1059,7 +1234,11 @@ fn asynchronous_questions_survive_detachment_and_hold_queued_work_until_answered
         include_str!("fixtures/agent.py"),
     )
     .unwrap();
-    let info = fixture.create(Provider::Codex, true, "async-question-finished");
+    let info = fixture.create(
+        Provider::Codex,
+        Persistence::Auto,
+        "async-question-finished",
+    );
     let mut view = fixture.attach(&info);
     let state = view.until(|state| !state.chat.busy && !state.chat.prompts.is_empty());
     let question_id = state.chat.prompts[0].id.clone();
@@ -1136,7 +1315,7 @@ fn automatic_queue_preserves_pause_edit_and_failure_holds_while_detached() {
             if hold == "failure" {
                 fs::write(fixture.root.join("fail-first"), "").unwrap();
             }
-            let info = fixture.create(provider, true, "work");
+            let info = fixture.create(provider, Persistence::Auto, "work");
             let mut view = fixture.attach(&info);
             view.until(|s| s.chat.connected && s.chat.busy);
             view.queue(

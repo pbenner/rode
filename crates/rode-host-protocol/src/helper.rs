@@ -40,6 +40,8 @@ pub const CAPABILITIES: &[&str] = &[
     "compact_sandbox_arguments",
     "explorer_mutations",
     "large_document_transfer",
+    "connection_heartbeats",
+    "agent_auto_persist",
 ];
 
 /// Metadata repeated in the live handshake after discovery and cache publication.
@@ -253,5 +255,16 @@ mod tests {
             .validate(std::env::consts::OS, std::env::consts::ARCH, 13)
             .unwrap_err();
         assert!(error.contains("sandbox_system_lookups"), "{error}");
+    }
+
+    #[test]
+    fn helpers_without_connection_expiry_require_an_upgrade() {
+        let mut info = Info::current("0.1.0", 20);
+        info.capabilities
+            .retain(|cap| cap != "connection_heartbeats");
+        let error = info
+            .validate(std::env::consts::OS, std::env::consts::ARCH, 20)
+            .unwrap_err();
+        assert!(error.contains("connection_heartbeats"), "{error}");
     }
 }

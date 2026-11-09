@@ -82,7 +82,11 @@ impl State {
         if state.is_none() {
             *state = Some(
                 Client::connect(remote)
-                    .map(Arc::new)
+                    .map(|client| {
+                        let client = Arc::new(client);
+                        Client::heartbeat(&client);
+                        client
+                    })
                     .map_err(|e| format!("{e:#}")),
             );
         }
@@ -112,6 +116,42 @@ impl State {
 }
 
 impl Client {
+    fn heartbeat(client: &Arc<Self>) {
+        let client = Arc::downgrade(client);
+        std::thread::spawn(move || {
+            loop {
+                // Retain only a weak reference while sleeping so dropping the
+                // connection immediately closes its channel and wakes callers.
+                std::thread::sleep(framing::HEARTBEAT_INTERVAL);
+                let Some(client) = client.upgrade() else {
+                    break;
+                };
+                if client.shared.pending.lock().unwrap().closed.is_some() {
+                    break;
+                }
+                let result = (|| -> Result<()> {
+                    let mut input = client
+                        .input
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Host writer lock failed"))?;
+                    framing::write(
+                        &mut DeadlineWriter::new(&mut input, Duration::from_secs(10))?,
+                        &wire::Request {
+                            id: 0,
+                            operation: Operation::Heartbeat,
+                        },
+                    )?;
+                    Ok(())
+                })();
+                if result.is_err() {
+                    client.stop(
+                        "Native host heartbeat failed; reconnect before submitting more work.",
+                    );
+                    break;
+                }
+            }
+        });
+    }
     fn connect(remote: &ssh::Remote) -> Result<Self> {
         ensure!(
             remote.connected(),

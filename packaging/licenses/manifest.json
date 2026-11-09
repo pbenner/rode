@@ -89,5 +89,58 @@
         "source": "https://www.latex-project.org/lppl/lppl-1-3c.txt"
       }
     ]
+  },
+  {
+    "packages": [
+      "delegate@0.13.5"
+    ],
+    "files": [
+      {
+        "file": "delegate-LICENSE-MIT",
+        "sha256": "be7ee8aa49dc586023669a0c600a0536fce6a9f61264a53a67cdd842564ed899",
+        "source": "https://raw.githubusercontent.com/Kobzol/rust-delegate/b129d4cbf4cc499eff7743365dcb0fe5d8d2e820/LICENSE-MIT"
+      },
+      {
+        "file": "delegate-LICENSE-APACHE",
+        "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+        "source": "https://raw.githubusercontent.com/Kobzol/rust-delegate/b129d4cbf4cc499eff7743365dcb0fe5d8d2e820/LICENSE-APACHE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "russh@0.65.1"
+    ],
+    "files": [
+      {
+        "file": "russh-LICENSE.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source": "https://raw.githubusercontent.com/warp-tech/russh/b33092aad1e51c66258a12e8b83fc473a68d9d34/LICENSE.txt"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "russh-cryptovec@0.62.0"
+    ],
+    "files": [
+      {
+        "file": "russh-LICENSE.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source": "https://raw.githubusercontent.com/warp-tech/russh/907c732562c5732aad6c140dba958eafddc41ba0/LICENSE.txt"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "russh-util@0.52.0"
+    ],
+    "files": [
+      {
+        "file": "russh-LICENSE.txt",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "source": "https://raw.githubusercontent.com/warp-tech/russh/3d09c20c52a542ffa327723d3a44cb1edd9b0ca4/LICENSE-2.0.txt"
+      }
+    ]
   }
 ]

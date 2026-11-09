@@ -14,6 +14,21 @@ fn view(style: Personality) -> State {
     })).unwrap()
 }
 
+#[test]
+fn lifetime_changes_remain_pending_until_the_requested_mode_is_acknowledged() {
+    let mut client = Client::test_style_view(Personality::Default, Personality::Default);
+    client.persistence_pending = Some(Persistence::Auto);
+    client.accept_state(view(Personality::Default));
+    assert!(client.work_pending());
+    assert_eq!(client.persistence(), Persistence::On);
+    let mut acknowledged = view(Personality::Default);
+    acknowledged.info.persistent = Persistence::Auto;
+    client.accept_state(acknowledged);
+    assert_eq!(client.persistence(), Persistence::Auto);
+    assert!(client.persistence_pending.is_none());
+    assert!(!client.work_pending());
+}
+
 impl Client {
     pub(crate) fn test_style_view(selected: Personality, applied: Personality) -> Self {
         let mut client = Self::pending(
@@ -31,7 +46,7 @@ impl Client {
                 python: "off".into(),
             },
             "fixture".into(),
-            true,
+            Persistence::On,
             Arc::new(|| {}),
         );
         client.preparing.pending.store(false, Ordering::Release);

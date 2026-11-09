@@ -42,6 +42,8 @@ pub struct Reply<T> {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Operation<F, S, E> {
+    /// Renew the connection lease without occupying a worker or producing a reply.
+    Heartbeat,
     /// Canonicalise and probe a project policy on the authenticated host.
     Prepare {
         /// Requested root on this host.

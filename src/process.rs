@@ -315,6 +315,7 @@ fn run_session(
             ssh::quote(&remote.native.client(remote)?.executable)
         ));
         let mut data = serde_json::to_vec(&RemoteLaunch {
+            heartbeat: true,
             native_debug: launch.native_debug,
             environment: launch.plan.environment.clone(),
             root: launch.plan.root.clone(),
@@ -394,13 +395,26 @@ fn run_session(
         control.kill(libc::SIGTERM);
     }
     let mut stdin = child.stdin.take().context("Process stdin is missing")?;
+    let heartbeat = launch.remote.is_some();
     std::thread::spawn(move || {
         if let Some(bootstrap) = bootstrap
             && stdin.write_all(&bootstrap).is_err()
         {
             return;
         }
-        for data in input {
+        loop {
+            let data = if heartbeat {
+                match input.recv_timeout(rode_host_protocol::framing::HEARTBEAT_INTERVAL) {
+                    Ok(data) => data,
+                    Err(mpsc::RecvTimeoutError::Timeout) => vec![b'\n'],
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match input.recv() {
+                    Ok(data) => data,
+                    Err(_) => break,
+                }
+            };
             if stdin.write_all(&data).and_then(|_| stdin.flush()).is_err() {
                 break;
             }

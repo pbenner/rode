@@ -52,6 +52,15 @@ Or configure a direct connection with a jump host:
 
 The selected client reads `~/.ssh/config`, including `Include` and `ProxyJump` settings. The connection picker discovers literal aliases in the main config file; aliases defined in included files can be entered manually. Use `--ssh-config FILE` to select an alternative configuration.
 
+The desktop renews its remote gateway and attachment streams every 10 seconds,
+including while the window is idle or hidden. If a desktop crashes, reboots or
+loses its network, those transient helpers expire after 45 seconds without input,
+even if the SSH server still has their pipes open. Their attachments close:
+agents in Auto mode finish accepted work and then exit; agents in On mode,
+persistent terminals and notebook/debugger runtimes remain available to
+reattach. Off/nonpersistent work follows its normal last-view cleanup policy.
+Agent and runtime views keep exclusive control while their attachment is live.
+
 ## Client compatibility
 
 The Rust backend supports `Host` patterns and negation, bounded `Include` files,

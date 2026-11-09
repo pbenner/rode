@@ -10,6 +10,7 @@ use anyhow::Result;
 pub use personality::Personality;
 pub use rode_agent_core::network::Network;
 pub use rode_agent_core::prompt_history;
+pub use rode_agent_core::service::Persistence;
 pub use rode_agent_core::{Access, Approval, Config, LINE_LIMIT, PROMPT_LIMIT, Provider};
 use serde_json::Value;
 use std::collections::BTreeMap;

@@ -20,9 +20,11 @@ from ui_harness import (
     display,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
     text,
     theme,
+    wait_for_ui_state,
     wait_for_window,
     x11,
 )
@@ -64,6 +66,7 @@ def run(remote=False, isolated=False):
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             RODE_SESSION_DIR=str(base / "runtime"),
+            RODE_UI_TEST_STATE=str(base / "ui-state.json"),
         )
         Path(environment["HOME"]).mkdir()
 
@@ -196,11 +199,48 @@ def run(remote=False, isolated=False):
                     m.get("command") == "setBreakpoints" and m["arguments"]["breakpoints"]
                     for m in messages
                 )
+                pauses = sum(m.get("command") == "scopes" for m in read_json_lines(rpc))
                 key("F10")
                 wait_for(lambda: '"command": "next"' in rpc.read_text(), "F10 did not step")
-                time.sleep(0.5)
+                # A step request can precede its stopped/source-navigation reply,
+                # especially while the debug terminal drains its output burst.
+                # Let that source jump finish before requesting terminal focus.
+                wait_for(
+                    lambda: (
+                        sum(m.get("command") == "scopes" for m in read_json_lines(rpc)) > pauses
+                    ),
+                    "Debugger did not inspect the stepped frame",
+                )
+                before = json.loads((base / "ui-state.json").read_text())["pass"]
+                wait_for_ui_state(
+                    process,
+                    log_path,
+                    base / "ui-state.json",
+                    lambda state: (
+                        state["pass"] > before
+                        and any(
+                            button["name"] == "source-editor"
+                            and button["enabled"]
+                            and button["focused"]
+                            for button in state["buttons"]
+                        )
+                    ),
+                    "Stepped source did not acquire input focus",
+                )
                 key("space", ("Control_L",))
                 key("t")
+                wait_for_ui_state(
+                    process,
+                    log_path,
+                    base / "ui-state.json",
+                    lambda state: any(
+                        button["name"].startswith("terminal-input:debug-")
+                        and button["enabled"]
+                        and button["focused"]
+                        for button in state["buttons"]
+                    ),
+                    "Debug terminal did not acquire input focus",
+                )
                 text("RODE\n")
                 wait_for(
                     lambda: (project / "input-result").exists(), "Debug PTY input was not delivered"

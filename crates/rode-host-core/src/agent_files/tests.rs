@@ -159,6 +159,25 @@ fn outside_paths_symlinks_and_metadata_are_rejected_for_every_operation() {
 }
 
 #[test]
+fn mutation_lock_ends_with_its_owner_even_if_a_spawn_retains_the_descriptor() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = Path::new("source");
+    fs::write(temporary.path().join(path), "original").unwrap();
+    let root = Root::open(temporary.path().to_str().unwrap(), &[]).unwrap();
+    let (owner, _, revision) = root.read(path, true).unwrap();
+    // A descriptor copied across fork shares the same open file description.
+    let inherited = owner.try_clone().unwrap();
+    assert!(root.write(path, "blocked", Some(&revision)).is_err());
+    drop(owner);
+    root.write(path, "replacement", Some(&revision)).unwrap();
+    assert_eq!(
+        fs::read_to_string(temporary.path().join(path)).unwrap(),
+        "replacement"
+    );
+    drop(inherited);
+}
+
+#[test]
 fn read_only_and_external_edits_cannot_be_bypassed() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();

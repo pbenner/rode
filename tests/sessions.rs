@@ -4,6 +4,9 @@
 #[path = "support/native.rs"]
 mod native_peer;
 
+#[path = "support/terminal.rs"]
+mod terminal_ui;
+
 use portable_pty::CommandBuilder;
 use rode::{sandbox, sessions, terminal::Terminal};
 use rode_session::{Request, Response};
@@ -149,6 +152,33 @@ impl Fixture {
     }
 }
 #[test]
+fn native_terminal_resize_reaches_the_shell_over_tty_and_pipe_attachments() {
+    for piped in [false, true] {
+        let mut fixture = Fixture::new();
+        let info = fixture.create(&fixture.plan());
+        let mut command = if piped {
+            // SSH executes the attachment with pipes, without a remote TTY or
+            // SIGWINCH. Relay bytes through the same kind of stdin here.
+            let mut command = CommandBuilder::new("/bin/sh");
+            command.args(["-c", "cat | \"$@\"", "pipe-attachment"]);
+            command.arg(env!("CARGO_BIN_EXE_rode-sessiond"));
+            command
+        } else {
+            CommandBuilder::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+        };
+        command.args(["attach", "--framed", &info.id, &info.policy]);
+        command.env("RODE_SESSION_DIR", &fixture.runtime);
+        let mut terminal = Terminal::spawn_native(
+            &eframe::egui::Context::default(),
+            command,
+            "Resize test".into(),
+        )
+        .unwrap();
+        terminal_ui::check_sizes(&mut terminal, fixture.root.path());
+    }
+}
+
+#[test]
 fn cargo_helper_is_headless_and_shares_persistent_sessions_with_the_editor() {
     let protocol = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
         .arg("protocol")
@@ -186,6 +216,60 @@ fn cargo_helper_is_headless_and_shares_persistent_sessions_with_the_editor() {
         .send(b"printf 'TOKEN_%s\\n' \"$TOKEN\"\n".to_vec())
         .unwrap();
     wait(|| terminal.contents().contains("TOKEN_cargo-installed"));
+}
+
+#[test]
+fn abandoned_remote_terminal_views_expire_and_apply_last_view_persistence() {
+    std::thread::scope(|scope| {
+        for persistent in [false, true] {
+            scope.spawn(move || {
+                let mut fixture = Fixture::new();
+                let info = fixture.create_with_persistence(&fixture.plan(), persistent);
+                let mut bridge = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
+                    .args(["attach", "--framed", "--heartbeat", &info.id, &info.policy])
+                    .env("RODE_SESSION_DIR", &fixture.runtime)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let input = bridge.stdin.take().unwrap();
+                wait(|| {
+                    fixture
+                        .direct_list()
+                        .iter()
+                        .any(|i| i.id == info.id && i.clients == 1)
+                });
+                let until = Instant::now()
+                    + rode_host_protocol::framing::CONNECTION_TIMEOUT
+                    + Duration::from_secs(5);
+                while bridge.try_wait().unwrap().is_none() {
+                    if Instant::now() >= until {
+                        let _ = bridge.kill();
+                        let _ = bridge.wait();
+                        panic!("Abandoned terminal bridge did not expire");
+                    }
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                drop(input);
+                if persistent {
+                    wait(|| {
+                        fixture
+                            .direct_list()
+                            .iter()
+                            .any(|i| i.id == info.id && i.alive && i.clients == 0)
+                    });
+                    let terminal = fixture.attach(&info);
+                    terminal
+                        .send(b"printf 'REATTACH_%s\\n' READY\n".to_vec())
+                        .unwrap();
+                    wait(|| terminal.contents().contains("REATTACH_READY"));
+                } else {
+                    wait(|| !fixture.runtime.join("socket").exists());
+                }
+            });
+        }
+    });
 }
 
 #[test]

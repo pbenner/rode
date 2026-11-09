@@ -205,6 +205,7 @@ impl Gateway {
             "Host connection closed"
         );
         match operation {
+            Operation::Heartbeat => bail!("Heartbeats must bypass host workers"),
             Operation::Prepare { path, options } => {
                 let plan = self.insert(sandbox::prepare_native(&path, &options)?)?;
                 let response = FileResponse {
@@ -299,7 +300,7 @@ impl Gateway {
 /// Serve a bounded set of concurrent operations on one authenticated stdio channel.
 /// There is no listener, credential storage, or automatic reconnection.
 pub fn serve() -> Result<()> {
-    let mut stdin = std::io::stdin().lock();
+    let mut stdin = rode_host_core::connection::Input::stdin()?;
     let mut magic = [0; 12];
     stdin.read_exact(&mut magic)?;
     ensure!(
@@ -307,6 +308,13 @@ pub fn serve() -> Result<()> {
         "Incompatible host protocol preamble"
     );
     let hello: wire::Hello = framing::read(&mut stdin)?.context("Missing host handshake")?;
+    if !hello
+        .capabilities
+        .iter()
+        .any(|s| s == "connection_heartbeats")
+    {
+        stdin.unbounded();
+    }
     ensure!(
         hello.version == framing::VERSION,
         "Incompatible host protocol version"
@@ -405,6 +413,9 @@ pub fn serve() -> Result<()> {
                     !gateway.cancelled.load(Ordering::Acquire),
                     "Host output channel closed"
                 );
+                if matches!(request.operation, Operation::Heartbeat) {
+                    continue;
+                }
                 match send.try_send(request) {
                     Ok(()) => {}
                     Err(std::sync::mpsc::TrySendError::Full(request)) => {

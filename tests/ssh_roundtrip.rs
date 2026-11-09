@@ -9,6 +9,8 @@ mod fixture_process;
 mod installed_helpers;
 #[path = "ssh_roundtrip/large_files.rs"]
 mod large_files;
+#[path = "support/terminal.rs"]
+mod terminal_ui;
 #[path = "ssh_roundtrip/x11.rs"]
 mod x11;
 
@@ -211,7 +213,7 @@ fn remote_native_tools(model_only: bool) {
             executable: program.to_string_lossy().into(),
             env: BTreeMap::new(),
             python: "off".into(),
-            persistent: false,
+            persistent: false.into(),
             text: Some("remote edit".into()),
             attachments: vec![],
         };
@@ -525,8 +527,153 @@ fn mise_tools_and_tasks_resolve_on_the_project_host_over_ssh_and_proxyjump() {
 
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn native_terminal_size_tracks_panes_over_ssh_and_proxyjump() {
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    for jump in ["", "rode-jump"] {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let remote = Remote::new(Profile {
+            host: "rode-test".into(),
+            config: config.clone(),
+            jump: jump.into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+        let until = Instant::now() + Duration::from_secs(8);
+        while !remote.connected() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(remote.connected());
+        let plan = rode::sandbox::Plan {
+            root: root.to_string_lossy().into(),
+            ..Default::default()
+        };
+        let response = remote
+            .request(&Request::Tool {
+                request: rode::project::Request::Sessions {
+                    root: plan.root.clone(),
+                    operation: rode::sessions::Operation::Create {
+                        id: rode_session::new_id().unwrap(),
+                        name: "Resize test".into(),
+                        policy: rode::sessions::fingerprint(&plan),
+                        environment: Box::new(plan.environment.clone()),
+                        plan: Box::new(plan),
+                        python: "off".into(),
+                        persistent: false,
+                        allocation: None,
+                    },
+                    directory: Some(base.path().join("sessions").to_string_lossy().into()),
+                },
+            })
+            .unwrap();
+        let Some(rode::project::Response::Sessions(reply)) = response.tool else {
+            panic!("No terminal service reply")
+        };
+        let rode_session::Response::Session(info) = &reply.response else {
+            panic!("No terminal session")
+        };
+        let mut terminal = native_attach(&remote, &reply, info);
+        terminal_ui::check_sizes(&mut terminal, &root);
+        drop(terminal);
+        drop(login);
+        remote.cleanup();
+    }
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn openssh_mux_roundtrip_and_disconnect() {
     roundtrip("");
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn idle_remote_gateways_processes_and_terminals_renew_their_leases() {
+    use std::sync::Arc;
+    let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
+    std::thread::scope(|scope| {
+        for backend in [rode::ssh::Backend::Russh, rode::ssh::Backend::OpenSsh] {
+            for jump in ["", "rode-jump"] {
+                let config = config.clone();
+                scope.spawn(move || {
+                    let base = tempfile::tempdir().unwrap();
+                    let root = base.path().join("project");
+                    std::fs::create_dir(&root).unwrap();
+                    std::fs::write(root.join("source"), "idle gateway survived").unwrap();
+                    let remote = Remote::new(Profile {
+                        host: "rode-test".into(), backend, config, jump: jump.into(),
+                        x11_forwarding: false, ..Default::default()
+                    }).unwrap();
+                    let ctx = eframe::egui::Context::default();
+                    let login = Terminal::remote(&ctx, &remote).unwrap();
+                    let until = Instant::now() + Duration::from_secs(15);
+                    while !remote.connected() {
+                        assert!(login.is_alive() && Instant::now() < until, "{}", login.contents());
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    let plan = remote.request(&Request::Prepare {
+                        path: root.to_string_lossy().into(), sandbox: Default::default()
+                    }).unwrap().project.unwrap();
+                    let response = remote.request(&Request::Tool {
+                        request: rode::project::Request::Sessions {
+                            root: plan.root.clone(),
+                            operation: rode::sessions::Operation::Create {
+                                id: rode_session::new_id().unwrap(), name: "Idle lease test".into(),
+                                policy: rode::sessions::fingerprint(&plan),
+                                environment: Box::new(plan.environment.clone()), plan: Box::new(plan.clone()),
+                                python: "off".into(), persistent: false, allocation: None,
+                            },
+                            directory: Some(base.path().join("sessions").to_string_lossy().into()),
+                        }
+                    }).unwrap();
+                    let Some(rode::project::Response::Sessions(reply)) = response.tool else { panic!() };
+                    let rode_session::Response::Session(info) = &reply.response else { panic!() };
+                    let terminal = Terminal::native_session(&ctx, Some(&remote), &reply, info).unwrap();
+                    let pipe = rode::process::Session::start(rode::process::Launch {
+                            argv: policy_python("import json, sys; print('{\"ready\":true}', flush=True)\nfor line in sys.stdin: print(json.dumps(json.loads(line)), flush=True)").to_vec(),
+                        plan: plan.clone(), remote: Some(remote.clone()), python: "off".into(),
+                        python_program: false, native_debug: false, line_limit: 8192,
+                    }, Arc::new(|| {})).unwrap();
+                    let until = Instant::now() + Duration::from_secs(15);
+                    loop {
+                        if let Some(rode::process::Event::Message(value)) = pipe.poll() {
+                            assert_eq!(value["ready"], true);
+                            break;
+                        }
+                        assert!(Instant::now() < until, "Remote process did not start");
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    // No GUI repaint or user input renews these leases.
+                    std::thread::sleep(rode_host_protocol::framing::CONNECTION_TIMEOUT + Duration::from_secs(5));
+                    assert!(terminal.is_alive(), "{}", terminal.contents());
+                    remote.request_in(&Request::Read { path: root.join("source").to_string_lossy().into() }, Some(&plan)).unwrap();
+                    pipe.send(&serde_json::json!({"after_idle":true})).unwrap();
+                    let until = Instant::now() + Duration::from_secs(10);
+                    loop {
+                        match pipe.poll() {
+                            Some(rode::process::Event::Message(value)) => { assert_eq!(value["after_idle"], true); break; }
+                            Some(rode::process::Event::Error(error)) => panic!("{error}"),
+                            Some(rode::process::Event::Exited(code)) => panic!("Idle process exited: {code:?}"),
+                            _ => {}
+                        }
+                        assert!(Instant::now() < until);
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    terminal.send(b"printf 'IDLE_%s\\n' READY\n".to_vec()).unwrap();
+                    while !terminal.contents().contains("IDLE_READY") {
+                        assert!(terminal.is_alive() && Instant::now() < until, "{}", terminal.contents());
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    drop(pipe);
+                    drop(terminal);
+                    drop(login);
+                    remote.cleanup();
+                });
+            }
+        }
+    });
 }
 
 #[test]
@@ -1047,9 +1194,19 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
 fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
+    background_agent_lifetime_roundtrip(rode_agent_core::service::Persistence::On);
+}
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn auto_background_agents_finish_queued_work_then_exit_after_ssh_disconnect() {
+    background_agent_lifetime_roundtrip(rode_agent_core::service::Persistence::Auto);
+}
+
+fn background_agent_lifetime_roundtrip(persistent: rode_agent_core::service::Persistence) {
     use rode_agent_core::{
         queue::Action as Queue,
-        service::{Command, Spec, State, Update},
+        service::{Command, Persistence, Spec, State, Update},
     };
     use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, sync::Arc};
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
@@ -1133,7 +1290,7 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 file_tool_plan: Some(serde_json::to_value(&plan).unwrap()),
                 env: BTreeMap::new(),
                 python: "off".into(),
-                persistent: true,
+                persistent,
                 text: Some("work".into()),
                 attachments: vec![],
             };
@@ -1248,24 +1405,35 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 std::thread::sleep(Duration::from_millis(25));
             }
             let (next, login) = connect(remote.profile.clone());
-            let second = attach(&next);
-            let until = Instant::now() + Duration::from_secs(12);
-            state = None;
-            while state
-                .as_ref()
-                .is_none_or(|s| s.chat.completed != 3 || s.chat.busy || !s.queue.items.is_empty())
-            {
-                if let Some(rode::process::Event::Message(value)) = second.poll() {
-                    state = Some(
-                        serde_json::from_value::<Update>(value)
-                            .unwrap()
-                            .apply(state.as_ref())
-                            .unwrap(),
-                    );
+            let second = if persistent == Persistence::On {
+                let second = attach(&next);
+                let until = Instant::now() + Duration::from_secs(12);
+                state = None;
+                while state.as_ref().is_none_or(|s| {
+                    s.chat.completed != 3 || s.chat.busy || !s.queue.items.is_empty()
+                }) {
+                    if let Some(rode::process::Event::Message(value)) = second.poll() {
+                        state = Some(
+                            serde_json::from_value::<Update>(value)
+                                .unwrap()
+                                .apply(state.as_ref())
+                                .unwrap(),
+                        );
+                    }
+                    assert!(Instant::now() < until, "SSH agent did not reattach");
+                    std::thread::sleep(Duration::from_millis(25));
                 }
-                assert!(Instant::now() < until, "SSH agent did not reattach");
-                std::thread::sleep(Duration::from_millis(25));
-            }
+                rpc(
+                    &next,
+                    rode_session::Request::EndAgent {
+                        id: info.id.clone(),
+                        policy: policy.clone(),
+                    },
+                );
+                Some(second)
+            } else {
+                None
+            };
             assert_eq!(std::fs::read(root.join("agent.pid")).unwrap(), pid);
             let recorded: Vec<serde_json::Value> =
                 std::fs::read_to_string(root.join("recorded-inputs.jsonl"))
@@ -1276,13 +1444,6 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
             assert_eq!(recorded.len(), 3);
             assert_eq!(recorded[1][0]["text"], "queued over SSH 1");
             assert_eq!(recorded[2][0]["text"], "queued over SSH 2");
-            rpc(
-                &next,
-                rode_session::Request::EndAgent {
-                    id: info.id.clone(),
-                    policy: policy.clone(),
-                },
-            );
             let until = Instant::now() + Duration::from_secs(8);
             loop {
                 let rode_session::Response::Agents(infos) =
@@ -1295,6 +1456,16 @@ fn background_agents_survive_ssh_disconnect_and_keep_their_sandbox() {
                 }
                 assert!(Instant::now() < until, "Remote agent did not stop");
                 std::thread::sleep(Duration::from_millis(50));
+            }
+            if persistent == Persistence::Auto {
+                let until = Instant::now() + Duration::from_secs(8);
+                while std::path::Path::new(&runtime).join("socket").exists() {
+                    assert!(
+                        Instant::now() < until,
+                        "Auto left an unused remote service running"
+                    );
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
             drop(second);
             drop(login);

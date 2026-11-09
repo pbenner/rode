@@ -553,6 +553,9 @@ struct Gateway {
 }
 impl Gateway {
     fn start(helper: &Path) -> Self {
+        Self::start_transport(helper, false)
+    }
+    fn start_transport(helper: &Path, heartbeat: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         let mut child = Command::new(helper)
             .arg("host-rpc")
@@ -587,7 +590,11 @@ impl Gateway {
                 version: framing::VERSION,
                 architecture: std::env::consts::ARCH.into(),
                 digest: digest.clone(),
-                capabilities: vec![],
+                capabilities: if heartbeat {
+                    vec!["connection_heartbeats".into()]
+                } else {
+                    vec![]
+                },
                 info: None,
             },
         )
@@ -670,6 +677,78 @@ impl Gateway {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+#[test]
+fn abandoned_native_gateway_expires_with_its_input_pipe_still_open() {
+    let Some(helper) = helper() else { return };
+    let mut gateway = Gateway::start_transport(&helper, true);
+    // An incomplete next message must expire too, without waiting for a
+    // complete request or relying on the remote sshd to close its pipes.
+    gateway.input.as_mut().unwrap().write_all(&[0, 0]).unwrap();
+    let until = Instant::now() + framing::CONNECTION_TIMEOUT + Duration::from_secs(5);
+    while gateway.child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < until, "Abandoned host-rpc never expired");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    gateway.close();
+}
+
+#[test]
+fn native_heartbeats_do_not_produce_replies_or_occupy_workers() {
+    let Some(helper) = helper() else { return };
+    let mut gateway = Gateway::start_transport(&helper, true);
+    for _ in 0..32 {
+        gateway.send(Operation::Heartbeat);
+    }
+    let root = tempfile::tempdir().unwrap();
+    let plan = gateway.prepare(root.path(), Default::default());
+    assert_eq!(plan.root, root.path().to_string_lossy());
+    gateway.close();
+}
+
+#[test]
+fn abandoned_supervisors_reap_children_even_when_output_is_blocked() {
+    let Some(helper) = helper() else { return };
+    let root = tempfile::tempdir().unwrap();
+    let mut child = Command::new(helper)
+        .arg("--process")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    writeln!(input, "{}", serde_json::json!({
+        "heartbeat": true, "environment": {}, "root": root.path(), "prefix": [],
+        "argv": ["/usr/bin/python3", "-c", "import os, signal, threading\nfrom pathlib import Path\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nPath('pid').write_text(str(os.getpid()))\nthreading.Thread(target=os.write, args=(2, b'e' * 65536), daemon=True).start()\nwhile True: os.write(1, b'x' * 65536)"],
+        "python": "off", "python_program": false
+    })).unwrap();
+    let until = Instant::now() + framing::CONNECTION_TIMEOUT + Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Ok(pid) = fs::read_to_string(root.path().join("pid")) {
+                let pid: i32 = pid.parse().unwrap();
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            }
+            panic!("Abandoned supervisor retained a child blocked on stdout");
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let pid: i32 = fs::read_to_string(root.path().join("pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "Supervisor did not reap its child"
+    );
+    drop(input);
 }
 impl Drop for Gateway {
     fn drop(&mut self) {

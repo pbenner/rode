@@ -2,7 +2,7 @@
 //! action columns are fixed, with a separate action row in narrow windows.
 use crate::theme::Palette;
 use eframe::egui::{self, Align, Layout, RichText};
-use rode_agent_core::service::Info;
+use rode_agent_core::service::{Info, Persistence};
 
 #[cfg(test)]
 mod tests;
@@ -159,10 +159,10 @@ fn row(
             let metadata = format!(
                 "{} · {} · {}",
                 info.provider.label(),
-                if info.persistent {
-                    "Persistent"
-                } else {
-                    "Until view closes"
+                match info.persistent {
+                    Persistence::Auto => "Auto · finish work",
+                    Persistence::On => "Persistent",
+                    Persistence::Off => "Until view closes",
                 },
                 if !info.alive {
                     "Stopped"

@@ -13,6 +13,10 @@ pub const MAGIC: &[u8; 12] = b"RODE-HOST\0\0\x01";
 pub const CHUNK: usize = 64 * 1024;
 /// Limit for control messages; document transfers use the streaming entry points.
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
+/// Idle desktops renew each remote gateway and stream independently of GUI repaints.
+pub const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+/// Abandon transient SSH work when its desktop stops sending input or heartbeats.
+pub const CONNECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 struct Bounded(Vec<u8>);
 impl Write for Bounded {

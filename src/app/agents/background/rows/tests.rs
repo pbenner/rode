@@ -37,7 +37,7 @@ fn fixture() -> Vec<Info> {
                 "Ready".into()
             },
             attached: index == 0 || index == 3,
-            persistent: index != 1,
+            persistent: (index != 1).into(),
             created: 0,
         })
         .collect()

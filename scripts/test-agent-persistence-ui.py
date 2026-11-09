@@ -19,6 +19,7 @@ from ui_harness import (
     ROOT,
     assert_running,
     click,
+    click_button,
     close_window,
     focus_window,
     key,
@@ -106,19 +107,29 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
             screenshot(window, "ready.png")
             assert not (root / "agent.pid").exists()
             assert not infos(), "Opening chat started a native agent"
-            click(1325, 840)
+
+            def persistence(mode):
+                click_button(window, process, log_path, base / "ui-state.json", "agent-persistence")
+                click_button(
+                    window, process, log_path, base / "ui-state.json", f"agent-persist-{mode}"
+                )
+
+            persistence("on")
             assert not infos(), "Choosing persistence before Send started an agent"
-            click(1325, 840)
+            persistence("auto")
             click(1280, 785)
             text("work")
             key("Return")
             wait(lambda: (root / "work-started").exists(), "Agent did not start")
             first = wait(lambda: infos(), "Native agent missing")[0]
-            assert not first["persistent"], "New chats must default to persistence off"
+            assert first["persistent"] == "auto", "New chats must default to Auto"
             pid = (root / "agent.pid").read_text()
-            screenshot(window, "off.png")
-            click(1325, 840)
-            wait(lambda: infos() and infos()[0]["persistent"], "Persist button did not enable")
+            screenshot(window, "auto.png")
+            persistence("on")
+            wait(
+                lambda: infos() and infos()[0]["persistent"] is True,
+                "Persist On was not acknowledged",
+            )
             screenshot(window, "on.png")
             click(460, 850)  # Attach a desktop file to a waiting prompt.
             time.sleep(0.3)
@@ -252,8 +263,10 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
                 lambda: (root / "work-done").read_text() == "3", "Reattached chat did not continue"
             )
             assert (root / "agent.pid").read_text() == pid, "Reattach restarted the backend"
-            click(1325, 840)
-            wait(lambda: infos() and not infos()[0]["persistent"], "Persist did not switch off")
+            persistence("off")
+            wait(
+                lambda: infos() and infos()[0]["persistent"] is False, "Persist did not switch off"
+            )
             screenshot(window, "off-again.png")
             close_window(window, process)
             wait(lambda: not infos(), "Nonpersistent agent survived the last view")

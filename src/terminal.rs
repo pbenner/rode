@@ -216,6 +216,7 @@ impl Terminal {
         args.extend([
             "attach".into(),
             "--framed".into(),
+            "--heartbeat".into(),
             info.id.clone(),
             info.policy.clone(),
         ]);
@@ -385,7 +386,25 @@ impl Terminal {
         });
         let (input, rx) = mpsc::sync_channel::<Vec<u8>>(256);
         std::thread::spawn(move || {
-            while let Ok(bytes) = rx.recv() {
+            loop {
+                let bytes = if native {
+                    match rx.recv_timeout(rode_host_protocol::framing::HEARTBEAT_INTERVAL) {
+                        Ok(bytes) => bytes,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            let mut frame = vec![];
+                            if rode_session::write_stream(&mut frame, b'H', &[]).is_err() {
+                                break;
+                            }
+                            frame
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                } else {
+                    match rx.recv() {
+                        Ok(bytes) => bytes,
+                        Err(_) => break,
+                    }
+                };
                 if writer
                     .write_all(&bytes)
                     .and_then(|_| writer.flush())
@@ -402,7 +421,9 @@ impl Terminal {
             killer: Some(killer),
             control: None,
             alive,
-            size: (24, 100),
+            // A native host may have a different size before its first view.
+            // Always publish the first layout, even if it matches this PTY.
+            size: if native { (0, 0) } else { (24, 100) },
             title,
             native,
             persistent,
@@ -504,10 +525,50 @@ impl Terminal {
             bytes.len() <= 1024 * 1024,
             "Terminal paste exceeds 1 MiB. Paste a smaller chunk."
         );
+        if self.native {
+            self.send_frame(b'I', &bytes)
+        } else {
+            self.queue(bytes)
+        }
+    }
+
+    fn send_frame(&self, kind: u8, bytes: &[u8]) -> Result<()> {
+        let mut frame = Vec::with_capacity(bytes.len() + 5);
+        rode_session::write_stream(&mut frame, kind, bytes)?;
+        self.queue(frame)
+    }
+
+    fn queue(&self, bytes: Vec<u8>) -> Result<()> {
         self.input.try_send(bytes).map_err(|error| match error {
             mpsc::TrySendError::Full(_) => anyhow::anyhow!("Terminal input queue is full. Input was not sent; try again when the shell responds."),
             mpsc::TrySendError::Disconnected(_) => anyhow::anyhow!("Terminal session has ended."),
         })
+    }
+
+    fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
+        if self.native {
+            // Input uses this queue too, so the shell receives the new size
+            // before a command typed into the resized pane.
+            self.send_frame(b'R', &[rows.to_be_bytes(), cols.to_be_bytes()].concat())?;
+        } else {
+            if let Some(control) = &self.control {
+                control(StreamControl::Resize(rows, cols));
+            }
+            if let Some(master) = &self.master {
+                master.resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })?;
+            }
+            if let Ok(mut parser) = self.parser.lock() {
+                parser.screen_mut().set_size(rows, cols);
+            }
+        }
+        self.size = (rows, cols);
+        self.selection = None;
+        Ok(())
     }
 
     /// Render selectable terminal cells and process focused shell input. Returns input
@@ -555,26 +616,11 @@ impl Terminal {
         let cols = ((rect.width() - 12.0) / char_size.x)
             .floor()
             .clamp(10.0, 400.0) as u16;
-        if self.size != (rows, cols) {
-            self.size = (rows, cols);
-            self.selection = None;
-            if let Some(control) = &self.control {
-                control(StreamControl::Resize(rows, cols));
-            }
-            if let Some(master) = &self.master {
-                let _ = master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
-            }
-            if !self.native
-                && let Ok(mut parser) = self.parser.lock()
-            {
-                parser.screen_mut().set_size(rows, cols);
-            }
-        }
+        let resize_error = if self.size != (rows, cols) {
+            self.resize(rows, cols).err().map(|error| error.to_string())
+        } else {
+            None
+        };
         let mut bytes_to_send = Vec::new();
         let origin = rect.min + egui::vec2(6.0, 4.0);
         if let Ok(mut parser) = self.parser.lock() {
@@ -870,10 +916,13 @@ impl Terminal {
         if !bytes_to_send.is_empty() {
             return (
                 response,
-                self.send(bytes_to_send).err().map(|e| e.to_string()),
+                self.send(bytes_to_send)
+                    .err()
+                    .map(|e| e.to_string())
+                    .or(resize_error),
             );
         }
-        (response, None)
+        (response, resize_error)
     }
 }
 

@@ -901,7 +901,15 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     stream.set_read_timeout(None)?;
     let mut sender = stream.try_clone()?;
     std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(std::io::stdin());
+        let input = rode_host_core::connection::Input::stdin().map(|mut input| {
+            input.unbounded();
+            input
+        });
+        let Ok(input) = input else {
+            let _ = sender.shutdown(std::net::Shutdown::Both);
+            return;
+        };
+        let mut reader = std::io::BufReader::new(input);
         use std::io::BufRead;
         loop {
             let mut bytes = vec![];
@@ -924,6 +932,7 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         }
         let _ = sender.shutdown(std::net::Shutdown::Both);
     });
+    let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
         let value: Value = receive(&mut stream)?;
         if value["kind"] == "error" {
@@ -934,8 +943,9 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
                     .unwrap_or("Runtime attachment failed")
             );
         }
-        serde_json::to_writer(std::io::stdout().lock(), &value)?;
-        println!();
+        serde_json::to_writer(&mut output, &value)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
     }
 }
 

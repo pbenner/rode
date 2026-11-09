@@ -5,7 +5,7 @@ use super::{Config, Launch, background::Client, history::Restored};
 use anyhow::{Result, ensure};
 use rode_agent_core::attachment::{self, Attachment};
 pub use rode_agent_core::protocol::{Choice, Message, Prompt, Question, Role, clip};
-use rode_agent_core::service::Command;
+use rode_agent_core::service::{Command, Persistence};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -15,9 +15,10 @@ pub struct Chat {
     inner: rode_agent_core::protocol::Chat,
     native: Option<Client>,
     managed: bool,
-    desired: bool,
+    desired: Persistence,
     persistence_error: Option<String>,
 }
+
 impl std::ops::Deref for Chat {
     type Target = rode_agent_core::protocol::Chat;
     fn deref(&self) -> &Self::Target {
@@ -42,7 +43,7 @@ impl Chat {
             inner,
             native: Some(client),
             managed: true,
-            desired: true,
+            desired: Persistence::On,
             persistence_error: None,
         }
     }
@@ -255,7 +256,7 @@ impl Chat {
     /// project switches; explicit Stop and encrypted locking use disconnect.
     pub fn detach(&mut self) {
         self.native = None;
-        self.desired = false;
+        self.desired = Persistence::default();
         self.inner.disconnect();
         self.inner.status = "Detached".into();
     }
@@ -296,15 +297,23 @@ impl Chat {
     }
     /// Last acknowledged persistence, or the explicit next-chat choice before Send.
     pub fn persistent(&self) -> bool {
+        self.persistence().enabled()
+    }
+    /// Last acknowledged lifetime mode; new chats default to Auto without starting a process.
+    pub fn persistence(&self) -> Persistence {
         self.native
             .as_ref()
-            .map(Client::persistent)
+            .map(Client::persistence)
             .unwrap_or(self.desired)
     }
     /// Change lifetime without restarting the model process or current turn.
     pub fn set_persistent(&mut self, persistent: bool) -> Result<()> {
+        self.set_persistence(persistent.into())
+    }
+    /// Change Off/Auto/On in place, retaining host acknowledgement before a clean exit.
+    pub fn set_persistence(&mut self, persistent: Persistence) -> Result<()> {
         if let Some(client) = &mut self.native {
-            client.set_persistent(persistent)?;
+            client.set_persistence(persistent)?;
         } else {
             ensure!(
                 !self.inner.connected(),
@@ -366,5 +375,29 @@ impl Chat {
         self.native = Some(Client::attach(launch, info, wake));
         self.inner.busy = true;
         self.inner.status = "Reattaching agent…".into();
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn auto_is_the_inert_default_and_each_new_conversation_resets_to_it() {
+        let mut chat = Chat::default();
+        assert_eq!(chat.persistence(), Persistence::Auto);
+        assert!(chat.native_id().is_none());
+        assert!(!chat.connected());
+        for mode in Persistence::ALL {
+            chat.set_persistence(mode).unwrap();
+            assert_eq!(chat.persistence(), mode);
+            assert!(
+                chat.native_id().is_none(),
+                "Selecting lifetime must not start a process"
+            );
+            assert!(!chat.work_pending());
+        }
+        chat.detach();
+        assert_eq!(chat.persistence(), Persistence::Auto);
     }
 }

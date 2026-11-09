@@ -33,33 +33,41 @@ impl Running {
         };
     }
 }
-/// Render the acknowledged lifetime toggle and submit an explicit in-place policy change.
+/// Render the acknowledged lifetime mode and submit an explicit in-place policy change.
 pub(super) fn persistence(
     ui: &mut egui::Ui,
     chat: &mut Chat,
     palette: theme::Palette,
     enabled: bool,
 ) {
-    let on = chat.persistent();
-    let mut button = egui::Button::new(
-        RichText::new(if on { "Persist: on" } else { "Persist: off" }).color(if on {
-            palette.background
-        } else {
-            palette.text
-        }),
-    )
-    .min_size(egui::vec2(84., 0.));
-    if on {
-        button = button
-            .fill(palette.accent)
-            .stroke(egui::Stroke::new(1.0_f32, palette.accent));
+    let mode = chat.persistence();
+    let mut selected = mode;
+    let response = ui.add_enabled_ui(enabled && chat.persistence_ready(), |ui| {
+        egui::ComboBox::from_id_salt("agent-persistence")
+            .width(100.)
+            .selected_text(RichText::new(format!("Persist: {}", mode.label())).color(
+                if mode.enabled() { palette.accent } else { palette.text },
+            ))
+            .show_ui(ui, |ui| {
+                for choice in agent::Persistence::ALL {
+                    let hint = match choice {
+                        agent::Persistence::Auto => "Finish work after closing the window or losing SSH, then exit. Pending questions and queued prompts stay available. New chats default to Auto.",
+                        agent::Persistence::On => "Keep this agent running after its window closes, including while idle, until you explicitly end it.",
+                        agent::Persistence::Off => "Stop this agent when its window closes or disconnects.",
+                    };
+                    let option = ui.selectable_value(&mut selected, choice, choice.label()).on_hover_text(hint);
+                    super::super::ui_probe::button(ui, &format!("agent-persist-{}", choice.label().to_lowercase()), &option);
+                }
+            })
+    }).inner.response;
+    super::super::ui_probe::button(ui, "agent-persistence", &response);
+    response.on_hover_text("Auto finishes detached work and then exits. On retains idle chats; Off stops when the view closes. Permissions still require your answers.")
+        .on_disabled_hover_text("Waiting for native agent startup or persistence acknowledgement.");
+    if selected != mode
+        && let Err(error) = chat.set_persistence(selected)
+    {
+        chat.notice(&error.to_string());
     }
-    if ui.add_enabled(enabled && chat.persistence_ready(), button)
-        .on_hover_text("Keep this agent running after closing RODE, changing projects or losing SSH. Permissions still apply; questions wait until you reattach from Running. New chats default off.")
-        .on_disabled_hover_text("Waiting for native agent startup or persistence acknowledgement.")
-        .clicked()
-        && let Err(error) = chat.set_persistent(!on)
-    { chat.notice(&error.to_string()); }
 }
 impl EditorApp {
     /// Open live-session discovery and request metadata without starting a coding agent.
@@ -184,8 +192,8 @@ impl EditorApp {
         ui.add(egui::Label::new(palette.tag(format!("{host} · {mode}"))).truncate());
         ui.add(egui::Label::new(format!("Current project: {root}")).truncate())
             .on_hover_text(&root);
-        ui.add(egui::Label::new(RichText::new("Persist keeps work running after its controlling view closes.").small().color(palette.muted)).wrap())
-            .on_hover_text("Persist keeps work running after its controlling view closes. Only one window can control a chat. Permission requests wait for you; they are never automatically approved.");
+        ui.add(egui::Label::new(RichText::new("Auto finishes detached work, then exits. On also retains idle chats.").small().color(palette.muted)).wrap())
+            .on_hover_text("Only one window can control a chat. Pending prompts and permission requests remain available until you reattach; they are never automatically approved.");
         if let Some(info) = self.agents.running.confirm.clone() {
             ui.separator();
             ui.add(

@@ -9,6 +9,68 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 
+/// Lifetime of an agent after its controlling view disconnects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Persistence {
+    /// Stop when the controlling view disconnects.
+    Off,
+    /// Finish detached work, including queued prompts and pending questions, then stop.
+    #[default]
+    Auto,
+    /// Retain the conversation until explicitly ended, including while idle.
+    On,
+}
+impl Persistence {
+    /// Choices presented for each conversation; new chats start in Auto.
+    pub const ALL: [Self; 3] = [Self::Auto, Self::On, Self::Off];
+    /// Compact user-facing lifetime choice.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Auto => "Auto",
+            Self::On => "On",
+        }
+    }
+    /// Whether closing a view may leave accepted work running on its host.
+    pub fn enabled(self) -> bool {
+        self != Self::Off
+    }
+}
+impl From<bool> for Persistence {
+    fn from(persistent: bool) -> Self {
+        if persistent { Self::On } else { Self::Off }
+    }
+}
+impl Serialize for Persistence {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Auto => serializer.serialize_str("auto"),
+            Self::Off | Self::On => serializer.serialize_bool(*self == Self::On),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for Persistence {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = Persistence;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("true, false, or \"auto\"")
+            }
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(value.into())
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                match value {
+                    "auto" => Ok(Persistence::Auto),
+                    _ => Err(E::unknown_variant(value, &["auto"])),
+                }
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
 /// Captured host-side launch, prepared by the desktop's existing project adapter.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Spec {
@@ -32,8 +94,9 @@ pub struct Spec {
     pub env: BTreeMap<String, String>,
     /// Project interpreter identity for history invalidation.
     pub python: String,
-    /// Explicit opt-in lifetime after the controlling view closes.
-    pub persistent: bool,
+    /// Lifetime after the controlling view closes; omitted values use Auto.
+    #[serde(default)]
+    pub persistent: Persistence,
     /// First prompt, absent only for explicit history browsing.
     pub text: Option<String>,
     /// Immutable file contents for the first prompt.
@@ -64,8 +127,8 @@ pub struct Info {
     pub status: String,
     /// Whether a controlling desktop is attached.
     pub attached: bool,
-    /// Keep running after that view closes.
-    pub persistent: bool,
+    /// Lifetime after that view closes.
+    pub persistent: Persistence,
     /// Creation time in Unix seconds.
     pub created: u64,
 }
@@ -215,7 +278,7 @@ pub enum Command {
     /// Change last-view lifetime in place.
     Persistence {
         /// Requested last-view lifetime.
-        persistent: bool,
+        persistent: Persistence,
     },
     /// Load the next saved-conversation page.
     HistoryMore,
@@ -231,4 +294,37 @@ pub enum Command {
         /// Open frontend conversations to keep, in addition to host-owned controllers.
         protected: Vec<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifetime_modes_keep_explicit_boolean_choices_and_default_to_auto() {
+        assert_eq!(Persistence::default(), Persistence::Auto);
+        for (wire, mode) in [
+            (serde_json::json!(false), Persistence::Off),
+            (serde_json::json!(true), Persistence::On),
+            (serde_json::json!("auto"), Persistence::Auto),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<Persistence>(wire.clone()).unwrap(),
+                mode
+            );
+            assert_eq!(serde_json::to_value(mode).unwrap(), wire);
+        }
+        assert!(serde_json::from_value::<Persistence>(serde_json::json!("unknown")).is_err());
+        let spec = serde_json::json!({
+            "id": "fixture", "name": "Fixture", "policy": "a".repeat(64),
+            "mode": "NORMAL MODE", "config": Config::default(),
+            "plan": Plan { root: "/project".into(), ..Default::default() },
+            "executable": "/bin/true", "file_tool_plan": null, "env": {},
+            "python": "off", "text": "work", "attachments": []
+        });
+        assert_eq!(
+            serde_json::from_value::<Spec>(spec).unwrap().persistent,
+            Persistence::Auto
+        );
+    }
 }

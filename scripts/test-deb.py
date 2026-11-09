@@ -250,6 +250,7 @@ def main():
                 argv=["/bin/sh", "-c", "printf packaged > result; exec sleep 60"],
                 initial_input="",
                 env={"PATH": "/usr/bin:/bin"},
+                persistent=True,
             )
             deadline = time.monotonic() + 5
             while not (project / "result").exists():

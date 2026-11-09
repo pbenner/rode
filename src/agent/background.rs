@@ -4,7 +4,7 @@
 use super::{Config, Launch};
 use crate::{files, project, sessions as service};
 use anyhow::{Context, Result, ensure};
-use rode_agent_core::service::{Command, Info, Spec, State};
+use rode_agent_core::service::{Command, Info, Persistence, Spec, State};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
@@ -63,8 +63,8 @@ pub struct Client {
     /// Last connection/preparation failure, consumed by its owning UI.
     pub error: Option<String>,
     id: String,
-    desired: bool,
-    persistence_pending: Option<bool>,
+    desired: Persistence,
+    persistence_pending: Option<Persistence>,
     queue_requests: VecDeque<QueueRequest>,
     /// Retain the user's request separately from the host's acknowledged setting.
     requested_style: super::Personality,
@@ -80,9 +80,10 @@ impl Client {
         launch: Launch,
         text: Option<String>,
         attachments: Vec<rode_agent_core::attachment::Attachment>,
-        persistent: bool,
+        persistent: impl Into<Persistence>,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
+        let persistent = persistent.into();
         launch.config.arguments(text.is_some())?;
         rode_agent_core::Plan {
             root: launch.plan.root.clone(),
@@ -177,7 +178,7 @@ impl Client {
             })()
             .map_err(|e| format!("{e:#}"));
             if let Err(mpsc::SendError(Ok((_, info)))) = tx.send(result)
-                && (!persistent || preparing.cancelled.load(Ordering::Acquire))
+                && (!persistent.enabled() || preparing.cancelled.load(Ordering::Acquire))
             {
                 let _ = request(
                     &launch,
@@ -195,7 +196,7 @@ impl Client {
     fn pending(
         launch: Launch,
         id: String,
-        desired: bool,
+        desired: Persistence,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         let (_, ready) = mpsc::channel();
@@ -551,6 +552,10 @@ impl Client {
     }
     /// Last acknowledged persistence flag; pending requests do not paint as enabled.
     pub fn persistent(&self) -> bool {
+        self.persistence().enabled()
+    }
+    /// Last acknowledged lifetime mode, or the captured startup choice.
+    pub fn persistence(&self) -> Persistence {
         self.state
             .as_ref()
             .map(|s| s.info.persistent)
@@ -558,6 +563,10 @@ impl Client {
     }
     /// Change lifetime in place, waiting for an authoritative acknowledgement.
     pub fn set_persistent(&mut self, persistent: bool) -> Result<()> {
+        self.set_persistence(persistent.into())
+    }
+    /// Change the lifetime mode after the host acknowledges the requested policy.
+    pub fn set_persistence(&mut self, persistent: Persistence) -> Result<()> {
         self.send(Command::Persistence { persistent })?;
         self.persistence_pending = Some(persistent);
         Ok(())

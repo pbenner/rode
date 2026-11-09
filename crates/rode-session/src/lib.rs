@@ -1,5 +1,5 @@
 //! A headless, per-user PTY and coding-agent service. GUI clients may disconnect
-//! without ending explicitly persistent jobs. Control uses same-user Unix sockets;
+//! without ending work retained by its lifetime policy. Control uses same-user Unix sockets;
 //! A host-owned capability protects control on Landlock ABI 4/5;
 //! Linux abstract sockets additionally enforce ABI 6's IPC-domain boundary.
 //!
@@ -61,7 +61,7 @@ mod runtimes;
 pub mod tunnels;
 
 /// Required service protocol and runtime-directory generation.
-pub const PROTOCOL: u32 = 19;
+pub const PROTOCOL: u32 = 21;
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 8;
@@ -1467,6 +1467,10 @@ extern "C" fn resized(_: libc::c_int) {
 /// Attach stdin/stdout to a session after policy verification. Framed mode multiplexes
 /// input/resize/output; dropping a view obeys the session's persistence policy.
 pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
+    attach_stream(id, policy, framed, false)
+}
+
+fn attach_stream(id: &str, policy: &str, framed: bool, heartbeat: bool) -> Result<()> {
     let mut stream = connect_control(&directory())?;
     send_json(
         &mut stream,
@@ -1488,7 +1492,7 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
         }
     }
     let mut old: libc::termios = unsafe { std::mem::zeroed() };
-    let termios = if unsafe { libc::tcgetattr(0, &mut old) } == 0 {
+    let termios = if !framed && unsafe { libc::tcgetattr(0, &mut old) } == 0 {
         let mut raw = old;
         unsafe {
             libc::cfmakeraw(&mut raw);
@@ -1499,13 +1503,41 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
         None
     };
     let _raw = Raw(termios);
-    unsafe {
-        libc::signal(libc::SIGWINCH, resized as *const () as libc::sighandler_t);
+    let mut framed_input = framed
+        .then(rode_host_core::connection::Input::stdin)
+        .transpose()?;
+    if !heartbeat && let Some(input) = &mut framed_input {
+        input.unbounded();
+    }
+    if !framed {
+        unsafe {
+            libc::signal(libc::SIGWINCH, resized as *const () as libc::sighandler_t);
+        }
     }
     let input = Arc::new(Mutex::new(stream.try_clone()?));
     let stopped = Arc::new(AtomicBool::new(false));
     let stop = stopped.clone();
     std::thread::spawn(move || {
+        if let Some(mut stdin) = framed_input {
+            // A remote attachment has pipes, not a TTY. Carry dimensions in
+            // the same ordered stream as input instead of relying on SIGWINCH.
+            while !stop.load(Ordering::Acquire) {
+                let Ok((kind, bytes)) = read_frame(&mut stdin) else {
+                    break;
+                };
+                if kind == b'H' && bytes.is_empty() {
+                    continue;
+                }
+                if !matches!((kind, bytes.len()), (b'I', _) | (b'R', 4)) {
+                    break;
+                }
+                if frame(&mut *input.lock().unwrap(), kind, &bytes).is_err() {
+                    break;
+                }
+            }
+            let _ = input.lock().unwrap().shutdown(std::net::Shutdown::Both);
+            return;
+        }
         let mut bytes = [0; 8192];
         while !stop.load(Ordering::Acquire) {
             if RESIZED.swap(false, Ordering::AcqRel) {
@@ -1537,7 +1569,11 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
         let _ = input.lock().unwrap().shutdown(std::net::Shutdown::Both);
     });
     let result = (|| -> Result<()> {
-        let mut output = std::io::stdout().lock();
+        let mut output: Box<dyn Write> = if framed {
+            Box::new(rode_host_core::connection::Output::stdout()?)
+        } else {
+            Box::new(std::io::stdout().lock())
+        };
         loop {
             let (kind, data) = read_frame(&mut stream)?;
             if framed {
@@ -1623,6 +1659,9 @@ pub fn cli(args: &[String]) -> Result<()> {
         Some("attach") if args.len() == 4 && args[1] == "--framed" => {
             attach(&args[2], &args[3], true)
         }
+        Some("attach") if args.len() == 5 && args[1..3] == ["--framed", "--heartbeat"] => {
+            attach_stream(&args[3], &args[4], true, true)
+        }
         _ => bail!("Usage: rode-sessiond serve | request | attach SESSION POLICY"),
     }
 }
@@ -1630,7 +1669,12 @@ fn request_result(request: Request, launcher: &Launcher) -> Response {
     self::request(&request, launcher).unwrap_or_else(|error| Response::Error(format!("{error:#}")))
 }
 
-/// Read the framed native terminal stream (output, shared size, or exit).
+/// Write one bounded native stream frame, including terminal input and resize.
+pub fn write_stream(output: &mut impl Write, kind: u8, bytes: &[u8]) -> Result<()> {
+    frame(output, kind, bytes)
+}
+
+/// Read a bounded native stream frame (input, output, size, or exit).
 pub fn read_stream(input: &mut impl Read) -> Result<(u8, Vec<u8>)> {
     read_frame(input)
 }
@@ -1638,13 +1682,15 @@ pub fn read_stream(input: &mut impl Read) -> Result<(u8, Vec<u8>)> {
 /// Keep native GUI streams framed even if attaching fails before its first page.
 pub fn report_error(args: &[String], error: &anyhow::Error) {
     if args.iter().any(|arg| arg == "--framed") {
-        let _ = frame(
-            &mut std::io::stdout().lock(),
-            b'X',
-            format!("\r\n[terminal attach failed: {error:#}]\r\n").as_bytes(),
-        );
-    } else {
-        eprintln!("{error:#}");
+        if let Ok(output) = rode_host_core::connection::Output::stdout() {
+            let _ = frame(
+                &mut output.with_timeout(Duration::from_secs(1)),
+                b'X',
+                format!("\r\n[terminal attach failed: {error:#}]\r\n").as_bytes(),
+            );
+        }
+    } else if let Ok(output) = rode_host_core::connection::Output::stderr() {
+        let _ = writeln!(output.with_timeout(Duration::from_secs(1)), "{error:#}");
     }
 }
 

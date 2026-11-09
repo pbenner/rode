@@ -14,6 +14,9 @@ use std::{
 /// Structured launch metadata sent before the child's own input stream.
 #[derive(Serialize, Deserialize)]
 pub struct Spec {
+    #[serde(default)]
+    /// Expect periodic empty lines from a desktop that owns this transient view.
+    pub heartbeat: bool,
     /// Captured runtime overrides and literal values.
     pub environment: crate::environment::Settings,
     /// Canonical project root on this host.
@@ -52,7 +55,7 @@ pub fn signals() -> Result<()> {
 
 /// Forward bounded lines while retaining a live supervisor for the complete child lifetime.
 pub fn serve() -> Result<()> {
-    let mut input = std::io::BufReader::new(std::io::stdin());
+    let mut input = std::io::BufReader::new(crate::connection::Input::stdin()?);
     let mut bytes = vec![];
     input
         .by_ref()
@@ -63,6 +66,10 @@ pub fn serve() -> Result<()> {
         "Invalid process launch request"
     );
     let mut spec: Spec = serde_json::from_slice(&bytes)?;
+    let lease = input.get_ref().lease();
+    if !spec.heartbeat {
+        input.get_mut().unbounded();
+    }
     spec.environment.validate()?;
     ensure!(
         !spec.argv.is_empty()
@@ -144,6 +151,9 @@ pub fn serve() -> Result<()> {
                     line.len() <= 16 * 1024 * 1024,
                     "Process request exceeds 16 MiB"
                 );
+                if spec.heartbeat && line == b"\n" {
+                    continue;
+                }
                 child_input.write_all(&line)?;
                 child_input.flush()?;
             }
@@ -154,7 +164,10 @@ pub fn serve() -> Result<()> {
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if closed.load(Ordering::Acquire) || crate::command::CANCELLED.load(Ordering::Acquire) {
+        if closed.load(Ordering::Acquire)
+            || crate::command::CANCELLED.load(Ordering::Acquire)
+            || (spec.heartbeat && lease.expired())
+        {
             unsafe {
                 libc::kill(-pid, libc::SIGTERM);
             }

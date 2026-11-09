@@ -4,7 +4,7 @@ set -euo pipefail
 # All fixture caches and credentials must stay private under permissive caller umasks.
 umask 077
 cd "$(dirname "$0")/.."
-test_dir=$(mktemp -d /tmp/rode-ssh-test.XXXXXX)
+test_dir=$(mktemp -d "${TMPDIR:-/tmp}/rode-ssh-test.XXXXXX")
 mkdir -m 700 "$test_dir/codex-home" "$test_dir/home"
 sshd_pid=
 cleanup() {
@@ -100,6 +100,7 @@ cat > "$test_dir/host-shell" <<EOF
 # Apply the fixture home after the account's initial shell startup files.
 export HOME='$test_dir/home'
 export PATH='$test_path'
+export TMPDIR='$test_dir'
 export XAUTHORITY='$test_dir/home/.Xauthority'
 $test_shell_export
 if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then

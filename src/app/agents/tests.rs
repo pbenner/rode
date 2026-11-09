@@ -224,6 +224,8 @@ fn mismatched_host_tones_show_the_actual_setting_and_keep_the_draft_and_queue() 
 #[test]
 fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
     let mut agents = Agents::load(None);
+    assert_eq!(agents.chat.persistence(), agent::Persistence::Auto);
+    agents.chat.set_persistence(agent::Persistence::On).unwrap();
     agents.draft = "unsent draft".into();
     agents.queue.push("queued work".into()).unwrap();
     agents.chat.messages.push_back(agent::protocol::Message {
@@ -247,6 +249,7 @@ fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
     assert_eq!(agents.queue.head_id(), queued);
     agents.chat.busy = false;
     assert!(agents.start_new_chat());
+    assert_eq!(agents.chat.persistence(), agent::Persistence::Auto);
     assert!(!agents.attaching);
     assert!(agents.chat.messages.is_empty());
     assert!(agents.queue.is_empty());
@@ -368,7 +371,7 @@ fn chat_header_actions_fit_inside_the_visible_panel() {
                     "History",
                     "Running",
                     "Attach…",
-                    "Persist: off",
+                    "Persist: Auto",
                 ] {
                     let (rect, clip) = layout::tests::button_frame(&output, label);
                     assert!(

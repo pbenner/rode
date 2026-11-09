@@ -249,6 +249,27 @@ struct Root {
     path: PathBuf,
     configuration: Vec<PathBuf>,
 }
+
+/// Release a mutation's lock when its owner finishes, even if a concurrent
+/// spawn inherited this open file description before close-on-exec ran.
+struct ReadFile {
+    file: File,
+    locked: bool,
+}
+impl std::ops::Deref for ReadFile {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.file
+    }
+}
+impl Drop for ReadFile {
+    fn drop(&mut self) {
+        if self.locked {
+            unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
 impl Root {
     fn check_mutation(&self, path: &str, request: &Request) -> Result<()> {
         let relative = self.relative(path, false)?;
@@ -371,7 +392,7 @@ impl Root {
         })
     }
 
-    fn read(&self, path: &Path, lock: bool) -> Result<(File, String, String)> {
+    fn read(&self, path: &Path, lock: bool) -> Result<(ReadFile, String, String)> {
         self.read_limited(path, lock, &mut (MAX_FILE + 1))
     }
 
@@ -380,7 +401,7 @@ impl Root {
         path: &Path,
         lock: bool,
         remaining: &mut u64,
-    ) -> Result<(File, String, String)> {
+    ) -> Result<(ReadFile, String, String)> {
         // O_PATH inspects the inode without opening a device/FIFO. Reopen that
         // exact regular inode through our trusted proc descriptor, not its name.
         let descriptor = self.file(path, libc::O_PATH)?;
@@ -390,15 +411,24 @@ impl Root {
             "Only regular project files are available"
         );
         ensure!(metadata.len() <= MAX_FILE, "File exceeds 1 MiB");
-        let mut file = File::open(format!("/proc/self/fd/{}", descriptor.as_raw_fd()))?;
+        let mut file = ReadFile {
+            file: File::open(format!("/proc/self/fd/{}", descriptor.as_raw_fd()))?,
+            locked: false,
+        };
         if lock {
-            ensure!(
-                unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
-                "File is busy; retry after its current writer finishes"
-            );
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                let error = std::io::Error::last_os_error();
+                let message = if error.kind() == std::io::ErrorKind::WouldBlock {
+                    "File is busy; retry after its current writer finishes"
+                } else {
+                    "Cannot lock project file for mutation"
+                };
+                return Err(error).context(message);
+            }
+            file.locked = true;
         }
         let mut bytes = vec![];
-        (&mut file)
+        (&mut file.file)
             .take((MAX_FILE + 1).min(remaining.saturating_add(1)))
             .read_to_end(&mut bytes)?;
         let within_budget = bytes.len() as u64 <= *remaining;

@@ -214,7 +214,7 @@ fn native_agent_controllers_honor_environment_prefixes_in_normal_mode() {
         file_tool_plan: None,
         env: Default::default(),
         python: "auto".into(),
-        persistent: false,
+        persistent: false.into(),
         text: Some("mise smoke".into()),
         attachments: vec![],
     };
@@ -384,6 +384,9 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
     {
         let mut command = native_peer::command();
         command.current_dir(root.path());
+        // TMPDIR may be inside a checkout with its own untrusted mise config.
+        // Discover only this fixture's config, never its ancestors.
+        command.env("MISE_CEILING_PATHS", root.path().parent().unwrap());
         for name in ["CONFIG", "DATA", "STATE", "CACHE"] {
             command.env(format!("MISE_{name}_DIR"), root.path().join(name));
         }
@@ -422,6 +425,7 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
     command
         .args(["run", "smoke"])
         .current_dir(root.path())
+        .env("MISE_CEILING_PATHS", root.path().parent().unwrap())
         .env("MISE_AUTO_INSTALL", "0")
         .env("MISE_EXEC_AUTO_INSTALL", "0")
         .env("MISE_PARANOID", "1");

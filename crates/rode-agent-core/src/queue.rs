@@ -116,6 +116,10 @@ pub struct Queue {
     view: View,
 }
 impl Queue {
+    /// Whether all accepted waiting prompts have been dispatched or removed.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
     /// Eligible head identity; the controller checks task/permission state separately.
     pub fn next_id(&self) -> Option<u64> {
         if self.view.paused || self.view.editing.is_some() {

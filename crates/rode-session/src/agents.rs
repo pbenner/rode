@@ -6,7 +6,7 @@ use rode_agent_core::{
     Provider,
     history::{Browser, Owner},
     protocol::Chat,
-    service::{Command as Action, Info, Spec, State},
+    service::{Command as Action, Info, Persistence, Spec, State},
 };
 use serde_json::Value;
 use std::sync::{Condvar, atomic::AtomicUsize};
@@ -383,8 +383,15 @@ fn run(
         };
         let mut shared = job.shared.lock().unwrap();
         let view = shared.attached;
-        if !shared.state.info.persistent
-            && !view
+        let auto_finished = shared.state.info.persistent == Persistence::Auto
+            && matches!(incoming, Err(mpsc::TryRecvError::Empty))
+            && !chat.busy
+            && chat.prompts.is_empty()
+            && !chat.has_deadline()
+            && queue.is_empty()
+            && !browser.as_ref().is_some_and(|browser| browser.busy);
+        if !view
+            && (shared.state.info.persistent == Persistence::Off || auto_finished)
             && (shared.ever_attached || job.created.elapsed() >= Duration::from_secs(30))
         {
             stopping = true;
@@ -726,7 +733,15 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
     stream.set_read_timeout(None)?;
     let mut sender = stream.try_clone()?;
     std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(std::io::stdin());
+        let input = rode_host_core::connection::Input::stdin().map(|mut input| {
+            input.unbounded();
+            input
+        });
+        let Ok(input) = input else {
+            let _ = sender.shutdown(std::net::Shutdown::Both);
+            return;
+        };
+        let mut reader = std::io::BufReader::new(input);
         use std::io::BufRead;
         loop {
             let mut bytes = vec![];
@@ -745,6 +760,7 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         }
         let _ = sender.shutdown(std::net::Shutdown::Both);
     });
+    let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
         let value = recv_json::<_, Value>(&mut stream)?;
         if value["kind"] == "error" {
@@ -756,8 +772,9 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
             );
         }
         let update: rode_agent_core::service::Update = serde_json::from_value(value)?;
-        serde_json::to_writer(std::io::stdout().lock(), &update)?;
-        println!();
+        serde_json::to_writer(&mut output, &update)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
         if !update.state.info.alive {
             break;
         }
