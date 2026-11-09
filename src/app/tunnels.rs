@@ -10,12 +10,14 @@ use rode_session::{
     tunnels::{Info, Spec, Status},
 };
 
+mod saved;
 mod ui;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Hash)]
 enum Page {
     #[default]
     Tunnels,
+    Saved,
     New,
 }
 
@@ -92,6 +94,9 @@ impl Host {
 }
 #[derive(Default)]
 pub(super) struct Tunnels {
+    saved: saved::Library,
+    saved_id: Option<String>,
+    delete_saved: Option<String>,
     generation: Option<u64>,
     page: Page,
     draft_epoch: u64,
@@ -130,6 +135,7 @@ impl EditorApp {
         if self.tunnels.generation != Some(self.generation) {
             self.tunnels = Tunnels {
                 generation: Some(self.generation),
+                saved: std::mem::take(&mut self.tunnels.saved),
                 ..Default::default()
             };
         }

@@ -11,7 +11,7 @@ use std::{
     collections::BTreeMap,
     io::Read,
     os::unix::fs::OpenOptionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -22,6 +22,10 @@ use tokio::{
 
 const MAX_TUNNELS: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(15);
+// OpenSSH's default IdentityFile order, restricted to file-backed key types this
+// unattended worker can sign with. Security keys and encrypted keys need an agent.
+// https://man.openbsd.org/ssh_config.5#IdentityFile
+const DEFAULT_IDENTITIES: [&str; 3] = ["~/.ssh/id_rsa", "~/.ssh/id_ecdsa", "~/.ssh/id_ed25519"];
 
 /// Read this machine's hostname for display without starting a process or doing
 /// DNS/filesystem work. An unavailable name must not be mistaken for a remote host.
@@ -49,7 +53,8 @@ pub struct Spec {
     pub relay_port: u16,
     /// SSH login on the relay.
     pub relay_user: String,
-    /// Unencrypted private-key path on the compute host; blank uses the explicit agent.
+    /// Unencrypted private-key path on the compute host. Both credential fields
+    /// blank try default SSH key files; an explicit agent alone stays agent-only.
     pub identity: String,
     /// Optional persistent SSH-agent socket on the compute host. Never inherited implicitly.
     pub agent_socket: String,
@@ -101,10 +106,6 @@ impl Spec {
             self.relay_port > 0 && self.listen_port > 0 && self.ssh_port > 0,
             "Tunnel ports must be between 1 and 65535"
         );
-        ensure!(
-            !self.identity.is_empty() || !self.agent_socket.is_empty(),
-            "Choose an identity file or persistent agent socket on the tunnel host"
-        );
         for path in [&self.identity, &self.agent_socket] {
             ensure!(
                 path.len() <= 4096
@@ -121,6 +122,23 @@ impl Spec {
             keys::PublicKey::from_openssh(&self.relay_key).context("Invalid relay host key")?;
         }
         Ok(())
+    }
+
+    fn automatic_identity(&self) -> bool {
+        self.identity.is_empty() && self.agent_socket.is_empty()
+    }
+
+    fn identity_files(&self) -> Vec<PathBuf> {
+        if !self.identity.is_empty() {
+            return vec![rode_host_core::files::expand_home(&self.identity)];
+        }
+        if !self.agent_socket.is_empty() {
+            return vec![];
+        }
+        DEFAULT_IDENTITIES
+            .iter()
+            .map(|path| rode_host_core::files::expand_home(path))
+            .collect()
     }
 }
 /// Observable daemon state; attention states do not retry authentication or accept changed keys.
@@ -562,12 +580,36 @@ async fn authenticate(
             }
         }
     }
-    if !spec.identity.is_empty() {
-        let path = rode_host_core::files::expand_home(&spec.identity);
-        let key = tokio::task::spawn_blocking(move || read_identity(&path))
+    let automatic = spec.automatic_identity();
+    let mut failures = vec![];
+    for path in spec.identity_files() {
+        if !path.is_absolute() {
+            let message = "Cannot resolve SSH identity files on the tunnel host: HOME must be an absolute directory, or set an absolute Identity file path";
+            attention(info, message);
+            bail!(message);
+        }
+        let source = path.clone();
+        let loaded = tokio::task::spawn_blocking(move || read_identity(&source))
             .await
-            .context("SSH identity reader failed on the tunnel host")?
-            .inspect_err(|e| attention(info, &format!("{e:#}")))?;
+            .context("SSH identity reader failed on the tunnel host")?;
+        let key = match loaded {
+            Ok(key) => key,
+            Err(error) if automatic => {
+                // Missing defaults are normal. An unreadable/encrypted first key
+                // must not hide a later usable key, or leak its private contents.
+                if !error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                {
+                    failures.push(format!("{error:#}"));
+                }
+                continue;
+            }
+            Err(error) => {
+                attention(info, &format!("{error:#}"));
+                return Err(error);
+            }
+        };
         let result = session
             .authenticate_publickey(
                 &spec.relay_user,
@@ -577,6 +619,21 @@ async fn authenticate(
         if result.success() {
             return Ok(());
         }
+        if automatic {
+            failures.push(format!("{}: key rejected by the relay", path.display()));
+        }
+    }
+    if automatic {
+        let mut message = format!(
+            "Default SSH keys could not authenticate to the relay from the tunnel host. Tried {}. Set Identity file to an unencrypted private key, or Agent socket to a persistent agent (required for encrypted or hardware-backed keys).",
+            DEFAULT_IDENTITIES.join(", ")
+        );
+        for failure in failures {
+            message.push('\n');
+            message.push_str(&failure);
+        }
+        attention(info, &message);
+        bail!(message);
     }
     attention(
         info,
@@ -592,7 +649,7 @@ fn read_identity(path: &Path) -> Result<keys::PrivateKey> {
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
         .open(path)
-        .with_context(|| format!("Cannot open SSH identity file {} on the tunnel host; check Identity file, or clear it to use only Agent socket", path.display()))?;
+        .with_context(|| format!("Cannot open SSH identity file {} on the tunnel host; check Identity file, or clear it and select a persistent Agent socket", path.display()))?;
     ensure!(
         file.metadata()
             .with_context(|| format!(

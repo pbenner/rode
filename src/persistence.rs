@@ -164,6 +164,7 @@ fn structured(key: &str) -> bool {
             | "agent_preferences"
             | "sandbox_defaults"
             | "sandbox_presets"
+            | "tunnel_profiles"
             | "extension_preferences"
     )
 }
@@ -182,6 +183,7 @@ fn removable_preference(key: &str, path: &[String]) -> bool {
                     | "sandbox_presets",
                 [_]
             )
+            | ("tunnel_profiles", [_])
             | (
                 "agent_preferences",
                 [_, "acp_options" | "claude_options", _, ..]
@@ -210,7 +212,10 @@ fn comparison_base(key: &str, raw: &Value, next: &Value) -> Result<Value> {
     let mut seed = raw.clone();
     // A named preset is a real record even if every option equals its default.
     // Do not synthesize missing records before diffing the reusable library.
-    if !matches!(key, "sandbox_defaults" | "sandbox_presets") {
+    if !matches!(
+        key,
+        "sandbox_defaults" | "sandbox_presets" | "tunnel_profiles"
+    ) {
         for project in next.as_object().context("Invalid preference map")?.keys() {
             seed.as_object_mut()
                 .context("Invalid preference map")?
@@ -232,6 +237,7 @@ fn comparison_base(key: &str, raw: &Value, next: &Value) -> Result<Value> {
         "sandbox_presets" => serde_json::to_value(serde_json::from_value::<
             crate::sandbox::presets::Presets,
         >(seed)?)?,
+        "tunnel_profiles" => serde_json::to_value(crate::ssh::tunnels::decode(&seed.to_string())?)?,
         _ => raw.clone(),
     };
     fn overlay(base: &mut Value, raw: &Value) {
@@ -270,6 +276,7 @@ fn decode(values: &Values) -> Result<Value> {
                         let _: crate::sandbox::Options = serde_json::from_str(text)?;
                     }
                     "sandbox_presets" => { crate::sandbox::presets::decode(text)?; }
+                    "tunnel_profiles" => { crate::ssh::tunnels::decode(text)?; }
                     _ => {}
                 }
                 let value: Value = serde_json::from_str(text).with_context(|| {
@@ -324,6 +331,10 @@ fn write_edits(path: &Path, edits: &[Edit]) -> Result<()> {
             // file that the next startup would otherwise refuse to load.
             if key == crate::sandbox::presets::STORAGE_KEY {
                 crate::sandbox::presets::decode(&text).context("Sandbox presets were not saved")?;
+            }
+            if key == crate::ssh::tunnels::STORAGE_KEY {
+                crate::ssh::tunnels::decode(&text)
+                    .context("Tunnel configurations were not saved")?;
             }
             values.insert(key.clone(), text);
         }

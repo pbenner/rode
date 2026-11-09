@@ -147,10 +147,14 @@ RODE desktop → relay SSH → relay 127.0.0.1:22022
 1. Choose **New tunnel**. Enter the relay's literal hostname/IP, SSH port
    and username, a stable relay loopback port, and the compute node's SSH port.
    The outbound worker does not read SSH aliases or ProxyJump configuration.
-2. Choose credentials **on the compute node**: an unencrypted private-key file,
-   or an explicitly selected persistent SSH-agent socket. Leave the identity
-   field blank to use only the agent. Both credential fields start blank; choose the
-   key or socket that actually exists on that host.
+2. Leave both credential fields blank to try **the compute node's** default SSH
+   private-key files: `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`, then `~/.ssh/id_ed25519`.
+   These are the supported file-backed keys in [OpenSSH's default order](https://man.openbsd.org/ssh_config.5#IdentityFile).
+   Missing, unreadable, encrypted or rejected defaults do not prevent trying the
+   next file. Set **Identity file** to use a specific unencrypted key instead,
+   or select a persistent **Agent socket**. With an agent selected and the identity
+   blank, only that agent is used. Encrypted and hardware-backed keys require the
+   persistent agent; the service does not prompt for passphrases or hardware access.
    RODE does not copy your desktop key to the node or provision credentials.
 3. Start the tunnel. Verify the displayed relay SHA-256 host-key fingerprint
    through a trusted source, then choose **Trust relay key and start**. This pin
@@ -193,6 +197,21 @@ hostname. These labels do not change the actual loopback forwarding addresses.
 its draft survives tab switches. Status refreshes pause while setting up a tunnel.
 Tabs and the Start/Close controls remain visible while the form scrolls.
 
+Choose **Save configuration** in setup or on a running tunnel's card to keep it
+across editor and service restarts. **Saved** lists the reusable setups. Choose
+**Load setup** to fill the form, review it, then choose **Start tunnel**. Loading
+does not connect or start a service. **Update configuration** saves changes,
+including a renamed setup. **Delete…** removes only the saved setup.
+
+Saved setups belong to their tunnel host: local setups include this computer's
+hostname; remote setups use the original SSH host/alias, login, port override and
+configuration file. Reconnect to that SSH host before loading its setup. Project
+folder, SSH backend and return-tunnel routing changes do not change this identity.
+The desktop preferences store settings, key/agent paths, the optional return-route
+jump chain and any explicitly trusted relay public key. Private keys, passphrases
+and agent credentials are never copied into saved setups. Saving from a tunnel
+after verifying its relay key retains that pin for subsequent starts.
+
 Automatic return-profile creation currently requires desktop SSH configuration
 understood by the Rust backend, even when selecting OpenSSH for the resulting
 connection.
@@ -220,16 +239,17 @@ changed host key requires attention rather than repeated login attempts. Open
 or stop it. If all routes are lost, administrative access to the compute host is
 needed to repair credentials or trust.
 
-Tunnels are retained in service memory, not restarted after a daemon restart,
+Running tunnels are retained in service memory, not restarted after a daemon restart,
 node reboot or allocation ending. **Stop tunnel** closes its forwarded streams;
 it leaves unrelated terminals, jobs and tunnels alone. Starting a tunnel does
 not grant persistence to project jobs or extend a scheduler allocation.
 
 Tunnel failures identify the operation and the relevant identity file, agent
 socket, relay address or listener port. Paths are resolved on the tunnel host.
-No identity file or agent socket is assumed: select a private key that actually
-exists there, or leave Identity file blank and set Agent socket to a persistent
-agent on that host. Changing the desktop's key path does not change a remote
+Blank credentials try the supported default key files on that host; an explicit
+key or agent selection overrides this search. The worker does not read `IdentityFile`
+or other settings from SSH configuration and never inherits `SSH_AUTH_SOCK`.
+Changing the desktop's key path does not change a remote
 tunnel's credentials. Error details include the underlying
 OS failure, without displaying private-key contents.
 

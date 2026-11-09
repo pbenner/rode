@@ -556,7 +556,7 @@ impl EditorApp {
             opening: HashSet::new(),
             terminal: None,
             sessions: Default::default(),
-            tunnels: Default::default(),
+            tunnels: tunnels::Tunnels::load(storage, &mut warnings),
             ssh_master: None,
             preparing: false,
             project_token: 0,
@@ -662,6 +662,7 @@ impl EditorApp {
         self.persist_agent_preferences(Some(&mut storage));
         self.persist_extensions(Some(&mut storage));
         self.sandbox_presets.store(&mut storage);
+        self.tunnels.store(&mut storage);
         self.navigation.bindings.store(&mut storage);
         self.terminal_colors.store(&mut storage);
         if self.font_save_pending {
@@ -2116,6 +2117,7 @@ impl eframe::App for EditorApp {
             self.persist_extensions(frame.storage_mut());
             if let Some(storage) = frame.storage_mut() {
                 self.sandbox_presets.store(storage);
+                self.tunnels.store(storage);
                 self.navigation.bindings.store(storage);
                 self.terminal_colors.store(storage);
             }
@@ -2142,6 +2144,7 @@ impl eframe::App for EditorApp {
         self.agents.store(storage);
         self.persist_extensions(Some(storage));
         self.sandbox_presets.store(storage);
+        self.tunnels.store(storage);
         storage.set_string("font_size", self.font_size.to_string());
         storage.set_string("ui_scale", self.ui_scale.to_string());
         if let Ok(options) = serde_json::to_string(&self.sandbox_defaults) {

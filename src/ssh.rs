@@ -30,6 +30,7 @@ use std::{
 
 #[cfg(unix)]
 mod native;
+pub mod tunnels;
 
 /// SSH client implementation. Native connections do not execute a system SSH client.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

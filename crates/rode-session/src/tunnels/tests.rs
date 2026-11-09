@@ -310,7 +310,7 @@ fn tunnel_forwarding_errors_distinguish_refusal_from_lost_transport() {
     assert!(message.contains("SSH did not report why"));
 }
 #[test]
-fn credentials_start_blank_and_explicit_key_or_agent_settings_are_preserved() {
+fn blank_credentials_use_defaults_and_explicit_key_or_agent_settings_are_preserved() {
     let defaults = Spec::default();
     assert!(defaults.identity.is_empty() && defaults.agent_socket.is_empty());
     let mut settings: Spec = serde_json::from_value(serde_json::json!({
@@ -318,14 +318,20 @@ fn credentials_start_blank_and_explicit_key_or_agent_settings_are_preserved() {
     }))
     .unwrap();
     assert!(settings.identity.is_empty() && settings.agent_socket.is_empty());
-    let error = settings.validate().unwrap_err().to_string();
-    assert!(
-        error.contains("identity file") && error.contains("agent socket"),
-        "{error}"
+    settings.validate().unwrap();
+    assert!(settings.automatic_identity());
+    assert_eq!(
+        settings.identity_files(),
+        DEFAULT_IDENTITIES.map(rode_host_core::files::expand_home)
     );
     for identity in ["~/.ssh/custom-relay-key", "~/.ssh/id_ed25519"] {
         settings.identity = identity.into();
         settings.validate().unwrap();
+        assert!(!settings.automatic_identity());
+        assert_eq!(
+            settings.identity_files(),
+            [rode_host_core::files::expand_home(identity)]
+        );
         let restored: Spec =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
@@ -333,6 +339,8 @@ fn credentials_start_blank_and_explicit_key_or_agent_settings_are_preserved() {
     settings.identity.clear();
     settings.agent_socket = "/run/user/1000/agent.sock".into();
     settings.validate().unwrap();
+    assert!(!settings.automatic_identity());
+    assert!(settings.identity_files().is_empty());
     let restored: Spec = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
     assert_eq!(restored, settings);
 }
@@ -364,7 +372,7 @@ fn validates_bounded_explicit_credentials_and_ports() {
             ..spec()
         }
         .validate()
-        .is_err()
+        .is_ok()
     );
     assert!(
         Spec {
@@ -443,6 +451,202 @@ fn tunnel_identity_fifo_is_rejected_without_waiting_for_a_writer() {
             .to_string()
             .contains("regular file")
     );
+}
+
+#[test]
+fn default_ssh_keys_and_explicit_overrides_authenticate_in_an_isolated_home() {
+    const CHILD: &str = "RODE_TEST_TUNNEL_HOME";
+    if let Some(home) = std::env::var_os(CHILD) {
+        assert_eq!(std::env::var_os("HOME"), Some(home.clone()));
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(default_identity_fixture(Path::new(&home)));
+        return;
+    }
+    // The worker must discover keys in its own HOME. Never mutate the test
+    // runner's environment or inspect the developer's real SSH credentials.
+    let directory = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tunnels::tests::default_ssh_keys_and_explicit_overrides_authenticate_in_an_isolated_home",
+            "--nocapture",
+        ])
+        .env(CHILD, directory.path())
+        .env("HOME", directory.path())
+        .env("SSH_AUTH_SOCK", directory.path().join("unavailable-agent.sock"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn settled_tunnel(store: &Store, settings: Spec) -> Info {
+    let id = crate::new_id().unwrap();
+    store.start(id.clone(), settings).unwrap();
+    until(|| {
+        matches!(
+            store.list()[0].status,
+            Status::Connected | Status::Attention | Status::HostKeyRequired
+        )
+    })
+    .await;
+    let info = store.list().remove(0);
+    store.stop(&id);
+    if info.status == Status::Connected {
+        // Stop closes the client synchronously; the relay releases its listener
+        // when it processes that EOF. Wait for release before reusing the port.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while TcpListener::bind(("127.0.0.1", info.spec.listen_port))
+                .await
+                .is_err()
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    info
+}
+
+async fn default_identity_fixture(home: &Path) {
+    let ssh = home.join(".ssh");
+    std::fs::create_dir(&ssh).unwrap();
+    let write_key = |name: &str, identity: &PrivateKey| {
+        std::fs::write(
+            ssh.join(name),
+            identity
+                .to_openssh(keys::ssh_key::LineEnding::LF)
+                .unwrap()
+                .as_bytes(),
+        )
+        .unwrap();
+    };
+    for (name, algorithm) in [
+        ("id_rsa", Algorithm::Rsa { hash: None }),
+        (
+            "id_ecdsa",
+            Algorithm::Ecdsa {
+                curve: keys::EcdsaCurve::NistP256,
+            },
+        ),
+        ("id_ed25519", Algorithm::Ed25519),
+    ] {
+        let identity = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
+        write_key(name, &identity);
+        let host_key = key();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let relay_port = listener.local_addr().unwrap().port();
+        let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = reserved.local_addr().unwrap().port();
+        drop(reserved);
+        let relay = Relay {
+            allowed: identity.public_key().clone(),
+            handles: Default::default(),
+            auths: Default::default(),
+            deny_forwarding: Default::default(),
+        };
+        let mut server = relay.clone();
+        let config = Arc::new(server::Config {
+            keys: vec![host_key.clone()],
+            auth_rejection_time: Duration::ZERO,
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            server.run_on_socket(config, &listener).await.unwrap();
+        });
+        let store = Store::default();
+        let settings = Spec {
+            relay_port,
+            listen_port,
+            relay_host: "127.0.0.1".into(),
+            relay_user: "compute".into(),
+            ..Default::default()
+        };
+        let info = settled_tunnel(&store, settings.clone()).await;
+        assert_eq!(info.status, Status::HostKeyRequired, "{info:?}");
+        assert_eq!(relay.auths.load(Ordering::SeqCst), 0);
+        let settings = Spec {
+            relay_key: host_key.public_key().to_openssh().unwrap(),
+            ..settings
+        };
+        let info = settled_tunnel(&store, settings.clone()).await;
+        assert_eq!(info.status, Status::Connected, "{name}: {info:?}");
+        assert_eq!(relay.auths.load(Ordering::SeqCst), 1);
+        if name == "id_ed25519" {
+            // Bad and rejected defaults must not prevent the final key working.
+            std::fs::write(ssh.join("id_rsa"), "invalid-private-key-must-not-leak").unwrap();
+            write_key("id_ecdsa", &key());
+            let info = settled_tunnel(&store, settings.clone()).await;
+            assert_eq!(info.status, Status::Connected, "{info:?}");
+            let encrypted = key()
+                .encrypt(&mut rand::rng(), "fixture-passphrase")
+                .unwrap();
+            write_key("id_rsa", &encrypted);
+            let info = settled_tunnel(&store, settings.clone()).await;
+            assert_eq!(info.status, Status::Connected, "{info:?}");
+            // Default order is meaningful: stop after the first accepted key.
+            write_key("id_rsa", &identity);
+            let before = relay.auths.load(Ordering::SeqCst);
+            let info = settled_tunnel(&store, settings.clone()).await;
+            assert_eq!(info.status, Status::Connected, "{info:?}");
+            assert_eq!(relay.auths.load(Ordering::SeqCst), before + 1);
+            // A selected key or agent must never silently fall back to defaults.
+            for (identity, agent) in [
+                ("~/.ssh/id_ecdsa".to_owned(), String::new()),
+                (
+                    home.join("missing-key").to_string_lossy().into_owned(),
+                    String::new(),
+                ),
+                (
+                    String::new(),
+                    home.join("missing-agent.sock")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            ] {
+                let info = settled_tunnel(
+                    &store,
+                    Spec {
+                        identity,
+                        agent_socket: agent,
+                        ..settings.clone()
+                    },
+                )
+                .await;
+                assert_eq!(info.status, Status::Attention, "{info:?}");
+            }
+            std::fs::write(ssh.join("id_rsa"), "invalid-private-key-must-not-leak").unwrap();
+            std::fs::remove_file(ssh.join("id_ed25519")).unwrap();
+            let info = settled_tunnel(&store, settings.clone()).await;
+            assert_eq!(info.status, Status::Attention, "{info:?}");
+            assert!(
+                info.error.contains("Cannot decode") && info.error.contains("rejected"),
+                "{info:?}"
+            );
+            assert!(!info.error.contains("invalid-private-key-must-not-leak"));
+            std::fs::remove_file(ssh.join("id_rsa")).unwrap();
+            std::fs::remove_file(ssh.join("id_ecdsa")).unwrap();
+        } else {
+            std::fs::remove_file(ssh.join(name)).unwrap();
+        }
+        let before = relay.auths.load(Ordering::SeqCst);
+        let info = settled_tunnel(&store, settings).await;
+        assert_eq!(info.status, Status::Attention, "{info:?}");
+        assert!(
+            info.error.contains("Default SSH keys") && info.error.contains("Agent socket"),
+            "{info:?}"
+        );
+        assert_eq!(relay.auths.load(Ordering::SeqCst), before);
+        server_task.abort();
+    }
 }
 
 #[tokio::test]

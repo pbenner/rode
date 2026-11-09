@@ -33,6 +33,119 @@ fn open(path: &Path) -> Preferences {
     Preferences::open(path.into(), Arc::new(|| {}))
 }
 
+fn tunnel_entry(name: &str) -> Value {
+    json!({
+        "host": {"kind": "ssh", "host": "compute", "user": "researcher", "port": "2222", "config": ""},
+        "spec": {"name": name, "relay_host": "relay.example.org", "relay_user": "researcher"},
+        "relay_jump": "desktop-relay"
+    })
+}
+
+#[test]
+fn saved_tunnels_merge_across_windows_without_losing_renames_fields_or_newer_records() {
+    const KEY: &str = ssh::tunnels::STORAGE_KEY;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("app.ron");
+    let mut entry = tunnel_entry("Compute access");
+    entry["future"] = json!({"keep": true});
+    entry["spec"]["future_option"] = json!("keep");
+    let initial = json!({"compute": entry});
+    let mut store = open(&path);
+    store.set_string(KEY, initial.to_string());
+    drop(store);
+    let mut first = open(&path);
+    let mut second = open(&path);
+    let mut stale_delete = open(&path);
+    let mut idle = open(&path);
+    let mut next = initial.clone();
+    next["compute"]["spec"]["name"] = "Renamed compute".into();
+    next["compute"]["spec"]["relay_port"] = json!(8443);
+    first.set_string(KEY, next.to_string());
+    drop(first);
+    let mut next = initial.clone();
+    next["compute"]["spec"]["listen_port"] = json!(22444);
+    next["compute"]["spec"]["identity"] = "~/keys/custom-relay".into();
+    next["second"] = tunnel_entry("Second relay");
+    // A normal typed snapshot drops unknown future fields; the writer retains them.
+    let typed = ssh::tunnels::decode(&next.to_string()).unwrap();
+    second.set_string(KEY, serde_json::to_string(&typed).unwrap());
+    drop(second);
+    stale_delete.set_string(KEY, "{}".into());
+    drop(stale_delete);
+    idle.set_string(
+        KEY,
+        serde_json::to_string(&ssh::tunnels::decode(&initial.to_string()).unwrap()).unwrap(),
+    );
+    drop(idle);
+    let saved: Value = serde_json::from_str(&values(&path)[KEY]).unwrap();
+    assert_eq!(saved["compute"]["spec"]["name"], "Renamed compute");
+    assert_eq!(saved["compute"]["spec"]["relay_port"], 8443);
+    assert_eq!(saved["compute"]["spec"]["listen_port"], 22444);
+    assert_eq!(saved["compute"]["spec"]["identity"], "~/keys/custom-relay");
+    assert_eq!(saved["compute"]["future"]["keep"], true);
+    assert_eq!(saved["compute"]["spec"]["future_option"], "keep");
+    assert!(saved.get("second").is_some());
+    let mut deleting = open(&path);
+    deleting.set_string(KEY, json!({"second": saved["second"]}).to_string());
+    drop(deleting);
+    let saved: Value = serde_json::from_str(&values(&path)[KEY]).unwrap();
+    assert!(saved.get("compute").is_none());
+    assert!(saved.get("second").is_some());
+}
+
+#[test]
+fn concurrent_tunnel_additions_cannot_publish_duplicate_names_or_exceed_the_limit() {
+    const KEY: &str = ssh::tunnels::STORAGE_KEY;
+    for limit in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("app.ron");
+        let initial: BTreeMap<_, _> = (0..if limit { 127 } else { 0 })
+            .map(|i| (format!("setup-{i}"), tunnel_entry(&format!("Setup {i}"))))
+            .collect();
+        let mut store = open(&path);
+        store.set_string(KEY, serde_json::to_string(&initial).unwrap());
+        drop(store);
+        let mut first = open(&path);
+        let mut second = open(&path);
+        for (id, name, writer) in [
+            ("first", "New tunnel", &mut first),
+            (
+                "second",
+                if limit {
+                    "Another tunnel"
+                } else {
+                    "New tunnel"
+                },
+                &mut second,
+            ),
+        ] {
+            let mut next = initial.clone();
+            next.insert(id.into(), tunnel_entry(name));
+            writer.set_string(KEY, serde_json::to_string(&next).unwrap());
+        }
+        drop(first);
+        let preserved = fs::read(&path).unwrap();
+        second.flush();
+        let mut error = None;
+        wait(|| {
+            error = second.take_error();
+            error.is_some()
+        });
+        let error = error.unwrap();
+        assert!(
+            error.contains(if limit {
+                "At most 128"
+            } else {
+                "already saved"
+            }),
+            "{error}"
+        );
+        drop(second);
+        assert_eq!(fs::read(&path).unwrap(), preserved);
+        assert!(open(&path).take_error().is_none());
+    }
+}
+
 #[test]
 fn sandbox_presets_merge_across_windows_and_preserve_newer_records() {
     let root = tempfile::tempdir().unwrap();

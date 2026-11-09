@@ -4,7 +4,7 @@ use super::*;
 const LISTENER_ERROR: &str = "SSH login to relay login.example.org:8443 succeeded, but the relay refused tunnel listener 127.0.0.1:22022.\nSSH did not report why. Possible causes: the port is already in use, or forwarding is restricted on the relay.\nOn the relay, run: ss -ltnp 'sport = :22022' (use sudo to see all owners).\nAn sshd-session listener usually belongs to an existing SSH tunnel. Stop that tunnel at its source, or choose a different Relay port under Port forwarding.\nRODE will retry automatically.";
 
 #[test]
-fn new_tunnel_setup_requires_explicit_credentials_without_assuming_a_key_filename() {
+fn new_tunnel_setup_allows_automatic_credentials_without_selecting_a_key_filename() {
     for remote in [false, true] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("widgets.json");
@@ -20,13 +20,14 @@ fn new_tunnel_setup_requires_explicit_credentials_without_assuming_a_key_filenam
         app.tunnels.spec.relay_host = "relay.example.org".into();
         app.tunnels.spec.relay_user = "researcher".into();
         assert!(app.tunnels.spec.identity.is_empty() && app.tunnels.spec.agent_socket.is_empty());
-        let hint = app.tunnels.spec.validate().unwrap_err().to_string();
+        app.tunnels.spec.validate().unwrap();
+        let hint = "Next: verify the relay’s host key.";
         for size in [egui::vec2(390., 540.), egui::vec2(900., 1000.)] {
             for _ in 0..3 {
                 dialog_frame(&mut app, &ctx, size, vec![]);
             }
             let output = dialog_frame(&mut app, &ctx, size, vec![]);
-            let (rect, clip) = text_bounds(&output, &hint);
+            let (rect, clip) = text_bounds(&output, hint);
             assert!(ctx.content_rect().contains_rect(rect) && clip.contains_rect(rect));
             assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("id_ed25519"))));
             let state: serde_json::Value =
@@ -36,12 +37,16 @@ fn new_tunnel_setup_requires_explicit_credentials_without_assuming_a_key_filenam
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|button| button["name"] == "tunnel-start" && button["enabled"] == false)
+                    .any(|button| button["name"] == "tunnel-start" && button["enabled"] == true)
             );
         }
-        // Either explicit credential kind enables Start, without reading files,
+        // Automatic and explicit credentials enable Start without reading files,
         // inheriting an agent or dispatching network work during rendering.
-        for (identity, agent) in [("~/keys/relay", ""), ("", "/run/user/1000/agent.sock")] {
+        for (identity, agent) in [
+            ("", ""),
+            ("~/keys/relay", ""),
+            ("", "/run/user/1000/agent.sock"),
+        ] {
             app.tunnels.spec.identity = identity.into();
             app.tunnels.spec.agent_socket = agent.into();
             dialog_frame(&mut app, &ctx, egui::vec2(900., 1000.), vec![]);
@@ -375,7 +380,7 @@ fn tunnel_controls_render_without_starting_workers_and_hidden_manager_does_not_p
             fingerprint: "SHA256:abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTU".into(),
             attempts: 1,
         }];
-        for page in [Page::Tunnels, Page::New] {
+        for page in [Page::Tunnels, Page::Saved, Page::New] {
             app.tunnels.page = page;
             for frame in 0..3 {
                 let _ = ctx.run(
@@ -578,14 +583,23 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                     })
                     .collect();
                 app.tunnels.stop = Some("retained-0".into());
-                for page in [Page::Tunnels, Page::New] {
+                app.save_tunnel_configuration(
+                    Spec {
+                        name: "Saved compute setup".into(),
+                        relay_host: "relay.example.org".into(),
+                        relay_user: "researcher".into(),
+                        ..Default::default()
+                    },
+                    false,
+                );
+                for page in [Page::Tunnels, Page::Saved, Page::New] {
                     app.tunnels.page = page;
                     for _ in 0..3 {
                         dialog_frame(&mut app, &ctx, size, vec![]);
                     }
                     let output = dialog_frame(&mut app, &ctx, size, vec![]);
                     let screen = ctx.content_rect();
-                    for label in ["New tunnel", "Tunnels (8)", "Close"]
+                    for label in ["New tunnel", "Tunnels (8)", "Saved (1)", "Close"]
                         .into_iter()
                         .chain((page == Page::New).then_some("Start tunnel"))
                     {
@@ -598,6 +612,7 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                     for label in ["Close"]
                         .into_iter()
                         .chain((page == Page::New).then_some("Start tunnel"))
+                        .chain((page == Page::New).then_some("Save configuration"))
                     {
                         let (rect, clip) = layout::tests::button_frame(&output, label);
                         assert!(
@@ -646,4 +661,218 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
             }
         }
     }
+}
+
+#[derive(Default)]
+struct TunnelStorage(HashMap<String, String>);
+impl eframe::Storage for TunnelStorage {
+    fn get_string(&self, key: &str) -> Option<String> {
+        self.0.get(key).cloned()
+    }
+    fn set_string(&mut self, key: &str, value: String) {
+        self.0.insert(key.into(), value);
+    }
+    fn flush(&mut self) {}
+}
+
+fn saved_spec() -> Spec {
+    Spec {
+        name: "Compute access".into(),
+        relay_host: "relay.example.org".into(),
+        relay_user: "researcher".into(),
+        identity: "~/keys/compute-relay".into(),
+        relay_key:
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ"
+                .into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_deletion() {
+    use crate::ssh::tunnels::STORAGE_KEY;
+    for remote in [false, true] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        if remote {
+            app.workspace = Some(crate::app::tests::remote_workspace());
+        }
+        app.dialog = Dialog::Tunnels;
+        app.tunnels.page = Page::New;
+        app.tunnels.spec = saved_spec();
+        app.tunnels.relay_jump = "desktop-relay-alias".into();
+        click(&mut app, &ctx, "Save configuration");
+        let id = app.tunnels.saved_id.clone().unwrap();
+        assert_eq!(app.tunnels.saved.entries.len(), 1);
+        assert_eq!(app.tunnels.saved.entries[&id].spec, saved_spec());
+        assert!(app.tunnels.pending.is_none() && app.tunnels.available.is_empty());
+        let mut storage = TunnelStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert!(storage.0.contains_key(STORAGE_KEY));
+
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut reopened = EditorApp::new(&cc, Startup::default());
+        if remote {
+            reopened.workspace = app.workspace.take();
+        }
+        reopened.tunnel_tick(&ctx); // Workspace generation changes retain the library.
+        reopened.dialog = Dialog::Tunnels;
+        reopened.tunnels.page = Page::Saved;
+        click(&mut reopened, &ctx, "Load setup");
+        assert_eq!(reopened.tunnels.page, Page::New);
+        assert_eq!(reopened.tunnels.spec, saved_spec());
+        assert_eq!(reopened.tunnels.relay_jump, "desktop-relay-alias");
+        assert!(reopened.tunnels.pending.is_none());
+        reopened.tunnels.spec.name = "Renamed setup".into();
+        reopened.tunnels.spec.listen_port = 22444;
+        click(&mut reopened, &ctx, "Update configuration");
+        assert_eq!(reopened.tunnels.saved_id.as_deref(), Some(id.as_str()));
+        assert_eq!(reopened.tunnels.saved.entries.len(), 1);
+        assert_eq!(reopened.tunnels.saved.entries[&id].spec.listen_port, 22444);
+        click(&mut reopened, &ctx, "Saved (1)");
+        click(&mut reopened, &ctx, "Delete…");
+        click(&mut reopened, &ctx, "Cancel");
+        assert!(reopened.tunnels.saved.entries.contains_key(&id));
+        click(&mut reopened, &ctx, "Delete…");
+        click(&mut reopened, &ctx, "Delete configuration");
+        assert!(reopened.tunnels.saved.entries.is_empty());
+        assert!(reopened.tunnels.saved_id.is_none());
+        assert_eq!(reopened.tunnels.spec.name, "Renamed setup");
+        assert!(reopened.tunnels.pending.is_none());
+        eframe::App::save(&mut reopened, &mut storage);
+        assert_eq!(storage.0[STORAGE_KEY], "{}");
+        if let Some(remote) = reopened.workspace.as_ref().and_then(|w| w.remote.as_ref()) {
+            remote.cleanup();
+        }
+    }
+}
+
+#[test]
+fn saving_a_running_tunnel_keeps_only_its_settings_and_never_trusts_an_observed_key() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.dialog = Dialog::Tunnels;
+    app.tunnels.available = vec![Info {
+        id: "retained".into(),
+        hostname: "compute".into(),
+        spec: Spec {
+            relay_key: String::new(),
+            ..saved_spec()
+        },
+        status: Status::HostKeyRequired,
+        error: String::new(),
+        observed_key: saved_spec().relay_key,
+        fingerprint: "SHA256:fixture".into(),
+        attempts: 1,
+    }];
+    click(&mut app, &ctx, "Save configuration");
+    let entry = app.tunnels.saved.entries.values().next().unwrap();
+    assert!(
+        entry.spec.relay_key.is_empty(),
+        "Saving is not relay trust confirmation"
+    );
+    assert_eq!(entry.spec, app.tunnels.available[0].spec);
+    assert!(app.tunnels.pending.is_none());
+    let id = app.tunnels.saved.entries.keys().next().unwrap().clone();
+    app.delete_tunnel_configuration(&id);
+    assert_eq!(app.tunnels.available[0].id, "retained");
+    assert!(app.tunnels.pending.is_none());
+}
+
+#[test]
+fn saved_tunnel_loads_are_bound_to_the_selected_host_account_port_and_config() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("widgets.json");
+    let ctx = egui::Context::default();
+    ui_probe::install_at(&ctx, path.clone());
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.save_tunnel_configuration(saved_spec(), false);
+    let id = app.tunnels.saved.entries.keys().next().unwrap().clone();
+    let profile = app
+        .workspace
+        .as_ref()
+        .unwrap()
+        .remote
+        .as_ref()
+        .unwrap()
+        .profile
+        .clone();
+    for field in ["host", "user", "port", "config"] {
+        let remote = app.workspace.as_mut().unwrap().remote.as_mut().unwrap();
+        remote.profile = profile.clone();
+        match field {
+            "host" => remote.profile.host = "other-host".into(),
+            "user" => remote.profile.user = "other-user".into(),
+            "port" => remote.profile.port = "2222".into(),
+            "config" => remote.profile.config = "~/.ssh/other-config".into(),
+            _ => unreachable!(),
+        }
+        app.dialog = Dialog::Tunnels;
+        app.tunnels.page = Page::Saved;
+        dialog_frame(&mut app, &ctx, egui::vec2(900., 1000.), vec![]);
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            state["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|button| button["name"] == format!("tunnel-saved-load:{id}")
+                    && button["enabled"] == false)
+        );
+        let before = app.tunnels.spec.clone();
+        app.load_tunnel_configuration(&id);
+        assert_eq!(app.tunnels.page, Page::Saved);
+        assert_eq!(app.tunnels.spec, before);
+        assert!(app.tunnels.error.contains("before loading"));
+        assert!(app.tunnels.pending.is_none());
+    }
+    app.workspace
+        .as_mut()
+        .unwrap()
+        .remote
+        .as_mut()
+        .unwrap()
+        .profile = profile;
+    app.generation += 1;
+    app.dialog = Dialog::None;
+    app.tunnel_tick(&ctx);
+    assert!(app.tunnels.saved.entries.contains_key(&id));
+    app.load_tunnel_configuration(&id);
+    assert_eq!(app.tunnels.spec, saved_spec());
+    app.workspace
+        .as_ref()
+        .unwrap()
+        .remote
+        .as_ref()
+        .unwrap()
+        .cleanup();
+}
+
+#[test]
+fn malformed_saved_tunnels_are_preserved_and_cannot_be_overwritten_by_an_empty_window() {
+    let mut storage = TunnelStorage(HashMap::from([(
+        crate::ssh::tunnels::STORAGE_KEY.into(),
+        "malformed".into(),
+    )]));
+    let mut warnings = vec![];
+    let mut tunnels = Tunnels::load(Some(&storage), &mut warnings);
+    assert_eq!(warnings.len(), 1);
+    assert!(tunnels.saved.error.is_some());
+    tunnels.store(&mut storage);
+    assert_eq!(storage.0[crate::ssh::tunnels::STORAGE_KEY], "malformed");
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx);
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.tunnels = tunnels;
+    app.save_tunnel_configuration(saved_spec(), true);
+    assert!(app.tunnels.saved.entries.is_empty());
+    assert!(app.tunnels.error.contains("Repair saved tunnel data"));
+    app.tunnels.store(&mut storage);
+    assert_eq!(storage.0[crate::ssh::tunnels::STORAGE_KEY], "malformed");
 }

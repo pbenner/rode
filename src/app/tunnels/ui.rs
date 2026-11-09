@@ -41,6 +41,12 @@ impl EditorApp {
                 format!("Tunnels ({})", self.tunnels.available.len()),
             );
             ui_probe::button(ui, "tunnel-tab-list", &list);
+            let saved = ui.selectable_value(
+                &mut self.tunnels.page,
+                Page::Saved,
+                format!("Saved ({})", self.tunnels.saved.entries.len()),
+            );
+            ui_probe::button(ui, "tunnel-tab-saved", &saved);
             let new = ui.selectable_value(&mut self.tunnels.page, Page::New, "New tunnel");
             ui_probe::button(ui, "tunnel-tab-new", &new);
         });
@@ -51,7 +57,7 @@ impl EditorApp {
         let header_height = ui.cursor().top() - top;
         // Reserve room for wrapped validation/lifetime copy and the action row,
         // independent of an Area retaining its previous dialog's dimensions.
-        let footer_height = if page == Page::New { 112. } else { 90. };
+        let footer_height = if page == Page::New { 144. } else { 90. };
         let body_height =
             (ctx.content_rect().height() - 80. - header_height - footer_height).max(40.);
         egui::ScrollArea::vertical()
@@ -76,12 +82,66 @@ impl EditorApp {
                 }
                 match page {
                     Page::Tunnels => self.tunnel_list_ui(ui, ctx, palette),
+                    Page::Saved => self.saved_tunnels_ui(ui, palette),
                     Page::New => self.tunnel_form_ui(ui, palette),
                 }
             });
         ui.add_space(8.);
         ui.separator();
         self.tunnel_footer(ui, ctx, page, palette);
+    }
+
+    fn saved_tunnels_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
+        if let Some(error) = &self.tunnels.saved.error {
+            ui.colored_label(palette.error, error);
+            return;
+        }
+        if self.tunnels.saved.entries.is_empty() {
+            layout::empty(
+                ui,
+                "No saved tunnel configurations",
+                "Save a setup from New tunnel or from a running tunnel to reuse it after a restart.",
+                palette,
+            );
+            return;
+        }
+        layout::subtitle(
+            ui,
+            "Saved on this computer. Load a setup for the selected host, review it, then start the tunnel.",
+            palette,
+        );
+        ui.add_space(8.);
+        let host = self.tunnel_saved_host();
+        let mut entries: Vec<_> = self.tunnels.saved.entries.clone().into_iter().collect();
+        entries.sort_by(|(_, a), (_, b)| {
+            (a.host != host, &a.spec.name).cmp(&(b.host != host, &b.spec.name))
+        });
+        for (id, saved) in entries {
+            ui.push_id(("saved-tunnel", &id), |ui| {
+                layout::card(ui, palette, |ui| {
+                    ui.add(egui::Label::new(RichText::new(&saved.spec.name).strong()).wrap());
+                    ui.add(egui::Label::new(saved.host.label()).wrap());
+                    layout::subtitle(ui, &format!("Relay {} · listener 127.0.0.1:{}", endpoint(&saved.spec.relay_host, saved.spec.relay_port), saved.spec.listen_port), palette);
+                    ui.horizontal_wrapped(|ui| {
+                        let load = ui.add_enabled(saved.host == host, egui::Button::new("Load setup"))
+                            .on_disabled_hover_text(format!("Open {} before loading this setup.", saved.host.label()));
+                        ui_probe::button(ui, &format!("tunnel-saved-load:{id}"), &load);
+                        if load.clicked() { self.load_tunnel_configuration(&id); }
+                        if ui.button("Delete…").clicked() { self.tunnels.delete_saved = Some(id.clone()); }
+                    });
+                    if self.tunnels.delete_saved.as_deref() == Some(&id) {
+                        ui.label("Delete this saved configuration? Running tunnels keep their current settings.");
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(RichText::new("Delete configuration").color(palette.error)).clicked() {
+                                self.delete_tunnel_configuration(&id);
+                            }
+                            if ui.button("Cancel").clicked() { self.tunnels.delete_saved = None; }
+                        });
+                    }
+                });
+            });
+            ui.add_space(10.);
+        }
     }
 
     fn tunnel_list_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: Palette) {
@@ -245,8 +305,18 @@ impl EditorApp {
             }
             if ui.button("Copy settings").clicked() {
                 self.tunnels.spec = info.spec.clone();
+                self.tunnels.saved_id = None;
                 self.tunnels.draft_epoch += 1;
                 self.tunnels.page = Page::New;
+            }
+            if ui
+                .add_enabled(
+                    self.tunnels.saved.error.is_none(),
+                    egui::Button::new(self.tunnel_save_label(&info.spec, false)),
+                )
+                .clicked()
+            {
+                self.save_tunnel_configuration(info.spec.clone(), false);
             }
             if ui
                 .add_enabled(
@@ -328,17 +398,18 @@ impl EditorApp {
             });
             layout::section(ui, if local { "Credentials on this computer" } else { "Credentials on the compute host" }, palette, |ui| {
                 form_grid(ui, "credential-fields", |ui, compact, width| {
-                    text_field(ui, "Identity file", &mut spec.identity, "Unencrypted private-key path", compact, width);
+                    text_field(ui, "Identity file", &mut spec.identity, "Automatic SSH key files", compact, width);
                     text_field(ui, "Agent socket", &mut spec.agent_socket, "Persistent SSH-agent socket path", compact, width);
                 });
-                layout::subtitle(ui, if local { "Choose an unencrypted key or a persistent SSH-agent socket on this computer." } else { "Choose an unencrypted key or a persistent SSH-agent socket on the compute host." }, palette);
+                layout::subtitle(ui, if local { "Leave both blank to try default SSH keys on this computer. Set a key path to override, or an agent socket to use only that agent." } else { "Leave both blank to try default SSH keys on the compute host. Set a key path to override, or an agent socket to use only that agent." }, palette);
                 if !spec.relay_key.is_empty() {
                     ui.add_space(4.);
-                    layout::subtitle(ui, "Copied settings retain the verified relay key.", palette);
+                    layout::subtitle(ui, "This setup retains the verified relay key.", palette);
                 }
             });
             ui.collapsing("Connection requirements", |ui| {
                 ui.label("Use a literal relay hostname or IP. The relay must allow SSH forwarding, and the compute node must be able to reach it.");
+                ui.label("Default key files: ~/.ssh/id_rsa, ~/.ssh/id_ecdsa, then ~/.ssh/id_ed25519. Encrypted or hardware-backed keys require a persistent SSH agent.");
                 ui.label("Desktop credentials are not copied. A forwarded desktop agent disappears when that connection ends; use an agent owned by the compute host.");
                 ui.label("The service reconnects after network loss. Tunnels end when stopped or when the service, node or allocation ends.");
             });
@@ -360,16 +431,20 @@ impl EditorApp {
                 "Enter the relay host and username.".to_owned()
             } else if let Err(error) = &validation {
                 error.to_string()
+            } else if !self.tunnels.spec.relay_key.is_empty() {
+                "The relay must match the saved host key.".to_owned()
             } else {
                 "Next: verify the relay’s host key.".to_owned()
             };
             layout::subtitle(ui, &hint, palette);
-        } else {
+        } else if page == Page::Tunnels {
             layout::subtitle(
                 ui,
                 "Tunnels keep running when you close this window.",
                 palette,
             );
+        } else {
+            layout::subtitle(ui, "Loading a saved setup opens it for review.", palette);
         }
         ui.add_space(6.);
         ui.horizontal_wrapped(|ui| {
@@ -388,6 +463,14 @@ impl EditorApp {
                         }
                     }
                 });
+                let save = ui.add_enabled(
+                    validation.is_ok() && self.tunnels.saved.error.is_none(),
+                    egui::Button::new(self.tunnel_save_label(&self.tunnels.spec, true)),
+                );
+                ui_probe::button(ui, "tunnel-save", &save);
+                if save.clicked() {
+                    self.save_tunnel_configuration(self.tunnels.spec.clone(), true);
+                }
             }
             let close = ui.button("Close");
             ui_probe::button(ui, "tunnel-close", &close);
