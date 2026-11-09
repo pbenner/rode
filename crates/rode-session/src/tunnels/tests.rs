@@ -92,6 +92,7 @@ fn spec() -> Spec {
     Spec {
         relay_host: "127.0.0.1".into(),
         relay_user: "compute".into(),
+        identity: "/fixture/relay-key".into(),
         ..Default::default()
     }
 }
@@ -308,6 +309,34 @@ fn tunnel_forwarding_errors_distinguish_refusal_from_lost_transport() {
     assert!(message.chars().count() <= 2048, "{message}");
     assert!(message.contains("SSH did not report why"));
 }
+#[test]
+fn credentials_start_blank_and_explicit_key_or_agent_settings_are_preserved() {
+    let defaults = Spec::default();
+    assert!(defaults.identity.is_empty() && defaults.agent_socket.is_empty());
+    let mut settings: Spec = serde_json::from_value(serde_json::json!({
+        "relay_host": "relay.example.org", "relay_user": "researcher"
+    }))
+    .unwrap();
+    assert!(settings.identity.is_empty() && settings.agent_socket.is_empty());
+    let error = settings.validate().unwrap_err().to_string();
+    assert!(
+        error.contains("identity file") && error.contains("agent socket"),
+        "{error}"
+    );
+    for identity in ["~/.ssh/custom-relay-key", "~/.ssh/id_ed25519"] {
+        settings.identity = identity.into();
+        settings.validate().unwrap();
+        let restored: Spec =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+    }
+    settings.identity.clear();
+    settings.agent_socket = "/run/user/1000/agent.sock".into();
+    settings.validate().unwrap();
+    let restored: Spec = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+    assert_eq!(restored, settings);
+}
+
 #[test]
 fn validates_bounded_explicit_credentials_and_ports() {
     assert!(spec().validate().is_ok());

@@ -148,8 +148,9 @@ RODE desktop → relay SSH → relay 127.0.0.1:22022
    and username, a stable relay loopback port, and the compute node's SSH port.
    The outbound worker does not read SSH aliases or ProxyJump configuration.
 2. Choose credentials **on the compute node**: an unencrypted private-key file,
-   or an explicitly selected persistent SSH-agent socket. Clear the identity
-   field to use only the agent. The default identity path is `~/.ssh/id_ed25519`.
+   or an explicitly selected persistent SSH-agent socket. Leave the identity
+   field blank to use only the agent. Both credential fields start blank; choose the
+   key or socket that actually exists on that host.
    RODE does not copy your desktop key to the node or provision credentials.
 3. Start the tunnel. Verify the displayed relay SHA-256 host-key fingerprint
    through a trusted source, then choose **Trust relay key and start**. This pin
@@ -225,11 +226,11 @@ it leaves unrelated terminals, jobs and tunnels alone. Starting a tunnel does
 not grant persistence to project jobs or extend a scheduler allocation.
 
 Tunnel failures identify the operation and the relevant identity file, agent
-socket, relay address or listener port. Paths are resolved on the tunnel host;
-the default Identity file is `~/.ssh/id_ed25519`. If it is absent, select the
-private key that actually exists there, or clear Identity file and set Agent
-socket to a persistent agent on that host. Changing the desktop's key path does
-not change a remote tunnel's credentials. Error details include the underlying
+socket, relay address or listener port. Paths are resolved on the tunnel host.
+No identity file or agent socket is assumed: select a private key that actually
+exists there, or leave Identity file blank and set Agent socket to a persistent
+agent on that host. Changing the desktop's key path does not change a remote
+tunnel's credentials. Error details include the underlying
 OS failure, without displaying private-key contents.
 
 If SSH login succeeds but the relay refuses the tunnel listener, the error

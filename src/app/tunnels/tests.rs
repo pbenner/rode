@@ -4,6 +4,69 @@ use super::*;
 const LISTENER_ERROR: &str = "SSH login to relay login.example.org:8443 succeeded, but the relay refused tunnel listener 127.0.0.1:22022.\nSSH did not report why. Possible causes: the port is already in use, or forwarding is restricted on the relay.\nOn the relay, run: ss -ltnp 'sport = :22022' (use sudo to see all owners).\nAn sshd-session listener usually belongs to an existing SSH tunnel. Stop that tunnel at its source, or choose a different Relay port under Port forwarding.\nRODE will retry automatically.";
 
 #[test]
+fn new_tunnel_setup_requires_explicit_credentials_without_assuming_a_key_filename() {
+    for remote in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        ui_probe::install_at(&ctx, path.clone());
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        if remote {
+            app.workspace = Some(crate::app::tests::remote_workspace());
+        }
+        app.dialog = Dialog::Tunnels;
+        app.tunnels.page = Page::New;
+        app.tunnels.spec.relay_host = "relay.example.org".into();
+        app.tunnels.spec.relay_user = "researcher".into();
+        assert!(app.tunnels.spec.identity.is_empty() && app.tunnels.spec.agent_socket.is_empty());
+        let hint = app.tunnels.spec.validate().unwrap_err().to_string();
+        for size in [egui::vec2(390., 540.), egui::vec2(900., 1000.)] {
+            for _ in 0..3 {
+                dialog_frame(&mut app, &ctx, size, vec![]);
+            }
+            let output = dialog_frame(&mut app, &ctx, size, vec![]);
+            let (rect, clip) = text_bounds(&output, &hint);
+            assert!(ctx.content_rect().contains_rect(rect) && clip.contains_rect(rect));
+            assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("id_ed25519"))));
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert!(
+                state["buttons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|button| button["name"] == "tunnel-start" && button["enabled"] == false)
+            );
+        }
+        // Either explicit credential kind enables Start, without reading files,
+        // inheriting an agent or dispatching network work during rendering.
+        for (identity, agent) in [("~/keys/relay", ""), ("", "/run/user/1000/agent.sock")] {
+            app.tunnels.spec.identity = identity.into();
+            app.tunnels.spec.agent_socket = agent.into();
+            dialog_frame(&mut app, &ctx, egui::vec2(900., 1000.), vec![]);
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert!(
+                state["buttons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|button| button["name"] == "tunnel-start" && button["enabled"] == true)
+            );
+            assert!(app.tunnels.pending.is_none() && app.tunnels.available.is_empty());
+        }
+        if let Some(remote) = app
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+        {
+            remote.cleanup();
+        }
+    }
+}
+
+#[test]
 fn tunnel_errors_can_be_copied_without_starting_host_work() {
     for request_error in [true, false] {
         let ctx = egui::Context::default();

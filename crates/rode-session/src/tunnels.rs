@@ -67,7 +67,7 @@ impl Default for Spec {
             relay_host: String::new(),
             relay_port: 22,
             relay_user: String::new(),
-            identity: "~/.ssh/id_ed25519".into(),
+            identity: String::new(),
             agent_socket: String::new(),
             relay_key: String::new(),
             listen_port: 22022,
@@ -103,7 +103,7 @@ impl Spec {
         );
         ensure!(
             !self.identity.is_empty() || !self.agent_socket.is_empty(),
-            "Choose a compute-host identity or persistent agent socket"
+            "Choose an identity file or persistent agent socket on the tunnel host"
         );
         for path in [&self.identity, &self.agent_socket] {
             ensure!(

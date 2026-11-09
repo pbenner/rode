@@ -328,10 +328,10 @@ impl EditorApp {
             });
             layout::section(ui, if local { "Credentials on this computer" } else { "Credentials on the compute host" }, palette, |ui| {
                 form_grid(ui, "credential-fields", |ui, compact, width| {
-                    text_field(ui, "Identity file", &mut spec.identity, "~/.ssh/id_ed25519", compact, width);
-                    text_field(ui, "Agent socket", &mut spec.agent_socket, "Optional persistent agent", compact, width);
+                    text_field(ui, "Identity file", &mut spec.identity, "Unencrypted private-key path", compact, width);
+                    text_field(ui, "Agent socket", &mut spec.agent_socket, "Persistent SSH-agent socket path", compact, width);
                 });
-                layout::subtitle(ui, "Use an unencrypted key or a persistent agent on the compute node. Clear Identity file to use only the agent.", palette);
+                layout::subtitle(ui, if local { "Choose an unencrypted key or a persistent SSH-agent socket on this computer." } else { "Choose an unencrypted key or a persistent SSH-agent socket on the compute host." }, palette);
                 if !spec.relay_key.is_empty() {
                     ui.add_space(4.);
                     layout::subtitle(ui, "Copied settings retain the verified relay key.", palette);

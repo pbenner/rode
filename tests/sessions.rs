@@ -1474,6 +1474,7 @@ fn local_tunnels_need_neither_a_project_nor_an_ssh_client() {
             relay_host: "127.0.0.1".into(),
             relay_port: relay.local_addr().unwrap().port(),
             relay_user: "fixture".into(),
+            identity: runtime.join("unused-relay-key").to_string_lossy().into(),
             ..Default::default()
         };
         assert!(
@@ -1530,6 +1531,12 @@ fn retained_tunnels_keep_sessiond_alive_after_last_terminal_and_stop_explicitly(
         relay_host: "127.0.0.1".into(),
         relay_port: port,
         relay_user: "fixture".into(),
+        identity: fixture
+            .root
+            .path()
+            .join("unused-relay-key")
+            .to_string_lossy()
+            .into(),
         ..Default::default()
     };
     assert!(
