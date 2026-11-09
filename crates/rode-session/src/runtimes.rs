@@ -12,6 +12,7 @@ use std::sync::Condvar;
 
 const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 const NOTEBOOK_LIMIT: usize = 8 * 1024 * 1024;
+const TERMINAL_EVENT_LIMIT: usize = 128;
 #[derive(Default)]
 /// Host registry of retained notebook/debugger controllers; completed persistent state
 /// can remain discoverable until an explicit End removes it.
@@ -27,6 +28,9 @@ struct Shared {
     terminals: BTreeMap<u64, (String, vt100::Parser, bool)>,
     events: VecDeque<(u64, debugger::Event)>,
     event_sequence: u64,
+    /// Last event copied into the controlling writer's bounded output batch.
+    /// Later events must not be evicted while that attachment is still live.
+    terminal_read_sequence: u64,
     ever_attached: bool,
     finished: bool,
 }
@@ -224,6 +228,7 @@ impl Store {
                 terminals: BTreeMap::new(),
                 events: VecDeque::new(),
                 event_sequence: 0,
+                terminal_read_sequence: 0,
                 ever_attached: false,
                 finished: false,
             }),
@@ -294,7 +299,7 @@ impl Store {
             let result = (|| -> Result<()> {
                 loop {
                     let shared = writing.shared.lock().unwrap();
-                    let shared = writing
+                    let mut shared = writing
                         .changed
                         .wait_timeout_while(shared, Duration::from_millis(200), |s| {
                             s.revision == revision && !stop.load(Ordering::Acquire)
@@ -349,6 +354,7 @@ impl Store {
                         );
                     }
                     sequence = shared.event_sequence;
+                    shared.terminal_read_sequence = sequence;
                     drop(shared);
                     send(&mut writer, &Update::State(Box::new(state)))?;
                     for (key, cell) in updated {
@@ -500,9 +506,19 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Envelope>, spec: Spec) {
                 shared.view.execution = kernel.execution.clone();
             }
             Controller::Debugger(client) => {
-                changed |= client.poll();
-                while let Some(event) = client.terminal_events.pop_front() {
+                // Keep unread events for a slow controlling view instead of
+                // overflowing its replay window and disconnecting it. Retain
+                // one bounded client batch; once it fills, pipe backpressure
+                // reaches the coordinator and PTY without blocking host control.
+                if client.terminal_events.is_empty() {
+                    changed |= client.poll();
+                }
+                while terminal_event_room(&shared) {
+                    let Some(event) = client.terminal_events.pop_front() else {
+                        break;
+                    };
                     terminal_event(&mut shared, event);
+                    changed = true;
                 }
                 shared.view.info.busy = client.phase == debugger::protocol::Phase::Starting;
                 client.status = client.status.chars().take(4096).collect();
@@ -514,8 +530,11 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Envelope>, spec: Spec) {
                 if changed {
                     shared.view.debugger = Some(client.view());
                 }
-                shared.finished =
-                    client.phase == debugger::protocol::Phase::Ended && !client.is_stopping();
+                // A completed adapter may still have a final terminal batch
+                // waiting for its reader. Publish it before retiring the worker.
+                shared.finished = client.phase == debugger::protocol::Phase::Ended
+                    && !client.is_stopping()
+                    && client.terminal_events.is_empty();
             }
         }
         shared.view.info.alive = !shared.finished;
@@ -834,6 +853,15 @@ fn json_size(value: &impl serde::Serialize) -> Result<usize> {
     Ok(counter.0)
 }
 
+fn terminal_event_room(shared: &Shared) -> bool {
+    !shared.view.info.attached
+        || shared.events.len() < TERMINAL_EVENT_LIMIT
+        || shared
+            .events
+            .front()
+            .is_some_and(|(sequence, _)| *sequence <= shared.terminal_read_sequence)
+}
+
 fn terminal_event(shared: &mut Shared, event: debugger::Event) {
     use base64::{Engine, engine::general_purpose::STANDARD};
     match &event {
@@ -860,7 +888,7 @@ fn terminal_event(shared: &mut Shared, event: debugger::Event) {
     }
     shared.event_sequence += 1;
     shared.events.push_back((shared.event_sequence, event));
-    while shared.events.len() > 128 {
+    while shared.events.len() > TERMINAL_EVENT_LIMIT {
         shared.events.pop_front();
     }
 }

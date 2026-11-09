@@ -88,8 +88,14 @@ while True:
             )
         if args.get("flood"):
             program = (
-                "import sys; sys.stdout.write(('output burst\\n')*250000); sys.stdout.flush(); "
-                + program
+                "import sys; from pathlib import Path; "
+                "sys.stdout.write(('output burst\\n')*250000); sys.stdout.flush(); "
+                "Path('output-ready').write_text('ready'); " + program
+            )
+        if gate := args.get("outputGate"):
+            program = (
+                "import time; from pathlib import Path\n"
+                f"while not Path({gate!r}).exists(): time.sleep(0.01)\n" + program
             )
         send(
             dict(

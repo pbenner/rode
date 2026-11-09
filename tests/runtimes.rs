@@ -1,4 +1,5 @@
 //! Native host-owned kernels/debuggers retain protocol state across desktop loss.
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rode::{debugger, process, sandbox, sessions};
 use rode_runtime_core::service::{
     Command as Action, DebugAction, Envelope, Info, Spec, Start, Update,
@@ -166,6 +167,7 @@ fn wait(session: &process::Session, mut check: impl FnMut(&Update) -> bool) -> U
                         panic!("{error}");
                     }
                 }
+                process::Event::Stderr(text) => eprintln!("Runtime attachment: {text}"),
                 process::Event::Error(error) => panic!("{error}"),
                 process::Event::Exited(code) => panic!("Unexpected view exit {code:?}"),
                 _ => {}
@@ -498,6 +500,120 @@ fn debugger_pause_stack_variables_and_terminal_survive_detach_with_epoch_guards(
         .unwrap();
     until(|| fixture.infos().is_empty());
     drop(session);
+}
+
+#[test]
+fn slow_debugger_views_keep_their_terminal_and_controls_during_output_bursts() {
+    for detach_after_stall in [false, true] {
+        let mut fixture = Fixture::new();
+        let root = fixture.root.path();
+        let file = root.join("main.py");
+        fs::write(&file, "answer=42\n").unwrap();
+        let adapter = root.join("adapter.py");
+        fs::write(&adapter, include_str!("fixtures/debug_adapter.py")).unwrap();
+        let mut settings = debugger::Settings::default();
+        settings.config.backend = debugger::Backend::Custom;
+        settings.config.adapter = "python3".into();
+        settings.config.adapter_arguments = vec![adapter.to_string_lossy().into()];
+        settings.config.extra = serde_json::json!({"flood": true, "outputGate": "release-output"});
+        let start = debugger::Start {
+            root: root.to_string_lossy().into(),
+            file: file.to_string_lossy().into(),
+            python: "python3".into(),
+            config: settings.config.clone(),
+        };
+        let info = fixture.create(
+            Start::Debugger {
+                launch: Box::new(start),
+                settings: Box::new(settings),
+            },
+            vec![
+                env!("CARGO_BIN_EXE_rode-sessiond").into(),
+                "--debug-helper".into(),
+            ],
+            "/usr/bin/python3",
+            true,
+        );
+        let session = fixture.attach(&info);
+        let mut terminal = None;
+        let mut epoch = None;
+        wait(&session, |update| {
+            if let Update::Terminal(debugger::Event::Terminal { id, .. }) = update {
+                terminal = Some(*id);
+            }
+            if let Update::State(state) = update
+                && let Some(view) = &state.debugger
+                && view.phase == debugger::protocol::Phase::Paused
+            {
+                epoch = Some(view.epoch);
+            }
+            terminal.is_some() && epoch.is_some()
+        });
+        let epoch = epoch.unwrap();
+        fs::write(fixture.root.path().join("release-output"), "go").unwrap();
+        // Simulate a busy UI without draining its bounded transport.
+        std::thread::sleep(Duration::from_secs(2));
+        let session = if detach_after_stall {
+            drop(session);
+            until(|| fixture.infos().iter().all(|runtime| !runtime.attached));
+            // Detaching must release backpressure; a persistent target keeps running
+            // with only its bounded screen retained, even without a reader.
+            until(|| fixture.root.path().join("output-ready").exists());
+            fixture.attach(&info)
+        } else {
+            session
+        };
+        let token = action(
+            &session,
+            Action::Debug {
+                epoch,
+                operation: Box::new(DebugAction::Control {
+                    command: "next".into(),
+                }),
+            },
+        );
+        let mut stepped = false;
+        let mut output = String::new();
+        wait(&session, |update| {
+            stepped |= matches!(update, Update::State(s) if s.acknowledgements.contains(&token) && s.debugger.as_ref().is_some_and(|d| d.phase == debugger::protocol::Phase::Paused && d.epoch > epoch));
+            if let Update::Terminal(debugger::Event::Data { data, .. }) = update {
+                output.push_str(&String::from_utf8_lossy(&STANDARD.decode(data).unwrap()));
+            }
+            stepped && output.contains("Name:")
+        });
+        assert!(fixture.root.path().join("output-ready").exists());
+        if !detach_after_stall {
+            assert_eq!(output.matches("output burst").count(), 250000);
+        }
+        action(
+            &session,
+            Action::Debug {
+                epoch,
+                operation: Box::new(DebugAction::Terminal {
+                    command: debugger::Command::Input {
+                        id: terminal.unwrap(),
+                        data: STANDARD.encode(b"RODE\n"),
+                    },
+                }),
+            },
+        );
+        wait(&session, |update| {
+            matches!(
+                update,
+                Update::Terminal(debugger::Event::TerminalExited { .. })
+            )
+        });
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("input-result")).unwrap(),
+            "RODE"
+        );
+        assert!(
+            fixture
+                .infos()
+                .iter()
+                .any(|runtime| runtime.id == info.id && runtime.attached && runtime.alive)
+        );
+    }
 }
 
 #[test]
