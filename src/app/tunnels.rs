@@ -7,7 +7,7 @@ use crate::project;
 use anyhow::Context;
 use rode_session::{
     Request as Control,
-    tunnels::{Info, Spec, Status},
+    tunnels::{Info, ListenOn, Spec, Status},
 };
 
 mod saved;
@@ -50,17 +50,28 @@ impl Host {
     }
 
     fn request(&self, request: Control) -> anyhow::Result<rode_session::Response> {
+        let scope = match &request {
+            Control::StartTunnel { spec, .. } => Some(spec.listen_on),
+            _ => None,
+        };
         let action = match &request {
             Control::StartTunnel { .. } => "start SSH tunnel",
             Control::StopTunnel { .. } => "stop SSH tunnel",
             _ => "list SSH tunnels",
         };
-        self.dispatch(request).with_context(|| match self {
-            Self::Local => format!("Cannot {action} on this computer"),
-            Self::Remote { remote, .. } => {
-                format!("Cannot {action} on SSH host {}", remote.profile.endpoint())
-            }
-        })
+        self.dispatch(request)
+            .and_then(|response| {
+                if let Some(scope) = scope {
+                    check_started_scope(&response, scope)?;
+                }
+                Ok(response)
+            })
+            .with_context(|| match self {
+                Self::Local => format!("Cannot {action} on this computer"),
+                Self::Remote { remote, .. } => {
+                    format!("Cannot {action} on SSH host {}", remote.profile.endpoint())
+                }
+            })
     }
 
     fn dispatch(&self, request: Control) -> anyhow::Result<rode_session::Response> {
@@ -91,6 +102,20 @@ impl Host {
         };
         reply.response.checked()
     }
+}
+
+fn check_started_scope(
+    response: &rode_session::Response,
+    requested: ListenOn,
+) -> anyhow::Result<()> {
+    let rode_session::Response::Tunnel(info) = response else {
+        anyhow::bail!("Unexpected tunnel start response");
+    };
+    anyhow::ensure!(
+        info.spec.listen_on == requested,
+        "The running tunnel service did not apply the requested relay access. Update/restart that service before retrying; its existing jobs were not stopped."
+    );
+    Ok(())
 }
 #[derive(Default)]
 pub(super) struct Tunnels {
@@ -123,11 +148,19 @@ impl Tunnels {
     }
 
     fn connection_details(&self, info: &Info) -> String {
-        format!(
+        let via_relay = format!(
             "In Connect SSH on the other computer:\nHost: 127.0.0.1\nPort: {}\nJump / ProxyJump: {}\nUser: your login on the computer running the tunnel\n\nUse that computer's SSH credentials and verify its host key before accepting it.\n",
             info.spec.listen_port,
             self.relay_jump(info)
-        )
+        );
+        if info.spec.listen_on == ListenOn::AllInterfaces {
+            format!(
+                "Direct connection, if the relay's SSH policy and firewall allow access:\nHost: {}\nPort: {}\nJump / ProxyJump: leave blank\nUser: your login on the computer running the tunnel\n\nVerify the tunnel host's SSH key, independently of the relay's SSH key.\n\nAlternatively, through the relay's SSH connection:\n{via_relay}",
+                info.spec.relay_host, info.spec.listen_port
+            )
+        } else {
+            via_relay
+        }
     }
 }
 impl EditorApp {

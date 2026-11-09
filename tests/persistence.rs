@@ -64,6 +64,7 @@ fn saved_tunnels_merge_across_windows_without_losing_renames_fields_or_newer_rec
     drop(first);
     let mut next = initial.clone();
     next["compute"]["spec"]["listen_port"] = json!(22444);
+    next["compute"]["spec"]["listen_on"] = "all_interfaces".into();
     next["compute"]["spec"]["identity"] = "~/keys/custom-relay".into();
     next["second"] = tunnel_entry("Second relay");
     // A normal typed snapshot drops unknown future fields; the writer retains them.
@@ -81,6 +82,7 @@ fn saved_tunnels_merge_across_windows_without_losing_renames_fields_or_newer_rec
     assert_eq!(saved["compute"]["spec"]["name"], "Renamed compute");
     assert_eq!(saved["compute"]["spec"]["relay_port"], 8443);
     assert_eq!(saved["compute"]["spec"]["listen_port"], 22444);
+    assert_eq!(saved["compute"]["spec"]["listen_on"], "all_interfaces");
     assert_eq!(saved["compute"]["spec"]["identity"], "~/keys/custom-relay");
     assert_eq!(saved["compute"]["future"]["keep"], true);
     assert_eq!(saved["compute"]["spec"]["future_option"], "keep");

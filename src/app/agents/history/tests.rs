@@ -2,6 +2,65 @@
 use super::*;
 
 #[test]
+fn scope_controls_fit_compact_panels_and_wait_for_supported_idle_browsers() {
+    for width in [320., 960.] {
+        for enabled in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("widgets.json");
+            let ctx = egui::Context::default();
+            ui_probe::install_at(&ctx, path.clone());
+            let frame = |events| {
+                let mut selected = None;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 400.),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            selected = scope_picker(ui, Scope::Project, enabled);
+                        });
+                    },
+                );
+                let state: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                (selected, state)
+            };
+            frame(vec![]);
+            let (_, state) = frame(vec![]);
+            let button = state["buttons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|button| button["name"] == "agent-history-all-projects")
+                .unwrap();
+            assert_eq!(button["enabled"], enabled);
+            let rect: [f32; 4] = serde_json::from_value(button["rect"].clone()).unwrap();
+            assert!(rect[0] >= 0. && rect[2] <= width && rect[3] <= 400.);
+            let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
+            let mut selected = None;
+            for pressed in [true, false] {
+                selected = selected.or(frame(vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ])
+                .0);
+            }
+            assert_eq!(selected, enabled.then_some(Scope::AllProjects));
+        }
+    }
+}
+
+#[test]
 fn history_row_controls_keep_delete_separate_from_restore_at_compact_widths() {
     for width in [320., 960.] {
         for scale in [1., 1.5] {
@@ -26,6 +85,11 @@ fn history_row_controls_keep_delete_separate_from_restore_at_compact_widths() {
                     "agent-history-delete:thread",
                     (false, false),
                 ),
+                (
+                    Availability::OtherProject,
+                    "agent-history-other-project:thread",
+                    (false, false),
+                ),
             ] {
                 let directory = tempfile::tempdir().unwrap();
                 let path = directory.path().join("widgets.json");
@@ -36,6 +100,7 @@ fn history_row_controls_keep_delete_separate_from_restore_at_compact_widths() {
                     id: "thread".into(),
                     title: "Private long title\nwith multiple lines ".repeat(20),
                     preview: "Private preview ".repeat(40),
+                    cwd: "/project".into(),
                     updated: "5m ago".into(),
                     active: availability == Availability::Active,
                 };

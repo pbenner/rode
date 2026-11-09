@@ -1,11 +1,11 @@
-//! Native project-scoped history list. The browser owns all asynchronous work;
+//! Native history list with an explicit host-wide metadata view. The browser owns asynchronous work;
 //! rendering filters only bounded cached metadata and never performs host I/O.
 use super::super::{
     icons::{Icon, IconButton},
     layout, ui_probe,
 };
 use crate::{
-    agent::history::{Browser, Entry, Owner},
+    agent::history::{Browser, Entry, Owner, Scope},
     theme::Palette,
 };
 use eframe::egui::{self, Align, Layout, RichText, Sense, Stroke};
@@ -19,6 +19,7 @@ pub(super) struct Action {
     pub running: bool,
     pub close: bool,
     pub delete: Option<Delete>,
+    pub scope: Option<Scope>,
 }
 
 #[derive(Clone)]
@@ -34,6 +35,7 @@ enum Availability {
     Saved,
     Active,
     Owned(Owner),
+    OtherProject,
 }
 impl Availability {
     fn of(entry: &Entry, current: Option<&str>, owner: Option<Owner>) -> Self {
@@ -52,6 +54,7 @@ impl Availability {
             Self::Current => "Open here · Return to chat",
             Self::Saved if can_resume => "Saved · Restore chat",
             Self::Saved => "Saved · Restore unavailable",
+            Self::OtherProject => "Other project · Open its project to restore",
             Self::Active => "Active turn · Use Running",
             Self::Owned(Owner::Attached) => "Open in another window · Use Running",
             Self::Owned(Owner::Detached) => "Running in background · Use Running",
@@ -61,6 +64,9 @@ impl Availability {
     fn hint(self) -> &'static str {
         match self {
             Self::Current => "Return to the chat already open in this window.",
+            Self::OtherProject => {
+                "Open this conversation's project before restoring it. Its context cannot be moved into the current project."
+            }
             Self::Saved => {
                 "Restore this saved chat. The backend checks ownership when restoring; another client may still have it open."
             }
@@ -100,6 +106,14 @@ pub(super) fn ui(
                 toolbar(ui, browser, can_resume, confirmation, &mut action, palette);
             },
         );
+        if let Some(scope) = scope_picker(
+            ui,
+            browser.map_or(Scope::Project, |browser| browser.scope),
+            browser.is_some_and(|browser| browser.can_list && !browser.busy),
+        ) {
+            action.scope = Some(scope);
+            *confirmation = None;
+        }
         let search = ui.add_sized(
             [ui.available_width(), 30.],
             egui::TextEdit::singleline(filter)
@@ -211,7 +225,9 @@ pub(super) fn ui(
                 .wrap(),
             );
         }
-        if !browser.can_delete && !browser.busy && browser.diagnostics().is_empty() {
+        if browser.scope == Scope::AllProjects {
+            ui.add(egui::Label::new("Lists projects visible to this backend on this host. Open another project's folder to restore its chats; switch to Current project to delete history.").wrap());
+        } else if !browser.can_delete && !browser.busy && browser.diagnostics().is_empty() {
             ui.add(egui::Label::new(RichText::new("History deletion is unavailable with this backend.").small().color(palette.muted)).wrap())
                             .on_hover_text("ACP agents must advertise session deletion; older Codex versions may need updating.");
         }
@@ -240,14 +256,19 @@ pub(super) fn ui(
                     if !query.is_empty()
                         && !entry.title.to_lowercase().contains(&query)
                         && !entry.preview.to_lowercase().contains(&query)
+                        && !entry.cwd.to_lowercase().contains(&query)
                     {
                         continue;
                     }
                     visible += 1;
-                    let availability =
-                        Availability::of(entry, current, browser.owners.get(&entry.id).copied());
+                    let availability = if browser.is_current_project(entry) {
+                        Availability::of(entry, current, browser.owners.get(&entry.id).copied())
+                    } else {
+                        Availability::OtherProject
+                    };
                     let resumable = can_resume
                         && !browser.busy
+                        && availability != Availability::OtherProject
                         && (availability != Availability::Saved || browser.can_resume);
                     let deletable = can_resume
                         && browser.can_delete
@@ -325,11 +346,42 @@ pub(super) fn ui(
             && action.delete.is_none()
             && action.resume.is_none()
             && !action.close
+            && action.scope.is_none()
         {
             ui_probe::button(ui, "agent-history-ready", &search);
         }
     });
     action
+}
+
+fn scope_picker(ui: &mut egui::Ui, scope: Scope, enabled: bool) -> Option<Scope> {
+    let mut selected = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Show");
+        for choice in [Scope::Project, Scope::AllProjects] {
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(choice.label()).selected(scope == choice),
+                )
+                .on_disabled_hover_text(
+                    "Wait for history to load. Older host services need updating to change scope.",
+                );
+            ui_probe::button(
+                ui,
+                if choice == Scope::Project {
+                    "agent-history-project"
+                } else {
+                    "agent-history-all-projects"
+                },
+                &response,
+            );
+            if response.clicked() {
+                selected = Some(choice);
+            }
+        }
+    });
+    selected
 }
 
 fn toolbar(
@@ -341,7 +393,7 @@ fn toolbar(
     palette: Palette,
 ) {
     let delete = ui.add_enabled(
-        can_resume && browser.is_some_and(|b| b.can_delete && !b.busy),
+        can_resume && browser.is_some_and(|b| b.scope == Scope::Project && b.can_delete && !b.busy),
         egui::Button::new(RichText::new("Delete all…").color(palette.error)),
     ).on_hover_text("Delete saved chats for this host, project and backend, including unloaded pages. Open and active chats are kept.");
     ui_probe::button(ui, "agent-history-delete-all", &delete);
@@ -407,7 +459,7 @@ fn confirm(
                 if cancel.clicked() {
                     *confirmation = None;
                 }
-                let confirm = ui.add_enabled(can_resume && browser.can_delete && !browser.busy,
+                let confirm = ui.add_enabled(can_resume && browser.scope == Scope::Project && browser.can_delete && !browser.busy,
                     egui::Button::new(RichText::new(match selected { Delete::All => "Confirm delete all", _ => "Confirm delete chat" }).color(palette.error)),
                 );
                 ui_probe::button(ui, "agent-history-confirm-delete", &confirm);
@@ -427,6 +479,7 @@ fn conversation(
     can_resume: bool,
     palette: Palette,
 ) -> (bool, bool) {
+    let resumable = resumable && availability != Availability::OtherProject;
     let open = availability == Availability::Current;
     let mut frame = layout::card_frame(palette)
         .fill(if open { palette.active } else { palette.panel })
@@ -480,6 +533,19 @@ fn conversation(
                             .show_tooltip_when_elided(false),
                     );
                 }
+                if !entry.cwd.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(single_line(&entry.cwd))
+                                .size(11.)
+                                .color(palette.muted),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(&entry.cwd);
+                } else if availability == Availability::OtherProject {
+                    ui.small("Project not supplied by backend");
+                }
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::Label::new(
@@ -526,6 +592,7 @@ fn conversation(
                     match availability {
                         Availability::Current => "Show",
                         Availability::Saved => "Restore",
+                        Availability::OtherProject => "Open project before restoring",
                         _ => "Find in Running",
                     },
                     single_line(&entry.title)
@@ -541,6 +608,12 @@ fn conversation(
             );
         } else if availability == Availability::Current {
             super::super::ui_probe::button(&interaction, "Show current conversation", &body);
+        } else if availability == Availability::OtherProject {
+            ui_probe::button(
+                &interaction,
+                &format!("agent-history-other-project:{}", entry.id),
+                &body,
+            );
         }
         resume = body.clicked();
         hovered |= body.hovered() || body.has_focus();

@@ -137,6 +137,19 @@ The agent core keeps one built-in prompt per personality, edited directly during
 
 Click **History** beside the chat status. RODE asks the selected agent on the current project host for saved conversations in this project folder. Filter the loaded titles/previews, use **Load more conversations** for older entries, and select a conversation to restore its recent messages and continue chatting. **Back** or **Cancel** returns to the current chat; **Refresh** reloads the list. Stop an active turn before restoring another conversation.
 
+**Show → Current project** is the default. Choose **All projects on this host**
+to list other projects from the selected backend's available history store.
+Rows show their project paths, and the text filter also searches those paths.
+RODE uses the backend's history-list API, without scanning project directories or
+changing the current chat, host or sandbox. Custom agent homes and sandbox grants
+still determine which stores the backend can see; histories on other SSH hosts
+are not combined. Refresh keeps the chosen scope; changing projects resets it.
+
+Other-project rows are read-only: open their project folder before restoring a
+chat. Deletion is disabled in the all-project view; switch to **Current project**
+to delete conversations. The selector requires backend listing support and an
+updated host service. ACP uses its [optional working-directory filter](https://agentclientprotocol.com/protocol/v1/session-list).
+
 Use **Delete…** beside an individual chat or **Delete all…** in the history header, then confirm the displayed action. Delete all covers the current host, project folder and backend/provider, including unloaded pages and archived Codex chats; the text filter does not limit it. Open RODE conversations and backend-reported active turns are kept. End an open agent session before deleting its saved history. Deletion never submits a model prompt or deletes project files.
 
 Each row describes its availability: **Saved · Restore chat**, **Open here · Return to chat**, **Open in another window**, **Running in background**, or **Open in another process**. Selecting the current chat returns to it without reopening the backend. Known open chats lead to **Running**, where **Attach** continues a detached RODE session. Host-owned RODE chats are identified when history is refreshed, including idle persistent chats. Ownership in another client may only become known when the backend rejects a restore; that row is then marked as open elsewhere, and other saved chats remain usable.
@@ -151,7 +164,7 @@ Codex and Codex local-model history use the agent's saved threads, including con
 
 Listing/loading starts a separate, short-lived agent process without requesting model inference. A successful restore replaces the current chat process; a failure or cancellation leaves it intact. Closing history/the agent panel or changing project, host, sandbox, interpreter or agent settings stops the browser. The current Codex access/approval policy overrides the saved thread's policy; current explicit model/effort choices apply when you continue. ACP controls are applied before the next prompt, using the session's advertised capabilities. The outer project sandbox always remains in force.
 
-RODE displays up to 32 recent Codex turns, 128 messages and 512 KiB of replay; the agent retains the full conversation context. Metadata browsing is limited to 256 conversations and 32 pages. History connections accept protocol lines up to 2 MiB, including after resuming; oversized replies fail visibly. ACP replay shares the display limits. Agents must already have readable saved history; RODE cannot recover conversations that were never persisted by the agent or were deleted. Archiving stays in the agent's own tools.
+RODE displays up to 32 recent Codex turns, 128 messages and 512 KiB of replay; the agent retains the full conversation context. Metadata browsing is limited to 256 conversations, 32 pages and 1 MiB of retained rows, including project paths. History connections accept protocol lines up to 2 MiB, including after resuming; oversized replies fail visibly. ACP replay shares the display limits. Agents must already have readable saved history; RODE cannot recover conversations that were never persisted by the agent or were deleted. Archiving stays in the agent's own tools.
 
 ## Providers
 

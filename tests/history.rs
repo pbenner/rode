@@ -7,7 +7,7 @@ mod native_peer;
 use rode::{
     agent::{
         Access, Approval, Config, Launch, Provider,
-        history::Browser,
+        history::{Browser, Scope},
         protocol::{Chat, Role},
     },
     sandbox,
@@ -136,6 +136,106 @@ fn deleted(root: &Path) -> Vec<String> {
         .ok()
         .map(|bytes| serde_json::from_slice(&bytes).unwrap())
         .unwrap_or_default()
+}
+
+#[test]
+fn all_project_history_uses_backend_metadata_and_preserves_project_boundaries() {
+    for provider in [
+        Provider::Codex,
+        Provider::Local,
+        Provider::Claude,
+        Provider::Acp,
+    ] {
+        let (temp, launch) = fixture(provider, false);
+        let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        assert_eq!(browser.scope, Scope::Project);
+        assert!(!browser.entries.iter().any(|entry| entry.id == "foreign"));
+        browser.load_more().unwrap();
+        wait(&mut browser);
+        let before = log(temp.path()).len();
+        browser.set_scope(Scope::AllProjects).unwrap();
+        wait(&mut browser);
+        assert_eq!(browser.scope, Scope::AllProjects);
+        assert!(!browser.can_delete);
+        let foreign = browser
+            .entries
+            .iter()
+            .find(|entry| entry.id == "foreign")
+            .unwrap();
+        assert_eq!(Path::new(&foreign.cwd), temp.path().parent().unwrap());
+        assert!(!browser.is_current_project(foreign));
+        let calls = log(temp.path());
+        let request = calls[before..]
+            .iter()
+            .find(|call| {
+                matches!(
+                    call["method"].as_str(),
+                    Some("thread/list" | "session/list")
+                )
+            })
+            .unwrap();
+        assert!(request["params"].get("cwd").is_none());
+        assert!(
+            request["params"].get("cursor").is_none(),
+            "Scope changes must reset pagination"
+        );
+        assert!(browser.resume("foreign").is_err());
+        assert!(browser.delete(None, vec![]).is_err());
+        assert!(browser.delete(Some("saved-1"), vec![]).is_err());
+        assert_eq!(
+            log(temp.path()).len(),
+            calls.len(),
+            "Rejected actions must not reach the backend"
+        );
+        browser.load_more().unwrap();
+        wait(&mut browser);
+        assert!(browser.entries.iter().any(|entry| entry.id == "saved-2"));
+        browser.set_scope(Scope::Project).unwrap();
+        wait(&mut browser);
+        assert!(browser.can_delete);
+        assert!(
+            browser
+                .entries
+                .iter()
+                .all(|entry| browser.is_current_project(entry))
+        );
+        assert!(!browser.entries.iter().any(|entry| entry.id == "saved-2"));
+        browser.resume("saved-1").unwrap();
+        wait(&mut browser);
+        assert!(browser.take_restored().is_some(), "{}", browser.status);
+        assert!(!log(temp.path()).iter().any(|call| matches!(
+            call["method"].as_str(),
+            Some("turn/start" | "session/prompt")
+        )));
+    }
+}
+
+#[test]
+fn all_project_metadata_remains_bounded_with_long_project_paths() {
+    let (temp, launch) = fixture(Provider::Codex, false);
+    options(
+        temp.path(),
+        serde_json::json!({"count": 300, "cwd": format!("/{}", "\\".repeat(4000))}),
+    );
+    let mut browser = Browser::open(launch, Arc::new(|| {})).unwrap();
+    wait(&mut browser);
+    browser.set_scope(Scope::AllProjects).unwrap();
+    wait(&mut browser);
+    while browser.more {
+        browser.load_more().unwrap();
+        wait(&mut browser);
+    }
+    assert!(browser.entries.len() < 256);
+    assert!(
+        browser.status.contains("browse limit reached"),
+        "{}",
+        browser.status
+    );
+    assert!(
+        serde_json::to_vec(&browser.entries).unwrap().len()
+            <= 1024 * 1024 + browser.entries.len() + 2
+    );
 }
 
 #[test]

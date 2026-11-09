@@ -3,7 +3,7 @@
 //! connection only after the backend has acknowledged it.
 use super::{Launch, background::Client};
 use anyhow::{Context, Result};
-pub use rode_agent_core::history::{Entry, Owner};
+pub use rode_agent_core::history::{Entry, Owner, Scope};
 use rode_agent_core::service::{Command, HistoryView};
 use std::{collections::BTreeSet, sync::Arc};
 /// Acknowledged restored conversation; consumed exactly once by Chat.
@@ -22,6 +22,9 @@ pub struct Browser {
     diagnostics: String,
     selected: Option<String>,
     locked: BTreeSet<String>,
+    project: String,
+    initial_scope: Option<Scope>,
+    pending_scope: Option<Scope>,
 }
 impl std::ops::Deref for Browser {
     type Target = HistoryView;
@@ -33,6 +36,7 @@ impl Browser {
     /// Start through the direct local/SSH adapter for standalone library clients.
     pub fn open(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
         let interpreter = launch.python.clone();
+        let project = launch.plan.root.clone();
         let inner = rode_agent_core::history::Browser::open(launch.core(), wake)?;
         Ok(Self {
             view: inner.view(),
@@ -42,11 +46,23 @@ impl Browser {
             diagnostics: String::new(),
             selected: None,
             locked: BTreeSet::new(),
+            project,
+            initial_scope: None,
+            pending_scope: None,
         })
     }
     /// Open a disposable browser on the native host service, without inference.
     pub fn open_service(launch: Launch, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
+        Self::open_service_scoped(launch, Scope::Project, wake)
+    }
+    /// Open a host browser and apply an explicit scope after initialization, without inference.
+    pub fn open_service_scoped(
+        launch: Launch,
+        scope: Scope,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self> {
         let interpreter = launch.python.clone();
+        let project = launch.plan.root.clone();
         let native = Client::start(launch, None, vec![], super::Persistence::Auto, wake)?;
         Ok(Self {
             view: HistoryView {
@@ -60,12 +76,16 @@ impl Browser {
             diagnostics: String::new(),
             selected: None,
             locked: BTreeSet::new(),
+            project,
+            initial_scope: (scope != Scope::Project).then_some(scope),
+            pending_scope: None,
         })
     }
     /// Drain bounded browser updates and preserve the current chat on failure.
     pub fn poll(&mut self) {
         let mut updated = false;
         let mut closed = None;
+        let mut scope_failed = false;
         if let Some(direct) = &mut self.direct {
             direct.poll();
             self.view = direct.view();
@@ -77,6 +97,7 @@ impl Browser {
                 if let Some(view) = state.history {
                     self.view = view;
                     if !state.error.is_empty() {
+                        scope_failed = true;
                         self.view.status = state.error;
                         self.view.busy = false;
                         self.view.deleting = false;
@@ -99,6 +120,28 @@ impl Browser {
         if let Some(error) = closed {
             self.connection_closed(error);
         }
+        if let Some(scope) = self.pending_scope {
+            if self.view.scope == scope || scope_failed {
+                self.pending_scope = None;
+            } else {
+                // An old idle snapshot does not acknowledge this scope change.
+                self.view.busy = true;
+            }
+        }
+        if !self.view.busy
+            && self.native.as_ref().is_some_and(|client| {
+                client
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.history.is_some())
+            })
+            && let Some(scope) = self.initial_scope.take()
+        {
+            if let Err(error) = self.set_scope(scope) {
+                self.view.status = format!("Cannot change history scope: {error:#}");
+            }
+            updated = true;
+        }
         if updated {
             self.describe_status();
         }
@@ -115,10 +158,13 @@ impl Browser {
         self.view.status = error;
         self.view.busy = false;
         self.view.can_resume = false;
+        self.view.can_list = false;
         self.view.can_delete = false;
         self.view.deleting = false;
         self.view.more = false;
         self.selected = None;
+        self.initial_scope = None;
+        self.pending_scope = None;
     }
     fn describe_status(&mut self) {
         self.diagnostics.clear();
@@ -181,6 +227,39 @@ impl Browser {
         self.diagnostics.clear();
         Ok(())
     }
+    /// List another metadata scope in the same captured host/backend/sandbox.
+    pub fn set_scope(&mut self, scope: Scope) -> Result<()> {
+        anyhow::ensure!(
+            !self.view.busy && self.view.can_list,
+            "All-project history requires a backend with history listing and a matching, updated host service"
+        );
+        if self.view.scope == scope {
+            return Ok(());
+        }
+        if let Some(direct) = &mut self.direct {
+            direct.set_scope(scope)?;
+            self.view = direct.view();
+        } else {
+            self.native
+                .as_ref()
+                .context("History browser is closed")?
+                .send(Command::HistoryScope { scope })?;
+            self.view.busy = true;
+            self.pending_scope = Some(scope);
+        }
+        self.selected = None;
+        self.diagnostics.clear();
+        Ok(())
+    }
+    /// Unknown paths from older project-scoped hosts remain compatible; the
+    /// all-project view never treats an unknown path as the current project.
+    pub fn is_current_project(&self, entry: &Entry) -> bool {
+        if entry.cwd.is_empty() {
+            self.view.scope == Scope::Project
+        } else {
+            std::path::Path::new(&entry.cwd) == std::path::Path::new(&self.project)
+        }
+    }
     /// Restore exactly the backend row selected by the user.
     pub fn resume(&mut self, id: &str) -> Result<()> {
         anyhow::ensure!(
@@ -191,7 +270,7 @@ impl Browser {
             self.view
                 .entries
                 .iter()
-                .any(|entry| entry.id == id && !entry.active),
+                .any(|entry| entry.id == id && !entry.active && self.is_current_project(entry)),
             "Select an idle conversation from this project"
         );
         anyhow::ensure!(
@@ -214,6 +293,10 @@ impl Browser {
     }
     /// Delete one saved chat or all pages for this project/backend, keeping open chats.
     pub fn delete(&mut self, id: Option<&str>, protected: Vec<String>) -> Result<()> {
+        anyhow::ensure!(
+            self.view.scope == Scope::Project,
+            "Switch to Current project before deleting saved conversations"
+        );
         if let Some(direct) = &mut self.direct {
             direct.delete(id, protected)?;
             self.view = direct.view();
@@ -285,7 +368,45 @@ mod tests {
             diagnostics: String::new(),
             selected: None,
             locked: BTreeSet::new(),
+            project: "/project".into(),
+            initial_scope: None,
+            pending_scope: None,
         }
+    }
+
+    #[test]
+    fn scope_changes_ignore_old_idle_snapshots_and_closed_connections_disable_the_picker() {
+        let mut browser = presentation(HistoryView {
+            can_list: true,
+            ..Default::default()
+        });
+        browser.pending_scope = Some(Scope::AllProjects);
+        browser.poll();
+        assert!(browser.busy);
+        assert_eq!(browser.pending_scope, Some(Scope::AllProjects));
+        browser.view.scope = Scope::AllProjects;
+        browser.view.busy = false;
+        browser.poll();
+        assert!(!browser.busy);
+        assert_eq!(browser.pending_scope, None);
+        browser.pending_scope = Some(Scope::Project);
+        browser.connection_closed("disconnected".into());
+        assert!(!browser.can_list);
+        assert_eq!(browser.pending_scope, None);
+    }
+
+    #[test]
+    fn legacy_project_rows_remain_usable_but_unknown_all_project_rows_cannot_restore() {
+        let entry: Entry = serde_json::from_value(serde_json::json!({"id":"legacy", "title":"Saved chat", "preview":"", "updated":"", "active":false})).unwrap();
+        let mut browser = presentation(HistoryView::default());
+        assert!(browser.is_current_project(&entry));
+        browser.view.scope = Scope::AllProjects;
+        assert!(!browser.is_current_project(&entry));
+        let entry = Entry {
+            cwd: "/project".into(),
+            ..entry
+        };
+        assert!(browser.is_current_project(&entry));
     }
 
     #[test]

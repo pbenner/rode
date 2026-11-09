@@ -169,6 +169,12 @@ pub struct ChatView {
 /// Explicit history browsing state; no inference is requested by listing.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct HistoryView {
+    /// Explicit listing scope; older hosts retain project-only browsing.
+    #[serde(default)]
+    pub scope: crate::history::Scope,
+    /// Whether the backend acknowledged history-list support.
+    #[serde(default)]
+    pub can_list: bool,
     /// Bounded saved-chat rows.
     pub entries: Vec<Entry>,
     /// Known owners on this host; other chats are checked when restored.
@@ -282,6 +288,11 @@ pub enum Command {
     },
     /// Load the next saved-conversation page.
     HistoryMore,
+    /// Change only the saved-conversation metadata scope.
+    HistoryScope {
+        /// Current project or all projects visible to the captured backend/store.
+        scope: crate::history::Scope,
+    },
     /// Restore one backend-owned saved conversation.
     HistoryResume {
         /// Backend-owned saved conversation ID.

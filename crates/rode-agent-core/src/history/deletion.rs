@@ -30,6 +30,10 @@ impl Browser {
     /// conversations are skipped; backend errors preserve unacknowledged rows.
     pub fn delete(&mut self, id: Option<&str>, protected: Vec<String>) -> Result<()> {
         ensure!(
+            self.scope == Scope::Project,
+            "Switch to Current project before deleting saved conversations"
+        );
+        ensure!(
             !self.busy && self.can_delete,
             "This agent cannot delete history right now"
         );
@@ -231,6 +235,7 @@ impl Browser {
             }
             self.deletion_result = Some(summary);
             self.entries.clear();
+            self.list_limited = false;
             self.list()
         }
     }

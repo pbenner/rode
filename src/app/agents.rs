@@ -48,6 +48,7 @@ pub(super) struct Agents {
     browser: Option<agent::history::Browser>,
     history_open: bool,
     history_filter: String,
+    history_scope: agent::history::Scope,
     history_delete: Option<history::Delete>,
     runtime: runtime::Runtime,
     running: background::Running,
@@ -85,6 +86,7 @@ impl Agents {
             browser: None,
             history_open: false,
             history_filter: String::new(),
+            history_scope: agent::history::Scope::Project,
             history_delete: None,
             runtime: runtime::Runtime::default(),
             running: Default::default(),
@@ -244,6 +246,7 @@ impl EditorApp {
             self.agents.browser = None;
             self.agents.history_open = false;
             self.agents.history_filter.clear();
+            self.agents.history_scope = agent::history::Scope::Project;
             self.agents.history_delete = None;
             self.agents.save_config();
             self.agents.replace_chat();
@@ -620,7 +623,7 @@ impl EditorApp {
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let history = ui.add_enabled(!offline && !installing && !answering,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations on this host for this project");
+                let history = ui.add_enabled(!offline && !installing && !answering,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations for this project or other projects on this host");
                 ui_probe::button(ui, "agent-history", &history);
                 if history.clicked() {
                     agents.history_open = !agents.history_open;
@@ -653,6 +656,7 @@ impl EditorApp {
                 let panel=history::ui(ui,agents.browser.as_ref(),&mut agents.history_filter,!agents.chat.busy && !modal,agents.chat.conversation_id(),&mut agents.history_delete,palette);
                 history_action.refresh |= panel.refresh;
                 history_action.more=panel.more;
+                history_action.scope=panel.scope;
                 history_action.resume=panel.resume;
                 history_action.running=panel.running;
                 history_action.close=panel.close;
@@ -953,7 +957,11 @@ impl EditorApp {
             self.agents.history_delete = None;
             self.open_agent_history(ctx);
         } else if let Some(browser) = &mut self.agents.browser {
-            let result = if let Some(selected) = history_action.delete {
+            let result = if let Some(scope) = history_action.scope {
+                self.agents.history_delete = None;
+                self.agents.history_scope = scope;
+                browser.set_scope(scope)
+            } else if let Some(selected) = history_action.delete {
                 let protected = self
                     .agents
                     .chat
@@ -1140,8 +1148,9 @@ impl EditorApp {
         }
         let launch = self.agent_launch();
         let context = ctx.clone();
-        match agent::history::Browser::open_service(
+        match agent::history::Browser::open_service_scoped(
             launch,
+            self.agents.history_scope,
             Arc::new(move || context.request_repaint()),
         ) {
             Ok(browser) => {

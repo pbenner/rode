@@ -57,22 +57,32 @@ impl server::Handler for Peer {
         port: &mut u32,
         session: &mut server::Session,
     ) -> Result<bool> {
-        ensure!(address == "127.0.0.1", "Non-loopback forwarding request");
+        ensure!(
+            matches!(address, "127.0.0.1" | ""),
+            "Unexpected forwarding address"
+        );
         if self.relay.deny_forwarding.load(Ordering::SeqCst) {
             return Ok(false);
         }
-        let Ok(listener) = TcpListener::bind((address, *port as u16)).await else {
+        let bind = if address.is_empty() {
+            "0.0.0.0"
+        } else {
+            address
+        };
+        let Ok(listener) = TcpListener::bind((bind, *port as u16)).await else {
             return Ok(false);
         };
         let handle = session.handle();
         self.relay.handles.lock().unwrap().push(handle.clone());
         let port = *port;
+        let address = address.to_owned();
         self.listener = Some(tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let handle = handle.clone();
+                let address = address.clone();
                 tokio::spawn(async move {
                     if let Ok(channel) = handle
-                        .channel_open_forwarded_tcpip("127.0.0.1", port, "127.0.0.1", 54321)
+                        .channel_open_forwarded_tcpip(address, port, "127.0.0.1", 54321)
                         .await
                     {
                         let _ =
@@ -343,6 +353,39 @@ fn blank_credentials_use_defaults_and_explicit_key_or_agent_settings_are_preserv
     assert!(settings.identity_files().is_empty());
     let restored: Spec = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
     assert_eq!(restored, settings);
+}
+
+#[test]
+fn listener_scope_defaults_to_loopback_and_only_accepts_requested_address_kinds() {
+    let legacy: Spec = serde_json::from_value(serde_json::json!({
+        "relay_host": "relay.example.org", "relay_user": "researcher"
+    }))
+    .unwrap();
+    assert_eq!(legacy.listen_on, ListenOn::Loopback);
+    assert_eq!(legacy.listener(), "127.0.0.1:22022");
+    for address in ["", "0.0.0.0", "::", "::1", "192.0.2.1", "2001:db8::1"] {
+        assert!(!ListenOn::Loopback.accepts_address(address));
+        assert!(ListenOn::AllInterfaces.accepts_address(address));
+    }
+    assert!(ListenOn::Loopback.accepts_address("127.0.0.1"));
+    assert!(!ListenOn::AllInterfaces.accepts_address("not-an-address"));
+    let public = Spec {
+        listen_on: ListenOn::AllInterfaces,
+        ..legacy
+    };
+    assert_eq!(public.listener(), "*:22022");
+    assert_eq!(
+        serde_json::from_str::<Spec>(&serde_json::to_string(&public).unwrap()).unwrap(),
+        public
+    );
+    let message = format!(
+        "{:#}",
+        forwarding_error(&public, russh::Error::RequestDenied)
+    );
+    assert!(
+        message.contains("listener *:22022") && message.contains("GatewayPorts"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -794,6 +837,44 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
             .await
             .is_err()
     );
+    // Scope changes replace this worker; wildcard channels may identify the
+    // requested wildcard or an actual IPv4/IPv6 interface. They still reach
+    // only the fixed compute SSH port and reject unrequested listener ports.
+    for listen_on in [ListenOn::AllInterfaces, ListenOn::Loopback] {
+        settings.listen_on = listen_on;
+        store.start(id.clone(), settings.clone()).unwrap();
+        until(|| store.list()[0].status == Status::Connected).await;
+        roundtrip(listen_port).await;
+        let handle = relay.handles.lock().unwrap().last().unwrap().clone();
+        assert!(
+            handle
+                .channel_open_forwarded_tcpip(
+                    "127.0.0.1",
+                    u32::from(listen_port) + 1,
+                    "127.0.0.1",
+                    1
+                )
+                .await
+                .is_err()
+        );
+        if listen_on == ListenOn::AllInterfaces {
+            for address in ["0.0.0.0", "::", "192.0.2.1", "2001:db8::1"] {
+                let channel = handle
+                    .channel_open_forwarded_tcpip(address, listen_port.into(), "127.0.0.1", 1)
+                    .await
+                    .unwrap();
+                let mut stream = channel.into_stream();
+                stream.write_all(b"scope").await.unwrap();
+                let mut bytes = [0; 5];
+                tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(&bytes, b"scope");
+            }
+        }
+    }
+    let handle = relay.handles.lock().unwrap().last().unwrap().clone();
     // A policy refusal is indistinguishable from a port conflict on the wire.
     relay.deny_forwarding.store(true, Ordering::SeqCst);
     handle

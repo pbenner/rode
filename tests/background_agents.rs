@@ -764,6 +764,80 @@ fn restored_prompt_recall_survives_native_deltas_and_reattachment() {
 }
 
 #[test]
+fn host_history_scope_is_explicit_and_cannot_restore_or_delete_other_projects() {
+    use rode_agent_core::history::Scope;
+    for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
+        let fixture = Fixture::new();
+        fs::write(
+            fixture.root.join("agent.py"),
+            include_str!("fixtures/agent.py"),
+        )
+        .unwrap();
+        let info = fixture.create_agent(provider, false, None, vec![]);
+        let mut view = fixture.attach(&info);
+        let initial = view.until(|state| {
+            state
+                .history
+                .as_ref()
+                .is_some_and(|history| !history.busy && history.can_list)
+        });
+        assert_eq!(initial.history.unwrap().scope, Scope::Project);
+        view.send(Action::HistoryScope {
+            scope: Scope::AllProjects,
+        });
+        let listed = view.until(|state| {
+            state
+                .history
+                .as_ref()
+                .is_some_and(|history| !history.busy && history.scope == Scope::AllProjects)
+        });
+        let history = listed.history.unwrap();
+        assert!(history.entries.iter().any(|entry| entry.id == "foreign"));
+        assert!(!history.can_delete);
+        view.send(Action::HistoryResume {
+            id: "foreign".into(),
+        });
+        let rejected = view.until(|state| state.error.contains("from this project"));
+        assert!(rejected.history.is_some());
+        view.send(Action::HistoryDelete {
+            id: None,
+            protected: vec![],
+        });
+        view.until(|state| state.error.contains("Switch to Current project"));
+        view.send(Action::HistoryScope {
+            scope: Scope::Project,
+        });
+        let listed = view.until(|state| {
+            state
+                .history
+                .as_ref()
+                .is_some_and(|history| !history.busy && history.scope == Scope::Project)
+        });
+        assert!(
+            listed
+                .history
+                .unwrap()
+                .entries
+                .iter()
+                .all(|entry| entry.id != "foreign")
+        );
+        view.send(Action::HistoryResume {
+            id: "saved-1".into(),
+        });
+        let restored = view.until(|state| state.history.is_none() && state.chat.connected);
+        assert_eq!(restored.info.root, fixture.root.to_str().unwrap());
+        let calls = fs::read_to_string(fixture.root.join("agent-rpc.jsonl")).unwrap();
+        assert!(!calls.lines().any(|line| {
+            let call: serde_json::Value = serde_json::from_str(line).unwrap();
+            matches!(
+                call["method"].as_str(),
+                Some("turn/start" | "session/prompt" | "thread/delete" | "session/delete")
+            )
+        }));
+    }
+}
+
+#[test]
 fn history_marks_attached_and_detached_owners_without_trying_to_resume_them() {
     for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();

@@ -1,7 +1,8 @@
 //! Explicit, daemon-owned reverse SSH forwards to this host's existing sshd.
 //!
 //! Only the authenticated host administration channel may manage tunnels. Relay
-//! listeners are loopback-only; forwarded bytes go to a fixed local SSH port.
+//! listeners default to loopback; wider access requires an explicit selection.
+//! Forwarded bytes always go to a fixed local SSH port.
 //! The desktop still authenticates the compute host independently over that route.
 //! Workers retain no desktop attachment and never execute an ssh client binary.
 use anyhow::{Context, Result, bail, ensure};
@@ -26,6 +27,46 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 // unattended worker can sign with. Security keys and encrypted keys need an agent.
 // https://man.openbsd.org/ssh_config.5#IdentityFile
 const DEFAULT_IDENTITIES: [&str; 3] = ["~/.ssh/id_rsa", "~/.ssh/id_ecdsa", "~/.ssh/id_ed25519"];
+
+/// Requested relay listener scope. The relay's SSH policy may further restrict it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListenOn {
+    /// Request a listener on the relay's IPv4 loopback interface only.
+    #[default]
+    Loopback,
+    /// Request every address family/interface supported by the relay.
+    AllInterfaces,
+}
+impl ListenOn {
+    /// User-visible listener scope, without claiming the relay honoured the request.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Loopback => "Localhost only",
+            Self::AllInterfaces => "All network interfaces",
+        }
+    }
+
+    fn address(self) -> &'static str {
+        match self {
+            Self::Loopback => "127.0.0.1",
+            // RFC 4254 §7.1 requests all supported address families with an
+            // empty bind address; 0.0.0.0 would request IPv4 only.
+            Self::AllInterfaces => "",
+        }
+    }
+
+    fn accepts_address(self, address: &str) -> bool {
+        match self {
+            Self::Loopback => address == "127.0.0.1",
+            // Servers may report the original wildcard or the actual IPv4/
+            // IPv6 destination. The requested port is checked independently.
+            Self::AllInterfaces => {
+                address.is_empty() || address == "*" || address.parse::<std::net::IpAddr>().is_ok()
+            }
+        }
+    }
+}
 
 /// Read this machine's hostname for display without starting a process or doing
 /// DNS/filesystem work. An unavailable name must not be mistaken for a remote host.
@@ -60,7 +101,9 @@ pub struct Spec {
     pub agent_socket: String,
     /// Explicitly trusted relay public key in OpenSSH format. Blank requests trust confirmation.
     pub relay_key: String,
-    /// Stable loopback listener on the relay. Zero/dynamic ports are not accepted.
+    /// Relay listener scope; older configurations default to loopback.
+    pub listen_on: ListenOn,
+    /// Stable listener port on the relay. Zero/dynamic ports are not accepted.
     pub listen_port: u16,
     /// This compute host's existing SSH server, always reached through 127.0.0.1.
     pub ssh_port: u16,
@@ -75,12 +118,22 @@ impl Default for Spec {
             identity: String::new(),
             agent_socket: String::new(),
             relay_key: String::new(),
+            listen_on: ListenOn::default(),
             listen_port: 22022,
             ssh_port: 22,
         }
     }
 }
 impl Spec {
+    /// Requested relay listener for diagnostics; `*` means all interfaces.
+    pub fn listener(&self) -> String {
+        let address = match self.listen_on {
+            ListenOn::Loopback => "127.0.0.1",
+            ListenOn::AllInterfaces => "*",
+        };
+        format!("{address}:{}", self.listen_port)
+    }
+
     /// Bound all control data before allocating a worker or opening a connection.
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -239,7 +292,7 @@ impl Store {
             entries.contains_key(&id) || entries.len() < MAX_TUNNELS,
             "At most {MAX_TUNNELS} tunnels may be retained"
         );
-        if let Some(name) = entries.iter().find_map(|(other_id, e)| {
+        if let Some((name, listener)) = entries.iter().find_map(|(other_id, e)| {
             let other = &e.info.lock().unwrap().spec;
             (*other_id != id
                 && (
@@ -247,11 +300,10 @@ impl Store {
                     other.relay_port,
                     other.listen_port,
                 ) == (spec.relay_host.as_str(), spec.relay_port, spec.listen_port))
-                .then(|| other.name.clone())
+                .then(|| (other.name.clone(), other.listener()))
         }) {
             bail!(
-                "Tunnel {name:?} already reserves listener 127.0.0.1:{} on relay {}. Manage that tunnel in Tunnels, or choose a different Relay port under Port forwarding.",
-                spec.listen_port,
+                "Tunnel {name:?} already reserves listener {listener} on relay {}. Manage that tunnel in Tunnels, or choose a different Relay port under Port forwarding.",
                 relay_endpoint(&spec)
             );
         }
@@ -393,7 +445,8 @@ impl client::Handler for Handler {
         reply: client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<()> {
-        if address != "127.0.0.1" || port != u32::from(self.spec.listen_port) {
+        if !self.spec.listen_on.accepts_address(address) || port != u32::from(self.spec.listen_port)
+        {
             return Ok(());
         }
         let Ok(slot) = self.slots.clone().try_acquire_owned() else {
@@ -482,8 +535,8 @@ async fn connected(info: Arc<Mutex<Info>>) -> Result<()> {
             spec.relay_user
         )
     })?;
-    tokio::time::timeout(TIMEOUT, session.tcpip_forward("127.0.0.1", spec.listen_port.into())).await
-        .with_context(|| format!("SSH login to relay {relay} succeeded, but the request for tunnel listener 127.0.0.1:{} timed out. The relay did not confirm whether it created the listener. RODE will reconnect and retry.", spec.listen_port))?
+    tokio::time::timeout(TIMEOUT, session.tcpip_forward(spec.listen_on.address(), spec.listen_port.into())).await
+        .with_context(|| format!("SSH login to relay {relay} succeeded, but the request for tunnel listener {} timed out. The relay did not confirm whether it created the listener. RODE will reconnect and retry.", spec.listener()))?
         .map_err(|error| forwarding_error(&spec, error))?;
     {
         let mut state = info.lock().unwrap();
@@ -507,22 +560,23 @@ fn relay_endpoint(spec: &Spec) -> String {
 fn forwarding_error(spec: &Spec, error: russh::Error) -> anyhow::Error {
     let relay = relay_endpoint(spec);
     let port = spec.listen_port;
+    let listener = spec.listener();
     // SSH_MSG_REQUEST_FAILURE carries no reason. Do not claim a port conflict
     // without evidence, or mislabel a lost connection as a server refusal.
     let message = if matches!(error, russh::Error::RequestDenied) {
         format!(
-            "SSH login as {} to relay {relay} succeeded, but the relay refused tunnel listener 127.0.0.1:{port}.\n\
+            "SSH login as {} to relay {relay} succeeded, but the relay refused tunnel listener {listener}.\n\
              SSH did not report why. Possible causes: the port is already in use (including another tunnel), or forwarding is restricted on the relay.\n\
              On the relay, run: ss -ltnp 'sport = :{port}' (use sudo to see all owners).\n\
              An sshd-session listener usually belongs to an existing SSH tunnel. Stop that tunnel at its source, or choose a different Relay port under Port forwarding.\n\
-             If the port is free, ask the relay administrator to check AllowTcpForwarding, DisableForwarding, PermitListen and authorized_keys restrictions.\n\
+             If the port is free, ask the relay administrator to check GatewayPorts (clientspecified for all interfaces), AllowTcpForwarding, DisableForwarding, PermitListen and authorized_keys restrictions.\n\
              RODE will retry automatically. Stop this tunnel before testing the same port with ssh -R.\n\
              SSH detail",
             spec.relay_user
         )
     } else {
         format!(
-            "SSH login to relay {relay} succeeded, but the request for tunnel listener 127.0.0.1:{port} could not complete. RODE will reconnect and retry.\nSSH detail"
+            "SSH login to relay {relay} succeeded, but the request for tunnel listener {listener} could not complete. RODE will reconnect and retry.\nSSH detail"
         )
     };
     anyhow::Error::new(error).context(message)

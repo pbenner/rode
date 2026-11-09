@@ -122,6 +122,7 @@ KbdInteractiveAuthentication no
 UsePAM no
 AllowUsers $test_user
 LogLevel VERBOSE
+GatewayPorts clientspecified
 # Parallel direct/ProxyJump tests exceed sshd's default ten-login throttle.
 # Keep a bounded limit on this private loopback daemon without random drops.
 MaxStartups 64

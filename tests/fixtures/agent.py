@@ -44,7 +44,7 @@ def saved(identity):
     return {
         "id": identity,
         "sessionId": identity,
-        "cwd": str(root),
+        "cwd": options.get("cwd", str(root)),
         "modelProvider": "rode_local"
         if any("model_providers.rode_local" in a for a in sys.argv)
         else "openai",
@@ -247,7 +247,7 @@ try:
                 result["configOptions"] = controls()
             response(request, result)
         elif method in ("thread/list", "session/list"):
-            assert params["cwd"] == str(root)
+            assert params.get("cwd", str(root)) == str(root)
             options = history_options()
             if options.get("refresh_error") and deleted_history():
                 emit(

@@ -145,7 +145,9 @@ RODE desktop → relay SSH → relay 127.0.0.1:22022
 ```
 
 1. Choose **New tunnel**. Enter the relay's literal hostname/IP, SSH port
-   and username, a stable relay loopback port, and the compute node's SSH port.
+   and username, a stable relay listener port, and the compute node's SSH port.
+   **Relay access** defaults to **Localhost only**. Choose **All network interfaces**
+   to request access from other devices; saved setups retain this choice.
    The outbound worker does not read SSH aliases or ProxyJump configuration.
 2. Leave both credential fields blank to try **the compute node's** default SSH
    private-key files: `~/.ssh/id_rsa`, `~/.ssh/id_ecdsa`, then `~/.ssh/id_ed25519`.
@@ -188,11 +190,12 @@ profiles from an existing SSH workspace retain its original host-key identity.
 The **Tunnels** tab shows each tunnel’s status in a separate card. **Tunnel**
 shows the relay hostname and tunnel listener port; **Destination** shows the
 compute hostname and SSH port it forwards to. The relay's SSH login port belongs
-in setup and connection details, not the card summary. A short note explains that
-the tunnel listener is loopback-only and reached through the relay's SSH connection.
+in setup and connection details, not the card summary. A short note distinguishes
+access through the relay's SSH connection from access requested for other devices.
+**Listen on** shows the requested listener scope; the relay's policy can restrict it.
 The compute name comes from the owning service. Older remote services use the
 selected SSH host/alias as a display fallback; local tunnels use this computer's
-hostname. These labels do not change the actual loopback forwarding addresses.
+hostname. These labels do not change the fixed loopback destination on the compute host.
 **New tunnel** groups relay, forwarding and compute-host credentials;
 its draft survives tab switches. Status refreshes pause while setting up a tunnel.
 Tabs and the Start/Close controls remain visible while the form scrolls.
@@ -212,6 +215,11 @@ jump chain and any explicitly trusted relay public key. Private keys, passphrase
 and agent credentials are never copied into saved setups. Saving from a tunnel
 after verifying its relay key retains that pin for subsequent starts.
 
+To change an existing tunnel, use **Copy settings** to prepare the new setup.
+Stop the original before starting the copy on the same relay port; stopping it
+closes connections through that tunnel. Saving a configuration edits the reusable
+setup and does not change a running listener.
+
 Automatic return-profile creation currently requires desktop SSH configuration
 understood by the Rust backend, even when selecting OpenSSH for the resulting
 connection.
@@ -225,10 +233,28 @@ Files, tools and terminals then use the normal authenticated workspace connectio
 and its existing sandbox policy.
 
 The relay must permit remote TCP forwarding for the compute login and direct TCP
-forwarding for the desktop login. RODE requests a `127.0.0.1` listener; the relay
-administrator must keep `GatewayPorts no` or `clientspecified` to honour that
-scope. Other relay users can reach its loopback port, but must still authenticate
-to the compute node's SSH server. No session-service control socket is exposed.
+forwarding for return connections through SSH. **Localhost only** requests
+`127.0.0.1`; **All network interfaces** requests all address families supported by
+the relay. Other devices can then connect to the relay hostname and listener port,
+using the compute host's SSH login and credentials. **Copy connection details**
+includes this direct route for an all-interface tunnel; the SSH return route
+remains available too.
+
+To honour the client's choice, the relay administrator should set
+[`GatewayPorts clientspecified`](https://man.openbsd.org/sshd_config#GatewayPorts)
+in `sshd_config`, validate it with `sshd -t`, then reload that SSH service using
+the host's normal administration procedure. `GatewayPorts no` (the server default)
+restricts forwarding to loopback even when all interfaces were requested.
+`GatewayPorts yes` forces wildcard listeners, including for localhost requests;
+use `clientspecified` to preserve each tunnel's selected scope. The relay firewall
+must also permit the listener port. SSH confirms the forwarding request without
+reporting the effective bind address, so RODE displays the requested scope;
+inspect the relay's listeners with `ss -ltnp` to verify its actual binding.
+
+Network listeners expose the compute host's existing SSH server to devices that
+can reach the relay port. Those clients must still authenticate to the compute
+host and verify its host key independently. No session-service control socket is
+exposed. Existing and older saved setups retain the localhost default.
 
 The tunnel survives editor exit and closing the last terminal. After a network
 loss, the service retries after 1, 2, 4, 8, 16 and then 30 seconds, with SSH
@@ -258,7 +284,7 @@ includes a port-specific `ss -ltnp` command to run **on the relay**. A listener
 owned by `sshd-session` usually belongs to another SSH tunnel. Stop that tunnel
 at its source, or choose a different **Relay port** under **Port forwarding**;
 leave the relay's **SSH port** unchanged. If the port is free, have the relay
-administrator check `AllowTcpForwarding`, `DisableForwarding`, `PermitListen`
+administrator check `GatewayPorts`, `AllowTcpForwarding`, `DisableForwarding`, `PermitListen`
 and restrictions on the authorised key. SSH sends no reason for this refusal,
 so RODE reports these as possible causes rather than claiming a confirmed port
 conflict. Transport failures and request timeouts are reported separately.
@@ -268,8 +294,9 @@ or sharing, including errors returned by older services. Copying never starts
 a command or changes the relay's configuration.
 
 Already running session services keep their existing code after an editor
-update. Worker diagnostic improvements take effect after the owning service is
-restarted; restarting it ends its tunnels and must account for any retained work.
+update. Listener-scope changes and worker diagnostic improvements require an
+updated owning service; restarting it ends its tunnels and must account for any
+retained work. RODE reports when an older service ignores the requested scope.
 
 Unattended relay authentication currently supports plain private keys and
 agent-held keys/certificates. Passwords, keyboard-interactive/MFA, Kerberos,

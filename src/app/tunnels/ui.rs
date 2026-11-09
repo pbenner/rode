@@ -121,7 +121,7 @@ impl EditorApp {
                 layout::card(ui, palette, |ui| {
                     ui.add(egui::Label::new(RichText::new(&saved.spec.name).strong()).wrap());
                     ui.add(egui::Label::new(saved.host.label()).wrap());
-                    layout::subtitle(ui, &format!("Relay {} · listener 127.0.0.1:{}", endpoint(&saved.spec.relay_host, saved.spec.relay_port), saved.spec.listen_port), palette);
+                    layout::subtitle(ui, &format!("Relay {} · listener {} · {}", endpoint(&saved.spec.relay_host, saved.spec.relay_port), saved.spec.listener(), saved.spec.listen_on.label()), palette);
                     ui.horizontal_wrapped(|ui| {
                         let load = ui.add_enabled(saved.host == host, egui::Button::new("Load setup"))
                             .on_disabled_hover_text(format!("Open {} before loading this setup.", saved.host.label()));
@@ -215,8 +215,9 @@ impl EditorApp {
                     egui::Label::new(endpoint(&info.spec.relay_host, info.spec.listen_port)).wrap(),
                 )
                 .on_hover_text(format!(
-                    "Listener: 127.0.0.1:{} on {}.",
-                    info.spec.listen_port, info.spec.relay_host
+                    "Requested listener: {} on {}.",
+                    info.spec.listener(),
+                    info.spec.relay_host
                 ));
                 ui.end_row();
                 ui.label(RichText::new("Destination").color(palette.muted));
@@ -226,10 +227,17 @@ impl EditorApp {
                         info.spec.ssh_port
                     ));
                 ui.end_row();
+                ui.label(RichText::new("Listen on").color(palette.muted));
+                ui.add(egui::Label::new(info.spec.listen_on.label()).wrap());
+                ui.end_row();
             });
         layout::subtitle(
             ui,
-            "Reach the tunnel port through the relay's SSH connection (loopback only).",
+            if info.spec.listen_on == ListenOn::Loopback {
+                "Requests localhost access through the relay's SSH connection."
+            } else {
+                "Requests access from other devices. The relay's SSH policy and firewall determine reachability."
+            },
             palette,
         );
         if !info.error.is_empty() {
@@ -290,6 +298,12 @@ impl EditorApp {
                     .clicked()
                 {
                     self.tunnel_route(info, ctx);
+                }
+                if !local
+                    && info.spec.listen_on == ListenOn::AllInterfaces
+                    && ui.button("Copy connection details").clicked()
+                {
+                    ctx.copy_text(self.tunnels.connection_details(info));
                 }
             });
             if info.status == Status::Attention
@@ -392,9 +406,21 @@ impl EditorApp {
             layout::section(ui, "Port forwarding", palette, |ui| {
                 form_grid(ui, "forwarding-fields", |ui, compact, _| {
                     port_field(ui, "Relay port", &mut spec.listen_port, compact);
+                    layout::field_label(ui, "Relay access", compact);
+                    let access = egui::ComboBox::from_id_salt("tunnel-listen-on")
+                        .selected_text(spec.listen_on.label())
+                        .show_ui(ui, |ui| {
+                            for scope in [ListenOn::Loopback, ListenOn::AllInterfaces] {
+                                let option = ui.selectable_value(&mut spec.listen_on, scope, scope.label());
+                                ui_probe::button(ui, if scope == ListenOn::Loopback { "tunnel-listen-loopback" } else { "tunnel-listen-all" }, &option);
+                            }
+                        });
+                    ui_probe::button(ui, "tunnel-listen-on", &access.response);
+                    ui.end_row();
                     port_field(ui, "Compute SSH port", &mut spec.ssh_port, compact);
                 });
-                layout::subtitle(ui, if local { "Loopback only. This computer must already run sshd." } else { "Loopback only. The compute node must already run sshd." }, palette);
+                layout::subtitle(ui, if local { "This computer must already run sshd." } else { "The compute node must already run sshd." }, palette);
+                layout::subtitle(ui, if spec.listen_on == ListenOn::Loopback { "Requests a listener on the relay's loopback interface." } else { "Requests access to this host's SSH server from other devices. Configure GatewayPorts clientspecified on the relay and allow the listener port through its firewall." }, palette);
             });
             layout::section(ui, if local { "Credentials on this computer" } else { "Credentials on the compute host" }, palette, |ui| {
                 form_grid(ui, "credential-fields", |ui, compact, width| {

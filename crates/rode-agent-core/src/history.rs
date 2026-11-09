@@ -27,6 +27,26 @@ use std::{
 };
 mod deletion;
 
+/// Explicit metadata discovery scope; filesystem permissions and chat context stay unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    /// List only the captured project's conversations.
+    #[default]
+    Project,
+    /// Ask the selected backend for every project visible in its current host/store.
+    AllProjects,
+}
+impl Scope {
+    /// Text used by the history selector.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Project => "Current project",
+            Self::AllProjects => "All projects on this host",
+        }
+    }
+}
+
 /// Observed ownership of a saved conversation; absence means ownership is unverified.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -39,7 +59,7 @@ pub enum Owner {
     OtherProcess,
 }
 
-/// A host/project-scoped saved conversation returned by the agent.
+/// Saved conversation metadata returned by the captured host/backend.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
     /// Opaque backend session/thread identity.
@@ -48,6 +68,9 @@ pub struct Entry {
     pub title: String,
     /// Short saved-message preview when supplied by the agent.
     pub preview: String,
+    /// Backend-reported project path; empty means the backend did not provide one.
+    #[serde(default)]
+    pub cwd: String,
     /// Relative recency or backend-supplied metadata.
     pub updated: String,
     /// Whether the backend reports an already-active turn.
@@ -82,8 +105,12 @@ enum Call {
 
 /// An explicit, bounded history-browser connection. Drop cancels owned work.
 pub struct Browser {
-    /// Saved conversations for this project; never persisted by RODE.
+    /// Saved conversations in the selected metadata scope; never persisted by RODE.
     pub entries: Vec<Entry>,
+    /// Selected metadata scope, always project-only at startup.
+    pub scope: Scope,
+    /// Whether initialization confirmed that listing is supported.
+    pub can_list: bool,
     /// Human-readable load/support/error status.
     pub status: String,
     /// Whether startup, listing or restoring is pending.
@@ -114,19 +141,22 @@ pub struct Browser {
     restored: Option<Restored>,
     deletion: Option<deletion::Deletion>,
     deletion_result: Option<String>,
+    list_limited: bool,
 }
 
 impl Browser {
     /// Copy bounded listing state for a disposable desktop view.
     pub fn view(&self) -> crate::service::HistoryView {
         crate::service::HistoryView {
+            scope: self.scope,
+            can_list: self.can_list,
             entries: self.entries.clone(),
             owners: self.owners.clone(),
             backend_output: self.stderr.trim().into(),
             status: self.status.clone(),
             busy: self.busy,
             can_resume: self.can_resume,
-            can_delete: self.can_delete,
+            can_delete: self.can_delete && self.scope == Scope::Project,
             deleting: self.deletion.is_some(),
             more: self.more,
         }
@@ -136,6 +166,8 @@ impl Browser {
         let session = Session::history(launch.clone(), wake)?;
         Ok(Self {
             entries: vec![],
+            scope: Scope::Project,
+            can_list: false,
             status: "Loading saved conversations…".into(),
             busy: true,
             can_resume: false,
@@ -161,7 +193,30 @@ impl Browser {
             restored: None,
             deletion: None,
             deletion_result: None,
+            list_limited: false,
         })
+    }
+    /// Restart bounded metadata discovery without changing the current chat or sandbox.
+    pub fn set_scope(&mut self, scope: Scope) -> Result<()> {
+        ensure!(
+            !self.busy && self.can_list,
+            "Wait for history listing to finish or refresh it before changing scope"
+        );
+        if self.scope == scope {
+            return Ok(());
+        }
+        self.scope = scope;
+        self.entries.clear();
+        self.cursor = None;
+        self.cursors.clear();
+        self.selected.clear();
+        self.list_limited = false;
+        self.deletion_result = None;
+        if let Err(error) = self.list() {
+            self.fail(&error.to_string());
+            return Err(error);
+        }
+        Ok(())
     }
     /// Request another bounded metadata page without polling in the background.
     pub fn load_more(&mut self) -> Result<()> {
@@ -182,7 +237,9 @@ impl Browser {
             "This agent cannot resume history right now"
         );
         ensure!(
-            self.entries.iter().any(|e| e.id == id && !e.active),
+            self.entries.iter().any(|e| e.id == id
+                && !e.active
+                && Path::new(&e.cwd) == Path::new(&self.launch.plan.root)),
             "Select an idle conversation from this project"
         );
         ensure!(
@@ -288,7 +345,10 @@ impl Browser {
     }
     fn list_params(&self, cursor: Option<String>) -> Value {
         let acp = self.launch.config.provider.is_acp();
-        let mut params = json!({"cwd":self.launch.plan.root});
+        let mut params = json!({});
+        if self.scope == Scope::Project {
+            params["cwd"] = self.launch.plan.root.clone().into();
+        }
         if let Some(cursor) = cursor {
             params["cursor"] = cursor.into();
         }
@@ -398,6 +458,7 @@ impl Browser {
                     self.can_delete = !self.launch.config.native_tools();
                     self.send(json!({"method":"initialized","params":{}}))?;
                 }
+                self.can_list = true;
                 self.list()?;
             }
             Call::List => {
@@ -407,11 +468,21 @@ impl Browser {
                 } else {
                     &result["data"]
                 };
+                let mut bytes = self.entries.iter().try_fold(
+                    0_usize,
+                    |bytes, entry| -> serde_json::Result<usize> {
+                        Ok(bytes + serde_json::to_vec(entry)?.len())
+                    },
+                )?;
                 for row in list.as_array().into_iter().flatten().take(128) {
                     if self.entries.len() >= 256 {
                         break;
                     }
-                    if !in_project(row, &self.launch, acp) {
+                    let matches = match self.scope {
+                        Scope::Project => in_project(row, &self.launch, acp),
+                        Scope::AllProjects => in_provider(row, &self.launch, acp),
+                    };
+                    if !matches {
                         continue;
                     }
                     let Some(id) = row[if acp { "sessionId" } else { "id" }]
@@ -442,20 +513,33 @@ impl Browser {
                         ),
                         256,
                     );
-                    self.entries.push(Entry {
+                    let entry = Entry {
                         id: id.into(),
                         title,
                         preview,
+                        cwd: row["cwd"]
+                            .as_str()
+                            .filter(|path| path.len() <= 4096 && !path.contains('\0'))
+                            .unwrap_or_default()
+                            .into(),
                         updated: if let Some(date) = row["updatedAt"].as_str() {
                             clip(date, 64)
                         } else {
                             recency(row["updatedAt"].as_u64())
                         },
                         active: row["status"]["type"] == "active",
-                    });
+                    };
+                    let size = serde_json::to_vec(&entry)?.len();
+                    if bytes + size > 1024 * 1024 {
+                        self.list_limited = true;
+                        break;
+                    }
+                    bytes += size;
+                    self.entries.push(entry);
                 }
                 let next = cursor(result);
-                self.more = self.entries.len() < 256
+                self.more = !self.list_limited
+                    && self.entries.len() < 256
                     && self.cursors.len() < 32
                     && next.as_ref().is_some_and(|s| !self.cursors.contains(s));
                 if let Some(next) = &next {
@@ -468,11 +552,18 @@ impl Browser {
                 } else if !self.can_resume {
                     "This agent lists history but does not support replay/resume.".into()
                 } else if self.entries.is_empty() {
-                    "No saved conversations for this project.".into()
+                    if self.scope == Scope::Project {
+                        "No saved conversations for this project."
+                    } else {
+                        "No saved conversations available from this backend on this host."
+                    }
+                    .into()
                 } else {
                     format!("{} saved conversations", self.entries.len())
                 };
-                if self.cursor.is_some() && (self.entries.len() >= 256 || self.cursors.len() >= 32)
+                if self.list_limited
+                    || self.cursor.is_some()
+                        && (self.entries.len() >= 256 || self.cursors.len() >= 32)
                 {
                     self.status.push_str(" · browse limit reached");
                 }
@@ -628,6 +719,7 @@ impl Browser {
         self.busy = false;
         self.more = false;
         self.can_resume = false;
+        self.can_list = false;
         self.can_delete = false;
         self.pending = None;
         self.session = None;
@@ -640,12 +732,14 @@ pub(crate) fn in_project(row: &Value, launch: &Launch, acp: bool) -> bool {
     row["cwd"]
         .as_str()
         .is_some_and(|s| Path::new(s) == Path::new(&launch.plan.root))
-        && (acp
-            || if launch.config.provider == Provider::Local {
-                row["modelProvider"] == "rode_local"
-            } else {
-                row["modelProvider"] != "rode_local"
-            })
+        && in_provider(row, launch, acp)
+}
+fn in_provider(row: &Value, launch: &Launch, acp: bool) -> bool {
+    acp || if launch.config.provider == Provider::Local {
+        row["modelProvider"] == "rode_local"
+    } else {
+        row["modelProvider"] != "rode_local"
+    }
 }
 fn cursor(value: &Value) -> Option<String> {
     value["nextCursor"]

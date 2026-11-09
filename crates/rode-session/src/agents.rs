@@ -588,6 +588,10 @@ fn run(
                         .as_mut()
                         .context("History browser is closed")
                         .and_then(Browser::load_more),
+                    Action::HistoryScope { scope } => browser
+                        .as_mut()
+                        .context("History browser is closed")
+                        .and_then(|browser| browser.set_scope(scope)),
                     Action::HistoryResume { id } => {
                         if history_owners(&registry, &spec).contains_key(&id) {
                             Err(anyhow::anyhow!(

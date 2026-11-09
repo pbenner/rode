@@ -380,6 +380,7 @@ fn tunnel_controls_render_without_starting_workers_and_hidden_manager_does_not_p
             fingerprint: "SHA256:abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTU".into(),
             attempts: 1,
         }];
+        app.tunnels.spec.listen_on = ListenOn::AllInterfaces;
         for page in [Page::Tunnels, Page::Saved, Page::New] {
             app.tunnels.page = page;
             for frame in 0..3 {
@@ -583,6 +584,7 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                     })
                     .collect();
                 app.tunnels.stop = Some("retained-0".into());
+                app.tunnels.spec.listen_on = ListenOn::AllInterfaces;
                 app.save_tunnel_configuration(
                     Spec {
                         name: "Saved compute setup".into(),
@@ -875,4 +877,84 @@ fn malformed_saved_tunnels_are_preserved_and_cannot_be_overwritten_by_an_empty_w
     assert!(app.tunnels.error.contains("Repair saved tunnel data"));
     app.tunnels.store(&mut storage);
     assert_eq!(storage.0[crate::ssh::tunnels::STORAGE_KEY], "malformed");
+}
+
+#[test]
+fn network_listener_choice_survives_saving_and_offers_direct_connection_details() {
+    for remote in [false, true] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        if remote {
+            app.workspace = Some(crate::app::tests::remote_workspace());
+        }
+        app.dialog = Dialog::Tunnels;
+        app.tunnels.page = Page::New;
+        app.tunnels.spec = saved_spec();
+        assert_eq!(app.tunnels.spec.listen_on, ListenOn::Loopback);
+        click(&mut app, &ctx, "Localhost only");
+        click(&mut app, &ctx, "All network interfaces");
+        assert_eq!(app.tunnels.spec.listen_on, ListenOn::AllInterfaces);
+        click(&mut app, &ctx, "Save configuration");
+        let id = app.tunnels.saved_id.clone().unwrap();
+        let mut storage = TunnelStorage::default();
+        app.tunnels.store(&mut storage);
+        let mut warnings = vec![];
+        let restored = Tunnels::load(Some(&storage), &mut warnings);
+        assert!(warnings.is_empty());
+        assert_eq!(
+            restored.saved.entries[&id].spec.listen_on,
+            ListenOn::AllInterfaces
+        );
+        app.tunnels.spec.listen_on = ListenOn::Loopback;
+        app.load_tunnel_configuration(&id);
+        assert_eq!(app.tunnels.spec.listen_on, ListenOn::AllInterfaces);
+        app.tunnels.available = vec![Info {
+            id: "fixture".into(),
+            hostname: "compute".into(),
+            spec: app.tunnels.spec.clone(),
+            status: Status::Connected,
+            error: String::new(),
+            observed_key: String::new(),
+            fingerprint: String::new(),
+            attempts: 1,
+        }];
+        app.tunnels.page = Page::Tunnels;
+        let output = click(&mut app, &ctx, "Copy connection details");
+        assert!(output.platform_output.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text.contains("Host: relay.example.org\nPort: 22022\nJump / ProxyJump: leave blank") && text.contains("Host: 127.0.0.1\nPort: 22022") && text.contains("verify its host key"))));
+        assert!(app.tunnels.pending.is_none());
+        if let Some(remote) = app
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+        {
+            remote.cleanup();
+        }
+    }
+}
+
+#[test]
+fn older_services_cannot_silently_ignore_a_requested_network_listener() {
+    let old_spec: Spec = serde_json::from_value(serde_json::json!({
+        "relay_host": "relay.example.org", "relay_user": "researcher"
+    }))
+    .unwrap();
+    let reply = rode_session::Response::Tunnel(Box::new(Info {
+        id: "fixture".into(),
+        hostname: "compute".into(),
+        spec: old_spec,
+        status: Status::Connecting,
+        error: String::new(),
+        observed_key: String::new(),
+        fingerprint: String::new(),
+        attempts: 1,
+    }));
+    check_started_scope(&reply, ListenOn::Loopback).unwrap();
+    let message = check_started_scope(&reply, ListenOn::AllInterfaces)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("service did not apply") && message.contains("Update/restart"),
+        "{message}"
+    );
 }

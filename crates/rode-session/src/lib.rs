@@ -120,7 +120,7 @@ pub enum Request {
     StartTunnel {
         /// Stable request identity for idempotent retries.
         id: String,
-        /// Relay, host identity and loopback forwarding settings.
+        /// Relay, host identity and explicitly selected listener scope.
         spec: tunnels::Spec,
     },
     /// Stop a tunnel and all of its active forwarding channels.

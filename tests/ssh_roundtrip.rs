@@ -11,6 +11,8 @@ mod installed_helpers;
 mod large_files;
 #[path = "support/terminal.rs"]
 mod terminal_ui;
+#[path = "ssh_roundtrip/tunnels.rs"]
+mod tunnels;
 #[path = "ssh_roundtrip/x11.rs"]
 mod x11;
 
@@ -2633,8 +2635,12 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
         assert!(chat.messages.iter().any(|m| m.text == "Earlier answer 1"));
         // Native history deletion must mutate only this project's backend on
         // the SSH host, while the independent restored chat keeps working.
-        let mut browser =
-            rode::agent::history::Browser::open_service(launch.clone(), Arc::new(|| {})).unwrap();
+        let mut browser = rode::agent::history::Browser::open_service_scoped(
+            launch.clone(),
+            rode::agent::history::Scope::AllProjects,
+            Arc::new(|| {}),
+        )
+        .unwrap();
         let wait_history = |browser: &mut rode::agent::history::Browser| {
             let until = Instant::now() + Duration::from_secs(20);
             while browser.busy {
@@ -2643,6 +2649,19 @@ fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
                 std::thread::sleep(Duration::from_millis(10));
             }
         };
+        wait_history(&mut browser);
+        assert_eq!(
+            browser.scope,
+            rode::agent::history::Scope::AllProjects,
+            "{}",
+            browser.status
+        );
+        assert!(browser.entries.iter().any(|entry| entry.id == "foreign"));
+        assert!(!browser.can_delete);
+        assert!(browser.resume("foreign").is_err());
+        browser
+            .set_scope(rode::agent::history::Scope::Project)
+            .unwrap();
         wait_history(&mut browser);
         assert!(browser.can_delete, "{}", browser.status);
         browser.load_more().unwrap();
