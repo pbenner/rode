@@ -117,6 +117,7 @@ The headless session helper includes the russh client for explicitly started
 [compute-node return tunnels](remote.md#compute-node-return-tunnels). Both editor
 and helper require Rust 1.89; no system SSH client or GSSAPI library is needed for
 that key/agent-authenticated outbound connection. The static musl helper retains
-its existing deployment size/ABI checks. Session protocol 19 must match the
-editor; rebuild both packages together. Existing daemon generations and their
+its existing deployment size/ABI checks. The session protocol defined by
+`rode_session::PROTOCOL` must match the editor; rebuild both packages together.
+Existing daemon generations and their
 jobs are not replaced or migrated during installation.

@@ -4,15 +4,12 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    fs::{self, File},
-    io::{BufRead, Read},
+    fs,
+    io::Read,
     os::{fd::AsRawFd, unix::process::CommandExt},
     path::{Path, PathBuf},
     process::Command,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -280,7 +277,7 @@ pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
     let output = output.canonicalize()?;
     // Directory inode locks coordinate builds across windows, SSH and bwrap
     // without creating permanent lock files in a project or private /tmp.
-    let lock = File::open(&output)?;
+    let lock = crate::locking::open_directory(&output)?;
     ensure!(
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
         "Another RODE build is using this LaTeX output directory. Try again when it finishes."
@@ -557,18 +554,5 @@ pub fn execute(command: Command, invocation: &Invocation, cancel: &AtomicBool) -
 /// Serve the internal `--latex-helper` stdin protocol; launch inside the prepared project
 /// boundary.
 pub fn coordinator() -> Result<()> {
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .take(256 * 1024)
-        .read_line(&mut line)?;
-    let invocation: Invocation = serde_json::from_str(&line)?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let control = cancel.clone();
-    std::thread::spawn(move || {
-        let _ = std::io::stdin().lock().read(&mut [0]);
-        control.store(true, Ordering::Release);
-    });
-    serde_json::to_writer(std::io::stdout().lock(), &run(&invocation, &cancel)?)?;
-    Ok(())
+    crate::coordinator::serve(256 * 1024, run)
 }

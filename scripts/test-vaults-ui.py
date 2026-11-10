@@ -109,6 +109,8 @@ def run(remote=False):
             XDG_DATA_HOME=str(base / "data"),
             RODE_SESSION_DIR=str(base / "sessions"),
         )
+        if not remote:
+            environment["RODE_VAULT_DIR"] = str(base / "vault-runtime")
         args = [str(BINARY), "--theme", "carbon"]
         if remote:
             tools = base / "tools"
@@ -221,7 +223,7 @@ def run(remote=False):
                     process.terminate()
                     process.wait(timeout=5)
                 runtime = (
-                    Path(f"/tmp/rode-vaults-{os.geteuid()}")
+                    Path(environment.get("RODE_VAULT_DIR", f"/tmp/rode-vaults-{os.geteuid()}"))
                     / hashlib.sha256(str(cipher).encode()).hexdigest()
                 )
                 point = runtime / "plain"

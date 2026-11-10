@@ -143,6 +143,33 @@ def window_geometry(window):
     )
 
 
+def viewport_state_path(process, log_path, state_path, title, timeout=12):
+    """Find this process's snapshot for a named native child window.
+
+    Child viewports publish sibling files so controls from equal-sized windows
+    cannot be mistaken for one another. Input remains routed through XTest.
+    """
+    state_path = Path(state_path)
+    deadline = time.monotonic() + timeout
+    observed = []
+    while time.monotonic() < deadline:
+        assert_running(process, log_path)
+        observed = []
+        for path in sorted(state_path.parent.glob(state_path.name + ".*.json")):
+            try:
+                state = json.loads(path.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+            if state.get("pid") == process.pid:
+                observed.append(state.get("title"))
+                if state.get("title") == title:
+                    return path
+        time.sleep(0.05)
+    raise AssertionError(
+        f"No UI snapshot for {title!r} within {timeout}s. Observed: {observed}. Log: {log_path}"
+    )
+
+
 def wait_for_button(
     window,
     process,
@@ -155,6 +182,7 @@ def wait_for_button(
     changed_after=None,
     after_pass=None,
     hovered=False,
+    enabled=True,
 ):
     """Wait for an enabled, visible registered control and resolve its current physical centre.
 
@@ -165,7 +193,10 @@ def wait_for_button(
     after_pass also waits for cursor/selection changes that do not edit the buffer.
     hovered moves the pointer and requires the native hit test to accept it before
     returning. Follow moving controls without retrying any activating input.
+    enabled=False resolves an explicitly disabled placeholder for negative-input tests.
     """
+    if hovered and not enabled:
+        raise ValueError("Disabled controls cannot acknowledge hover")
     deadline = time.monotonic() + timeout
     last = "No layout snapshot received"
     pointer = None
@@ -180,7 +211,7 @@ def wait_for_button(
         last = repr(state)
         if state.get("pid") == process.pid and (after_pass is None or state["pass"] > after_pass):
             for button in state["buttons"]:
-                if button["name"] != name or (not button["enabled"] and not hovered):
+                if button["name"] != name or (button["enabled"] != enabled and not hovered):
                     continue
                 if focused and not button.get("focused", False):
                     continue
@@ -216,7 +247,8 @@ def wait_for_button(
                     return point
         time.sleep(0.05)
     raise AssertionError(
-        f"No enabled {name!r} control within {timeout}s. Last layout: {last}. Log: {log_path}"
+        f"No {'enabled' if enabled else 'disabled'} {name!r} control within {timeout}s. "
+        f"Last layout: {last}. Log: {log_path}"
     )
 
 

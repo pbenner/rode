@@ -286,6 +286,90 @@ mod tests {
     }
 
     #[test]
+    fn prepared_ssh_connections_focus_chat_and_hide_the_explorer() {
+        for ready in [false, true] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            let mut workspace = crate::app::tests::remote_workspace();
+            workspace.ready = ready;
+            app.workspace = Some(workspace);
+            app.show_terminal = true;
+            app.terminal_intent();
+            Terminal::focus(&ctx);
+            let project = tempfile::tempdir().unwrap();
+            let response = files::local(&Request::Prepare {
+                path: project.path().to_string_lossy().into(),
+                sandbox: Default::default(),
+            })
+            .unwrap();
+            app.commit_project(response, true, Default::default(), true, None, &ctx);
+            assert!(app.project_ready());
+            assert!(app.session_busy(), "The background shell still starts");
+            assert_eq!(app.show_explorer, ready);
+            assert_eq!(app.panel_visible(Panel::Agent), !ready);
+            assert_eq!(app.terminal_visible(), ready);
+            if !ready {
+                let render = |app: &mut EditorApp| {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1000., 760.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            app.navigation.begin_layout();
+                            app.explorer(ctx);
+                            app.workspace_content(ctx);
+                        },
+                    );
+                };
+                render(&mut app);
+                assert_eq!(
+                    ctx.memory(|memory| memory.focused()),
+                    Some(egui::Id::new("agent-composer"))
+                );
+                assert!(app.navigation.rect(navigation::Pane::Explorer).is_none());
+                assert!(!app.agents.chat.busy);
+
+                // A shell can attach before a second chat frame remembers its child focus.
+                let plan = &app.workspace.as_ref().unwrap().plan;
+                let policy = crate::sessions::fingerprint(plan);
+                let info = serde_json::from_value(serde_json::json!({
+                    "id": "background-shell", "name": "Shell", "root": plan.root,
+                    "policy": policy, "mode": plan.label(), "alive": true,
+                    "clients": 1, "created": 0, "exit_code": null,
+                    "persistent": false, "allocation": null
+                }))
+                .unwrap();
+                let (terminal, _stream) = Terminal::stream(&ctx, "Shell".into(), |_| {});
+                app.add_terminal_view(terminal, "background-shell".into(), "Shell".into());
+                app.handle_session(
+                    sessions::Job::Create {
+                        persistent: false,
+                        policy,
+                    },
+                    Ok(crate::project::Response::Sessions(crate::sessions::Reply {
+                        response: rode_session::Response::Session(info),
+                        executable: String::new(),
+                        prefix: vec![],
+                    })),
+                    &ctx,
+                );
+                render(&mut app);
+                assert!(app.panel_visible(Panel::Agent));
+                assert!(!app.terminal_visible());
+                assert_eq!(
+                    ctx.memory(|memory| memory.focused()),
+                    Some(egui::Id::new("agent-composer"))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_dead_master_clears_the_host_and_allows_local_file_access() {
         let (mut app, ctx) = remote_buffer();
         let (master, stream) = Terminal::stream(&ctx, "SSH fixture".into(), |_| {});
@@ -402,6 +486,7 @@ mod tests {
         app.connect(
             Profile {
                 host: "failed-login".into(),
+                backend: crate::ssh::Backend::OpenSsh,
                 config: config.to_string_lossy().into(),
                 ..Default::default()
             },

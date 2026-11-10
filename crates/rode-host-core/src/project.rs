@@ -7,13 +7,9 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    time::{Duration, Instant},
+    process::Command,
+    sync::atomic::AtomicBool,
+    time::Duration,
 };
 pub mod git_auth;
 mod stash;
@@ -876,8 +872,8 @@ fn resolve_program(root: &Path, value: &str) -> String {
     }
 }
 
-/// Drain both pipes concurrently, cap allocations, and kill the whole command
-/// group on timeout/overflow (including hooks and children).
+/// Drain both pipes concurrently, cap allocations, and stop the owned command
+/// group on completion, timeout or overflow (including hooks and children).
 pub fn run(command: Command, input: Vec<u8>, timeout: Duration) -> Result<Output> {
     run_controlled(command, input, timeout, &AtomicBool::new(false), false)
 }
@@ -926,145 +922,31 @@ pub fn run_controlled_limited(
 /// Stream an owned input without retaining large executable transfers in memory.
 /// The same cancellation, output bounds and process-group cleanup apply as for tools.
 pub fn run_controlled_stream(
-    mut command: Command,
-    mut input: impl Read + Send + 'static,
+    command: Command,
+    input: impl Read + Send + 'static,
     timeout: Duration,
     cancel: &AtomicBool,
     lifeline: bool,
     output_limit: u64,
     terminate_grace: Duration,
 ) -> Result<Output> {
-    anyhow::ensure!(
-        !(cancel.load(Ordering::Acquire) || crate::command::CANCELLED.load(Ordering::Acquire)),
-        "Extension task cancelled."
-    );
-    let description = command.get_program().to_string_lossy().into_owned();
-    crate::command::new_session(&mut command);
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // A just-written executable can temporarily remain open across a concurrent
-    // fork. Match supervised agent startup's bounded ETXTBSY handling; never
-    // retry permission failures, nonzero exits or commands that already started.
-    let spawn_until = Instant::now() + timeout.min(Duration::from_secs(1));
-    let mut child = loop {
-        anyhow::ensure!(
-            !(cancel.load(Ordering::Acquire) || crate::command::CANCELLED.load(Ordering::Acquire)),
-            "Extension task cancelled."
-        );
-        match command.spawn() {
-            Err(error)
-                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < spawn_until =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            result => break result.with_context(|| format!("Cannot run {description}"))?,
-        }
-    };
-    let mut stdin = child.stdin.take().context("Missing command stdin")?;
-    let stdout = child.stdout.take().context("Missing command stdout")?;
-    let stderr = child.stderr.take().context("Missing command stderr")?;
-    let (input_tx, input_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut input, &mut stdin);
-        if lifeline {
-            let _ = input_tx.send(stdin);
-        }
-    });
-    let mut input_rx = Some(input_rx);
-    let overflow = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel();
-    for (is_out, pipe) in [
-        (true, Box::new(stdout) as Box<dyn Read + Send>),
-        (false, Box::new(stderr) as Box<dyn Read + Send>),
-    ] {
-        let tx = tx.clone();
-        let overflow = overflow.clone();
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let result = pipe.take(output_limit + 1).read_to_end(&mut bytes);
-            if bytes.len() as u64 > output_limit {
-                overflow.store(true, Ordering::Release);
-            }
-            let _ = tx.send((is_out, bytes, result));
-        });
-    }
-    let kill = |pid: u32| unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
-    };
-    let stop = |child: &mut std::process::Child| {
-        if !terminate_grace.is_zero() {
-            // Marp/Puppeteer closes its independently grouped browser on SIGINT.
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGINT);
-            }
-            let until = Instant::now() + terminate_grace;
-            while Instant::now() < until && child.try_wait().ok().flatten().is_none() {
-                std::thread::sleep(Duration::from_millis(15));
-            }
-        }
-        kill(child.id());
-        let _ = child.wait();
-    };
-    let start = Instant::now();
-    let status = loop {
-        if cancel.load(Ordering::Acquire) || crate::command::CANCELLED.load(Ordering::Acquire) {
-            // Closing the coordinator's input first lets it terminate the adapter
-            // process group on either host, before the transport is torn down.
-            input_rx.take();
-            if lifeline {
-                let grace = Instant::now();
-                while grace.elapsed() < Duration::from_secs(1).max(terminate_grace) {
-                    if child.try_wait()?.is_some() {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(15));
-                }
-            }
-            stop(&mut child);
-            bail!("Extension task cancelled.");
-        }
-        if overflow.load(Ordering::Acquire) || start.elapsed() > timeout {
-            input_rx.take();
-            stop(&mut child);
-            bail!(
-                "{description} exceeded its time or {} MiB output limit.",
-                output_limit / 1024 / 1024
-            );
-        }
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(15));
-    };
-    let mut output = Output {
-        code: status.code().unwrap_or(-1),
-        ..Default::default()
-    };
-    for _ in 0..2 {
-        let (is_out, bytes, result) = match rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(value) => value,
-            Err(error) => {
-                kill(child.id());
-                return Err(error).context("Command output pipes did not close");
-            }
-        };
-        result?;
-        if bytes.len() as u64 > output_limit {
-            bail!(
-                "Command output exceeded {} MiB.",
-                output_limit / 1024 / 1024
-            );
-        }
-        let value = String::from_utf8(bytes).context("Tool output is not UTF-8")?;
-        if is_out {
-            output.stdout = value;
-        } else {
-            output.stderr = value;
-        }
-    }
-    Ok(output)
+    let output = crate::command::capture::run(
+        command,
+        input,
+        timeout,
+        cancel,
+        lifeline,
+        crate::command::capture::Limits {
+            stdout: output_limit,
+            stderr: output_limit,
+        },
+        terminate_grace,
+    )?;
+    Ok(Output {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8(output.stdout).context("Tool output is not UTF-8")?,
+        stderr: String::from_utf8(output.stderr).context("Tool output is not UTF-8")?,
+    })
 }
 
 fn read(path: impl AsRef<Path>) -> String {

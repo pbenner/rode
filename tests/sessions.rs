@@ -178,6 +178,83 @@ fn native_terminal_resize_reaches_the_shell_over_tty_and_pipe_attachments() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn unauthenticated_connections_are_bounded_without_ending_retained_work() {
+    use std::{
+        io::Read,
+        os::{
+            linux::net::SocketAddrExt,
+            unix::{
+                fs::MetadataExt,
+                net::{SocketAddr, UnixStream},
+            },
+        },
+    };
+    let mut fixture = Fixture::new();
+    let info = fixture.create(&fixture.plan());
+    let terminal = fixture.attach(&info);
+    wait(|| {
+        fixture
+            .direct_list()
+            .iter()
+            .any(|item| item.id == info.id && item.clients == 1)
+    });
+    assert_eq!(
+        fs::metadata(fixture.runtime.join("socket")).unwrap().mode() & 0o777,
+        0o600
+    );
+    let expected_mask = Command::new("/bin/sh")
+        .args(["-c", "umask"])
+        .env_clear()
+        .output()
+        .unwrap();
+    assert!(expected_mask.status.success());
+    terminal
+        .send(b"umask > inherited.umask\n".to_vec())
+        .unwrap();
+    let mask_path = fixture.root.path().join("inherited.umask");
+    wait(|| fs::read_to_string(&mask_path).is_ok_and(|text| !text.is_empty()));
+    assert_eq!(
+        fs::read_to_string(&mask_path).unwrap().trim(),
+        String::from_utf8(expected_mask.stdout).unwrap().trim()
+    );
+    let metadata = fs::metadata(&fixture.runtime).unwrap();
+    let address = SocketAddr::from_abstract_name(format!(
+        "rode-session-auth-{}-{}-{}",
+        metadata.uid(),
+        metadata.dev(),
+        metadata.ino()
+    ))
+    .unwrap();
+    let mut pending = Vec::new();
+    for _ in 0..32 {
+        pending.push(UnixStream::connect_addr(&address).unwrap());
+    }
+    let mut overflow = UnixStream::connect_addr(&address).unwrap();
+    overflow
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    assert_eq!(
+        overflow
+            .read(&mut [0])
+            .expect("An unauthenticated peer retained another worker"),
+        0,
+    );
+    drop(pending.pop());
+    wait(|| {
+        matches!(fixture.rpc(&Request::List), Ok(Response::Sessions(items))
+        if items.iter().any(|item| item.id == info.id && item.alive))
+    });
+    drop(pending);
+    assert!(
+        fixture
+            .direct_list()
+            .iter()
+            .any(|item| item.id == info.id && item.alive)
+    );
+}
+
 #[test]
 fn cargo_helper_is_headless_and_shares_persistent_sessions_with_the_editor() {
     let protocol = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))

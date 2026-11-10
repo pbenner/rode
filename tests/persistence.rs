@@ -808,7 +808,11 @@ fn queued_changes_and_eviction_keep_their_order_and_override_removals_win() {
     let root = tempfile::tempdir().unwrap();
     seed(root.path());
     let path = root.path().join("app.ron");
-    let locked = fs::File::create(root.path().join("app.ron.lock")).unwrap();
+    let locked = rode_host_core::locking::open_private(
+        &root.path().join("app.ron.lock"),
+        rode_host_core::locking::PrivateFile::Lock,
+    )
+    .unwrap();
     assert_eq!(unsafe { libc::flock(locked.as_raw_fd(), libc::LOCK_EX) }, 0);
     let mut store = open(&path);
     for model in ["first", "second"] {

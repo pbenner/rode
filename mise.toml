@@ -22,7 +22,10 @@ run = "python3 scripts/ci.py time python-lint -- ruff check ."
 run = "python3 scripts/ci.py time python-format -- ruff format --check ."
 
 [tasks."lint:ci"]
-run = "python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py"
+run = [
+  "python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py",
+  "python3 scripts/ci.py time rust-fixture-regressions -- python3 scripts/test-rust-tests.py",
+]
 
 [tasks."lint:packaging"]
 run = "python3 scripts/ci.py time packaging -- python3 scripts/test-packaging.py"
@@ -47,7 +50,7 @@ run = [
 
 [tasks.test]
 description = "Run every ordinary workspace Rust test, including integration tests"
-run = "RODE_TEST_MISE='{{mise_bin}}' RODE_TEST_RUFF=\"$(command -v ruff)\" python3 scripts/ci.py time --timeout 600 rust-tests -- cargo test --locked --profile ci --workspace --all-targets"
+run = "RODE_TEST_MISE='{{mise_bin}}' RODE_TEST_RUFF=\"$(command -v ruff)\" python3 scripts/ci.py time --timeout 600 rust-tests -- python3 scripts/rust_tests.py"
 
 [tasks.build]
 run = "python3 scripts/ci.py time --timeout 600 editor-build -- cargo build --locked --profile ci --bins"

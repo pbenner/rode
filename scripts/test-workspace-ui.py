@@ -20,19 +20,25 @@ from ui_harness import (
     ROOT,
     assert_running,
     click,
+    click_button,
     close_window,
     display,
     focus_window,
     key,
+    palette_command,
+    read_json_lines,
     request_close,
     screenshot,
     text,
+    viewport_state_path,
+    wait_for_button,
     wait_for_project,
     wait_for_window,
     x11,
 )
 
 x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+window_titles = {}
 
 
 def focus(window):
@@ -47,7 +53,11 @@ def tool_window(title):
     if not match:
         return None
     attributes = subprocess.run(["xwininfo", "-id", match[1]], capture_output=True, text=True)
-    return int(match[1], 16) if "Map State: IsViewable" in attributes.stdout else None
+    if "Map State: IsViewable" not in attributes.stdout:
+        return None
+    window = int(match[1], 16)
+    window_titles[window] = "RODE · " + title
+    return window
 
 
 def tools_window():
@@ -72,11 +82,14 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
     (config / "app.ron").write_text(
         json.dumps({"agent_preferences": json.dumps({profile: {"codex": "./agent.py"}})})
     )
+    state_path = base / "ui-state.json"
     environment = dict(
         os.environ,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         SHELL=str(shell),
+        RODE_SESSION_DIR=str(base / "runtime"),
+        RODE_UI_TEST_STATE=str(state_path),
     )
     log_path = ARTIFACTS / "workspace.log"
     with log_path.open("w") as log:
@@ -96,16 +109,36 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 raise AssertionError(message)
 
             def calls():
-                path = project / "agent-rpc.jsonl"
+                return read_json_lines(project / "agent-rpc.jsonl")
+
+            def state_for(target):
                 return (
-                    [json.loads(line) for line in path.read_text().splitlines()]
-                    if path.exists()
-                    else []
+                    state_path
+                    if target == window
+                    else viewport_state_path(process, log_path, state_path, window_titles[target])
                 )
 
-            def send(message, window, point):
+            def control(name, target=None, **guards):
+                target = window if target is None else target
+                return wait_for_button(target, process, log_path, state_for(target), name, **guards)
+
+            def activate(name, target=None):
+                target = window if target is None else target
+                click_button(target, process, log_path, state_for(target), name)
+
+            def disabled_tab(name):
                 focus(window)
+                point = control("workspace-tab:" + name, enabled=False)
+                before = json.loads(state_path.read_text())["pass"]
                 click(*point)
+                control("workspace-code-selected", after_pass=before)
+
+            def composer(target):
+                activate("agent-composer", target)
+                control("agent-composer", target, focused=True)
+
+            def send(message, target, *, idle=True):
+                composer(target)
                 text(message)
                 key("Return")
                 wait(
@@ -116,7 +149,8 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                     ),
                     "Agent input failed after moving its window: " + message,
                 )
-                time.sleep(0.3)
+                if idle:
+                    control("agent-idle", target)
 
             window = wait_for_window(process, log_path)
             wait_for_project(window, process, log_path, project)
@@ -130,14 +164,14 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             screenshot(window, "code.png")
             key("a", ("Control_L", "Shift_L"))
             time.sleep(0.3)
-            send("before detach", window, (700, 790))
+            send("before detach", window)
             screenshot(window, "chat-full-workspace.png")
-            click(700, 790)
+            composer(window)
             text("draft across sidebar toggle")
             key("grave", ("Control_L",))
             screenshot(window, "sidebar-hidden.png")
             key("grave", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            control("agent-composer", focused=True)
             key("Return")
             wait(
                 lambda: any(
@@ -147,11 +181,11 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 ),
                 "Sidebar did not restore the chat and its draft",
             )
-            time.sleep(0.3)
-            click(1073, 69)  # Detach in the workspace toolbar, not the chat-session controls.
+            control("agent-idle")
+            activate("workspace-detach")
             wait(tools_window, "No native tools window was created")
             child = tools_window()
-            send("while detached", child, (450, 680))
+            send("while detached", child)
             screenshot(child, "chat-floating.png")
             focus(window)
             screenshot(window, "code-with-chat-detached.png")
@@ -163,25 +197,29 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             wait(tools_window, "Sidebar shortcut did not restore detached tools")
             assert tools_window() == child, "Hiding the sidebar recreated its native window"
             focus(child)
-            key("p", ("Control_L", "Shift_L"))
-            text("Terminal: Sessions and Slurm allocations")
-            key("Return")
+            palette_command(
+                child,
+                process,
+                log_path,
+                state_for(child),
+                "Terminal: Sessions and Slurm allocations",
+            )
             time.sleep(0.3)
             screenshot(child, "tools-dialog.png")
             key("Escape")
             request_close(child)
             wait(lambda: tools_window() is None, "Closing tools did not dock them back")
-            send("after docking", window, (700, 790))
+            send("after docking", window)
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
             assert sum(call.get("method") == "turn/start" for call in calls()) == 4
-            click(1073, 69)
+            activate("workspace-detach")
             child = wait(tools_window, "Could not detach the queued chat")
-            send("queue-gated", child, (450, 680))
+            send("queue-gated", child, idle=False)
             wait(lambda: (project / "queue-started").exists(), "Held turn did not start")
             # The first queued turn evicts user messages from the transcript;
             # recall must still include the second accepted queued prompt.
             for message in ["history-burst", "detached queue second"]:
-                click(450, 680)
+                composer(child)
                 text(message)
                 key("Return")
                 time.sleep(0.3)
@@ -201,9 +239,10 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 "history-burst",
                 "detached queue second",
             ], prompts
+            control("agent-idle", child)
             screenshot(child, "detached-queue-drained.png")
             focus(child)
-            click(450, 680)
+            composer(child)
             key("Up")
             key("Return")
             wait(
@@ -218,7 +257,7 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             request_close(child)
             wait(lambda: tools_window() is None, "Queued chat did not dock back")
             focus(window)
-            click(339, 69)  # Code replaces tools again, preserving the unsaved buffer.
+            activate("workspace-code")
             key("s", ("Control_L",))
             wait(lambda: "unsaved workspace edit" in source.read_text(), "Code edits were lost")
             screenshot(window, "code-restored.png")
@@ -238,7 +277,7 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 lambda: (project / "sidebar.pid").exists(), "Sidebar did not restore terminal input"
             )
             assert (project / "before.pid").read_text() == (project / "sidebar.pid").read_text()
-            click(1073, 69)
+            activate("workspace-detach")
             wait(tools_window, "Terminal could not open in the tools window")
             child = tools_window()
             focus(child)
@@ -254,7 +293,7 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             assert (project / "before.pid").read_text() == (project / "after.pid").read_text()
 
             # Independent tab windows share the existing shell and agent controller.
-            click(1155, 69)  # Detach tab, beside the full-sidebar Detach action.
+            activate("workspace-detach-tab:Terminal")
             terminal_window = wait(
                 lambda: tool_window("Terminal"), "No independent Terminal window"
             )
@@ -262,9 +301,13 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             text("echo $$ > tab.pid\n")
             wait(lambda: (project / "tab.pid").exists(), "Detached terminal tab lost shell input")
             assert (project / "before.pid").read_text() == (project / "tab.pid").read_text()
-            key("p", ("Control_L", "Shift_L"))
-            text("Terminal: Sessions and Slurm allocations")
-            key("Return")
+            palette_command(
+                terminal_window,
+                process,
+                log_path,
+                state_for(terminal_window),
+                "Terminal: Sessions and Slurm allocations",
+            )
             time.sleep(0.3)
             screenshot(terminal_window, "individual-terminal-dialog.png")
             key("Escape")
@@ -276,19 +319,19 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             )
             assert (project / "before.pid").read_text() == (project / "tab-modal.pid").read_text()
             focus(window)
-            click(400, 69)  # Disabled Terminal tab must not take over the docked surface.
+            disabled_tab("Terminal")
             screenshot(window, "disabled-terminal-tab.png")
-            key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
-            click(1155, 69)
+            activate("workspace-tab:Chat")
+            activate("workspace-detach-tab:Chat")
             chat_window = wait(lambda: tool_window("Chat"), "No independent Chat window")
-            send("independent chat tab", chat_window, (450, 680))
+            send("independent chat tab", chat_window)
             assert tool_window("Terminal") == terminal_window
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
             screenshot(chat_window, "independent-chat-tab.png")
             focus(window)
-            click(460, 69)  # Chat stays visible but disabled; Code remains selected.
-            click(700, 180)  # Code must still be available after the disabled tab click.
+            disabled_tab("Chat")
+            activate("source-editor")
+            control("source-editor", focused=True)
             key("End", ("Control_L",))
             text("\nedit with two detached tabs")
             key("s", ("Control_L",))
@@ -298,15 +341,19 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
                 "Disabled tool tab replaced Code or swallowed editor input",
             )
             focus(chat_window)
-            key("p", ("Control_L", "Shift_L"))
-            text("Terminal: Sessions and Slurm allocations")
-            key("Return")
+            palette_command(
+                chat_window,
+                process,
+                log_path,
+                state_for(chat_window),
+                "Terminal: Sessions and Slurm allocations",
+            )
             time.sleep(0.3)
             screenshot(chat_window, "individual-tab-dialog.png")
             key("Escape")
-            click(845, 14)  # Reattach in the individual window's header.
+            activate("workspace-reattach:Chat", chat_window)
             wait(lambda: tool_window("Chat") is None, "Reattach did not close the Chat tab window")
-            send("after individual reattach", window, (700, 790))
+            send("after individual reattach", window)
             assert tool_window("Terminal") == terminal_window
             focus(terminal_window)
             request_close(terminal_window)
@@ -318,24 +365,24 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             text("echo $$ > tab-docked.pid\n")
             wait(lambda: (project / "tab-docked.pid").exists(), "Tab reattach lost terminal input")
             assert (project / "before.pid").read_text() == (project / "tab-docked.pid").read_text()
-            click(1073, 69)
+            activate("workspace-detach")
             child = wait(tools_window, "Could not reopen tools before closing the main window")
             focus(child)
-            click(170, 22)  # Chat in the detached whole-sidebar window.
-            click(55, 55)  # Detach tab wraps below the tab row at this window width.
+            activate("workspace-tab:Chat", child)
+            activate("workspace-detach-tab:Chat", child)
             chat_window = wait(
                 lambda: tool_window("Chat"), "Could not detach a tab from the sidebar window"
             )
-            send("tab from detached sidebar", chat_window, (450, 680))
+            send("tab from detached sidebar", chat_window)
             assert tools_window() == child
             focus(chat_window)
-            click(845, 14)
+            activate("workspace-reattach:Chat", chat_window)
             wait(
                 lambda: tool_window("Chat") is None, "Tab did not reattach to its detached sidebar"
             )
-            send("reattached to sidebar window", child, (450, 680))
+            send("reattached to sidebar window", child)
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
-            click(55, 55)
+            activate("workspace-detach-tab:Chat", child)
             wait(lambda: tool_window("Chat"), "Could not reopen the independent Chat tab")
             close_window(window, process)
             assert tools_window() is None, "Closing the main window left an orphan tools window"
@@ -343,6 +390,13 @@ with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
             print(
                 "Workspace switching, sidebar and individual tab windows, disabled placeholders, retained chat/code and the same live shell passed."
             )
+        except Exception:
+            for snapshot in base.glob(state_path.name + "*"):
+                shutil.copy2(snapshot, ARTIFACTS / snapshot.name)
+            rpc = project / "agent-rpc.jsonl"
+            if rpc.exists():
+                shutil.copy2(rpc, ARTIFACTS / "workspace-rpc.jsonl")
+            raise
         finally:
             if process.poll() is None:
                 process.terminate()

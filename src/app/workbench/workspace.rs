@@ -332,11 +332,12 @@ impl EditorApp {
             ui.disable();
         }
         ui.horizontal_wrapped(|ui| {
-            let code = ui.selectable_label(
-                !child && (self.workbench.detached || !self.tool_surface()),
-                "Code",
-            );
+            let code_selected = !child && (self.workbench.detached || !self.tool_surface());
+            let code = ui.selectable_label(code_selected, "Code");
             ui_probe::button(ui, "workspace-code", &code);
+            if code_selected {
+                ui_probe::button(ui, "workspace-code-selected", &code);
+            }
             if code.clicked() {
                 self.focus_editor(ctx);
                 self.editor_intent();
@@ -378,22 +379,34 @@ impl EditorApp {
             }
             ui.separator();
             if self.workbench.detached {
-                if ui.button("Dock back").clicked() {
+                let dock = ui.button("Dock back");
+                ui_probe::button(ui, "workspace-dock", &dock);
+                if dock.clicked() {
                     self.dock_tools(ctx);
                 }
-            } else if self.tool_surface() && ui.button("Detach").clicked() {
-                self.workbench.detached = true;
-                self.navigation.zoom = None;
-                ctx.request_repaint();
+            } else if self.tool_surface() {
+                let detach = ui.button("Detach");
+                ui_probe::button(ui, "workspace-detach", &detach);
+                if detach.clicked() {
+                    self.workbench.detached = true;
+                    self.navigation.zoom = None;
+                    ctx.request_repaint();
+                }
             }
             if self.tool_surface()
                 && let Some(tab) = self.selected_tool_tab()
-                && ui
-                    .button("Detach tab")
-                    .on_hover_text(format!("Open {} in its own window", tab.label()))
-                    .clicked()
             {
-                self.detach_tab(tab, ctx);
+                let detach = ui
+                    .button("Detach tab")
+                    .on_hover_text(format!("Open {} in its own window", tab.label()));
+                ui_probe::button(
+                    ui,
+                    &format!("workspace-detach-tab:{}", tab.label()),
+                    &detach,
+                );
+                if detach.clicked() {
+                    self.detach_tab(tab, ctx);
+                }
             }
         });
     }
@@ -556,7 +569,13 @@ impl EditorApp {
         ui.horizontal(|ui| {
             ui.strong(tab.label());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Reattach").clicked() {
+                let reattach = ui.button("Reattach");
+                ui_probe::button(
+                    ui,
+                    &format!("workspace-reattach:{}", tab.label()),
+                    &reattach,
+                );
+                if reattach.clicked() {
                     self.reattach_tool_tab(tab, ctx);
                 }
             });

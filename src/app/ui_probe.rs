@@ -33,7 +33,7 @@ struct Controls {
 }
 
 #[derive(Clone, Default)]
-struct Probe(Arc<Mutex<Controls>>);
+struct Probe(Arc<Mutex<HashMap<egui::ViewportId, Controls>>>);
 
 /// Enable explicit fixture metadata only when a destination is supplied at launch.
 pub(super) fn install(ctx: &egui::Context) {
@@ -48,8 +48,9 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
     let begin = probe.clone();
     ctx.on_begin_pass(
         "native-ui-probe",
-        Arc::new(move |_| {
-            let mut controls = begin.0.lock().unwrap();
+        Arc::new(move |ctx| {
+            let mut viewports = begin.0.lock().unwrap();
+            let controls = viewports.entry(ctx.viewport_id()).or_default();
             controls.visible.clear();
             controls.session_ids = None;
         }),
@@ -61,14 +62,15 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             if ctx.will_discard() {
                 return;
             }
-            let mut controls = probe.0.lock().unwrap();
+            let mut viewports = probe.0.lock().unwrap();
+            let controls = viewports.entry(ctx.viewport_id()).or_default();
             let mut buttons = controls.visible.clone();
             let session_ids = controls.session_ids.clone();
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
                 .retain(|id, _| buttons.iter().any(|button| button.id == *id));
-            drop(controls);
+            drop(viewports);
             // Resolve focus and modal blocking after layout: a later modal can
             // take focus away from an editor registered earlier in the pass.
             ctx.memory(|memory| {
@@ -78,18 +80,29 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                     button.hovered &= button.enabled;
                 }
             });
+            // Winit's X11 title getter returns an empty string. Child window
+            // builders retain the title actually supplied by the application.
+            let title = ctx
+                .viewport(|viewport| viewport.builder.title.clone())
+                .or_else(|| {
+                    ctx.input(|input| input.viewport().title.clone())
+                        .filter(|title| !title.is_empty())
+                });
             let value = serde_json::json!({
                 "pid": std::process::id(),
+                "viewport": format!("{:016x}", ctx.viewport_id().0.value()),
+                "title": title,
                 "pass": ctx.cumulative_pass_nr(),
                 "pixels_per_point": ctx.pixels_per_point(),
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
                 "buttons": buttons,
                 "session_ids": session_ids,
             });
-            if let Err(error) = publish(&path, &value) {
+            let destination = viewport_path(&path, ctx.viewport_id());
+            if let Err(error) = publish(&destination, &value) {
                 eprintln!(
                     "Cannot publish native UI fixture state to {}: {error}",
-                    path.display()
+                    destination.display()
                 );
             }
         }),
@@ -103,7 +116,25 @@ pub(super) fn session_list<'a>(ui: &egui::Ui, ids: impl IntoIterator<Item = &'a 
         .ctx()
         .data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe")))
     {
-        probe.0.lock().unwrap().session_ids = Some(ids.into_iter().map(str::to_owned).collect());
+        probe
+            .0
+            .lock()
+            .unwrap()
+            .entry(ui.ctx().viewport_id())
+            .or_default()
+            .session_ids = Some(ids.into_iter().map(str::to_owned).collect());
+    }
+}
+
+/// Keep the root snapshot's existing path; native children publish separate files
+/// so equal-sized windows and nested passes cannot overwrite each other's controls.
+fn viewport_path(path: &Path, viewport: egui::ViewportId) -> PathBuf {
+    if viewport == egui::ViewportId::ROOT {
+        path.to_path_buf()
+    } else {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{:016x}.json", viewport.0.value()));
+        path.with_file_name(name)
     }
 }
 
@@ -125,7 +156,8 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
     let rect = response.rect.intersect(ui.clip_rect());
     if rect.is_positive() {
         let changed = response.changed().then(|| ui.ctx().cumulative_pass_nr());
-        let mut controls = probe.0.lock().unwrap();
+        let mut viewports = probe.0.lock().unwrap();
+        let controls = viewports.entry(ui.ctx().viewport_id()).or_default();
         if let Some(pass) = changed {
             controls.last_change.insert(response.id, pass);
         }
@@ -146,6 +178,85 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_viewports_keep_separate_controls_revisions_and_session_lists() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let child = egui::ViewportId::from_hash_of("independent-chat");
+        install_at(&ctx, path.clone());
+        let render = |viewport, changed| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    viewport_id: viewport,
+                    viewports: [
+                        (
+                            egui::ViewportId::ROOT,
+                            egui::ViewportInfo {
+                                title: Some("RODE root".into()),
+                                ..Default::default()
+                            },
+                        ),
+                        (
+                            child,
+                            egui::ViewportInfo {
+                                title: Some(String::new()),
+                                parent: Some(egui::ViewportId::ROOT),
+                                ..Default::default()
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut response = ui.button("Fixture control");
+                        if changed {
+                            response.mark_changed();
+                        }
+                        let name = if viewport == child { "child" } else { "root" };
+                        button(ui, name, &response);
+                        session_list(ui, [name]);
+                    });
+                    if viewport == egui::ViewportId::ROOT {
+                        ctx.show_viewport_deferred(
+                            child,
+                            egui::ViewportBuilder::default().with_title("RODE · Chat"),
+                            |_, _| {},
+                        );
+                    }
+                },
+            );
+        };
+        render(egui::ViewportId::ROOT, true);
+        let before = std::fs::read(&path).unwrap();
+        let root: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        render(child, false);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "A child pass overwrote the root snapshot"
+        );
+        let other: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(viewport_path(&path, child)).unwrap()).unwrap();
+        assert_eq!(other["title"], "RODE · Chat");
+        assert_eq!(other["buttons"][0]["name"], "child");
+        assert!(other["buttons"][0]["changed_pass"].is_null());
+        assert_eq!(other["session_ids"], serde_json::json!(["child"]));
+        render(egui::ViewportId::ROOT, false);
+        let after: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(after["buttons"][0]["name"], "root");
+        assert_eq!(
+            after["buttons"][0]["changed_pass"],
+            root["buttons"][0]["changed_pass"]
+        );
+        assert_eq!(after["session_ids"], serde_json::json!(["root"]));
+    }
 
     #[test]
     fn hover_acknowledges_real_pointer_input_and_is_cleared_when_it_leaves() {

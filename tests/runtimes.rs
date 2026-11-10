@@ -177,6 +177,7 @@ fn wait(session: &process::Session, mut check: impl FnMut(&Update) -> bool) -> U
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+#[track_caller]
 fn until(mut check: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !check() {

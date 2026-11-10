@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{BufRead, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -348,7 +348,7 @@ fn run(spec: Specification, input: &mut impl Read) -> Result<Reply> {
     if !cached(&levels, target, &spec.notices)? {
         ensure!(!runtime.try_exists()?, "Unexpected Codex runtime directory");
         fs::rename(&staged_runtime, &runtime)?;
-        File::open(&folder)?.sync_all()?;
+        crate::locking::open_directory(&folder)?.sync_all()?;
     }
     Ok(reply)
 }

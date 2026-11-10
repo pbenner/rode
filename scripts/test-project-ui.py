@@ -244,6 +244,24 @@ class ProjectUI:
         self.control(name, focused=True)
         return info
 
+    def remote_chat(self, project):
+        """Keep chat focused after the background shell has attached, including reconnects."""
+        self.wait(
+            lambda: any(
+                info["root"] == str(project) and info["alive"] and info["clients"] > 0
+                for info in session_rpc(self.environment, "list")
+            ),
+            "The background terminal did not attach",
+        )
+        self.control("agent-composer", focused=True)
+        self.absent("explorer-root")
+        self.layout(
+            lambda state: all(
+                not button["name"].startswith("terminal-input:") for button in state["buttons"]
+            ),
+            "The background terminal replaced chat",
+        )
+
     def disconnected(self):
         self.wait(lambda: '"RODE"' in self.title(), "Disconnect did not clear the host")
 
@@ -348,6 +366,9 @@ def run(remote=False, fallback=False):
                 window = window_for(process, log.name)
                 ui = ProjectUI(window, process, log.name, environment)
                 ui.project(first, remote)
+                if remote:
+                    ui.remote_chat(first)
+                    screenshot(window, "ssh-chat-focused.png")
                 if fallback:
                     assert "[Sandbox]" not in ui.title()
                 ui.edit_file(first / "alpha.rs", label + "-first-saved")
@@ -418,6 +439,8 @@ def run(remote=False, fallback=False):
                     ui.absent("project-dialog-path")
                     ui.command("Remote: Reconnect SSH")
                     ui.project(second, remote=True)
+                    ui.remote_chat(second)
+                    ui.click("workspace-tab:Terminal")
                     ui.terminal(second)
                     screenshot(window, "ssh-reconnected-compact.png")
                     ui.resize(1380, 900)
@@ -440,6 +463,8 @@ def run(remote=False, fallback=False):
                     ui.disconnected()
                     ui.command("Remote: Reconnect SSH")
                     ui.project(second, remote=True)
+                    ui.remote_chat(second)
+                    ui.click("workspace-tab:Terminal")
                     ui.terminal(second)
                     # Close only this GUI's private master to exercise
                     # unexpected transport loss rather than a palette action.
@@ -484,7 +509,7 @@ def run(remote=False, fallback=False):
                         pass
 
 
-def failed_connection():
+def failed_connection(backend):
     """A real refused SSH login must leave copyable diagnostics, not a local shell."""
     with tempfile.TemporaryDirectory(prefix="rode-ssh-failure-ui-") as directory:
         base = Path(directory)
@@ -493,9 +518,12 @@ def failed_connection():
             reserved.bind(("127.0.0.1", 0))
             port = reserved.getsockname()[1]
             config = base / "ssh_config"
+            known_hosts = base / "known_hosts"
+            known_hosts.touch()
             config.write_text(
                 f"Host rode-failure\n HostName 127.0.0.1\n Port {port}\n"
                 " BatchMode yes\n ConnectTimeout 2\n ConnectionAttempts 1\n"
+                f" UserKnownHostsFile {known_hosts}\n GlobalKnownHostsFile {known_hosts}\n"
             )
             environment = dict(
                 os.environ,
@@ -504,9 +532,17 @@ def failed_connection():
                 RODE_SESSION_DIR=str(base / "sessions"),
                 RODE_UI_TEST_STATE=str(base / "ui-state.json"),
             )
-            with (ARTIFACTS / "ssh-login-failure.log").open("w") as log:
+            with (ARTIFACTS / f"ssh-login-failure-{backend}.log").open("w") as log:
                 process = subprocess.Popen(
-                    [str(BINARY), "--ssh", "rode-failure", "--ssh-config", str(config)],
+                    [
+                        str(BINARY),
+                        "--ssh",
+                        "rode-failure",
+                        "--ssh-config",
+                        str(config),
+                        "--ssh-backend",
+                        backend,
+                    ],
                     cwd=base,
                     env=environment,
                     stdout=log,
@@ -518,7 +554,7 @@ def failed_connection():
                     ui = ProjectUI(window, process, log.name, environment)
                     ui.control("terminal-output-ended")
                     ui.disconnected()
-                    screenshot(window, "ssh-login-error-output.png")
+                    screenshot(window, f"ssh-login-error-output-{backend}.png")
                     ui.click("terminal-output-ended")
                     ui.control("terminal-output-ended", focused=True)
                     text("echo should-not-run\n")
@@ -533,7 +569,7 @@ def failed_connection():
                             output
                             if output
                             and "Connection refused" in output
-                            and f"port {port}:" in output
+                            and (f"port {port}:" in output or f"127.0.0.1:{port}" in output)
                             else None
                         )
 
@@ -554,15 +590,15 @@ def failed_connection():
                     key("Return")
                     ui.absent("file-dialog-path")
                     ui.saved(copied, output)
-                    screenshot(window, "ssh-login-error-copied.png")
+                    screenshot(window, f"ssh-login-error-copied-{backend}.png")
                     ui.picker()
-                    screenshot(window, "ssh-login-error-local-picker.png")
+                    screenshot(window, f"ssh-login-error-local-picker-{backend}.png")
                     ui.click("project-dialog-cancel")
                     ui.absent("project-dialog-path")
                     assert "[SSH" not in ui.title(), ui.title()
                     close_window(window, process)
                     print(
-                        "SSH failure: retained read-only client error, Copy and local opening passed."
+                        f"SSH failure ({backend}): retained read-only client error, Copy and local opening passed."
                     )
                 except Exception:
                     if ui is not None:
@@ -576,7 +612,8 @@ def failed_connection():
 
 case = os.environ.get("RODE_PROJECT_UI_CASE", "all")
 if case in ("all", "failure"):
-    failed_connection()
+    for backend in ("russh", "openssh"):
+        failed_connection(backend)
 if case in ("all", "sandbox"):
     run()
 if case in ("all", "fallback"):

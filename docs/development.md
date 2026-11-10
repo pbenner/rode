@@ -10,14 +10,75 @@ Build the public documentation with `scripts/uvx.sh --from mkdocs==1.6.1 mkdocs 
 cargo fmt --all --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 cargo clippy --workspace --all-targets -- -D warnings
-RODE_TEST_RUFF=/path/to/ruff cargo test --workspace --all-targets
+RODE_TEST_RUFF=/path/to/ruff python3 scripts/rust_tests.py
 ```
+
+`mise run test` and `scripts/rust_tests.py` run all ordinary workspace targets
+with a private home, XDG directories, temporary directory, session directory and
+vault coordination directory for each test binary. They preserve explicit Cargo
+and Rust toolchain locations and remove the development virtual environment
+from fixture command lookup. Tests therefore exercise sandbox enforcement
+without writing into the developer's home or relying on its Python activation.
+Explicit project interpreters and `RODE_TEST_*` tool paths remain available.
+The runner cleans up each private home after the test executable exits and keeps
+its exit status; it does not filter failing tests. Extra command-line arguments
+replace the default Cargo test arguments, for example
+`python3 scripts/rust_tests.py --locked --profile ci -p rode --test sessions`.
+Run `python3 scripts/test-rust-tests.py` to verify isolation, cleanup, argument
+forwarding and exit codes. Set `RODE_HOST_HELPER` to the freshly built
+`target/ci/rode-sessiond` when exercising the native-host integration cases.
+The SSH fixture uses the same private-home runner for both Cargo and prebuilt
+transport tests. Its remote shell shares private session/vault coordination
+directories within that fixture, so parallel fixtures do not borrow a developer's
+service or contend over a global vault directory.
 
 Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_host_core/index.html` for shared headless services, `target/doc/rode_host_protocol/index.html` for wire contracts, `target/doc/rode_agent_core/index.html` for agent protocols, `target/doc/rode_runtime_core/index.html` for notebook/debugger controllers, and `target/doc/rode_session/index.html` for the native gateway and persistent service. Add `--open` to the documentation command to open it in a browser. CI uses the same warning-free documentation check, including intra-doc links. Comment-only changes need formatting, API/documentation builds and a consistency review; application rebuilds and native UI tests are required only when executable behavior changes.
 
 The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; the remaining interpreter/Jupyter adapter docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
 
-Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
+Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, `src/app/sessions/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
+
+Session-control schema changes belong in
+`crates/rode-session/src/protocol.rs`; keep its crate-root re-exports stable and
+advance `PROTOCOL` when compatibility or required authentication changes. Frame
+changes belong in `framing.rs`, which owns both socket budgets. Check exact
+length boundaries, invalid/truncated prefixes, JSON kinds and the larger runtime
+budget with `cargo test -p rode-session framing::tests`. Run
+`cargo test -p rode-session --lib` and
+`cargo test --test sessions --test background_agents --test runtimes` when
+changing service ownership, directory setup or attachment routing. The existing
+control tests exercise inode substitution and authentication; service integration
+tests cover retained PTYs, permissions, handshake admission and runtime leases.
+
+Process lifetime changes start at `rode_runtime_core::process::ProcessGroup`,
+shared by desktop, agent and runtime transports. Its regressions run real owned
+process groups and check stop-before-spawn escalation, concurrent publication
+and cancellation, and isolation from independent groups:
+
+```sh
+cargo test -p rode-runtime-core process::group::tests
+cargo test --test agents --test background_agents --test notebooks --test debugger --test sessions
+```
+
+Retain each adapter's protocol limits and captured host/sandbox when changing
+this shared lifetime code. The installed `rode-sessiond` and standalone/static
+helper also share `rode_session::helper_main`; early bootstrap dispatch must
+remain before thread/runtime initialization. The service integration tests cover
+the installed helper, and the standalone helper can be checked without GUI
+dependencies using the build command below.
+
+Synchronous binary helpers and UTF-8 project commands share
+`rode_host_core::command::capture`. Its owner must keep the leader unreaped until
+its final group signal and clean up on normal exit as well as errors. Run
+`cargo test -p rode-host-core command::` for real-process cleanup, independent
+work, exact/uncapped binary limits and oversized diagnostics. Run
+`cargo test --test project command_` for the project runner checks and
+`cargo test --test security` for the real-PTY harness and file-security checks.
+LaTeX, Marp and extension suites cover cancellation/renderer cleanup; terminal,
+agent and runtime integration suites check that retained service jobs keep their
+separate lifetime. Native-host cases require an explicit `RODE_HOST_HELPER`
+pointing to the freshly built helper; a passing invocation without that fixture
+can leave gateway cases unexercised.
 
 `cargo test --lib saved_connection` checks Explorer profile context menus,
 dragging in both directions, Escape cancellation, ordinary clicks and failed
@@ -41,6 +102,15 @@ the SSH dialog's compact layout and runtime version columns. Theme tests compare
 the actual painted colours of empty hints and identical entered values; changing
 themes must keep hints muted without changing field contents. These checks run
 in `cargo test -p rode --lib` without opening a window.
+
+Directory-only locks, permission handles and durability syncs must use
+`rode_host_core::locking::open_directory`. A prior `is_dir`, `canonicalize` or
+`create_dir_all` does not protect a subsequent plain open from replacement by a
+FIFO. The shared guard preserves directory symlinks; private runtime paths still
+need their own ownership/permission and no-follow rules. Run
+`cargo test -p rode-host-core locking::tests` for directory substitution,
+private-file metadata and private-key checks, plus the affected LaTeX,
+persistence, bundle or encrypted-project integration tests.
 
 ## Process launch changes
 
@@ -88,10 +158,46 @@ keep navigation and Start/Close actions visible. These tests open no native wind
 They also cover long multiline diagnostics and copying request/tunnel errors
 without dispatching host work.
 
-The service now embeds russh and needs Rust 1.89. Rebuild the protocol-19 helper
-alongside the editor; existing daemon generations keep their own jobs. Validate
+The service embeds russh and needs Rust 1.89. Rebuild the matching helper
+alongside the editor; `rode_session::PROTOCOL` defines the required service
+generation, and existing daemon generations keep their own jobs. Validate
 the static musl helper against the existing 24 MiB deployment limit. Native UI
 checks must use the isolated headless display workflow below.
+
+The patched SSH sources in `vendor/russh` and `vendor/ssh-key` use `rsa >=0.10.0`
+and `pkcs1 >=0.8.0`, with the RSA `pkcs1v15` feature enabled for SSH signatures.
+Edit the normalized manifests for the local patch; retain `Cargo.toml.orig`
+unchanged as upstream provenance and record every adaptation in `PATCH.md`.
+The adapter unwraps the
+validated prime wrappers when exporting SSH key components, and reuses the
+RSA library's PKCS#1 decoder for PKCS#8 payloads. Do not restore the earlier
+RSA prerelease compatibility pins: RustSec marks those versions affected by
+[RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html).
+`cargo test --test ssh_client rsa_private_key_formats` checks encrypted/plain
+key round trips, signatures and rejection of changed messages/wrong passwords.
+Vendored SSH sources omit upstream serialized private-key fixtures, their
+dependent tests and embedded-key documentation examples. The normalized
+`ssh-key` manifest omits the corresponding integration-test targets; the
+original manifest remains an unchanged provenance record. Run
+`cargo test --test ssh_client generated_openssh_private_keys` for generated
+Ed25519, ECDSA and RSA OpenSSH key round trips, password rejection and signatures
+without committed key files.
+
+`cargo test -p rode-host-core coordinator::tests` covers shared tool-helper
+request limits and preservation of the following cancellation stream.
+`cargo test -p rode-session attachment::tests` covers shared attachment command
+limits, typed decoding, EOF and write failure. The LaTeX, Marp, extensions,
+background-agent and runtime integration suites cover their separate execution
+policies and attachment lifetimes.
+
+`cargo test --test sessions unauthenticated_connections` fills the service's
+pending-authentication budget, checks immediate rejection of excess peers and
+verifies that retained work and authenticated control survive once a slot frees.
+
+Socket fixtures need a short, writable temporary directory. For example, create
+`target/test-tmp` and set `TMPDIR="$PWD/target/test-tmp"` for Cargo tests. A deeply
+nested inherited temporary path can exceed Unix socket pathname limits before
+the service can start.
 
 ## Native SSH validation
 
@@ -198,6 +304,16 @@ UI fixtures can opt into `RODE_UI_TEST_STATE` to locate named controls in the cu
 
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
 
+The workspace fixture resolves tab, detach, dock and reattach controls by name,
+so tab ordering and wrapped toolbars cannot redirect a click. Each native
+viewport keeps separate controls and edit revisions: the root uses the supplied
+snapshot path, while children use `<path>.<viewport-id>.json`. Child snapshots
+include their builder title so the harness can distinguish equal-sized Chat,
+Terminal and whole-sidebar windows even when the platform cannot read titles
+back. The fixture checks disabled placeholders explicitly and retains all window
+snapshots and backend requests on failure. Native input and real shell PID,
+agent-session, draft and unsaved-file checks remain required.
+
 The history deletion fixture also uses named controls for setup, filtering,
 refresh, confirmation, diagnostics and restore. It checks the saved executable
 before opening History and waits for completed host operations and resized
@@ -234,6 +350,12 @@ Process fixtures must publish readiness markers only after their contents are co
 The terminal session UI fixture waits for palette focus and a complete command match, then for the exact host session to have an attached, focused terminal view. Shell commands acknowledge execution through complete file contents before another modal opens. Natural exit is gated until the open manager lists the session; the fixture then requires its removal from both the host service and the manager's cached list without clicking Refresh. The opt-in UI snapshot includes opaque session IDs for the whole manager list, including scrolled-out rows, and distinguishes an empty list from a closed manager. Multi-window snapshots have separate paths, and failures retain those snapshots, shell markers and the host session list alongside screenshots. Deadlines are unchanged and input is never retried.
 
 Observe widgets through their original `egui::Response`. `Context::read_response` replays interaction handling and can surrender focus after an outside click, even when the caller only wants geometry. The terminal tab regression checks real input delivery with the probe enabled and disabled, with mouse press/release in separate frames and batched together. The mise fixture retains the click on the already selected Terminal tab, waits for that same session's focus, and compares shell PID and environment before and after task execution. Metadata waits require the task button to render, not just the host request to be logged; failure artifacts retain the UI snapshot, fixture calls and shell markers.
+
+Remote startup foregrounds chat and collapses the explorer. UI fixtures must
+select the surfaces they exercise explicitly. Theme, Git staging/commit and image
+Fit controls use reported response geometry; Markdown image checks inspect the
+full document area. The coordinate-based notebook fixture deliberately expands
+the explorer before using its shared local/remote cell layout.
 
 Agent selector UI tests use named menu/option geometry and wait for a fresh rendered idle state between configuration changes. A saved preference or logged `session/set_config_option` request does not establish that the host and provider have finished applying it. The chat fixture creates `slow-controls` to delay provider replies and exercise that gap; the test still requires the new typed backend request, the saved selection and the subsequent idle acknowledgement. Clicks are not retried and timeout limits are unchanged.
 
@@ -551,6 +673,12 @@ It lays out 100 warmed frames at 390×900 with 1,600 variables, 1,024 breakpoint
 Regression coverage includes full-sized configurations with a slow adapter, request-buffer retries, old watch/frame/breakpoint replies, delayed source opens, invalid setting rollback, and terminal-view lifecycle. Shutdown drains output in batches so verbose targets do not consume the grace period one message at a time.
 
 `cargo test --test runtimes slow_debugger_views` deliberately stops reading an attached debugger during a multi-megabyte PTY output burst. The host retains unread terminal events within its bounded replay queue and propagates backpressure to the target instead of disconnecting the view. The test requires every output line, stepping and subsequent terminal input on the same attachment. A second case detaches the stalled reader, verifies the persistent target continues without a view, then reattaches and checks controls and input again.
+
+The runtime worker drains productive bounded batches immediately, checking
+queued controls between batches. It sleeps only when idle or waiting for replay
+space. A fixed sleep after every batch throttles small PTY reads even after
+detachment; increasing the test deadline would hide that delay. The retained
+screen, replay and transport limits still apply while output is draining.
 
 ## Lifecycle and hex rendering review
 

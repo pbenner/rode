@@ -187,6 +187,11 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
                 text(value)
                 wait_for_button(window, process, log_path, state_path, name, changed_after=before)
 
+            if remote:
+                # Remote startup intentionally foregrounds chat and hides the
+                # explorer. Select the surfaces this execution-mode test uses.
+                click("workspace-tab:Terminal")
+                command("Toggle explorer")
             first = created(set())
             active = first["mode"].startswith("SANDBOX")
             if expect_fallback:

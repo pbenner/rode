@@ -71,9 +71,11 @@ debug = 0
 incremental = false
 
 [workspace]
-exclude = ["vendor/vt100"]
+exclude = ["vendor/vt100", "vendor/russh", "vendor/ssh-key"]
 members = ["crates/rode-host-protocol", "crates/rode-host-core", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core", "crates/rode-bwrap", "xtask"]
 default-members = ["crates/rode-host-protocol", "crates/rode-host-core", ".", "crates/rode-session", "crates/rode-agent-core", "crates/rode-runtime-core"]
 
 [patch.crates-io]
 vt100 = { path = "vendor/vt100" }
+russh = { path = "vendor/russh" }
+ssh-key = { path = "vendor/ssh-key" }

@@ -4,13 +4,11 @@ use serde_json::Value;
 use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc,
-    },
-    time::Duration,
+    sync::{Arc, atomic::Ordering, mpsc},
 };
+
+mod group;
+pub use group::ProcessGroup;
 
 /// Process events shared with desktop adapters.
 #[derive(Debug)]
@@ -64,7 +62,7 @@ pub trait Transport: Send {
     fn poll(&self) -> Option<Event>;
     /// Stop only this process tree.
     fn stop(&self);
-    /// Whether the supervisor has reaped the process.
+    /// Whether supervision has finished, including launch failure and pipe cleanup.
     fn is_finished(&self) -> bool;
 }
 /// Connection owned by a notebook or debugger controller.
@@ -110,33 +108,6 @@ pub fn encode_request(value: &Value) -> Result<Vec<u8>> {
     bytes.push(b'\n');
     Ok(bytes)
 }
-struct Control {
-    pid: AtomicU32,
-    alive: AtomicBool,
-    stopped: AtomicBool,
-    finished: AtomicBool,
-}
-impl Control {
-    fn kill(&self, signal: i32) {
-        let pid = self.pid.load(Ordering::Acquire);
-        if pid != 0 && self.alive.load(Ordering::Acquire) {
-            unsafe {
-                libc::kill(-(pid as i32), signal);
-            }
-        }
-    }
-    fn stop(self: &Arc<Self>) {
-        if self.stopped.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.kill(libc::SIGTERM);
-        let control = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(1500));
-            control.kill(libc::SIGKILL);
-        });
-    }
-}
 struct Input(mpsc::SyncSender<Vec<u8>>);
 impl Sink for Input {
     fn try_send_buffer(&self, bytes: &mut Vec<u8>) -> Result<bool> {
@@ -159,7 +130,7 @@ impl Sink for Input {
 struct Pipe {
     writer: Writer,
     events: mpsc::Receiver<Event>,
-    control: Arc<Control>,
+    control: Arc<ProcessGroup>,
 }
 impl Transport for Pipe {
     fn writer(&self) -> Writer {
@@ -172,7 +143,7 @@ impl Transport for Pipe {
         self.control.stop();
     }
     fn is_finished(&self) -> bool {
-        self.control.finished.load(Ordering::Acquire)
+        self.control.is_finished()
     }
 }
 /// Spawn on the host. The spawning thread stays alive for the full sandbox lifetime.
@@ -192,12 +163,7 @@ pub fn spawn(mut command: Command) -> Result<Session> {
     }
     let (input, incoming) = mpsc::sync_channel::<Vec<u8>>(32);
     let (output, events) = mpsc::sync_channel(32);
-    let control = Arc::new(Control {
-        pid: AtomicU32::new(0),
-        alive: AtomicBool::new(false),
-        stopped: AtomicBool::new(false),
-        finished: AtomicBool::new(false),
-    });
+    let control = Arc::new(ProcessGroup::default());
     let pipe = Pipe {
         writer: Writer::new(Input(input)),
         events,
@@ -205,15 +171,11 @@ pub fn spawn(mut command: Command) -> Result<Session> {
     };
     std::thread::spawn(move || {
         let result = (|| -> Result<()> {
-            if control.stopped.load(Ordering::Acquire) {
+            if control.cancelled().load(Ordering::Acquire) {
                 return Ok(());
             }
             let mut child = command.spawn().context("Cannot start host runtime")?;
-            control.pid.store(child.id(), Ordering::Release);
-            control.alive.store(true, Ordering::Release);
-            if control.stopped.load(Ordering::Acquire) {
-                control.kill(libc::SIGTERM);
-            }
+            control.started(child.id());
             let mut stdin = child.stdin.take().context("Missing runtime input")?;
             std::thread::spawn(move || {
                 for data in incoming {
@@ -275,8 +237,7 @@ pub fn spawn(mut command: Command) -> Result<Session> {
             }
             let _ = output.send(Event::Started);
             let status = child.wait()?;
-            control.kill(libc::SIGKILL);
-            control.alive.store(false, Ordering::Release);
+            control.reaped();
             for reader in readers {
                 let _ = reader.join();
             }
@@ -286,8 +247,7 @@ pub fn spawn(mut command: Command) -> Result<Session> {
         if let Err(error) = result {
             let _ = output.send(Event::Error(format!("{error:#}")));
         }
-        control.alive.store(false, Ordering::Release);
-        control.finished.store(true, Ordering::Release);
+        control.finish();
     });
     Ok(Session::new(pipe))
 }

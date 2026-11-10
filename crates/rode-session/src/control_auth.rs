@@ -1,10 +1,16 @@
 //! Host-owned control capability. Landlock ABI 4/5 cannot scope abstract sockets.
 //! The token stays in a sealed memory file, accessible only through a ptrace-checked
-//! proc descriptor. Sharing the runtime directory reveals no usable secret.
+//! proc descriptor. Both peers prove access across the kernel's ptrace boundary;
+//! replacing a writable runtime directory must not impersonate a host service.
 use super::*;
+use std::{
+    fs::OpenOptions,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+};
 
 const TOKEN_FILE: &str = "control.capability";
 const TOKEN_BYTES: usize = 32;
+const PROOF_BYTES: usize = TOKEN_BYTES + 4;
 
 /// An owner-process capability shared by native local control transports.
 pub struct Token {
@@ -35,30 +41,83 @@ fn memory_file_with(mut create: impl FnMut(u32) -> std::io::Result<File>) -> std
     }
 }
 
+fn sealed_secret() -> Result<([u8; TOKEN_BYTES], File)> {
+    let mut bytes = [0; TOKEN_BYTES];
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    let mut file = memory_file().context("Cannot create terminal control capability")?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(&bytes)?;
+    ensure!(
+        unsafe {
+            libc::fcntl(
+                file.as_raw_fd(),
+                libc::F_ADD_SEALS,
+                libc::F_SEAL_SEAL | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_WRITE,
+            )
+        } == 0,
+        "Cannot seal terminal control capability: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok((bytes, file))
+}
+
+fn peer(stream: &UnixStream) -> Result<libc::ucred> {
+    let mut peer: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    ensure!(
+        unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut peer as *mut libc::ucred).cast(),
+                &mut size,
+            )
+        } == 0
+            && peer.pid > 0
+            && peer.uid == unsafe { libc::geteuid() },
+        "Terminal control peer must have the same UID"
+    );
+    Ok(peer)
+}
+
+fn read_secret(path: &Path) -> Result<[u8; TOKEN_BYTES]> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)?;
+    let meta = file.metadata()?;
+    ensure!(
+        meta.is_file()
+            && meta.uid() == unsafe { libc::geteuid() }
+            && meta.mode() & 0o077 == 0
+            && meta.len() == TOKEN_BYTES as u64,
+        "Invalid terminal control token length or permissions"
+    );
+    let required = libc::F_SEAL_SEAL | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_WRITE;
+    let seals = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) };
+    ensure!(
+        seals >= 0 && seals & required == required,
+        "Terminal control requires sealed memory"
+    );
+    let mut bytes = [0; TOKEN_BYTES];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn same_secret(left: &[u8], right: &[u8; TOKEN_BYTES]) -> bool {
+    left.len() == TOKEN_BYTES
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
 impl Token {
     /// Rotate before publishing a listener; the service lock serializes writers.
     pub fn publish(dir: &Path) -> Result<Self> {
-        let mut bytes = [0; TOKEN_BYTES];
-        File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-        let mut file = memory_file().context("Cannot create terminal control capability")?;
-        // Older kernels cannot seal execution bits; still start without any
-        // executable permissions. Modern kernels additionally seal that choice.
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
-        file.write_all(&bytes)?;
-        ensure!(
-            unsafe {
-                libc::fcntl(
-                    file.as_raw_fd(),
-                    libc::F_ADD_SEALS,
-                    libc::F_SEAL_SEAL
-                        | libc::F_SEAL_GROW
-                        | libc::F_SEAL_SHRINK
-                        | libc::F_SEAL_WRITE,
-                )
-            } == 0,
-            "Cannot seal terminal control capability: {}",
-            std::io::Error::last_os_error()
-        );
+        let (bytes, file) = sealed_secret()?;
         let mut reference = tempfile::NamedTempFile::new_in(dir)?;
         write!(
             reference,
@@ -70,24 +129,32 @@ impl Token {
         Ok(Self { bytes, _file: file })
     }
 
-    /// Check a fixed-size frame before reading any request or attaching a view.
+    /// Check the client capability, then prove access to its fresh sealed nonce
+    /// before any request is read. A sandboxed impostor cannot open the host
+    /// client's proc descriptor, even after replacing the runtime directory.
     pub fn verify(&self, stream: &mut UnixStream) -> Result<()> {
         let mut size = [0; 4];
         stream.read_exact(&mut size)?;
         ensure!(
-            u32::from_be_bytes(size) == (TOKEN_BYTES + 1) as u32,
+            u32::from_be_bytes(size) == (PROOF_BYTES + 1) as u32,
             "Terminal control authentication required outside the project sandbox"
         );
-        let mut proof = [0; TOKEN_BYTES + 1];
+        let mut proof = [0; PROOF_BYTES + 1];
         stream.read_exact(&mut proof)?;
-        let different = proof[1..]
-            .iter()
-            .zip(self.bytes)
-            .fold(0, |different, (a, b)| different | (a ^ b));
         ensure!(
-            proof[0] == b'A' && different == 0,
+            proof[0] == b'A' && same_secret(&proof[1..=TOKEN_BYTES], &self.bytes),
             "Terminal control authentication failed outside the project sandbox"
         );
+        let descriptor = i32::from_be_bytes(proof[TOKEN_BYTES + 1..].try_into().unwrap());
+        ensure!(
+            descriptor > 2,
+            "Invalid terminal control challenge descriptor"
+        );
+        let peer = peer(stream)?;
+        let path = PathBuf::from(format!("/proc/{}/fd/{descriptor}", peer.pid));
+        let challenge = read_secret(&path)
+            .context("Cannot prove host service identity outside the project sandbox")?;
+        frame(stream, b'V', &challenge)?;
         Ok(())
     }
 }
@@ -117,39 +184,24 @@ pub fn authenticate(stream: &mut UnixStream, dir: &Path) -> Result<()> {
     );
     let pid = fields[2].parse::<libc::pid_t>()?;
     let descriptor = fields[4].parse::<libc::c_int>()?;
-    let mut peer: libc::ucred = unsafe { std::mem::zeroed() };
-    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let peer = peer(stream)?;
     ensure!(
-        unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut peer as *mut libc::ucred).cast(),
-                &mut size,
-            )
-        } == 0
-            && peer.pid == pid
-            && peer.uid == unsafe { libc::geteuid() }
-            && descriptor > 2,
+        peer.pid == pid && descriptor > 2,
         "Terminal control capability does not belong to the service"
     );
     // A writable runtime directory must not let a substituted FIFO or device
     // block a host client before we can validate the opened inode.
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)?;
-    let meta = file.metadata()?;
+    let bytes = read_secret(Path::new(&path))?;
+    let (challenge, memory) = sealed_secret()?;
+    let mut proof = bytes.to_vec();
+    proof.extend(memory.as_raw_fd().to_be_bytes());
+    frame(stream, b'A', &proof)?;
+    let (kind, answer) = read_frame(stream)?;
     ensure!(
-        meta.is_file()
-            && meta.uid() == unsafe { libc::geteuid() }
-            && meta.len() == TOKEN_BYTES as u64,
-        "Invalid terminal control token length"
+        kind == b'V' && same_secret(&answer, &challenge),
+        "Terminal control service did not prove its host identity"
     );
-    let mut bytes = [0; TOKEN_BYTES];
-    file.read_exact(&mut bytes)?;
-    frame(stream, b'A', &bytes)?;
+    drop(memory);
     ensure!(
         matches!(recv_json::<_, Response>(stream)?.checked()?, Response::Ok),
         "Unexpected terminal control authentication reply"

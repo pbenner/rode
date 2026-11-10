@@ -122,7 +122,23 @@ pub enum Reply {
     },
 }
 
+/// Resolve the shared host coordination root, honoring an explicit
+/// `RODE_VAULT_DIR` override. Every window on one host must use the same root.
+/// The default is `/tmp/rode-vaults-UID`; ownership, permissions and absolute
+/// path validation occur before use, without repairing unsafe existing paths.
+pub fn runtime_directory() -> PathBuf {
+    std::env::var_os("RODE_VAULT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(format!("/tmp/rode-vaults-{}", unsafe { libc::geteuid() }))
+        })
+}
+
 fn private_directory(path: &Path) -> Result<()> {
+    ensure!(
+        path.is_absolute(),
+        "Encrypted-project runtime directory must be absolute."
+    );
     if !path.exists() {
         match fs::DirBuilder::new().mode(0o700).create(path) {
             Ok(()) => {}
@@ -203,7 +219,7 @@ impl Mount {
             .context("Cannot open the encrypted folder")?;
         ensure!(cipher.is_dir(), "Encrypted storage must be a directory.");
         let digest = crate::files::digest(cipher.to_string_lossy().as_bytes());
-        let base = PathBuf::from(format!("/tmp/rode-vaults-{}", unsafe { libc::geteuid() }));
+        let base = runtime_directory();
         private_directory(&base)?;
         let base = base.canonicalize()?;
         let runtime = base.join(&digest);
@@ -273,7 +289,9 @@ impl Mount {
             unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0,
             "Encrypted project is being locked by another window."
         );
-        self.directory = Some(File::open(&self.info.mountpoint)?);
+        self.directory = Some(crate::locking::open_directory(Path::new(
+            &self.info.mountpoint,
+        ))?);
         self.lease = Some(lease);
         Ok(())
     }
@@ -289,7 +307,9 @@ impl Mount {
         fs::set_permissions(&self.info.mountpoint, fs::Permissions::from_mode(0o700))?;
         // The underlying empty directory is inaccessible whenever the FUSE
         // mount is absent. A late operation cannot save plaintext into it.
-        let _covered = CoveredDirectory(File::open(&self.info.mountpoint)?);
+        let _covered = CoveredDirectory(crate::locking::open_directory(Path::new(
+            &self.info.mountpoint,
+        ))?);
         ensure!(
             fs::read_dir(&self.info.mountpoint)?.next().is_none(),
             "The decrypted mountpoint must be empty."
@@ -612,6 +632,24 @@ pub fn scratch_parent(root: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coordination_roots_reject_relative_symlinked_and_shared_directories() {
+        let root = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(private_directory(&shared).is_err());
+        assert_eq!(fs::metadata(&shared).unwrap().mode() & 0o777, 0o777);
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+        assert!(private_directory(&alias).is_err());
+        assert!(private_directory(Path::new("relative-vault-runtime")).is_err());
+        assert!(private_directory(root.path()).is_ok());
+    }
+
     #[test]
     fn fast_tool_exit_is_reaped_and_passwords_are_redacted() {
         let root = tempfile::tempdir().unwrap();

@@ -4,6 +4,7 @@ use russh::{
     keys::{Algorithm, PrivateKey},
     server::{self, Server as _},
 };
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -98,6 +99,10 @@ impl server::Handler for Peer {
 fn key() -> PrivateKey {
     PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()
 }
+fn write_private(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) {
+    std::fs::write(&path, bytes).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
 fn spec() -> Spec {
     Spec {
         relay_host: "127.0.0.1".into(),
@@ -163,14 +168,13 @@ async fn relay_disconnect_releases_forwards_even_when_local_peers_stay_open() {
     let directory = tempfile::tempdir().unwrap();
     let identity = key();
     let identity_path = directory.path().join("identity");
-    std::fs::write(
+    write_private(
         &identity_path,
         identity
             .to_openssh(keys::ssh_key::LineEnding::LF)
             .unwrap()
             .as_bytes(),
-    )
-    .unwrap();
+    );
     let host_key = key();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let relay_port = listener.local_addr().unwrap().port();
@@ -457,11 +461,34 @@ fn tunnel_identity_errors_identify_the_file_and_preserve_the_cause() {
 
     let invalid = directory.path().join("invalid-key");
     let private_content = "invalid-private-key-content-must-not-be-displayed";
-    std::fs::write(&invalid, private_content).unwrap();
+    write_private(&invalid, private_content);
     let message = format!("{:#}", read_identity(&invalid).unwrap_err());
     assert!(message.contains(invalid.to_str().unwrap()), "{message}");
     assert!(message.contains("decode"), "{message}");
     assert!(!message.contains(private_content));
+}
+
+#[test]
+fn tunnel_private_keys_reject_shared_permissions_before_decoding() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("identity");
+    let encoded = key().to_openssh(keys::ssh_key::LineEnding::LF).unwrap();
+    write_private(&path, encoded.as_bytes());
+    for mode in [0o600, 0o400, 0o640, 0o644, 0o660, 0o666] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        if mode & 0o077 == 0 {
+            assert!(read_identity(&path).is_ok());
+        } else {
+            let error = read_identity(&path).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            let message = format!("{error:#}");
+            assert!(message.contains("chmod 600"), "{message}");
+            assert!(!message.contains(encoded.as_str()));
+        }
+    }
 }
 
 #[test]
@@ -487,13 +514,15 @@ fn tunnel_identity_fifo_is_rejected_without_waiting_for_a_writer() {
             .unwrap()
     });
     reader.join().unwrap();
-    assert!(
-        result
-            .expect("Identity open waited for a FIFO writer")
-            .unwrap_err()
-            .to_string()
-            .contains("regular file")
+    let error = result
+        .expect("Identity open waited for a FIFO writer")
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::InvalidInput
     );
+    let message = format!("{error:#}");
+    assert!(message.contains("regular file"), "{message}");
 }
 
 #[test]
@@ -563,14 +592,13 @@ async fn default_identity_fixture(home: &Path) {
     let ssh = home.join(".ssh");
     std::fs::create_dir(&ssh).unwrap();
     let write_key = |name: &str, identity: &PrivateKey| {
-        std::fs::write(
+        write_private(
             ssh.join(name),
             identity
                 .to_openssh(keys::ssh_key::LineEnding::LF)
                 .unwrap()
                 .as_bytes(),
-        )
-        .unwrap();
+        );
     };
     for (name, algorithm) in [
         ("id_rsa", Algorithm::Rsa { hash: None }),
@@ -625,7 +653,7 @@ async fn default_identity_fixture(home: &Path) {
         assert_eq!(relay.auths.load(Ordering::SeqCst), 1);
         if name == "id_ed25519" {
             // Bad and rejected defaults must not prevent the final key working.
-            std::fs::write(ssh.join("id_rsa"), "invalid-private-key-must-not-leak").unwrap();
+            write_private(ssh.join("id_rsa"), "invalid-private-key-must-not-leak");
             write_key("id_ecdsa", &key());
             let info = settled_tunnel(&store, settings.clone()).await;
             assert_eq!(info.status, Status::Connected, "{info:?}");
@@ -666,7 +694,7 @@ async fn default_identity_fixture(home: &Path) {
                 .await;
                 assert_eq!(info.status, Status::Attention, "{info:?}");
             }
-            std::fs::write(ssh.join("id_rsa"), "invalid-private-key-must-not-leak").unwrap();
+            write_private(ssh.join("id_rsa"), "invalid-private-key-must-not-leak");
             std::fs::remove_file(ssh.join("id_ed25519")).unwrap();
             let info = settled_tunnel(&store, settings.clone()).await;
             assert_eq!(info.status, Status::Attention, "{info:?}");
@@ -697,14 +725,13 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
     let directory = tempfile::tempdir().unwrap();
     let identity = key();
     let identity_path = directory.path().join("identity");
-    std::fs::write(
+    write_private(
         &identity_path,
         identity
             .to_openssh(keys::ssh_key::LineEnding::LF)
             .unwrap()
             .as_bytes(),
-    )
-    .unwrap();
+    );
     let host_key = key();
     let alternate_key = PrivateKey::random(
         &mut rand::rng(),

@@ -1,5 +1,78 @@
 use super::*;
 use std::os::linux::net::SocketAddrExt;
+use std::os::unix::fs::PermissionsExt;
+
+#[test]
+fn service_startup_never_appends_to_a_redirected_log() {
+    use std::os::unix::fs::symlink;
+    for hard_link in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime");
+        private_directory_at(&runtime).unwrap();
+        let victim = root.path().join("unrelated.txt");
+        fs::write(&victim, "untouched\n").unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
+        if hard_link {
+            fs::hard_link(&victim, runtime.join("service.log")).unwrap();
+        } else {
+            symlink(&victim, runtime.join("service.log")).unwrap();
+        }
+        let launcher = Launcher {
+            executable: "/bin/sh".into(),
+            prefix: vec![
+                "-c".into(),
+                "printf 'redirected service error\\n' >&2; exit 1".into(),
+                "log-fixture".into(),
+            ],
+        };
+        let request = Request::Create {
+            id: new_id().unwrap(),
+            name: "Log fixture".into(),
+            root: root.path().to_string_lossy().into(),
+            policy: "a".repeat(64),
+            mode: "NORMAL MODE".into(),
+            argv: vec!["/bin/sh".into()],
+            initial_input: String::new(),
+            env: BTreeMap::new(),
+            persistent: false,
+            allocation: None,
+        };
+        assert!(request_once(&request, &launcher, &runtime).is_err());
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            "untouched\n",
+            "Service log followed an untrusted link"
+        );
+    }
+}
+
+#[test]
+fn runtime_directory_replacement_cannot_redirect_host_artifact_writes() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("runtime");
+    let directory = private_directory_at(&runtime).unwrap();
+    let moved = root.path().join("original");
+    let victim = root.path().join("other");
+    fs::create_dir(&victim).unwrap();
+    fs::write(victim.join("service.log"), "untouched").unwrap();
+    fs::rename(&runtime, &moved).unwrap();
+    symlink(&victim, &runtime).unwrap();
+    let mut log = rode_host_core::locking::open_private(
+        &runtime_path(&runtime, &directory).join("service.log"),
+        rode_host_core::locking::PrivateFile::Append,
+    )
+    .unwrap();
+    log.write_all(b"private log").unwrap();
+    assert_eq!(
+        fs::read_to_string(victim.join("service.log")).unwrap(),
+        "untouched"
+    );
+    assert_eq!(
+        fs::read_to_string(moved.join("service.log")).unwrap(),
+        "private log"
+    );
+}
 
 #[test]
 fn authenticated_control_requires_the_current_protocol() {

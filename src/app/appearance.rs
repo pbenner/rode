@@ -108,7 +108,8 @@ impl EditorApp {
             .max_height(280.0)
             .show(ui, |ui| {
                 for entry in &self.themes.entries {
-                    ui.radio_value(&mut selected, entry.id.clone(), &entry.name);
+                    let response = ui.radio_value(&mut selected, entry.id.clone(), &entry.name);
+                    ui_probe::button(ui, &format!("interface-theme:{}", entry.id), &response);
                 }
             });
         if selected != self.themes.active().id {

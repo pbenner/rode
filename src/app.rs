@@ -877,6 +877,7 @@ impl EditorApp {
             self.notify("Host returned an invalid project description.", true);
             return;
         };
+        let opening_connection = remote && self.workspace.as_ref().is_some_and(|w| !w.ready);
         let connection = if remote {
             self.workspace.as_ref().and_then(|w| w.remote.clone())
         } else {
@@ -946,6 +947,11 @@ impl EditorApp {
             self.open_file(path, ctx);
         } else if self.show_terminal {
             self.start_project_terminal(ctx);
+        }
+        if opening_connection {
+            self.show_explorer = false;
+            self.reveal_panel(Panel::Agent, ctx);
+            self.agents.focus = true;
         }
     }
 

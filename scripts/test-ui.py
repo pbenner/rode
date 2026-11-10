@@ -15,6 +15,7 @@ from ui_harness import (
     assert_running,
     background,
     click,
+    click_button,
     close_window,
     focus_window,
     key,
@@ -57,7 +58,10 @@ fn run_step(step: usize) {
     (Path(directory) / "scripts").mkdir()
     log = (ARTIFACTS / "app.log").open("w")
     environment = dict(
-        os.environ, XDG_CONFIG_HOME=directory + "/config", XDG_DATA_HOME=directory + "/data-home"
+        os.environ,
+        XDG_CONFIG_HOME=directory + "/config",
+        XDG_DATA_HOME=directory + "/data-home",
+        RODE_UI_TEST_STATE=directory + "/ui-state.json",
     )
     theme_dir = Path(directory) / "config/rode/themes"
     theme_dir.mkdir(parents=True)
@@ -137,9 +141,21 @@ fn run_step(step: usize) {
         background(window, "carbon.png", (16, 16, 16))
         # The status-bar menu contains built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
-        click(1310, 887)
+        click_button(
+            window,
+            process,
+            ARTIFACTS / "app.log",
+            environment["RODE_UI_TEST_STATE"],
+            "appearance-menu",
+        )
         screenshot(window, "status-theme-selector.png")
-        click(1290, 560)  # Phosphor, first menu row
+        click_button(
+            window,
+            process,
+            ARTIFACTS / "app.log",
+            environment["RODE_UI_TEST_STATE"],
+            "interface-theme:phosphor",
+        )
         saved_theme(directory, "phosphor")
         background(window, "phosphor.png", (13, 18, 20))
         for preset, color in [
@@ -165,8 +181,20 @@ fn run_step(step: usize) {
         theme("smoke custom")
         saved_theme(directory, "custom:smoke")
         background(window, "custom.png", (21, 18, 26))
-        click(1310, 887)
-        click(1290, 635)  # Code Dark, fourth menu row
+        click_button(
+            window,
+            process,
+            ARTIFACTS / "app.log",
+            environment["RODE_UI_TEST_STATE"],
+            "appearance-menu",
+        )
+        click_button(
+            window,
+            process,
+            ARTIFACTS / "app.log",
+            environment["RODE_UI_TEST_STATE"],
+            "interface-theme:code-dark",
+        )
         saved_theme(directory, "code-dark")
         theme("Studio Neutral")
         saved_theme(directory, "studio-neutral")

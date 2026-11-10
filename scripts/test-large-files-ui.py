@@ -23,6 +23,7 @@ from ui_harness import (
     close_window,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
     wait_for_button,
@@ -103,8 +104,9 @@ with tempfile.TemporaryDirectory(prefix="rode-large-files-ui-") as directory:
                     item["name"] == "hex-saved" for item in json.loads(state.read_text())["buttons"]
                 )
 
-            # SSH login initially owns terminal focus. Open through the real
-            # explorer row rather than sending Ctrl+P to that shell.
+            if remote:
+                palette_command(window, process, log.name, state, "Toggle explorer")
+            # Open through the real explorer row after selecting its surface.
             button("explorer-row:" + str(path))
             point("hex-ready", timeout=60)
             point("hex-next-page")

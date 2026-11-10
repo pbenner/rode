@@ -28,18 +28,22 @@
 //! rather than PTY-style shared input. Their complete protocol/history state
 //! comes from `rode-agent-core`, keeping remote helpers independent of the GUI.
 //! Pending questions wait without a view; persistence never broadens policy.
+//!
+//! `protocol` defines the shared wire schema; `framing` owns bounded socket
+//! encoding, and `runtime_directory` owns protected host artifacts. This root
+//! composes authentication, PTY ownership and dispatch. Agent/runtime controllers
+//! and stdin attachment cleanup live in their corresponding private modules.
 #![warn(missing_docs)]
 use anyhow::{Context, Result, bail, ensure};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::{
-            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+            fs::MetadataExt,
             net::{UnixListener, UnixStream},
             process::CommandExt,
         },
@@ -55,16 +59,27 @@ use std::{
 };
 
 mod agents;
+mod attachment;
 #[cfg(target_os = "linux")]
 pub mod control_auth;
+mod entry;
+mod framing;
+mod protocol;
+mod runtime_directory;
 mod runtimes;
 pub mod tunnels;
 
-/// Required service protocol and runtime-directory generation.
-pub const PROTOCOL: u32 = 21;
-const MAX_FRAME: usize = 4 * 1024 * 1024;
+pub use entry::helper_main;
+use framing::{MAX_FRAME, frame, read_frame, recv_json, send_json};
+pub use protocol::{Info, PROTOCOL, Request, Response};
+pub use runtime_directory::directory;
+use runtime_directory::{private_directory, private_directory_at, private_listener, runtime_path};
+
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 8;
+// Authentication reads run on blocking workers. Bound these before spawning so
+// a local peer cannot create unlimited threads without proving host access.
+const MAX_PENDING_CONTROL: usize = 32;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Relaunch this running image, including after a Linux upgrade unlinks it.
@@ -83,191 +98,6 @@ pub fn current_executable() -> Result<PathBuf> {
     }
     Ok(path)
 }
-/// Host-service metadata for one terminal; no live PTY handle is transferred to clients.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Info {
-    /// Opaque native session identifier.
-    pub id: String,
-    /// User-visible session name.
-    pub name: String,
-    /// Project working directory on the service host.
-    pub root: String,
-    /// Fingerprint of the creating workspace's actual sandbox plan.
-    pub policy: String,
-    /// Display label for the actual launch mode.
-    pub mode: String,
-    /// Whether the shell is still running.
-    pub alive: bool,
-    /// Number of currently attached terminal views.
-    pub clients: usize,
-    /// Creation time in Unix seconds.
-    pub created: u64,
-    /// Exit status when known; completed records are normally reaped promptly.
-    pub exit_code: Option<u32>,
-    /// Keep running with no attached views.
-    pub persistent: bool,
-    /// Scheduler job name for a managed interactive allocation, retained across
-    /// renames and shared attachments.
-    pub allocation: Option<String>,
-}
-/// Owner-only Unix-socket control protocol, serialized as JSON with an `action` tag.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum Request {
-    /// Discover daemon-owned reverse SSH tunnels without starting a service.
-    Tunnels,
-    /// Start or explicitly replace one daemon-owned tunnel.
-    StartTunnel {
-        /// Stable request identity for idempotent retries.
-        id: String,
-        /// Relay, host identity and explicitly selected listener scope.
-        spec: tunnels::Spec,
-    },
-    /// Stop a tunnel and all of its active forwarding channels.
-    StopTunnel {
-        /// Exact tunnel identity; unrelated sessions are retained.
-        id: String,
-    },
-    /// Report the required protocol before accepting client operations.
-    Protocol,
-    /// Discover retained notebook and debugger runtimes.
-    Runtimes,
-    /// Create a captured host-owned runtime.
-    CreateRuntime {
-        /// Immutable launch and lifetime context.
-        spec: Box<rode_runtime_core::service::Spec>,
-    },
-    /// Attach the exclusive controlling desktop.
-    AttachRuntime {
-        /// Native runtime identity.
-        id: String,
-        /// Original workspace policy fingerprint.
-        policy: String,
-    },
-    /// End a runtime and discard retained output.
-    EndRuntime {
-        /// Native runtime identity.
-        id: String,
-        /// Original workspace policy fingerprint.
-        policy: String,
-    },
-    /// List running sessions without keeping an otherwise idle service alive.
-    List,
-    /// List live agents without starting a service or inference.
-    Agents,
-    /// Create a host-owned conversation controller on explicit Send/History.
-    CreateAgent {
-        /// Captured and validated host launch context.
-        spec: Box<rode_agent_core::service::Spec>,
-    },
-    /// Attach the sole controlling desktop to a live agent.
-    AttachAgent {
-        /// Native agent identity.
-        id: String,
-        /// Original policy fingerprint.
-        policy: String,
-    },
-    /// Explicitly terminate one agent and its scoped process tree.
-    EndAgent {
-        /// Native agent identity.
-        id: String,
-        /// Original policy fingerprint.
-        policy: String,
-    },
-    /// Create a supervised PTY shell with explicit lifetime and environment.
-    Create {
-        /// Unique identifier for the new session.
-        id: String,
-        /// Initial user-visible session name.
-        name: String,
-        /// Initial working directory on the service host.
-        root: String,
-        /// Workspace policy fingerprint checked by later mutations/attachments.
-        policy: String,
-        /// Actual launch mode label for discovery.
-        mode: String,
-        /// Executable and literal arguments, including any enforcing sandbox prefix.
-        argv: Vec<String>,
-        /// Startup shell input sent once, never replayed when reattaching.
-        initial_input: String,
-        /// Environment captured from the creating caller.
-        env: BTreeMap<String, String>,
-        /// Whether to retain the shell after its final view disconnects.
-        persistent: bool,
-        /// Unique scheduler job name, if this terminal owns an allocation.
-        allocation: Option<String>,
-    },
-    /// Attach a streaming view after verifying the workspace policy fingerprint.
-    Attach {
-        /// Session to attach.
-        id: String,
-        /// Expected workspace policy fingerprint.
-        policy: String,
-    },
-    /// Rename a terminal without restarting its shell.
-    Rename {
-        /// Session to rename.
-        id: String,
-        /// Expected workspace policy fingerprint.
-        policy: String,
-        /// Replacement display name.
-        name: String,
-    },
-    /// Change last-view lifetime without restarting the shell.
-    SetPersistence {
-        /// Session to update.
-        id: String,
-        /// Expected workspace policy fingerprint.
-        policy: String,
-        /// Desired persistence after the final view disconnects.
-        persistent: bool,
-    },
-    /// Explicitly terminate one session and its owned descendants.
-    End {
-        /// Session to terminate.
-        id: String,
-        /// Expected workspace policy fingerprint.
-        policy: String,
-    },
-    /// Stop the service only when no running sessions prevent shutdown.
-    Shutdown,
-}
-/// Tagged JSON reply to a session-service control request.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-pub enum Response {
-    /// Discoverable daemon-owned reverse SSH tunnels.
-    Tunnels(Vec<tunnels::Info>),
-    /// Started/replaced tunnel, which may still be connecting.
-    Tunnel(Box<tunnels::Info>),
-    /// Exact protocol implemented by this service.
-    Protocol(u32),
-    /// Discoverable retained notebook/debugger controllers.
-    Runtimes(Vec<rode_runtime_core::service::Info>),
-    /// Created notebook/debugger identity.
-    Runtime(Box<rode_runtime_core::service::Info>),
-    /// Snapshot of discoverable running terminals.
-    Sessions(Vec<Info>),
-    /// Live native agent controllers.
-    Agents(Vec<rode_agent_core::service::Info>),
-    /// Created native agent metadata.
-    Agent(rode_agent_core::service::Info),
-    /// Metadata for the created or updated terminal.
-    Session(Info),
-    /// Successful operation without a result payload.
-    Ok,
-    /// User-visible service error; use [`Self::checked`] to propagate it.
-    Error(String),
-}
-impl Response {
-    /// Convert a service error reply into an `anyhow` error.
-    pub fn checked(self) -> Result<Self> {
-        if let Self::Error(error) = &self {
-            bail!("{error}");
-        }
-        Ok(self)
-    }
-}
 /// Executable identity used to start this client's matching service generation.
 #[derive(Clone)]
 pub struct Launcher {
@@ -277,69 +107,6 @@ pub struct Launcher {
     pub prefix: Vec<String>,
 }
 
-/// Resolve the host runtime directory, honoring `RODE_SESSION_DIR`; ownership validation occurs
-/// on use.
-pub fn directory() -> PathBuf {
-    std::env::var_os("RODE_SESSION_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(format!("/tmp/rode-session-v{PROTOCOL}-{}", unsafe {
-                libc::geteuid()
-            }))
-        })
-}
-fn private_directory() -> Result<PathBuf> {
-    let path = directory();
-    private_directory_at(&path)?;
-    Ok(path)
-}
-fn private_directory_at(path: &Path) -> Result<()> {
-    ensure!(
-        path.is_absolute(),
-        "Terminal runtime directory must be absolute"
-    );
-    match fs::DirBuilder::new().mode(0o700).create(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
-    let meta = fs::symlink_metadata(path)?;
-    ensure!(
-        meta.is_dir() && meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o077 == 0,
-        "Session directory must be an owner-only directory: {}",
-        path.display()
-    );
-    Ok(())
-}
-fn socket() -> PathBuf {
-    directory().join("socket")
-}
-fn frame<W: Write>(out: &mut W, kind: u8, bytes: &[u8]) -> Result<()> {
-    ensure!(bytes.len() < MAX_FRAME, "Session message exceeds 4 MiB");
-    out.write_all(&((bytes.len() + 1) as u32).to_be_bytes())?;
-    out.write_all(&[kind])?;
-    out.write_all(bytes)?;
-    out.flush()?;
-    Ok(())
-}
-fn read_frame<R: Read>(input: &mut R) -> Result<(u8, Vec<u8>)> {
-    let mut size = [0; 4];
-    input.read_exact(&mut size)?;
-    let size = u32::from_be_bytes(size) as usize;
-    ensure!(size > 0 && size <= MAX_FRAME, "Invalid session frame size");
-    let mut bytes = vec![0; size];
-    input.read_exact(&mut bytes)?;
-    let kind = bytes.remove(0);
-    Ok((kind, bytes))
-}
-fn send_json<W: Write, T: Serialize>(out: &mut W, value: &T) -> Result<()> {
-    frame(out, b'J', &serde_json::to_vec(value)?)
-}
-fn recv_json<R: Read, T: serde::de::DeserializeOwned>(input: &mut R) -> Result<T> {
-    let (kind, bytes) = read_frame(input)?;
-    ensure!(kind == b'J', "Expected a session control message");
-    Ok(serde_json::from_slice(&bytes)?)
-}
 #[cfg(target_os = "linux")]
 fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::SocketAddr> {
     use std::os::linux::net::SocketAddrExt;
@@ -561,12 +328,17 @@ fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Re
             if !service_offline(&error) {
                 return Err(error);
             }
-            private_directory_at(dir)?;
-            let log = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .open(dir.join("service.log"))?;
+            let directory = private_directory_at(dir)?;
+            let log = rode_host_core::locking::open_private(
+                &runtime_path(dir, &directory).join("service.log"),
+                rode_host_core::locking::PrivateFile::Append,
+            )
+            .with_context(|| {
+                format!(
+                    "Cannot open private session log {}",
+                    dir.join("service.log").display()
+                )
+            })?;
             let mut command = Command::new(&launcher.executable);
             command
                 .args(&launcher.prefix)
@@ -1108,7 +880,11 @@ fn verify_control_namespace(
     Ok(())
 }
 
-fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
+fn handle(
+    server: &Arc<Server>,
+    mut stream: UnixStream,
+    admission: tokio::sync::OwnedSemaphorePermit,
+) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
@@ -1145,6 +921,9 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
         "Session protocol handshake required"
     );
     send_json(&mut stream, &Response::Protocol(PROTOCOL))?;
+    // Established attachments have their own controller/view limits. They must
+    // not occupy the budget reserved for clients still proving their authority.
+    drop(admission);
     let request: Request = recv_json(&mut stream)?;
     if let Request::AttachRuntime { id, policy } = &request {
         return server.runtimes.attach(stream, id, policy);
@@ -1367,35 +1146,41 @@ fn handle(server: &Arc<Server>, mut stream: UnixStream) -> Result<()> {
 
 /// Run the headless owner-only Unix-socket server until stopped or idle with no live shells.
 /// The service owns PTYs independently of GUI clients.
+/// Call in a dedicated helper before spawning other threads: startup briefly
+/// changes the file-creation mask, restoring it before accepting work.
 pub fn serve() -> Result<()> {
-    let dir = private_directory()?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .open(dir.join("lock"))?;
+    let (dir, directory) = private_directory()?;
+    let runtime = runtime_path(&dir, &directory);
+    let socket = runtime.join("socket");
+    let lock = rode_host_core::locking::open_private(
+        &runtime.join("lock"),
+        rode_host_core::locking::PrivateFile::Lock,
+    )
+    .with_context(|| {
+        format!(
+            "Cannot open private session lock {}",
+            dir.join("lock").display()
+        )
+    })?;
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Ok(());
     }
-    if socket().exists() {
-        let meta = fs::symlink_metadata(socket())?;
+    if socket.exists() {
+        let meta = fs::symlink_metadata(&socket)?;
         ensure!(
             !meta.file_type().is_symlink() && meta.uid() == unsafe { libc::geteuid() },
             "Unsafe terminal socket"
         );
-        fs::remove_file(socket())?;
+        fs::remove_file(&socket)?;
     }
     #[cfg(target_os = "linux")]
-    let control_auth = control_auth::Token::publish(&dir)?;
+    let control_auth = control_auth::Token::publish(&runtime)?;
     // Publish discovery only after the authenticated endpoint is listening. A
     // filesystem socket alone would be reachable through Landlock's pathname
     // Unix-socket limitation, even without a grant for the runtime directory.
     #[cfg(target_os = "linux")]
-    let listener = UnixListener::bind_addr(&control_address(&fs::metadata(&dir)?)?)?;
-    let discovery = UnixListener::bind(socket())?;
-    fs::set_permissions(socket(), fs::Permissions::from_mode(0o600))?;
+    let listener = UnixListener::bind_addr(&control_address(&directory.metadata()?)?)?;
+    let discovery = private_listener(&socket)?;
     #[cfg(not(target_os = "linux"))]
     let listener = discovery.try_clone()?;
     let server = Arc::new(Server {
@@ -1410,6 +1195,7 @@ pub fn serve() -> Result<()> {
         next_viewer: AtomicU64::new(1),
     });
     let mut idle_since = Some(Instant::now());
+    let pending_control = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_CONTROL));
     while !server.stop.load(Ordering::Acquire) {
         let ids: Vec<_> = server.sessions.lock().unwrap().keys().cloned().collect();
         for id in ids {
@@ -1447,15 +1233,26 @@ pub fn serve() -> Result<()> {
             continue;
         }
         let (stream, _) = listener.accept()?;
+        let Ok(admission) = pending_control.clone().try_acquire_owned() else {
+            continue;
+        };
         let server = server.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = handle(&server, stream.try_clone().unwrap()) {
-                let mut stream = stream;
-                let _ = send_json(&mut stream, &Response::Error(format!("{error:#}")));
-            }
-        });
+        // Failed worker creation drops the socket and permit. It must not panic
+        // the daemon and terminate retained work during resource pressure.
+        let _ = std::thread::Builder::new()
+            .name("rode-control".into())
+            .spawn(move || {
+                let result = stream
+                    .try_clone()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|peer| handle(&server, peer, admission));
+                if let Err(error) = result {
+                    let mut stream = stream;
+                    let _ = send_json(&mut stream, &Response::Error(format!("{error:#}")));
+                }
+            });
     }
-    fs::remove_file(socket())?;
+    fs::remove_file(&socket)?;
     drop(lock);
     Ok(())
 }

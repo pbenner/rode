@@ -17,6 +17,80 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[test]
+fn generated_openssh_private_keys_roundtrip_without_stored_fixtures() {
+    use russh::keys::{HashAlg, decode_secret_key, ssh_key::LineEnding};
+
+    for algorithm in [
+        Algorithm::Ed25519,
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        },
+        Algorithm::Rsa { hash: None },
+    ] {
+        let original = PrivateKey::random(&mut rand::rng(), algorithm).unwrap();
+        for encrypted in [false, true] {
+            let key = if encrypted {
+                original
+                    .encrypt(&mut rand::rng(), "generated-fixture-password")
+                    .unwrap()
+            } else {
+                original.clone()
+            };
+            let encoded = key.to_openssh(LineEnding::LF).unwrap();
+            let decoded =
+                decode_secret_key(&encoded, encrypted.then_some("generated-fixture-password"))
+                    .unwrap();
+            assert_eq!(decoded.public_key(), original.public_key());
+            let signature = decoded
+                .sign("rode-generated-fixture", HashAlg::Sha256, b"message")
+                .unwrap();
+            original
+                .public_key()
+                .verify("rode-generated-fixture", b"message", &signature)
+                .unwrap();
+            if encrypted {
+                assert!(decode_secret_key(&encoded, Some("wrong-password")).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn rsa_private_key_formats_preserve_signatures_after_the_crypto_upgrade() {
+    use russh::keys::{HashAlg, decode_secret_key, encode_pkcs8_pem, encode_pkcs8_pem_encrypted};
+    let original = PrivateKey::random(&mut rand::rng(), Algorithm::Rsa { hash: None }).unwrap();
+    for encrypted in [false, true] {
+        let mut pem = Vec::new();
+        if encrypted {
+            encode_pkcs8_pem_encrypted(&original, b"fixture-password", 10, &mut pem).unwrap();
+        } else {
+            encode_pkcs8_pem(&original, &mut pem).unwrap();
+        }
+        let pem = std::str::from_utf8(&pem).unwrap();
+        let decoded = decode_secret_key(pem, encrypted.then_some("fixture-password")).unwrap();
+        assert_eq!(decoded.public_key(), original.public_key());
+        for hash in [HashAlg::Sha256, HashAlg::Sha512] {
+            let signature = decoded
+                .sign("rode-security", hash, b"signed fixture")
+                .unwrap();
+            original
+                .public_key()
+                .verify("rode-security", b"signed fixture", &signature)
+                .unwrap();
+            assert!(
+                original
+                    .public_key()
+                    .verify("rode-security", b"changed fixture", &signature)
+                    .is_err()
+            );
+        }
+        if encrypted {
+            assert!(decode_secret_key(pem, Some("wrong-password")).is_err());
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Method {
     Password,

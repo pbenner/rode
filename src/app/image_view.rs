@@ -93,7 +93,9 @@ impl ImageView {
         }
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
-            if ui.selectable_label(self.zoom.is_none(), "Fit").clicked() {
+            let fit = ui.selectable_label(self.zoom.is_none(), "Fit");
+            super::ui_probe::button(ui, "image-fit", &fit);
+            if fit.clicked() {
                 self.zoom = None;
                 self.reset_scroll = Some(ScrollOrigin::Start);
             }
@@ -197,6 +199,9 @@ impl ImageView {
                 );
             }
             let response = ui.interact(canvas, Self::focus_id(id), Sense::click());
+            if !self.loading && self.texture.is_some() {
+                ui_probe::button(ui, "image-preview", &response);
+            }
             if focus || response.clicked() {
                 response.request_focus();
             }

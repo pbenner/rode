@@ -13,6 +13,7 @@ from ui_harness import (
     focus_window,
     palette_command,
     read_json_lines,
+    viewport_state_path,
     wait_for_button,
     wait_for_project,
     wait_for_ui_state,
@@ -148,6 +149,38 @@ class WindowReadinessTests(unittest.TestCase):
             focus.assert_not_called()
 
 
+class ViewportReadinessTests(unittest.TestCase):
+    def test_equal_sized_windows_are_selected_by_title_and_process(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "widgets.json"
+            state = {"pid": 42, "title": "RODE · Chat", "size": [900, 760]}
+            root.write_text(json.dumps(state))
+            (Path(str(root) + ".a.json")).write_text(
+                json.dumps(dict(state, title="RODE · Terminal"))
+            )
+            (Path(str(root) + ".b.json")).write_text(json.dumps(dict(state, pid=41)))
+            expected = Path(str(root) + ".c.json")
+            expected.write_text(json.dumps(state))
+            process = Mock(pid=42)
+            process.poll.return_value = None
+            self.assertEqual(viewport_state_path(process, "log", root, "RODE · Chat"), expected)
+
+    def test_missing_child_snapshot_reports_observed_current_process_titles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "widgets.json"
+            Path(str(root) + ".child.json").write_text(
+                json.dumps({"pid": 42, "title": "RODE · Terminal"})
+            )
+            process = Mock(pid=42)
+            process.poll.return_value = None
+            with (
+                patch("ui_harness.time.monotonic", side_effect=[0, 0, 13]),
+                patch("ui_harness.time.sleep"),
+                self.assertRaisesRegex(AssertionError, "Chat.*Terminal.*log"),
+            ):
+                viewport_state_path(process, "log", root, "RODE · Chat")
+
+
 class ButtonReadinessTests(unittest.TestCase):
     def setUp(self):
         self.process = Mock(pid=42)
@@ -195,6 +228,17 @@ class ButtonReadinessTests(unittest.TestCase):
             json.dumps(self.state),
         ]
         self.assertEqual(self.wait(), (190, 245))
+        self.assertEqual(self.read.call_count, 2)
+
+    def test_disabled_placeholder_resolution_does_not_accept_an_enabled_tab(self):
+        self.read.side_effect = [
+            json.dumps(self.state),
+            json.dumps(dict(self.state, buttons=[dict(self.state["buttons"][0], enabled=False)])),
+        ]
+        self.assertEqual(
+            wait_for_button(0x123, self.process, "log", "state", "Install Codex", enabled=False),
+            (190, 245),
+        )
         self.assertEqual(self.read.call_count, 2)
 
     def test_click_uses_native_input_once_after_readiness(self):

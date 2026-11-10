@@ -5,13 +5,10 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{BufRead, Read},
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -412,18 +409,5 @@ pub fn execute(command: Command, invocation: &Invocation, cancel: &AtomicBool) -
 }
 /// Serve the internal `--marp-helper` stdin protocol inside the prepared project boundary.
 pub fn coordinator() -> Result<()> {
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .take(2 * 1024 * 1024)
-        .read_line(&mut line)?;
-    let invocation: Invocation = serde_json::from_str(&line)?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let control = cancel.clone();
-    std::thread::spawn(move || {
-        let _ = std::io::stdin().lock().read(&mut [0]);
-        control.store(true, Ordering::Release);
-    });
-    serde_json::to_writer(std::io::stdout().lock(), &run(&invocation, &cancel)?)?;
-    Ok(())
+    crate::coordinator::serve(2 * 1024 * 1024, run)
 }

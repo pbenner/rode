@@ -190,17 +190,11 @@ fn preferred_host_keys(config: &config::Config) -> Result<russh::Preferred> {
     Ok(preferred)
 }
 fn secret(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>> {
-    use std::os::unix::fs::MetadataExt;
-    let file = match crate::persistence::open_regular(path, false) {
+    let file = match rode_host_core::locking::open_private_key(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    ensure!(
-        file.metadata()?.mode() & 0o077 == 0,
-        "SSH private key {} must not be accessible to group/others",
-        path.display()
-    );
     let mut bytes = Zeroizing::new(Vec::new());
     file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 1024 * 1024, "SSH private key exceeds 1 MiB");

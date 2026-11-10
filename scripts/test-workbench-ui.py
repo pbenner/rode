@@ -105,10 +105,14 @@ def run(remote=False):
             ]
         else:
             args += [str(root)]
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
+        log_path = ARTIFACTS / (label + ".log")
+        with log_path.open("w") as log:
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
+
+                def control(name):
+                    click_button(window, process, log_path, state_path, name)
 
                 def mapped():
                     nonlocal window
@@ -178,31 +182,24 @@ def run(remote=False):
                 time.sleep(0.5)
                 screenshot(window, label + "-git.png")
 
-                # The fallback sandbox warning adds one row to the workspace.
-                def tool_click(x, y):
-                    state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                    click(x, y - (30 if "[Sandbox]" in state else 0))
-
-                # Controls occupy the workspace beside the explorer.
-                tool_click(385, 407)  # Stage all, below the page heading and Git tabs.
+                control("git-stage-all")
                 wait_for(
                     lambda: bool(git("diff", "--cached", "--name-only").strip()),
                     "Native Stage all failed",
                 )
                 screenshot(window, label + "-git-staged.png")
-                tool_click(700, 520)  # Commit message below the single-line file row.
+                control("git-commit-message")
                 text("Native project commit")
-                tool_click(550, 565)  # Commit staged.
+                control("git-commit")
                 wait_for(
                     lambda: git("log", "-1", "--format=%s").strip() == "Native project commit",
                     "Native commit failed",
                 )
                 command("Project: Settings and sandbox access")
                 screenshot(window, label + "-settings.png")
-                log_path = ARTIFACTS / (label + ".log")
 
                 def settings_click(name):
-                    click_button(window, process, log_path, state_path, name)
+                    control(name)
 
                 settings_click("settings-format-on-save")
                 # Categories retain an edit until explicitly saved or discarded.

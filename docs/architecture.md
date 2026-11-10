@@ -36,6 +36,15 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/extensions.rs`, `src/app/extensions.rs`, `crates/rode-host-core/src/extensions.rs` | Native feature activation, opt-in installed adapters and their UI/preferences |
 | `src/mise.rs`, `crates/rode-host-core/src/mise/native.rs`, `crates/rode-host-core/src/environment.rs` | Optional mise feature, bounded tool/task discovery, host-side environment resolution before exec and shared literal environment/command helpers |
 | `src/process.rs`, `crates/rode-host-core/src/supervisor.rs` | Shared bounded JSON-line subprocess transport and owned process-group cleanup |
+| `crates/rode-host-core/src/locking.rs` | Open-time directory/regular/private-file guards and bounded advisory locking; directory-only operations reject substituted special files |
+| `crates/rode-host-core/src/command/capture.rs` | Shared binary helper/project capture, independent pipe budgets, stdin leases and scoped process-group cleanup before reaping |
+| `crates/rode-host-core/src/coordinator.rs` | Shared bounded request parsing, stdin cancellation and reply serialization for LaTeX, Marp and extension helpers |
+| `crates/rode-session/src/protocol.rs` | Tagged control schema and required service generation, re-exported from the crate root for clients |
+| `crates/rode-session/src/framing.rs` | One bounded length/kind/payload codec for control, terminal and runtime sockets, with separate domain size limits |
+| `crates/rode-session/src/runtime_directory.rs` | Owner-only runtime directory validation, Linux inode-anchored artifact paths and startup-only socket permissions |
+| `crates/rode-session/src/attachment.rs` | Shared typed stdin-command forwarding and socket shutdown for agent/runtime attachments; each owner selects its frame budget and retains its output lifecycle |
+| `crates/rode-runtime-core/src/process/group.rs` | Shared process-group cancellation, delayed escalation and acknowledged cleanup for desktop, agent and runtime transports |
+| `crates/rode-session/src/entry.rs` | Early helper dispatch shared by the installed and standalone/static executables; bubblewrap dispatch precedes all worker/runtime initialization |
 | `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `crates/rode-host-core/src/runtime_cache.rs`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
 | `crates/rode-agent-core/` | Shared Codex/ACP state machines, bounded chat/history, capabilities, personalities and host-service wire views |
 | `crates/rode-runtime-core/`, `crates/rode-session/src/runtimes.rs`, `src/runtime.rs` | Shared notebook/DAP controllers, bounded output/state replay, exclusive leases, mutation acknowledgements and native runtime discovery |
@@ -53,6 +62,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
 | `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
 | `src/theme.rs`, `src/theme/syntax.rs`, `themes/` | Independent interface/syntax choices, bounded custom data and cached highlighting |
+| `scripts/rust_tests.py`, `scripts/test-rust-tests.py` | Isolated native Cargo test execution, private home/runtime fixtures and checked cleanup/exit propagation |
 | `tests/`, `tests/fixtures/`, `scripts/test-*.py` | Service integration tests, deterministic peers and isolated native UI checks |
 
 ## Current service boundaries
@@ -64,6 +74,19 @@ RODE requires the current session protocol. Each control connection authenticate
 `environment_probe.py` and `notebook_kernel.py` remain active language-specific adapters. They inspect Python installations and integrate with Jupyter respectively. They are not remnants of the removed general Python host backend. Direct agent/notebook/DAP library clients also remain supported alongside GUI-managed controllers and are exercised by integration tests.
 
 Runtime command validation belongs to `rode_runtime_core::service::Spec::validate_command` and runs before host executable resolution as well as controller creation. The per-execution notebook source limit lives in `rode_runtime_core::notebook::MAX_CODE`, re-exported by the desktop model, so moving execution into the service cannot leave a stale desktop-only limit.
+
+The session service keeps its tagged wire types in `protocol.rs` and re-exports
+`Info`, `Request`, `Response` and `PROTOCOL` from the crate root. Filesystem
+startup in `runtime_directory.rs` holds the validated directory inode open;
+callers retain that descriptor throughout artifact access. The shared
+`framing.rs` codec counts the kind byte in its inclusive length limit: control,
+terminal and agent connections allow 4 MiB, while notebook/debugger runtime
+attachments allow 16 MiB. It checks incoming lengths before payload allocation
+and outgoing encoded sizes before writing a prefix. It allows empty raw terminal
+payloads; JSON still requires a `J` kind and a valid
+value. Authentication and attachment lifetime remain with their owning modules.
+These sockets use different contracts from host RPC and line-based subprocess
+transports, which retain their own codecs.
 
 ## Design decisions and tradeoffs
 
@@ -111,13 +134,25 @@ Bounded stdio protocols reuse authenticated transport without a new application 
 
 A GUI/SSH attachment cannot own a shell that must outlive it. The headless native terminal service owns PTYs, removing a tmux/screen prerequisite and supporting shared views. The cost is native-helper deployment and an exact session-protocol contract. Persistence belongs to the session, so closing one window differs from explicitly ending the shared shell. The client uses only its current service generation and rejects protocol mismatches. See [process ownership](#process-and-resource-ownership) and [terminal lifetime](terminals.md).
 
-Agent history uses a separately supervised connection so failed or cancelled loading cannot replace the current conversation. Only explicit History starts it; opening the panel remains inert. Validated host/project metadata and current sandbox/permission settings precede replay. On success ownership transfers to the chat, with bounded recent messages and full context retained by the backend. RODE stores no duplicate transcript database. See `crates/rode-agent-core/src/history.rs`, `src/agent/history.rs`, `src/app/agents/history.rs` and [chat history](agents.md#chat-history).
+Agent history uses a separately supervised connection so failed or cancelled loading cannot replace the current conversation. Only explicit History starts it; opening the panel remains inert. The default list filters the current project. An explicit all-project view omits the backend's working-directory filter, within the same host, backend store and sandbox grants; it does not scan project folders. Foreign-project rows cannot restore into the current chat, and deletion requires the project-only view. Validated host/project metadata and current sandbox/permission settings precede replay. On success ownership transfers to the chat, with bounded recent messages and full context retained by the backend. RODE stores no duplicate transcript database. See `crates/rode-agent-core/src/history.rs`, `src/agent/history.rs`, `src/app/agents/history.rs` and [chat history](agents.md#chat-history).
+
+Synchronous host helpers and project commands share
+`rode_host_core::command::capture`. The binary wrapper keeps bytes intact and
+limits stderr separately; the project wrapper decodes UTF-8 and applies its
+configured per-stream limit. Capture owns a fresh session, streams/drains pipes
+concurrently and stops the owned group on normal exit, timeout, overflow or
+error. Exit observation leaves the leader unreaped until the final group signal,
+so cleanup cannot address a reused PID. Stdin lifetime leases and renderer
+termination grace remain caller-selected. Long-lived retained jobs use the
+persistent service's separate process ownership; backgrounding work from a
+transient helper does not retain it. An intentionally detached process is beyond
+this process-group contract and still depends on the enclosing sandbox policy.
 
 ### Host-owned agents
 
 Persistent agents need their complete protocol controller on the host: leaving only the executable alive would strand initialization, permissions and cancellation timers in the departed GUI. `rode-agent-core` shares those controllers between the existing direct-transport API and `rode-session` without pulling desktop libraries into the remote helper. Agents keep the exact captured sandbox and host environment; the attachment broker runs outside that namespace but supplies no tool execution or policy escalation.
 
-One controlling lease serializes prompts and answers, while other windows may list/end jobs. New agent chats default to Auto: after attachment loss, accepted tasks and queued prompts finish before the controller exits. Pending questions and paused or edited prompts retain the session for reattachment. On also retains idle detached chats, while Off stops on detachment. Attached chats stay available for follow-ups in every mode. The host owns grace periods, cancellation deadlines and process-tree reaping. The GUI waits for persistence/start/end acknowledgements during clean exit and retains retiring views until their pending lifetime work finishes. Read-only discovery never starts a service or agent. Capability negotiation selects a compatible service generation without terminating older jobs.
+One controlling lease serializes prompts and answers, while other windows may list/end jobs. New agent chats default to Auto: after attachment loss, accepted tasks and queued prompts finish before the controller exits. Pending questions and paused or edited prompts retain the session for reattachment. On also retains idle detached chats, while Off stops on detachment. Attached chats stay available for follow-ups in every mode. The host owns grace periods, cancellation deadlines and process-tree reaping. The GUI waits for persistence/start/end acknowledgements during clean exit and retains retiring views until their pending lifetime work finishes. Read-only discovery never starts a service or agent. Clients require the current authenticated service generation without terminating jobs owned by earlier services.
 
 Bounded state remains in host memory; backend History is the durable store. Chat updates contain changed messages plus the retained message order, avoiding a full transcript transfer for each streamed token. Detached workers retain bounded output without continuously serializing UI snapshots. Approvals remain pending offline, and reattachment requires the original project policy. These choices keep the background path native and independent of tmux, screen or model servers managed by RODE.
 
@@ -129,7 +164,7 @@ Desktop-installed, initially disabled manifests keep repository opening separate
 
 ### Optional native Codex runtime
 
-Codex is a separately versioned native executable in the optional `rode-codex` package, keeping the core editor independent of that payload, VS Code, Node.js and npm. Core packaging never prepares or downloads Codex. SHA-256/size pins and upstream notices are explicit runtime-package build inputs. Source builds optionally prepare the same runtime with a standard-library Python script; the application itself never downloads binaries from the internet or starts inference servers. The optional package's protected manifest selects its version independently of the editor; package installation is the trust boundary, while bounded manifests and checksum validation detect damaged assets. Runtime updates require protocol compatibility checks.
+Codex is a separately versioned native executable in the optional `rode-codex` package, keeping the core editor independent of that payload, VS Code, Node.js and npm. Core packaging never prepares or downloads Codex. SHA-256/size pins and upstream notices are explicit runtime-package build inputs. Source builds optionally prepare the same runtime with a standard-library Python script. The explicit **Install Codex** action downloads the editor-pinned official archives on the desktop, validates their sizes and SHA-256 checksums, and installs locally or deploys to the selected SSH host. Ordinary startup, Send and History do not download missing executables. RODE does not start inference servers. The optional package's protected manifest selects its version independently of the editor; package installation is the trust boundary, while bounded manifests and checksum validation detect damaged assets. Runtime updates require protocol compatibility checks.
 
 An `auto` executable is resolved only in the process worker after a message. A custom executable bypasses bundle preparation. SSH deployment streams the matching binary over authenticated multiplexed channels, verifies and atomically publishes a private immutable cache, and shares a lock across windows. Credentials remain on their host. An active project sandbox adds only this verified tool directory as a read-only mount; it does not acquire new user-folder or network grants. Versioned directories avoid replacing another process's running runtime. See [agent setup](agents.md) and [packaging](packaging.md).
 
@@ -213,6 +248,42 @@ Confirmed runtime terminations use a bounded worker separate from read-only disc
 
 Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Hidden monitors stop scheduling samples; hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
 
+`rode_runtime_core::process::ProcessGroup` owns shared cancellation and signal
+state for the desktop stdio transport, host agent transport and native runtime
+transport. Each spawning worker still owns its `Child`, executable identity,
+sandbox and pipe readers. It publishes the independently created group with
+`started`, calls `reaped` immediately after waiting for the leader, then calls
+`finish` after pipe cleanup or a startup failure. The 1.5-second escalation grace
+starts when a child exists, including when cancellation happened during slow
+preparation. PID publication, invalidation and timer signals share one short
+lock; requesting Stop never means cleanup has already completed.
+
+Reuse this lifetime primitive without merging protocol-specific transports.
+Agent, runtime and desktop queues have different message limits, wake callbacks
+and replay/attachment contracts. Those distinctions remain with their adapters;
+an abstraction that hides them would obscure the bounds it is meant to enforce.
+
+Dedicated LaTeX, Marp and extension coordinators share request parsing and stdin
+cancellation in `rode-host-core::coordinator`. Each caller supplies its byte limit
+and typed runner; the runner retains its host policy, timeout and output budget.
+The reader checks one byte beyond the limit before decoding so a valid prefix of
+an oversized request cannot be mistaken for the complete request. Reading the
+first line leaves subsequent stdin available for cancellation.
+
+Agent and runtime attachment bridges share only typed stdin-command forwarding
+and socket shutdown in `rode-session::attachment`. Each caller supplies its line
+limit and wire encoder. Agent snapshots and runtime replay still have distinct
+decoders and completion rules. Malformed input, EOF and write errors close both
+socket directions to wake the reader and release the controlling lease.
+
+Private runtime/configuration files share `locking::open_private`: no following
+leaf symlinks, no blocking FIFO opens, and opened-inode checks for regular-file
+type, current-user ownership, private permissions and a single hard link. Linux
+session startup also pins the runtime directory before creating artifacts, so
+replacement of its pathname cannot redirect later writes or cleanup. The
+service admits at most 32 pending control handshakes before allocating blocking
+workers; established attachments release those slots and retain their own limits.
+
 ### Daemon-owned reverse SSH tunnels
 
 `crates/rode-session/src/tunnels.rs` owns bounded native SSH reverse forwards;
@@ -224,16 +295,26 @@ they never fall back locally. Workers capture their host before dispatch and
 workspace generation changes discard stale replies. Discovery does not start
 the service; only an explicit tunnel start can do so.
 The compute node already runs sshd. Each outbound connection requests a fixed
-loopback relay listener and accepts only forwarding channels naming that exact
-address/port, then connects to a fixed compute loopback SSH port. There is no
-public session-service endpoint or general forwarding proxy.
+relay listener port, using loopback by default or explicitly selected all-interface
+access. Forwarded channels must name that port and an address permitted by the
+selected scope, then connect to a fixed compute loopback SSH port. The relay's
+`GatewayPorts` policy and firewall determine actual exposure; the desktop reports
+the requested scope. There is no public session-service endpoint or general
+forwarding proxy.
 
-Workers retain explicit compute-host credentials and a pinned relay public key,
-not desktop attachments. Network failures retry with capped exponential delay;
+Workers resolve credentials on the compute host: an explicit key/agent setting
+or the default SSH key files. They retain a pinned relay public key and their
+own lifetime, independent of desktop attachments. Network failures retry with capped exponential delay;
 unknown/changed host keys and credential failures require an explicit action.
 Stop cancels the worker and its streams. Retained tunnels participate in idle,
 last-terminal and shutdown checks, and creation shares the existing service-stop
 lock. State is memory-only and bounded to eight tunnels and 32 channels each.
+Reusable setups live separately in desktop preferences and contain settings/key
+paths, not private-key contents. The titlebar status check uses bounded read-only
+discovery on the selected host, every 15 seconds outside the manager list and
+every 2 seconds while viewing it. Its separate request slot cannot block a
+Start/Stop action; failed checks produce unknown status, and encrypted-project
+locking pauses discovery before new tracked work can begin.
 
 Return profiles retain the original compute alias, authentication and host-key
 identity while overriding only the final transport destination through the
@@ -350,7 +431,7 @@ Session service IPC remains protected independently of RPC: same-UID and namespa
 
 ### Protocol and channel contract
 
-Host wire version 1 is separate from session protocol 17 and helper API revision 1. A fixed preamble and handshake verify the selected helper digest, OS/architecture, metadata format, API revision, host/session protocols and required capabilities before operations. Package versions are diagnostic; matching release labels alone are insufficient. Installed discovery and the live handshake must report identical helper metadata. Stdout is exclusively protocol data; stderr supplies bounded diagnostics. Startup banners, wrong versions or wrong executable identity fail explicitly.
+The host wire version (`rode_host_protocol::framing::VERSION`), session protocol (`rode_session::PROTOCOL`) and helper API revision (`rode_host_protocol::helper::API`) are independent contracts. Their constants are authoritative; package versions are diagnostic. A fixed preamble and handshake verify the selected helper digest, OS/architecture, metadata format, API revision, host/session protocols and required capabilities before operations. Matching release labels alone are insufficient. Installed discovery and the live handshake must report identical helper metadata. Stdout is exclusively protocol data; stderr supplies bounded diagnostics. Startup banners, wrong versions or wrong executable identity fail explicitly.
 
 Maintain `rode_host_protocol::helper::API` for incompatible changes to helper CLI arguments, shared request/response DTOs, or auxiliary streams not already versioned by the host/session protocols. Additive capabilities may be advertised without breaking old clients; update the required set when the desktop depends on them. Bump the metadata format for incompatible discovery-schema changes. Keep metadata side-effect-free and repeat it in the handshake; do not substitute package-version comparisons for these contracts.
 

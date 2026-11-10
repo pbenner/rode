@@ -10,7 +10,7 @@ use rode_runtime_core::{
 use serde_json::Value;
 use std::sync::Condvar;
 
-const FRAME_LIMIT: usize = 16 * 1024 * 1024;
+const FRAME_LIMIT: usize = super::framing::RUNTIME.limit();
 const NOTEBOOK_LIMIT: usize = 8 * 1024 * 1024;
 const TERMINAL_EVENT_LIMIT: usize = 128;
 #[derive(Default)]
@@ -549,7 +549,13 @@ fn run(job: Arc<Job>, input: mpsc::Receiver<Envelope>, spec: Spec) {
         if finished {
             break;
         }
-        std::thread::sleep(Duration::from_millis(25));
+        // Drain ready work without imposing a fixed delay on every bounded
+        // batch. Small PTY reads can otherwise keep a detached program blocked
+        // for seconds even though its retained screen has room. An idle worker
+        // (including one waiting for a slow view) still sleeps between polls.
+        if !changed {
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
     // Do not acknowledge removal before the supervisor has reaped owned children.
     match &mut controller {
@@ -892,27 +898,13 @@ fn terminal_event(shared: &mut Shared, event: debugger::Event) {
         shared.events.pop_front();
     }
 }
-fn send(stream: &mut UnixStream, value: &Update) -> Result<()> {
-    let bytes = serde_json::to_vec(value)?;
-    ensure!(bytes.len() < FRAME_LIMIT, "Runtime update exceeds 16 MiB");
-    stream.write_all(&((bytes.len() + 1) as u32).to_be_bytes())?;
-    stream.write_all(b"J")?;
-    stream.write_all(&bytes)?;
-    stream.flush()?;
-    Ok(())
+/// Encode the runtime envelope with its larger limit through the shared codec.
+fn send<T: serde::Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
+    super::framing::RUNTIME.send_json(stream, value)
 }
+/// Decode one runtime update without allowing the control connection's smaller limit to leak in.
 fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
-    let mut len = [0u8; 4];
-    stream.read_exact(&mut len)?;
-    let n = u32::from_be_bytes(len) as usize;
-    ensure!(
-        (2..=FRAME_LIMIT).contains(&n),
-        "Runtime frame exceeds 16 MiB"
-    );
-    let mut bytes = vec![0; n];
-    stream.read_exact(&mut bytes)?;
-    ensure!(bytes[0] == b'J', "Invalid runtime frame");
-    Ok(serde_json::from_slice(&bytes[1..])?)
+    super::framing::RUNTIME.recv_json(stream)
 }
 
 /// Bridge bounded stdio messages through the current service's authenticated
@@ -927,39 +919,7 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         },
     )?;
     stream.set_read_timeout(None)?;
-    let mut sender = stream.try_clone()?;
-    std::thread::spawn(move || {
-        let input = rode_host_core::connection::Input::stdin().map(|mut input| {
-            input.unbounded();
-            input
-        });
-        let Ok(input) = input else {
-            let _ = sender.shutdown(std::net::Shutdown::Both);
-            return;
-        };
-        let mut reader = std::io::BufReader::new(input);
-        use std::io::BufRead;
-        loop {
-            let mut bytes = vec![];
-            if !matches!((&mut reader).take(FRAME_LIMIT as u64+1).read_until(b'\n',&mut bytes),Ok(n) if n>0&&n<FRAME_LIMIT)
-            {
-                break;
-            }
-            let Ok(value) = serde_json::from_slice::<Envelope>(&bytes) else {
-                break;
-            };
-            let data = serde_json::to_vec(&value).unwrap();
-            if sender
-                .write_all(&((data.len() + 1) as u32).to_be_bytes())
-                .and_then(|_| sender.write_all(b"J"))
-                .and_then(|_| sender.write_all(&data))
-                .is_err()
-            {
-                break;
-            }
-        }
-        let _ = sender.shutdown(std::net::Shutdown::Both);
-    });
+    super::attachment::forward_commands::<Envelope>(stream.try_clone()?, FRAME_LIMIT - 1, send);
     let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
         let value: Value = receive(&mut stream)?;

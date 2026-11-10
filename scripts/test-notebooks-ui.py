@@ -144,6 +144,10 @@ def run(remote=False):
                 wait_for(mapped, "No notebook window")
                 time.sleep(1)
                 focus_window(window)
+                if remote:
+                    # The coordinate-based cell checks below use the same
+                    # expanded explorer layout as the local notebook fixture.
+                    command("Toggle explorer")
                 open_file("demo.ipynb")
                 title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
                 host_offset = (44 if "[Sandbox]" in title else 74) if remote else 0

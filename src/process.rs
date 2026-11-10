@@ -15,8 +15,13 @@
 //! detach background tools from the launcher's controlling terminal and provide
 //! process groups for scoped stop/drop, preserving the SSH authentication master
 //! and independent terminal shells. Coordinators handle their own child lifetimes.
+//!
+//! [`ProcessGroup`] shares cancellation and signal ownership with host agents and
+//! runtimes. Executable aliases remain in this adapter, published before spawn,
+//! so native file tools retain the desktop launcher's executable protections.
 use crate::{files, project, sandbox, ssh};
 use anyhow::{Context, Result, bail, ensure};
+use rode_runtime_core::process::ProcessGroup;
 use serde_json::Value;
 use std::{
     io::{BufReader, Write},
@@ -24,7 +29,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::Ordering,
         mpsc::{self, Receiver, SyncSender},
     },
     time::{Duration, Instant},
@@ -79,49 +84,17 @@ type RemoteLaunch = rode_host_core::supervisor::Spec;
 
 pub use rode_agent_core::Event;
 
-#[derive(Default)]
-struct Control {
-    pid: AtomicU32,
-    alive: AtomicBool,
-    stopped: AtomicBool,
-    finished: AtomicBool,
-    executable: Arc<ExecutablePaths>,
-}
-
 /// Immutable executable aliases in the sandbox and on its host, published by
 /// the launch worker before spawn. Both must stay protected from native edits.
 pub(crate) type ExecutablePaths = OnceLock<[PathBuf; 2]>;
-impl Control {
-    fn kill(&self, signal: i32) {
-        let pid = self.pid.load(Ordering::Acquire);
-        if pid != 0 && self.alive.load(Ordering::Acquire) {
-            // Each process owns a fresh group. This never targets the project
-            // terminal or the shared SSH authentication master.
-            unsafe {
-                libc::kill(-(pid as i32), signal);
-            }
-        }
-    }
-    fn stop(self: &Arc<Self>) {
-        if self.stopped.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.kill(libc::SIGTERM);
-        let control = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(1500));
-            control.kill(libc::SIGKILL);
-        });
-    }
-}
-
 /// Owned subprocess transport. Workers handle I/O and wake the UI; dropping requests scoped
 /// termination without killing the SSH master or project terminals.
 pub struct Session {
     input: SyncSender<Vec<u8>>,
     line_limit: usize,
     events: Receiver<Event>,
-    control: Arc<Control>,
+    control: Arc<ProcessGroup>,
+    executable: Arc<ExecutablePaths>,
 }
 /// Cloneable handle to the bounded, nonblocking process-input queue.
 #[derive(Clone)]
@@ -173,7 +146,7 @@ impl Session {
     /// is published before spawn and stays unset for remote/coordinator launches.
     /// Callers must fail closed while preparation has not resolved the program.
     pub(crate) fn executable(&self) -> Arc<ExecutablePaths> {
-        self.control.executable.clone()
+        self.executable.clone()
     }
     /// Transfer ownership to a headless notebook/debugger controller.
     pub fn into_runtime(self) -> rode_runtime_core::process::Session {
@@ -202,21 +175,23 @@ impl Session {
         let line_limit = launch.line_limit;
         let (input, input_rx) = mpsc::sync_channel::<Vec<u8>>(32);
         let (output, events) = mpsc::sync_channel::<Event>(16);
-        let control = Arc::new(Control::default());
+        let control = Arc::new(ProcessGroup::default());
         let run_control = control.clone();
+        let executable = Arc::new(ExecutablePaths::default());
+        let run_executable = executable.clone();
         std::thread::spawn(move || {
             let result = run_session(
                 launch,
                 input_rx,
                 output.clone(),
                 run_control.clone(),
+                run_executable,
                 wake.clone(),
             );
             if let Err(error) = result {
                 emit(&output, &wake, Event::Error(format!("{error:#}")));
             }
-            run_control.alive.store(false, Ordering::Release);
-            run_control.finished.store(true, Ordering::Release);
+            run_control.finish();
             wake();
         });
         Ok(Self {
@@ -224,6 +199,7 @@ impl Session {
             input,
             events,
             control,
+            executable,
         })
     }
     /// Queue one protocol message through the shared writer.
@@ -232,7 +208,7 @@ impl Session {
     }
     /// Report completed transport supervision, distinct from a stop merely having been requested.
     pub(crate) fn is_finished(&self) -> bool {
-        self.control.finished.load(Ordering::Acquire)
+        self.control.is_finished()
     }
     /// Take the next available event without waiting.
     pub fn poll(&self) -> Option<Event> {
@@ -288,17 +264,18 @@ fn run_session(
     launch: Launch,
     input: Receiver<Vec<u8>>,
     output: SyncSender<Event>,
-    control: Arc<Control>,
+    control: Arc<ProcessGroup>,
+    executable: Arc<ExecutablePaths>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<()> {
-    if control.stopped.load(Ordering::Acquire) {
+    if control.cancelled().load(Ordering::Acquire) {
         return Ok(());
     }
     let mut argv = launch.argv.clone();
     let mut launch = launch;
     if argv[0] == crate::bundled::AUTO_CODEX {
         let (program, prefix) =
-            crate::bundled::prepare(&launch.plan, launch.remote.as_ref(), &control.stopped)?;
+            crate::bundled::prepare(&launch.plan, launch.remote.as_ref(), control.cancelled())?;
         argv[0] = program;
         launch.plan.prefix = prefix;
     }
@@ -353,7 +330,7 @@ fn run_session(
         .into();
         let program = PathBuf::from(&argv[0]);
         let host = rode_host_core::command::sandbox_host_path(&program, &launch.plan.prefix);
-        let _ = control.executable.set([program, host]);
+        let _ = executable.set([program, host]);
         let prefix = launch.plan.execution_prefix(&launch.python)?;
         let mut command = if !prefix.is_empty() {
             let mut command = rode_host_core::command::from_argv(&prefix)?;
@@ -381,7 +358,7 @@ fn run_session(
         match command.spawn() {
             Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < until => {
                 std::thread::sleep(Duration::from_millis(10));
-                if control.stopped.load(Ordering::Acquire) {
+                if control.cancelled().load(Ordering::Acquire) {
                     return Ok(());
                 }
             }
@@ -389,11 +366,7 @@ fn run_session(
         }
     }
     .context("Cannot start process. Check its executable and sandbox access on the project host")?;
-    control.pid.store(child.id(), Ordering::Release);
-    control.alive.store(true, Ordering::Release);
-    if control.stopped.load(Ordering::Acquire) {
-        control.kill(libc::SIGTERM);
-    }
+    control.started(child.id());
     let mut stdin = child.stdin.take().context("Process stdin is missing")?;
     let heartbeat = launch.remote.is_some();
     std::thread::spawn(move || {
@@ -455,9 +428,8 @@ fn run_session(
     }
     emit(&output, &wake, Event::Started);
     let status = child.wait()?;
-    // Kill any descendants that outlive an process which exits unexpectedly.
-    control.kill(libc::SIGKILL);
-    control.alive.store(false, Ordering::Release);
+    // Kill descendants that outlive a process which exits unexpectedly.
+    control.reaped();
     // Preserve the stream's final messages before publishing process exit.
     for reader in readers {
         let _ = reader.join();

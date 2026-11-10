@@ -735,35 +735,11 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
         },
     )?;
     stream.set_read_timeout(None)?;
-    let mut sender = stream.try_clone()?;
-    std::thread::spawn(move || {
-        let input = rode_host_core::connection::Input::stdin().map(|mut input| {
-            input.unbounded();
-            input
-        });
-        let Ok(input) = input else {
-            let _ = sender.shutdown(std::net::Shutdown::Both);
-            return;
-        };
-        let mut reader = std::io::BufReader::new(input);
-        use std::io::BufRead;
-        loop {
-            let mut bytes = vec![];
-            let read = (&mut reader)
-                .take(rode_agent_core::LINE_LIMIT as u64 + 1)
-                .read_until(b'\n', &mut bytes);
-            if !matches!(read, Ok(n) if n > 0 && n <= rode_agent_core::LINE_LIMIT) {
-                break;
-            }
-            let Ok(action) = serde_json::from_slice::<Action>(&bytes) else {
-                break;
-            };
-            if send_json(&mut sender, &action).is_err() {
-                break;
-            }
-        }
-        let _ = sender.shutdown(std::net::Shutdown::Both);
-    });
+    super::attachment::forward_commands::<Action>(
+        stream.try_clone()?,
+        rode_agent_core::LINE_LIMIT,
+        send_json,
+    );
     let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
         let value = recv_json::<_, Value>(&mut stream)?;

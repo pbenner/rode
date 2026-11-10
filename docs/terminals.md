@@ -87,11 +87,27 @@ The [native SSH helper](remote.md#host-service-backends) is verified and publish
 
 The service owns the PTYs independently of the desktop and SSH master. It runs outside the project sandbox; the actual shell and descendants run **inside the project's original prepared sandbox**. Control/attachment clients run on the host. The Linux service checks UID and mount namespace so sandboxed tools cannot use an exposed control socket to start unrestricted host commands.
 
-The default runtime is `/tmp/rode-session-v19-<uid>/`, with mode `0700`, a mode `0600` Unix socket, a stable singleton lock, and `service.log`. Optional `RODE_SESSION_DIR` selects a private absolute runtime directory; its parent must exist, and remote hosts must be able to create/use the same path. Do not remove its lock/socket while sessions run. Windows using the same host, UID, mount namespace, and runtime discover the same service. Removing the last session stops that service only when no retained agent, notebook/debugger runtime or SSH tunnel remains.
+The default runtime is `/tmp/rode-session-v<protocol>-<uid>/`, with mode `0700`,
+a stable singleton lock, and `service.log`. `rode_session::PROTOCOL` defines the
+generation. Linux control uses an authenticated abstract Unix socket bound to
+the runtime directory's identity; `control.capability` contains a reference to
+the service's sealed memory descriptor, rather than the secret itself. Its mode
+`0600` filesystem socket is a discovery marker and accepts no control commands.
+Other Unix hosts use that filesystem socket for control. Optional `RODE_SESSION_DIR`
+selects a private absolute runtime directory; its parent must exist, and remote
+hosts must be able to create/use the same path. Do not remove its lock or control
+metadata while sessions run. Windows using the same host, UID, mount namespace,
+and runtime discover the same service. Removing the last session stops that
+service only when no retained agent, notebook/debugger runtime or SSH tunnel
+remains.
 
 The service also exits automatically after five seconds without a retained terminal, agent, notebook/debugger runtime or SSH tunnel, including an unused startup or the last shell exiting naturally. A live shell counts even at an idle prompt or with no attached windows. Explicitly started [SSH return tunnels](remote.md#compute-node-return-tunnels) also keep the service alive, including tunnels awaiting reconnection or credential/host-key attention; stop them explicitly to allow shutdown. Session-list requests and completed tabs do not keep an empty service running. Shutdown removes its socket and releases its singleton lock; creating a terminal starts a fresh service automatically. The stable lock file stays in place for safe concurrent startup.
 
-Control connections authenticate and require session protocol 19. An explicit `RODE_SESSION_DIR` must point to a matching current service or an unused private directory. A protocol mismatch is an error; RODE does not search historical subdirectories or start a compatibility service.
+Control connections authenticate and require the current session protocol. An explicit `RODE_SESSION_DIR` must point to a matching current service or an unused private directory. A protocol mismatch is an error; RODE does not search historical subdirectories or start a compatibility service.
+
+At most 32 clients can be in the authentication/protocol handshake at once.
+Excess connections close immediately. A completed handshake releases its slot;
+terminal views and other established attachments retain their separate limits.
 
 There are at most 32 live sessions per service, 8 attached views per session, and 16 views per window. Scrollback is bounded to 1,000 rows, with a bounded screen/history replay when reattaching to a running shell. Output is consumed even with no viewers; a slow viewer is disconnected rather than blocking the job. On process exit, the service reaps its child, drains final output and releases the session record and terminal slot automatically, even while other shells keep running. Already displayed output remains in its editor tab; exited sessions cannot be reattached. This is a terminal session service, not a durable log or editor crash-recovery system.
 

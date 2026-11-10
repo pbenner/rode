@@ -80,7 +80,7 @@ fn request(path: &Path, program: &str, create: bool) -> vault::Open {
     }
 }
 fn runtime(path: &Path) -> PathBuf {
-    PathBuf::from(format!("/tmp/rode-vaults-{}", unsafe { libc::geteuid() })).join(files::digest(
+    vault::runtime_directory().join(files::digest(
         path.canonicalize().unwrap().to_string_lossy().as_bytes(),
     ))
 }
@@ -157,6 +157,13 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
         eprintln!("Installed gocryptfs is needed for the real encryption test");
         return;
     }
+    // A device node can exist while the test host forbids opening it. Keep
+    // initialization/password coverage in that case without claiming a mount.
+    let fuse_access = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/fuse")
+        .map(drop);
     for headless in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let cipher = root.path().join("encrypted");
@@ -168,18 +175,21 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
             serde_json::from_str::<serde_json::Value>(&config).unwrap()["EncryptedKey"].is_string()
         );
         assert!(!config.contains(&open.password));
-        if !Path::new("/dev/fuse").exists() {
+        if let Err(error) = &fuse_access {
             let vault::Reply::Error { message } = reply else {
                 panic!("Expected a FUSE availability error");
             };
             assert!(message.to_lowercase().contains("fuse"), "{message}");
             assert!(!message.contains(&open.password));
             eprintln!(
-                "Real gocryptfs initialization passed; mounting cannot run without /dev/fuse"
+                "Real gocryptfs initialization passed; mounting cannot open /dev/fuse: {error}"
             );
         } else {
             let vault::Reply::Opened { info } = reply else {
-                panic!("Real gocryptfs did not mount");
+                panic!(
+                    "Real gocryptfs did not mount: {}",
+                    serde_json::to_string(&reply).unwrap()
+                );
             };
             let file = Path::new(&info.mountpoint).join("confidential.txt");
             files::local(&files::Request::Write {

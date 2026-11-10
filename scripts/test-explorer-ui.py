@@ -18,6 +18,7 @@ from ui_harness import (
     display,
     focus_window,
     key,
+    palette_command,
     screenshot,
     text,
     wait_for_button,
@@ -116,6 +117,8 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
                 text(value)
                 button("explorer-apply")
 
+            if remote:
+                palette_command(window, process, log.name, state, "Toggle explorer")
             menu()
             screenshot(window, "root-menu.png")
             key("Escape")

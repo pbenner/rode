@@ -15,13 +15,14 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    click_button,
     close_window,
     display,
     focus_window,
     key,
     screenshot,
     text,
+    wait_for_button,
     x11,
 )
 
@@ -46,7 +47,7 @@ def command(name):
 
 
 def open_file(name):
-    # The SSH login terminal initially owns focus; Ctrl+P belongs to its shell.
+    # Resolve the application command independently of the current surface.
     command("Open file by path")
     text(name)
     key("Return")
@@ -76,8 +77,12 @@ def run(remote=False):
             "allow_local_files": False,
             "theme_css": "",
         }
+        state_path = base / "ui-state.json"
         environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+            os.environ,
+            XDG_CONFIG_HOME=str(base / "config"),
+            XDG_DATA_HOME=str(base / "data"),
+            RODE_UI_TEST_STATE=str(state_path),
         )
         host = ["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""] if remote else None
         context_key = json.dumps([host, str(project)], separators=(",", ":"))
@@ -204,7 +209,16 @@ def run(remote=False):
 
                 wait_for(lambda: slide(1), "Marp first slide was not rendered")
                 assert source.read_text() == original, "Preview saved or changed the source"
-                click(800, 450)
+
+                def focus_preview():
+                    log_path = ARTIFACTS / (label + ".log")
+                    wait_for_button(window, process, log_path, state_path, "marp-ready")
+                    click_button(window, process, log_path, state_path, "image-preview")
+                    wait_for_button(
+                        window, process, log_path, state_path, "image-preview", focused=True
+                    )
+
+                focus_preview()
                 key("Next")
                 wait_for(lambda: slide(2), "PageDown did not navigate slides")
                 key("s", ("Control_L",))
@@ -261,7 +275,7 @@ def run(remote=False):
                 assert "marp: true" in (project / "new.marp.md").read_text()
                 open_file("deck.marp.md")
                 command("Marp: Toggle slide preview")
-                click(800, 450)
+                focus_preview()
                 key("Home")
                 wait_for(lambda: slide(1), "Returning to Slides failed")
                 x11.XResizeWindow(display, window, 850, 560)

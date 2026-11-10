@@ -1,10 +1,166 @@
 # Security review
 
-Latest review: **2026-11-06**. This review covers local/SSH file services, executable-cache publication, sandbox construction, preference transactions, subprocess/terminal ownership, encrypted-mount coordination, document loading and extension/agent boundaries. It includes targeted source review, reproductions and dependency advisory checks; it is not a guarantee that every vulnerability has been found.
+Latest review: **2026-11-10**. This review covers local/SSH file services, executable-cache publication, sandbox construction, preference transactions, subprocess/terminal ownership, encrypted-mount coordination, document loading and extension/agent boundaries. It includes targeted source review, reproductions and dependency advisory checks; it is not a guarantee that every vulnerability has been found.
 
 The general Python host backend described in the historical findings below has been removed. Current local/headless regressions exercise the shared Rust services. Findings from the earlier **2026-10-29** review remain recorded below with current implementation references.
 
 ## Findings fixed
+
+### Transient commands could outlive their capture operation
+
+**Process ownership/availability issue (additional pass, 2026-11-10).** The
+bounded binary helper runner killed only its immediate child on timeout.
+Descendants could remain alive after the reported failure, including retaining
+pipes or continuing project work. Both this runner and the project command
+runner could also return success while a descendant that had closed its output
+continued running. The binary runner additionally inherited the launcher's
+controlling terminal and silently accepted stderr beyond its documented budget.
+
+Host helpers and project commands now share `command/capture.rs`. It starts a
+new session, enforces independent stdout/stderr budgets while reading, and owns
+a scoped child guard that stops the process group on completion and every error
+path before collecting output. It preserves binary transfers, streamed input,
+stdin cancellation leases and the renderer's existing SIGINT cleanup grace.
+Project commands retain their per-stream budgets; binary helpers retain the
+caller-selected stdout budget and a separate 64 KiB stderr budget. Exceeding
+either budget fails the operation instead of silently clipping diagnostics.
+
+The owner observes leader exit using Linux `waitid(WNOWAIT)` and sends the final
+group signal **before** reaping, keeping the leader's PID reserved until signals
+are finished. It disarms signalling when `waitid` reports that child ownership
+has already been lost (`ECHILD`). The behavior follows the
+[`waitid` contract](https://man7.org/linux/man-pages/man2/wait.2.html).
+
+Four deterministic regressions failed before the fix: helper timeout left a
+child alive, helper success left a child alive, project success left a child
+alive, and successful helper output above the stderr budget was accepted. They
+pass after the fix. Additional checks cover descendants holding output pipes,
+unchanged binary transfers (including the uncapped document-response setting),
+exit diagnostics and isolation from an independent command. The existing
+real-PTY regression now also requires bounded binary helpers to be unable to
+open the launcher's `/dev/tty`.
+
+Implementation: `crates/rode-host-core/src/command/capture.rs`, `command.rs` and
+`project.rs`. Regressions: `command/capture_tests.rs`, existing command tests and
+`tests/security.rs::background_terminal_child`, driven by its real-PTY harness.
+Rebuild the editor and native helper and reconnect SSH hosts to deploy new
+capture code. The wire protocol is unchanged. Persistent service jobs retain
+their independent ownership; transient helpers must not launch retained work by
+backgrounding a child and exiting. Descendants that deliberately create another
+session escape process-group cleanup; this is supervision under the existing
+sandbox policy, not a replacement for kernel isolation.
+
+### Directory-only opens could wait on substituted FIFOs
+
+**Conditional availability issue (follow-up pass, 2026-11-10).** LaTeX output
+locking and several directory-only permission/durability operations used plain
+`File::open`. Earlier pathname checks or successful directory creation do not
+ensure that the entry is still a directory when it is opened. A process able to
+replace a writable directory entry in that interval could substitute a FIFO,
+making the open wait for a writer, or substitute a regular file that the open
+would incorrectly accept as a directory handle.
+
+The shared `locking::open_directory` now requires `O_DIRECTORY` at open time,
+with `O_NONBLOCK`, `O_NOCTTY` and close-on-exec. LaTeX output locks, configuration
+and runtime-cache directory syncs, native installation publication and encrypted
+mount directory handles all use it. Ordinary symlinks to directories retain
+their existing behavior. These flags follow the Linux
+[`open(2)` contract](https://man7.org/linux/man-pages/man2/open.2.html).
+
+A deterministic regression first creates and canonicalizes an output directory,
+then renames it and substitutes a FIFO before invoking the directory opener.
+The former plain-open primitive failed its one-second deadline; the guarded
+open rejects it immediately. A second regression checks normal directories and
+directory aliases while refusing regular files, their aliases and missing paths.
+This reproduces the vulnerable open sequence, rather than claiming a full
+application exploit or privilege escalation.
+
+Implementation: `crates/rode-host-core/src/locking.rs`, `latex.rs`,
+`persistence.rs`, `runtime_cache.rs`, `vault.rs` and `src/bundled/install.rs`.
+Regressions: `locking::tests::checked_directory_replaced_by_a_fifo_is_rejected_without_waiting`
+and `locking::tests::directory_handles_allow_directory_aliases_and_reject_other_entry_types`.
+Rebuild the editor and native helper, and reconnect SSH hosts to deploy the new
+helper. Existing one-shot helpers retain their old code until they exit. The
+session wire protocol is unchanged. The guard validates the opened type; it
+does not pin ancestor names, forbid directory symlinks or guarantee deadlines
+for unavailable/network filesystems.
+
+### Runtime artifacts could redirect host file writes
+
+**Local integrity/availability issue (2026-11-10).** Service startup opened
+`service.log` with an ordinary append operation. A process able to plant an entry
+in a writable runtime directory could redirect host-side log writes to another
+file through a symbolic or hard link, or make the open wait on a FIFO. A
+controlled reproduction replaced the log with a symlink to a private fixture
+file and demonstrated the helper appending its error message to that file.
+
+Shared private-file opening now rejects leaf symlinks, nonregular files, multiple
+hard links, foreign owners and group/other permissions before writing. Opens are
+nonblocking and cannot acquire a controlling terminal. Runtime locks and
+configuration locks/temporary files use the same guard.
+
+On Linux, service startup captures and validates the runtime directory descriptor
+and addresses logs, locks, capability publication, socket binding and cleanup
+through that inode. Renaming the directory and substituting a symlink therefore
+cannot redirect those operations. The filesystem socket is created with private
+permissions, avoiding a pathname chmod race; the original process mask is
+restored before workers or user processes start.
+
+Regressions preserve unrelated files behind symlinks and hard links, reject
+FIFOs without waiting, check append/nontruncating-lock behavior and substitute a
+runtime-directory path after capture. The log redirection regression failed
+before the fix and passes after it.
+
+Implementation: `crates/rode-host-core/src/locking.rs`, `persistence.rs`,
+`crates/rode-session/src/lib.rs` and `control_tests.rs`. These checks protect
+runtime artifacts; they do not isolate unrestricted processes with the same UID.
+
+### Unauthenticated control connections could create unbounded workers
+
+**Local availability issue (2026-11-10).** The persistent service spawned a
+blocking thread for every accepted control socket before authenticating it.
+A reachable local peer could hold connections open without proving access to
+the host capability, growing the number of threads and open descriptors.
+Authentication deadlines alone did not bound simultaneous resource use.
+
+The service now admits at most 32 pending authentication/protocol handshakes
+before creating workers and closes excess connections immediately. Completed
+handshakes release their slots so established terminal views retain their
+separate limits. EOF and authentication failures release admission automatically;
+failed thread creation or socket cloning no longer panics the daemon.
+
+The regression opens the full pending-connection budget, requires immediate EOF
+for an excess peer, releases a slot and verifies authenticated listing of the
+same still-running terminal. It failed against the previous implementation and
+passes with admission control. This bounds unauthenticated worker growth; it
+does not promise availability against a sustained connection flood.
+
+Implementation: `crates/rode-session/src/lib.rs`. Regression:
+`tests/sessions.rs::unauthenticated_connections_are_bounded_without_ending_retained_work`.
+
+### Vendored SSH adapters retained an affected RSA prerelease
+
+**Dependency finding (2026-11-10).** The build-compatible
+`rsa 0.10.0-rc.18` pin is flagged by
+[RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html), whose
+2026-11-08 update lists stable `rsa >=0.10.0` as patched for known timing issues.
+A fresh audit of the previous lockfile reproduced the finding. This review did
+not attempt private-key recovery or establish an exploit against RODE's SSH use.
+
+Both vendored SSH adapters now use stable `rsa 0.10.0` and `pkcs1 0.8.0` where
+needed. The adapters explicitly enable PKCS#1 v1.5 signatures, export the new
+validated-prime representation and share the RSA library's PKCS#1 decoder for
+PKCS#8 payloads. Regression coverage checks plain/encrypted key round trips,
+signatures, changed-message rejection and wrong passwords; native SSH tests also
+exercise RSA host verification and modern RSA SHA-2 negotiation.
+
+New work selects **service generation 23**. Rebuild and install both editor and
+native helper. Earlier daemons keep their existing jobs and code; end and restart
+affected work to acquire the fixes. Updated clients do not migrate those jobs.
+
+Implementation: `vendor/russh`, `vendor/ssh-key`, `Cargo.lock` and the service
+generation constant. Regression:
+`tests/ssh_client.rs::rsa_private_key_formats_preserve_signatures_after_the_crypto_upgrade`.
 
 ### Custom Codex state directories could be read through file-only tools
 
@@ -84,6 +240,14 @@ Implementation: `src/process.rs`, `crates/rode-host-core/src/command.rs`, `crate
 
 ## Dependency audit
 
+On **2026-11-10**, `cargo-audit` **0.22.2** checked **510 locked packages** against
+RustSec commit `58a64e69d7a08a2b83a80efa6e4b018a9acb51fc`, last updated
+**2026-11-10** (1,430 advisories). The previous RSA prerelease produced one known
+vulnerability finding; after the migration the audit reports **zero known
+vulnerabilities**. The three unmaintained-crate warnings below remain visible
+and unsuppressed. Path dependencies, including locally patched SSH source, still
+require source review; a lockfile scan does not certify them.
+
 On **2026-11-06**, `cargo-audit` **0.22.2** checked **384 locked packages** against the RustSec database at commit `fbba727d074c77fe5f7aced91930ad33eede654c`, last updated **2026-11-06** (1,413 advisories). After the parser update it reported **zero known vulnerabilities** and these informational maintenance warnings:
 
 | Dependency | Dependency path | Advisory |
@@ -99,6 +263,84 @@ With an installed [cargo-audit](https://github.com/RustSec/rustsec/tree/main/car
 The vendored sandbox manifest pins bubblewrap **0.13.1** and libcap **2.78**. These are beyond the fixes listed in the upstream [bubblewrap setup advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx) (0.12.0), [bubblewrap setuid advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-xq78-7hw4-5jvp) (0.11.2) and [libcap file-capability advisory](https://github.com/AndrewGMorgan/libcap_mirror/security/advisories/GHSA-f78v-p5hx-m7hh) (2.78). Packaging tests verify the vendored file hashes. This check does not establish that every C dependency or installed system executable is free of vulnerabilities; system binaries still need distribution security updates.
 
 ## Validation snapshot
+
+The **2026-11-10 full-suite remediation run** passed **938 ordinary Rust tests**
+across 49 executables, with 40 declared harness/opt-in cases ignored and none
+filtered out. The run supplied a current native helper and installed real-tool
+fixtures, including Jupyter, debugpy, LLDB, formatters and the isolated Codex
+loopback peer. The final desktop check passed all 418 tests (4 declared ignores).
+The focused agent-network, agent and session suites also passed all 59 tests
+with `RODE_TEST_REQUIRE_LANDLOCK=1`. Private per-executable homes and fixture
+session/vault directories resolved the earlier real-home and global-directory
+failures without relaxing permissions. Workspace-local Poppler and an owned,
+authenticated X display supplied the preview and native UI prerequisites that
+earlier invocations had missed.
+Native UI cases for workspace, agents, terminals, tools, local/remote documents,
+SSH smoke workflows and local/remote runtimes passed after fixture corrections.
+Clippy, formatting, warning-free Rustdoc, strict MkDocs, doctests, standalone
+helper compilation and the CI/packaging/private-home runner regressions passed.
+
+This remains an incomplete platform-enforcement result. Four required
+Bubblewrap suite entries fail because the host denies namespace/network setup.
+The real SSH transport run passed 23 cases and failed agent forwarding; a
+separate plain OpenSSH probe reproduced sshd's `mkdtemp(): Permission denied`.
+Four Kerberos cases passed, while delegation reached sshd and failed its
+hardcoded `/tmp/krb5cc_*` cache creation with `Permission denied`. These failures
+remain visible. Real gocryptfs initialization and wrong-password checks passed,
+but opening `/dev/fuse` is denied, so mounting was not exercised. A device node's
+existence alone is not evidence that the fixture can use it. The ordinary pass
+does not establish these unavailable enforcement capabilities.
+
+The **2026-11-10 additional process-capture pass** passed 10 shared command
+checks, 3 focused project-runner checks, 17 native-host tests with
+`RODE_HOST_HELPER` explicitly set to the built helper, 6 file-security tests
+(2 subprocess entry points ignored by the outer harness), 5 concurrency tests,
+5 extension tests, 3 Git-credential tests, 6 stash tests, 5 LaTeX tests and all
+58 terminal/agent/runtime lifetime tests. These include the new real-process
+regressions and the extended real-controlling-PTY check. Native-host tests run
+without an explicit helper can return early; the initial invocation without
+that fixture was not counted as gateway validation.
+
+The Marp suite passed four cases and failed its PDF-preview case because this
+environment lacks Poppler's `pdfinfo`; the cancellation case passed. The ordinary
+agent-network invocation reported four passes but can skip unavailable
+enforcement. Requiring Landlock explicitly then failed two cases because scratch
+creation beneath the real home was denied by this execution environment. These
+failures do not establish actual offline-tool enforcement for this pass. Cases
+requiring missing external tools or optional runtime fixtures can also return
+early. This is not a fully green broad/platform test run. Workspace Clippy,
+warning-free private-item Rustdoc, formatting, strict MkDocs and standalone-helper
+compilation passed. The refreshed 510-package audit used RustSec commit
+`58a64e69d7a08a2b83a80efa6e4b018a9acb51fc` (updated 2026-11-10) and reported
+zero known vulnerabilities and the three unsuppressed maintenance warnings.
+
+The **2026-11-10 follow-up** directory-open checks passed all 5 shared file-guard
+tests (including the reproduced FIFO substitution), 7 native installer tests
+(1 explicit-download case ignored), 12 bundle tests, 5 LaTeX tests, 17 native-host
+tests, 26 persistence tests (1 subprocess harness ignored) and 6 file-security
+tests (2 subprocess harnesses ignored). Tests for unavailable external tools or
+sandbox backends can return without exercising them; their availability remains
+a separate validation requirement. Two encrypted-project integration tests
+failed because this execution environment denies creating their required
+`/tmp/rode-vaults-<uid>` directory. A direct directory-creation probe reproduced
+`PermissionDenied`, and both helper entry points failed before returning a vault
+reply. The optional real-FUSE case returned without an available fixture; it is
+not evidence that FUSE enforcement passed. This is not a fully green integration
+or native-GUI run. Workspace Clippy, warning-free private-item Rustdoc, formatting,
+strict MkDocs and standalone-helper compilation passed. At that earlier point, a freshly fetched RustSec audit used commit
+`d9cb059f3217db87aeccd190b81eaffe8cc29cb9` and reported zero known vulnerabilities
+with the same three unsuppressed maintenance warnings documented above.
+
+The **2026-11-10** targeted checks passed 28 terminal-service integration tests,
+14 native SSH/crypto tests, 6 file-security tests (2 harness cases ignored),
+17 native-host tests, 5 runtime integration tests, 26 preference-persistence
+tests (1 subprocess harness ignored), 3 shared private-file tests and 35
+headless-service unit tests. The unauthenticated-overload and redirected-log
+regressions failed before their fixes and passed afterward. A parallel
+background-agent run passed 24 tests and failed one history-initialization case;
+that case passed an isolated recheck. This is an observed intermittency, not a
+fully clean broad test result. These checks do not establish exhaustive exploit
+coverage or a fully passing workspace/native-GUI run.
 
 The fourth 2026-11-06 pass attempted the full workspace suite with installed real adapters. The optional `real_lldb_native_breakpoints_and_steps` test timed out, and an isolated recheck timed out too. That was **not a fully green workspace run**. A subsequent run excluding only that test passed **695 Rust tests**, with 27 harness/opt-in tests ignored and the single LLDB test filtered out. The preceding third-pass full run had passed all 693 tests then present.
 

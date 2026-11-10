@@ -101,6 +101,8 @@ cat > "$test_dir/host-shell" <<EOF
 export HOME='$test_dir/home'
 export PATH='$test_path'
 export TMPDIR='$test_dir'
+export RODE_SESSION_DIR='$test_dir/home/sessions'
+export RODE_VAULT_DIR='$test_dir/home/vaults'
 export XAUTHORITY='$test_dir/home/.Xauthority'
 $test_shell_export
 if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then
@@ -191,9 +193,9 @@ fi
 case "${RODE_SSH_RUN_TRANSPORT:-1}" in
     1)
         if [[ -n "${RODE_SSH_TEST_BINARY:-}" ]]; then
-            transport=("$RODE_SSH_TEST_BINARY" "${RODE_SSH_TEST_FILTER:-}" --ignored --nocapture)
+            transport=(python3 scripts/rust_tests.py --runner "$RODE_SSH_TEST_BINARY" "${RODE_SSH_TEST_FILTER:-}" --ignored --nocapture)
         else
-            transport=("${CARGO:-cargo}" test --locked)
+            transport=(python3 scripts/rust_tests.py --runner "${CARGO:-cargo}" test --locked)
             if [[ -n "${RODE_TEST_CARGO_PROFILE:-}" ]]; then transport+=(--profile "$RODE_TEST_CARGO_PROFILE"); fi
             transport+=(--test ssh_roundtrip "${RODE_SSH_TEST_FILTER:-}" -- --ignored --nocapture)
         fi

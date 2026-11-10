@@ -2,7 +2,7 @@
 pub use crate::locking::{lock, lock_existing, open_regular};
 use anyhow::{Context, Result, ensure};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
@@ -35,19 +35,15 @@ pub fn read(path: &Path, limit: usize) -> Result<Option<Vec<u8>>> {
 }
 
 fn private_file(path: &Path, exclusive: bool) -> Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    if exclusive {
-        options.create_new(true);
-    } else {
-        options.create(true);
-    }
-    Ok(options.open(path)?)
+    use crate::locking::PrivateFile;
+    Ok(crate::locking::open_private(
+        path,
+        if exclusive {
+            PrivateFile::New
+        } else {
+            PrivateFile::Lock
+        },
+    )?)
 }
 
 /// Serialize a read/modify/replace transaction under the stable configuration lock and
@@ -106,7 +102,8 @@ pub fn replace(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
             )?;
             fs::remove_file(&temporary)?;
         }
-        File::open(path.parent().context("Missing configuration directory")?)?.sync_all()?;
+        crate::locking::open_directory(path.parent().context("Missing configuration directory")?)?
+            .sync_all()?;
         Ok(())
     })();
     if result.is_err() {

@@ -58,7 +58,9 @@ def colors(window, name):
     raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
     counts = {}
     for y in range(160, 850):
-        for x in range(310, 1370):
+        # Remote startup may collapse the explorer; include the full document
+        # area so a correctly rendered image beside the tool rail is observed.
+        for x in range(60, 1370):
             color = raw[(y * 1380 + x) * 3 : (y * 1380 + x) * 3 + 3]
             counts[color] = counts.get(color, 0) + 1
     return counts

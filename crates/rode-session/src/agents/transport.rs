@@ -1,11 +1,12 @@
 //! Host-side stdio transport. The spawning thread remains alive until the
 //! owned process exits, including bubblewrap's --die-with-parent lifetime.
 use super::*;
+use rode_runtime_core::process::ProcessGroup;
 use std::{
     io::BufReader,
     os::unix::process::CommandExt,
     process::{Command as ProcessCommand, Stdio},
-    sync::atomic::{AtomicU32, AtomicUsize},
+    sync::atomic::AtomicUsize,
 };
 
 /// Captured host launch policy/executable/environment and a count of active owned
@@ -112,11 +113,7 @@ impl rode_agent_core::Factory for Factory {
         }
         let (input, incoming) = mpsc::sync_channel::<Vec<u8>>(32);
         let (output, events) = mpsc::sync_channel::<rode_agent_core::Event>(16);
-        let control = Arc::new(Control {
-            pid: AtomicU32::new(0),
-            alive: AtomicBool::new(false),
-            stopped: AtomicBool::new(false),
-        });
+        let control = Arc::new(ProcessGroup::default());
         let pipe = Pipe {
             input,
             events,
@@ -151,45 +148,18 @@ impl rode_agent_core::Factory for Factory {
                     rode_agent_core::Event::Error(format!("Cannot start agent: {error:#}")),
                 );
             }
-            control.alive.store(false, Ordering::Release);
+            control.finish();
             drop(running);
             wake();
         });
         Ok(rode_agent_core::Session::new(pipe))
     }
 }
-/// Shared idempotent signal state for only this transport's owned child process group.
-struct Control {
-    pid: AtomicU32,
-    alive: AtomicBool,
-    stopped: AtomicBool,
-}
-impl Control {
-    fn kill(&self, signal: i32) {
-        let pid = self.pid.load(Ordering::Acquire);
-        if pid != 0 && self.alive.load(Ordering::Acquire) {
-            unsafe {
-                libc::kill(-(pid as i32), signal);
-            }
-        }
-    }
-    fn stop(self: &Arc<Self>) {
-        if self.stopped.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        self.kill(libc::SIGTERM);
-        let control = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(1500));
-            control.kill(libc::SIGKILL);
-        });
-    }
-}
 /// Bounded agent input/event channels; the spawning worker retains actual child ownership.
 struct Pipe {
     input: mpsc::SyncSender<Vec<u8>>,
     events: mpsc::Receiver<rode_agent_core::Event>,
-    control: Arc<Control>,
+    control: Arc<ProcessGroup>,
 }
 impl rode_agent_core::Transport for Pipe {
     fn send(&self, message: &Value) -> Result<()> {
@@ -224,7 +194,7 @@ fn run(
     mut command: ProcessCommand,
     input: mpsc::Receiver<Vec<u8>>,
     output: mpsc::SyncSender<rode_agent_core::Event>,
-    control: Arc<Control>,
+    control: Arc<ProcessGroup>,
     wake: Arc<dyn Fn() + Send + Sync>,
     limit: usize,
 ) -> Result<()> {
@@ -237,11 +207,7 @@ fn run(
             result => break result?,
         }
     };
-    control.pid.store(child.id(), Ordering::Release);
-    control.alive.store(true, Ordering::Release);
-    if control.stopped.load(Ordering::Acquire) {
-        control.kill(libc::SIGTERM);
-    }
+    control.started(child.id());
     let mut stdin = child.stdin.take().context("Missing agent stdin")?;
     std::thread::spawn(move || {
         for bytes in input {
@@ -281,8 +247,7 @@ fn run(
     }
     emit(&output, &wake, rode_agent_core::Event::Started);
     let status = child.wait()?;
-    control.kill(libc::SIGKILL);
-    control.alive.store(false, Ordering::Release);
+    control.reaped();
     for reader in readers {
         let _ = reader.join();
     }

@@ -433,15 +433,15 @@ impl EditorApp {
             .iter()
             .any(project::GitFile::staged);
         ui.horizontal_wrapped(|ui| {
-            if ui
+            let stage = ui
                 .add_enabled(ready && stageable, egui::Button::new("Stage all"))
                 .on_disabled_hover_text(if ready {
                     "No unstaged or untracked changes to stage."
                 } else {
                     "Wait for the current Git operation to finish."
-                })
-                .clicked()
-            {
+                });
+            ui_probe::button(ui, "git-stage-all", &stage);
+            if stage.clicked() {
                 self.git_mutate(strings(&["add", "--all"]), "Stage all", ctx);
             }
             if ui

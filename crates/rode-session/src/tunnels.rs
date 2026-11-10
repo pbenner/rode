@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::Read,
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -699,21 +698,8 @@ async fn authenticate(
 fn read_identity(path: &Path) -> Result<keys::PrivateKey> {
     // Reject FIFOs/devices after opening without waiting for their peer. A timed
     // out spawn_blocking task cannot otherwise cancel a blocking FIFO open.
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
-        .open(path)
+    let file = rode_host_core::locking::open_private_key(path)
         .with_context(|| format!("Cannot open SSH identity file {} on the tunnel host; check Identity file, or clear it and select a persistent Agent socket", path.display()))?;
-    ensure!(
-        file.metadata()
-            .with_context(|| format!(
-                "Cannot inspect SSH identity file {} on the tunnel host",
-                path.display()
-            ))?
-            .is_file(),
-        "SSH identity {} on the tunnel host must be a regular file",
-        path.display()
-    );
     let mut encoded = zeroize::Zeroizing::new(String::new());
     file.take(65537)
         .read_to_string(&mut encoded)

@@ -17,7 +17,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    click_button,
     close_window,
     display,
     focus_window,
@@ -133,8 +133,12 @@ def run(remote=False):
         )
         (root / "corrupt.png").write_bytes(b"not a PNG")
         original = hashlib.sha256(image.read_bytes()).digest()
+        state_path = base / "ui-state.json"
         environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+            os.environ,
+            XDG_CONFIG_HOME=str(base / "config"),
+            XDG_DATA_HOME=str(base / "data"),
+            RODE_UI_TEST_STATE=str(state_path),
         )
         args = [str(BINARY), "--sandbox"]
         if remote:
@@ -159,7 +163,8 @@ def run(remote=False):
             ]
         else:
             args.append(str(root))
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
+        log_path = ARTIFACTS / (label + ".log")
+        with log_path.open("w") as log:
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
@@ -200,11 +205,7 @@ def run(remote=False):
                 x11.XResizeWindow(display, window, 850, 560)
                 x11.XFlush(display)
                 screenshot(window, label + "-compact.png")
-                # The Code surface has the full content area; account for the
-                # extra reason strip when sandbox preparation falls back.
-                title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                host_offset = 44 if "[Sandbox]" in title else 74
-                click(319, 142 + host_offset)  # Fit resets the enlarged compact preview.
+                click_button(window, process, log_path, state_path, "image-fit")
                 fitted = pixels(window, label + "-compact-fit.png", (240, 160, 24), size=(850, 560))
                 assert 238 <= fitted[2] - fitted[0] <= 241, fitted
                 assert 158 <= fitted[3] - fitted[1] <= 161, fitted

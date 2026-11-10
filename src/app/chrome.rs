@@ -64,7 +64,7 @@ impl EditorApp {
                     let label = elide(&full_theme, if roomy { 26 } else { 18 });
                     // The compact footer has 19 points of content height; normal
                     // menu-button padding would extend below the window edge.
-                    egui::containers::menu::MenuButton::from_button(
+                    let appearance = egui::containers::menu::MenuButton::from_button(
                         egui::Button::new(palette.tag(label))
                             .small()
                             .min_size(egui::vec2(0., 19.)),
@@ -74,6 +74,7 @@ impl EditorApp {
                         .on_hover_text(format!(
                             "{full_theme}\nSyntax: {}\nChange interface or syntax theme · saved automatically", self.themes.active_syntax().name
                         ));
+                    ui_probe::button(ui, "appearance-menu", &appearance);
                     if roomy {
                         ui.label(palette.tag("RODE 0.1"));
                     }

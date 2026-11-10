@@ -616,31 +616,15 @@ pub fn run_cancellable(
 /// The coordinator is launched inside the actual workspace policy. Its stdin
 /// remains open as a lifetime channel; EOF cancels the adapter's process group.
 pub fn coordinator() -> Result<()> {
-    use std::{
-        io::{BufRead, Read},
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
+    crate::coordinator::serve(
+        64 * 1024 * 1024,
+        |request: &crate::project::Request, cancel| {
+            let crate::project::Request::Extension { root, invocation } = request else {
+                anyhow::bail!("Expected an extension request");
+            };
+            run_cancellable(root, invocation, cancel)
         },
-    };
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .take(64 * 1024 * 1024)
-        .read_line(&mut line)?;
-    let request: crate::project::Request = serde_json::from_str(&line)?;
-    let crate::project::Request::Extension { root, invocation } = request else {
-        anyhow::bail!("Expected an extension request");
-    };
-    let cancel = Arc::new(AtomicBool::new(false));
-    let control = cancel.clone();
-    std::thread::spawn(move || {
-        let _ = std::io::stdin().lock().read(&mut [0]);
-        control.store(true, Ordering::Release);
-    });
-    let reply = run_cancellable(&root, &invocation, &cancel)?;
-    serde_json::to_writer(std::io::stdout().lock(), &reply)?;
-    Ok(())
+    )
 }
 /// Run the prepared adapter coordinator command with a single framed project request.
 pub fn execute<S: Serialize>(

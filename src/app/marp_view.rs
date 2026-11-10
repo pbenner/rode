@@ -140,12 +140,13 @@ impl EditorApp {
         let mut refresh = false;
         let mut export = None;
         let mut settings = false;
+        let mut refresh_button = None;
         {
             let view = self.documents[self.active].marp.as_mut().unwrap();
             ui.horizontal_wrapped(|ui| {
-                refresh = ui
-                    .add_enabled(!view.busy, egui::Button::new("Refresh slides"))
-                    .clicked();
+                let button = ui.add_enabled(!view.busy, egui::Button::new("Refresh slides"));
+                refresh = button.clicked();
+                refresh_button = Some(button);
                 if view.busy {
                     ui.spinner();
                     ui.label("Rendering Marp…");
@@ -245,6 +246,12 @@ impl EditorApp {
             ui.label("The current buffer is rendered without saving it.");
             return;
         };
+        if !view.busy
+            && !pdf.image.loading
+            && let Some(button) = &refresh_button
+        {
+            ui_probe::button(ui, "marp-ready", button);
+        }
         view.focus = false;
         let (reload, page) = pdf.ui(ui, id, palette, focus, keyboard, "Slide");
         if reload {

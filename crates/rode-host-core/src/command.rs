@@ -3,97 +3,53 @@
 //! This runner serves local helpers and remote transport commands. Keep errors
 //! tied to the actual executable, preserve binary stdout, and bound stderr
 //! independently; only the caller knows whether a missing tool is OpenSSH.
-use anyhow::{Context, Result, bail};
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-    process::{Command, Stdio},
-    sync::mpsc,
-    time::{Duration, Instant},
-};
+use anyhow::{Result, bail};
+use std::{io::Read, path::PathBuf, process::Command, sync::atomic::AtomicBool, time::Duration};
 mod arguments;
+pub(crate) mod capture;
 pub use arguments::{compact_pty, from_argv};
 /// Quote one argument for a POSIX remote shell, including embedded single quotes.
 pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Concurrently drain both pipes and stdin with the default 64 MiB stdout bound.
+/// Run a transient helper in a new session, draining pipes concurrently with the
+/// default 64 MiB stdout bound. Stop its owned group before returning on success
+/// or error; retained jobs require a separate persistent-service owner.
 pub fn run_bounded(command: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
     run_bounded_limited(command, input, timeout, 64 * 1024 * 1024)
 }
 
 /// Run a host command with a caller-specific stdout cap, enforced while reading.
-/// Stderr retains its separate 64 KiB diagnostic limit.
+/// Stderr has an independent 64 KiB limit; overflow fails instead of truncating.
+/// Binary stdout is preserved, and completion stops the owned process group.
 pub fn run_bounded_limited(
-    mut command: Command,
+    command: Command,
     input: Vec<u8>,
     timeout: Duration,
     output_limit: usize,
 ) -> Result<Vec<u8>> {
     let program = command.get_program().to_string_lossy().into_owned();
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Could not start {program}"))?;
-    let mut stdin = child.stdin.take().context("Missing SSH stdin")?;
-    let stdout = child.stdout.take().context("Missing SSH stdout")?;
-    let stderr = child.stderr.take().context("Missing SSH stderr")?;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = stdin.write_all(&input);
-    });
-    let out_tx = tx.clone();
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stdout
-            .take(output_limit.saturating_add(1) as u64)
-            .read_to_end(&mut bytes);
-        let _ = out_tx.send((true, bytes, result));
-    });
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stderr.take(64 * 1024 + 1).read_to_end(&mut bytes);
-        let _ = tx.send((false, bytes, result));
-    });
-    let start = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("{program} timed out; the operation did not finish within its deadline.");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let mut output = Vec::new();
-    let mut error = Vec::new();
-    for _ in 0..2 {
-        let (is_out, bytes, result) = rx
-            .recv_timeout(Duration::from_secs(2))
-            .with_context(|| format!("{program} output exceeded its limit or did not close"))?;
-        result?;
-        if is_out {
-            output = bytes;
-        } else {
-            error = bytes;
-        }
-    }
-    if output.len() > output_limit {
-        bail!("{program} response exceeded its size limit.");
-    }
-    if !status.success() {
-        let detail = String::from_utf8_lossy(&error);
+    let output = capture::run(
+        command,
+        std::io::Cursor::new(input),
+        timeout,
+        &AtomicBool::new(false),
+        false,
+        capture::Limits {
+            stdout: output_limit as u64,
+            stderr: 64 * 1024,
+        },
+        Duration::ZERO,
+    )?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
         if !detail.trim().is_empty() {
             bail!("{}", detail.trim());
         }
-        bail!("{program} failed ({status})");
+        bail!("{program} failed ({})", output.status);
     }
-    Ok(output)
+    Ok(output.stdout)
 }
 
 /// Detach an owned child group from the caller’s controlling terminal.
@@ -228,6 +184,9 @@ fn sandbox_options(prefix: &[String]) -> impl Iterator<Item = (&str, &str, &str)
 pub static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
+mod capture_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -255,14 +214,16 @@ mod tests {
     #[test]
     fn small_ssh_output_limits_preserve_binary_data_and_reject_overflow() {
         let data = vec![0, 255, 10, 42];
-        let output = run_bounded_limited(
-            Command::new("/bin/cat"),
-            data.clone(),
-            Duration::from_secs(5),
-            data.len(),
-        )
-        .unwrap();
-        assert_eq!(output, data);
+        for limit in [data.len(), usize::MAX] {
+            let output = run_bounded_limited(
+                Command::new("/bin/cat"),
+                data.clone(),
+                Duration::from_secs(5),
+                limit,
+            )
+            .unwrap();
+            assert_eq!(output, data);
+        }
         let error = run_bounded_limited(Command::new("/bin/cat"), data, Duration::from_secs(5), 3)
             .unwrap_err();
         assert!(error.to_string().contains("size limit"), "{error:#}");

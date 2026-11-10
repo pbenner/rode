@@ -330,6 +330,15 @@ fn background_terminal_child() {
     assert!(fs::File::open("/dev/tty").is_ok());
     let root = tempfile::tempdir().unwrap();
     let code = "import json,os\ntry:\n fd=os.open('/dev/tty',os.O_RDWR);os.close(fd);tty=True\nexcept OSError:\n tty=False\nprint(json.dumps({'tty':tty}))";
+    let mut helper = Command::new("python3");
+    helper.args(["-c", code]);
+    let output =
+        rode_host_core::command::run_bounded(helper, vec![], Duration::from_secs(5)).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["tty"], false,
+        "Bounded host helpers inherited /dev/tty"
+    );
     for enabled in [false, true] {
         let plan = native_peer::prepare(
             root.path().to_str().unwrap(),

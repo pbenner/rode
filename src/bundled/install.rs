@@ -506,7 +506,7 @@ fn install_to(
     selector.as_file().sync_all()?;
     cancelled(cancel)?;
     selector.persist(base.join("manifest.json"))?;
-    fs::File::open(base)?.sync_all()?;
+    rode_host_core::locking::open_directory(base)?.sync_all()?;
     Ok(destination)
 }
 

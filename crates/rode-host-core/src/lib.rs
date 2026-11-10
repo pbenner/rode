@@ -6,6 +6,7 @@ pub mod agent_files;
 pub use rode_bwrap as bwrap;
 pub mod command;
 pub mod connection;
+mod coordinator;
 pub mod debugger;
 pub mod environment;
 pub mod extensions;

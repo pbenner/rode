@@ -62,7 +62,10 @@ def probe_landlock(path, expose_runtime):
         except PermissionError:
             pass  # ABI 6 can block the connection itself.
         else:  # ABI 4/5 rely on the ptrace-protected capability.
-            assert_rejected(client, b"A" + b"0" * 32, "authentication failed")
+            # Keep the current proof shape (token plus nonce descriptor) while
+            # supplying a wrong token, so this exercises authentication failure.
+            proof = b"A" + b"0" * 32 + struct.pack(">i", 3)
+            assert_rejected(client, proof, "authentication failed")
     with socket.socket(socket.AF_UNIX) as client:
         client.settimeout(5)
         client.connect(path)
