@@ -12,6 +12,8 @@ enum Intent {
 }
 
 impl EditorApp {
+    /// Render saved connection intents and route connects through the shared dirty-buffer guard.
+    /// Disable row edits while a preference write is awaiting acknowledgement.
     pub(super) fn saved_connections_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let intent = ui

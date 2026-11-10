@@ -3,6 +3,7 @@
 use super::*;
 use crate::ssh::tunnels::{Host as SavedHost, Profiles, STORAGE_KEY, Saved};
 
+/// Saved tunnel configurations with deferred preference writes and a retained load error.
 #[derive(Default)]
 pub(super) struct Library {
     pub entries: Profiles,
@@ -93,6 +94,7 @@ impl Tunnels {
     }
 }
 impl EditorApp {
+    /// Capture the current local/SSH host identity used to scope saved tunnel configurations.
     pub(super) fn tunnel_saved_host(&self) -> SavedHost {
         SavedHost::for_profile(
             self.workspace
@@ -102,6 +104,8 @@ impl EditorApp {
         )
     }
 
+    /// Choose Save/Update from the selected form identity or a same-host/name match.
+    /// This label performs no preference write or tunnel operation.
     pub(super) fn tunnel_save_label(&self, spec: &Spec, from_form: bool) -> &'static str {
         let host = self.tunnel_saved_host();
         if (from_form && self.tunnels.saved_id.is_some())
@@ -118,6 +122,8 @@ impl EditorApp {
         }
     }
 
+    /// Validate/update a saved configuration and queue changed preference data.
+    /// Success updates the form identity; validation/load errors remain visible in the manager.
     pub(super) fn save_tunnel_configuration(&mut self, spec: Spec, from_form: bool) {
         let profile = Saved {
             host: self.tunnel_saved_host(),
@@ -141,6 +147,8 @@ impl EditorApp {
         }
     }
 
+    /// Load a same-host saved configuration into the draft without starting its tunnel.
+    /// A foreign host leaves the draft intact and reports the required host.
     pub(super) fn load_tunnel_configuration(&mut self, id: &str) {
         let Some(saved) = self.tunnels.saved.entries.get(id) else {
             return;
@@ -160,6 +168,8 @@ impl EditorApp {
         self.tunnels.error.clear();
     }
 
+    /// Queue removal of a saved configuration and clear its draft/deletion selection.
+    /// Running daemon tunnels are independent of the saved entry.
     pub(super) fn delete_tunnel_configuration(&mut self, id: &str) {
         self.tunnels.saved.remove(id);
         if self.tunnels.saved_id.as_deref() == Some(id) {

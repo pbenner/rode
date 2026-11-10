@@ -1,6 +1,7 @@
 //! Responsive chat header. Reserve the actual themed action widths before sizing the provider.
 use super::*;
 
+/// Header intents returned to the owning chat view after editing its configuration.
 #[derive(Default)]
 pub(super) struct Actions {
     pub provider_changed: bool,
@@ -8,6 +9,8 @@ pub(super) struct Actions {
     pub new_chat: bool,
 }
 
+/// Render responsive provider/personality controls and return requested chat actions.
+/// Busy/queued/offline state gates controls; this function does not launch a backend.
 pub(super) fn show(
     ui: &mut egui::Ui,
     config: &mut Config,

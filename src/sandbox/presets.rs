@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use std::collections::BTreeMap;
 
 pub(crate) const STORAGE_KEY: &str = "sandbox_presets";
+/// Named sandbox option snapshots; labels are user-facing identities rather than filesystem paths.
 pub(crate) type Presets = BTreeMap<String, Options>;
 
 /// Validate names independently of filesystem conventions: these are labels,

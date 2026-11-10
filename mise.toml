@@ -50,7 +50,8 @@ run = [
 
 [tasks.test]
 description = "Run every ordinary workspace Rust test, including integration tests"
-run = "RODE_TEST_MISE='{{mise_bin}}' RODE_TEST_RUFF=\"$(command -v ruff)\" python3 scripts/ci.py time --timeout 600 rust-tests -- python3 scripts/rust_tests.py"
+# Preserve CI's explicitly staged Ruff instead of selecting a different PATH entry.
+run = "RODE_TEST_MISE='{{mise_bin}}' RODE_TEST_RUFF=\"${RODE_TEST_RUFF:-$(command -v ruff)}\" python3 scripts/ci.py time --timeout 600 rust-tests -- python3 scripts/rust_tests.py"
 
 [tasks.build]
 run = "python3 scripts/ci.py time --timeout 600 editor-build -- cargo build --locked --profile ci --bins"

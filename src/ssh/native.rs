@@ -25,6 +25,7 @@ const MAX_PACKET: usize = 128 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 type Session = client::Handle<auth::Handler>;
 
+/// Resolve the destination identity used for known-host lookup without contacting the SSH server.
 pub(super) fn host_token(profile: &super::Profile) -> Result<String> {
     Ok(config::Config::resolve(profile, &profile.host, true)?.host_token())
 }
@@ -41,6 +42,8 @@ enum Request {
     },
 }
 
+/// Run the private native SSH master/channel entry point and return its exit code.
+/// Bound runtime shutdown so a blocked terminal stdin reader cannot retain a completed channel.
 pub(super) fn cli(args: &[String]) -> Result<i32> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -117,6 +120,7 @@ fn local_connect(socket: &Path, timeout: Duration) -> Result<std::os::unix::net:
     Ok(stream)
 }
 
+/// Probe this authenticated native master with bounded local I/O; any failure reports offline.
 pub(super) fn connected(socket: &Path) -> bool {
     (|| -> Result<()> {
         let mut stream = local_connect(socket, Duration::from_millis(500))?;
@@ -132,6 +136,8 @@ pub(super) fn connected(socket: &Path) -> bool {
     .is_ok()
 }
 
+/// Request scoped master shutdown and runtime-directory cleanup off the GUI thread.
+/// Endpoint capture is nonblocking; authentication and best-effort control writes run on a worker.
 pub(super) fn stop(socket: &Path) {
     // Capture the endpoint before Remote removes its name. Cleanup and token
     // authentication run off the GUI thread, including after a killed master.

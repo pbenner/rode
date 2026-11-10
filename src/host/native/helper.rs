@@ -2,6 +2,7 @@
 use super::*;
 use std::path::PathBuf;
 
+/// Verified remote helper path/digest plus installed-helper metadata when discovery supplied it.
 pub(super) struct Selected {
     pub executable: String,
     pub digest: String,
@@ -106,6 +107,8 @@ fn installed(remote: &ssh::Remote, architecture: &str) -> Result<Option<wire::he
     Ok(None)
 }
 
+/// Select and publish a verified helper for the remote Linux architecture.
+/// Explicit remote paths fail without fallback; permitted discovery may use a supplied desktop artifact.
 pub(super) fn select(remote: &ssh::Remote, architecture: &str) -> Result<Selected> {
     ensure!(
         matches!(architecture, "x86_64" | "aarch64"),

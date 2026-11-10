@@ -1,5 +1,8 @@
-#!/usr/bin/env python3
-"""Scripted app-server peer: requests tools but never executes them or calls a model."""
+#!/usr/bin/python3 -I
+"""Scripted app-server peer using the policy-covered system Python, independent of PATH.
+
+Requests tools but never executes them or calls a model.
+"""
 
 import json
 import os

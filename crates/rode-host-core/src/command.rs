@@ -4,7 +4,13 @@
 //! tied to the actual executable, preserve binary stdout, and bound stderr
 //! independently; only the caller knows whether a missing tool is OpenSSH.
 use anyhow::{Result, bail};
-use std::{io::Read, path::PathBuf, process::Command, sync::atomic::AtomicBool, time::Duration};
+use std::{
+    io::Read,
+    path::PathBuf,
+    process::{Command, Output},
+    sync::atomic::AtomicBool,
+    time::Duration,
+};
 mod arguments;
 pub(crate) mod capture;
 pub use arguments::{compact_pty, from_argv};
@@ -30,17 +36,12 @@ pub fn run_bounded_limited(
     output_limit: usize,
 ) -> Result<Vec<u8>> {
     let program = command.get_program().to_string_lossy().into_owned();
-    let output = capture::run(
+    let output = capture_bounded(
         command,
         std::io::Cursor::new(input),
         timeout,
         &AtomicBool::new(false),
-        false,
-        capture::Limits {
-            stdout: output_limit as u64,
-            stderr: 64 * 1024,
-        },
-        Duration::ZERO,
+        output_limit,
     )?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
@@ -50,6 +51,32 @@ pub fn run_bounded_limited(
         bail!("{program} failed ({})", output.status);
     }
     Ok(output.stdout)
+}
+
+/// Capture a transient command's binary stdout, stderr and exit status.
+/// Reads input concurrently, honors cancellation and enforces the selected
+/// stdout budget plus a separate 64 KiB stderr budget. The owned process group
+/// is stopped before reaping on success or error. A nonzero exit is returned in
+/// the output so callers can interpret tool-specific diagnostics.
+pub fn capture_bounded(
+    command: Command,
+    input: impl Read + Send + 'static,
+    timeout: Duration,
+    cancel: &AtomicBool,
+    output_limit: usize,
+) -> Result<Output> {
+    capture::run(
+        command,
+        input,
+        timeout,
+        cancel,
+        false,
+        capture::Limits {
+            stdout: output_limit as u64,
+            stderr: 64 * 1024,
+        },
+        Duration::ZERO,
+    )
 }
 
 /// Detach an owned child group from the caller’s controlling terminal.

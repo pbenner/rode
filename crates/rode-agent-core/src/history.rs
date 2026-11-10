@@ -728,6 +728,8 @@ impl Browser {
     }
 }
 
+/// Require the exact captured project path and provider before accepting a history row.
+/// Missing or incompatible metadata does not match the current conversation scope.
 pub(crate) fn in_project(row: &Value, launch: &Launch, acp: bool) -> bool {
     row["cwd"]
         .as_str()

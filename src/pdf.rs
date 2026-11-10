@@ -4,15 +4,13 @@ use crate::images;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
-    io::{Read, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// Maximum accepted page count in one PDF.
@@ -215,13 +213,7 @@ fn run(
     use std::os::unix::process::CommandExt;
     ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
     let mut command = Command::new(program);
-    command
-        .args(args)
-        .env("LC_ALL", "C")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+    command.args(args).env("LC_ALL", "C");
     // Bound the decoder's address space in addition to pixels and pipe output.
     unsafe {
         command.pre_exec(|| {
@@ -239,78 +231,26 @@ fn run(
             Ok(())
         });
     }
-    let child=command.spawn().with_context(||format!("PDF tools need Poppler's pdfinfo, pdftoppm and pdftotext on this desktop (for example: install poppler-utils). Cannot run {program}"))?;
-    struct Child(std::process::Child);
-    impl Drop for Child {
-        fn drop(&mut self) {
-            unsafe {
-                libc::kill(-(self.0.id() as i32), libc::SIGKILL);
-            }
-            let _ = self.0.wait();
-        }
-    }
-    let mut child = Child(child);
-    let mut stdin = child.0.stdin.take().context("Missing PDF input pipe")?;
-    let stdout = child.0.stdout.take().context("Missing PDF output pipe")?;
-    let stderr = child.0.stderr.take().context("Missing PDF error pipe")?;
-    std::thread::spawn(move || {
-        let _ = stdin.write_all(&bytes);
-    });
-    let overflow = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel();
-    for (out, mut pipe, max) in [
-        (true, Box::new(stdout) as Box<dyn Read + Send>, limit),
-        (false, Box::new(stderr) as Box<dyn Read + Send>, 64 * 1024),
-    ] {
-        let tx = tx.clone();
-        let overflow = overflow.clone();
-        std::thread::spawn(move || {
-            let mut result = vec![];
-            let status = pipe.by_ref().take(max as u64 + 1).read_to_end(&mut result);
-            if result.len() > max {
-                overflow.store(true, Ordering::Release);
-            }
-            let _ = tx.send((out, result, status));
-        });
-    }
-    drop(tx);
-    let started = Instant::now();
-    let status = loop {
+    let output = rode_host_core::command::capture_bounded(
+        command,
+        std::io::Cursor::new(bytes),
+        Duration::from_secs(20),
+        cancel,
+        limit,
+    )
+    .map_err(|error| {
         if cancel.load(Ordering::Acquire) {
-            bail!("PDF rendering cancelled.");
-        }
-        ensure!(
-            !overflow.load(Ordering::Acquire),
-            "PDF renderer output exceeded its limit."
-        );
-        ensure!(
-            started.elapsed() < Duration::from_secs(20),
-            "PDF rendering timed out after 20 seconds."
-        );
-        if let Some(status) = child.0.try_wait()? {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(15));
-    };
-    let mut output = vec![];
-    let mut errors = vec![];
-    for _ in 0..2 {
-        let (out, data, result) = rx
-            .recv_timeout(Duration::from_secs(2))
-            .context("PDF renderer output pipes did not close")?;
-        result?;
-        if out {
-            output = data;
+            anyhow::anyhow!("PDF rendering cancelled.")
+        } else if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            error.kind() == std::io::ErrorKind::NotFound
+        }) {
+            error.context(format!("PDF tools need Poppler's pdfinfo, pdftoppm and pdftotext on this desktop (for example: install poppler-utils). Cannot run {program}"))
         } else {
-            errors = data;
+            error
         }
-    }
-    ensure!(
-        !overflow.load(Ordering::Acquire),
-        "PDF renderer output exceeded its limit."
-    );
-    if !status.success() {
-        let error = String::from_utf8_lossy(&errors);
+    })?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
         if error.to_ascii_lowercase().contains("password") {
             bail!("Password-protected PDFs are not supported by this preview.");
         }
@@ -319,12 +259,13 @@ fn run(
             error.chars().take(2000).collect::<String>().trim()
         );
     }
-    Ok(output)
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
     #[test]
     fn cancelled_and_excessive_renderer_processes_are_stopped() {
         let cancel = Arc::new(AtomicBool::new(false));
@@ -353,5 +294,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn renderer_exit_closes_descendant_pipes_before_collecting_output() {
+        let before = Instant::now();
+        let output = run(
+            "/bin/sh",
+            &["-c".into(), "/bin/sleep 3 & printf done".into()],
+            Arc::from([]),
+            1024,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(output, b"done");
+        assert!(before.elapsed() < Duration::from_secs(2));
     }
 }

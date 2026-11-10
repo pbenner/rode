@@ -2,6 +2,8 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// Resolved native SSH endpoint, trust/authentication policy and forwarding settings.
+/// Configuration is captured before connecting and remains distinct from UI profile spelling.
 #[derive(Clone, Debug)]
 pub(super) struct Config {
     pub host: String,

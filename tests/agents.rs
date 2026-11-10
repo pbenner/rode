@@ -845,17 +845,7 @@ fn actual_landlock_encloses_the_agent_and_tools_without_fallback() {
 
 fn agent_sandbox(backend: sandbox::Backend) {
     let (_temp, root, program) = fixture();
-    // The policy grants /usr, independently of the developer's active venv or
-    // PATH-managed interpreter. Its children must use that same covered runtime.
-    fs::write(
-        &program,
-        include_str!("fixtures/agent.py").replacen(
-            "#!/usr/bin/env python3",
-            "#!/usr/bin/python3 -I",
-            1,
-        ),
-    )
-    .unwrap();
+    // Match the fixture's policy-covered system runtime for its child probes.
     let mut launch = launch(&root, &program, Provider::Codex, true);
     launch.python = "/usr/bin/python3".into();
     launch.config.access = Access::Full;

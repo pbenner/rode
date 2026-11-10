@@ -16,6 +16,7 @@
 
 use crate::{files, project, sandbox, ssh};
 use anyhow::{Context, Result, bail, ensure};
+use rode_host_core::runtime_cache::pins::{Notice, Target, valid_sha256, validate_version};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -45,43 +46,6 @@ struct Manifest {
     targets: BTreeMap<String, Target>,
     notices: Vec<Notice>,
 }
-#[derive(Deserialize)]
-struct Target {
-    size: u64,
-    sha256: String,
-    #[serde(default)]
-    helpers: BTreeMap<String, Artifact>,
-}
-#[derive(Deserialize)]
-struct Artifact {
-    size: u64,
-    sha256: String,
-}
-impl Target {
-    fn artifacts(&self) -> Vec<(&str, u64, &str)> {
-        std::iter::once(("codex", self.size, self.sha256.as_str()))
-            .chain(
-                self.helpers
-                    .iter()
-                    .map(|(name, pin)| (name.as_str(), pin.size, pin.sha256.as_str())),
-            )
-            .collect()
-    }
-    // An old main-only deployment must not conceal missing helpers. Include all
-    // pinned executables in the immutable remote cache identity.
-    fn cache_key(&self) -> String {
-        if self.helpers.is_empty() {
-            self.sha256.clone()
-        } else {
-            files::digest(&serde_json::to_vec(&self.artifacts()).expect("runtime pins"))
-        }
-    }
-}
-#[derive(Deserialize)]
-struct Notice {
-    file: String,
-    sha256: String,
-}
 
 struct Release {
     raw: String,
@@ -100,25 +64,11 @@ impl Release {
             "Codex manifest exceeds its size limit"
         );
         let manifest: Manifest = serde_json::from_str(&raw)?;
-        let version = &manifest.version;
-        ensure!(
-            !version.is_empty()
-                && version.len() <= 64
-                && version.as_bytes()[0].is_ascii_digit()
-                && version
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b".+-".contains(&c)),
-            "Invalid Codex runtime version"
-        );
+        validate_version(&manifest.version)?;
         ensure!(
             !manifest.targets.is_empty() && manifest.targets.len() <= 16,
             "Invalid Codex target count"
         );
-        let valid_hash = |s: &str| {
-            s.len() == 64
-                && s.bytes()
-                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-        };
         for (architecture, target) in &manifest.targets {
             ensure!(
                 !architecture.is_empty()
@@ -128,23 +78,9 @@ impl Release {
                         .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)),
                 "Invalid Codex architecture"
             );
-            ensure!(
-                (1..=512 * 1024 * 1024).contains(&target.size) && valid_hash(&target.sha256),
-                "Invalid Codex executable pin"
-            );
-            ensure!(
-                target.helpers.len() <= 8,
-                "Too many Codex helper executables"
-            );
-            for (name, pin) in &target.helpers {
-                ensure!(
-                    matches!(name.as_str(), "codex-code-mode-host" | "codex-exec-server")
-                        && (1..=512 * 1024 * 1024).contains(&pin.size)
-                        && valid_hash(&pin.sha256),
-                    "Invalid Codex helper pin"
-                );
-            }
+            target.validate()?;
         }
+
         ensure!(
             !manifest.notices.is_empty() && manifest.notices.len() <= 32,
             "Invalid Codex notice count"
@@ -165,7 +101,7 @@ impl Release {
                             | ".."
                     )
                     && names.insert(&notice.file)
-                    && valid_hash(&notice.sha256),
+                    && valid_sha256(&notice.sha256),
                 "Invalid Codex notice pin"
             );
         }
@@ -611,7 +547,7 @@ pub(crate) fn prepare(
             .to_owned();
         let suffix = Path::new(&release.manifest.version)
             .join(&architecture)
-            .join(target.cache_key())
+            .join(target.cache_key()?)
             .join("codex");
         ensure!(
             Path::new(&path).is_absolute() && Path::new(&path).ends_with(suffix),

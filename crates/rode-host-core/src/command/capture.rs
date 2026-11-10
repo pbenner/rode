@@ -33,32 +33,16 @@ struct Owned {
 impl Owned {
     /// Peek at this leader only; never reap an unrelated child or release our PID.
     fn exited(&mut self) -> io::Result<bool> {
-        loop {
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            // SAFETY: info is a writable siginfo_t; P_PID selects our own
-            // positive child ID and WNOWAIT retains it for the final group kill.
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.child.id(),
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            if result == 0 {
-                return Ok(unsafe { info.si_pid() } != 0);
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            if error.raw_os_error() == Some(libc::ECHILD) {
-                // An external SIGCHLD reaper/ignored disposition has broken
-                // ownership. Never signal a potentially reused numeric PID.
-                self.armed = false;
-            }
-            return Err(error);
+        let result = rode_runtime_core::process::wait::exited(&self.child);
+        if result
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD))
+        {
+            // A competing reaper/ignored SIGCHLD disposition broke ownership.
+            // Never signal a potentially reused numeric PID.
+            self.armed = false;
         }
+        result
     }
 
     fn signal(&self, signal: libc::c_int) {

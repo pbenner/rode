@@ -1,5 +1,6 @@
 //! Native stdio supervisor for one transient project process. No listener or persistent owner.
 use anyhow::{Context, Result, ensure};
+use rode_runtime_core::process::ProcessGroup;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, Read, Write},
@@ -132,7 +133,8 @@ pub fn serve() -> Result<()> {
             result => break result.context("Cannot start project process")?,
         }
     };
-    let pid = child.id() as i32;
+    let group = Arc::new(ProcessGroup::default());
+    group.started(child.id());
     let mut child_input = child.stdin.take().context("Missing child stdin")?;
     let closed = Arc::new(AtomicBool::new(false));
     let writer_closed = closed.clone();
@@ -161,30 +163,19 @@ pub fn serve() -> Result<()> {
         writer_closed.store(true, Ordering::Release);
     });
     let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+        if group.exited(&child)? {
+            break group.wait(&mut child)?;
         }
         if closed.load(Ordering::Acquire)
             || crate::command::CANCELLED.load(Ordering::Acquire)
             || (spec.heartbeat && lease.expired())
         {
-            unsafe {
-                libc::kill(-pid, libc::SIGTERM);
-            }
-            let until = Instant::now() + Duration::from_secs(1);
-            while Instant::now() < until && child.try_wait()?.is_none() {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-            }
-            break child.wait()?;
+            group.stop();
+            break group.wait(&mut child)?;
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
-    }
+    group.finish();
     ensure!(status.success(), "Project process exited with {status}");
     Ok(())
 }

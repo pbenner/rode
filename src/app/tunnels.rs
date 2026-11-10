@@ -117,6 +117,8 @@ fn check_started_scope(
     );
     Ok(())
 }
+/// Window-owned tunnel manager with captured-host generations and separate discovery/action workers.
+/// Saved configurations outlive a workspace reset; stale observations do not imply a live connection.
 #[derive(Default)]
 pub(super) struct Tunnels {
     saved: saved::Library,
@@ -182,6 +184,8 @@ impl EditorApp {
         }
     }
 
+    /// Poll tunnel workers and schedule bounded discovery without blocking the UI.
+    /// A workspace generation change resets live state while retaining saved configurations.
     pub(super) fn tunnel_tick(&mut self, ctx: &egui::Context) {
         if self.tunnels.generation != Some(self.generation) {
             self.tunnels = Tunnels {

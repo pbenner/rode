@@ -48,6 +48,8 @@ impl Chat {
         Ok(())
     }
 
+    /// Start the transport with captured file/network policy and a bounded startup deadline.
+    /// Remote automatic-runtime preparation receives the longer deployment allowance.
     pub(super) fn start_session(
         &mut self,
         launch: Launch,
@@ -74,12 +76,16 @@ impl Chat {
         Ok(())
     }
 
+    /// Return a saved conversation identity only when recovery is allowed to resume it.
+    /// Fresh-context recovery and missing/empty identities return `None`.
     pub(super) fn resume_id(&self) -> Option<&str> {
         self.recovery
             .as_deref()
             .filter(|id| !self.fresh_recovery && !id.is_empty())
     }
 
+    /// Queue conversation resume or creation using the current recovery decision.
+    /// Resuming omits replayed turns; completion is handled by the conversation reply.
     pub(super) fn start_conversation(&mut self, mut params: Value) -> Result<()> {
         if let Some(id) = self.resume_id() {
             params["threadId"] = id.into();

@@ -1,6 +1,9 @@
 //! Shared signal/stop state for a single, separately created process group.
-//! The transport worker retains the actual child and performs wait/reaping.
+//! The transport worker retains the actual child; this owner orders its final
+//! signals before reaping so a released PID cannot address an unrelated group.
 use std::{
+    io,
+    process::{Child, ExitStatus},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -19,8 +22,9 @@ struct State {
 /// Single-use process-group lifetime shared by desktop, agent and runtime transports.
 ///
 /// The spawning worker must create a separate process group/session before publishing
-/// its leader with [`Self::started`]. Call [`Self::reaped`] immediately after waiting
-/// for that leader, then [`Self::finish`] once transport cleanup has completed.
+/// its leader with [`Self::started`]. Use [`Self::wait`] to wait for that leader,
+/// then [`Self::finish`] once transport cleanup has completed.
+/// Do not reap the child through another waiter or a SIGCHLD handler.
 /// None of these operations owns a terminal, SSH authentication master or host policy.
 #[derive(Default)]
 pub struct ProcessGroup {
@@ -90,17 +94,59 @@ impl ProcessGroup {
         }
     }
 
-    /// Clean up descendants after the leader was reaped, then invalidate signalling.
-    /// Call this before joining pipe readers so surviving descendants cannot keep
-    /// stdout/stderr open indefinitely after their parent exits.
-    pub fn reaped(&self) {
+    /// Wait for the leader and clean up its descendants before joining pipe readers.
+    /// Closes any remaining stdin handle, as [`Child::wait`] does. Exit observation
+    /// retains the leader's PID until all group signalling has been invalidated.
+    /// The child must match the leader published through [`Self::started`].
+    /// The worker must retain exclusive ownership of this child's wait status;
+    /// lost ownership returns an error and disables further signals.
+    pub fn wait(&self, child: &mut Child) -> io::Result<ExitStatus> {
+        drop(child.stdin.take());
+        self.finish_signalling(child)?;
+        child.wait()
+    }
+
+    /// Check for leader exit without reaping or releasing its PID.
+    /// Use this instead of [`Child::try_wait`] while supervising deadlines or
+    /// input leases, and finish with [`Self::wait`] before collecting pipe readers.
+    /// Kernel observation errors disable signalling and propagate to the worker;
+    /// an unpublished child is rejected without changing the published owner.
+    pub fn exited(&self, child: &Child) -> io::Result<bool> {
+        self.observe_exit(child, false)
+    }
+
+    /// Observe exit without reaping, then finish signals while the PID is reserved.
+    fn finish_signalling(&self, child: &Child) -> io::Result<()> {
+        self.observe_exit(child, true)?;
         let mut state = self.state.lock().unwrap();
         if let Some(pid) = state.pid.take() {
-            // SAFETY: finish the separately owned group before releasing its ID.
+            // SAFETY: the leader remains unreaped. Invalidation shares the
+            // timer/stop lock and precedes the wait that releases this ID.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
+        Ok(())
+    }
+
+    fn observe_exit(&self, child: &Child, blocking: bool) -> io::Result<bool> {
+        if self.state.lock().unwrap().pid != Some(child.id()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Child is not the published process-group leader",
+            ));
+        }
+        let result = if blocking {
+            super::wait::wait_for_exit(child).map(|()| true)
+        } else {
+            super::wait::exited(child)
+        };
+        if result.is_err() {
+            // The kernel could not establish ownership. Do not trust a cached
+            // Child status or allow timer/Stop signals to use a released PID.
+            self.state.lock().unwrap().pid = None;
+        }
+        result
     }
 
     /// Publish completed supervision, including startup failures with no child.
@@ -123,7 +169,7 @@ mod tests {
     use std::{
         io::Read,
         os::unix::process::CommandExt,
-        process::{Child, Command, ExitStatus, Stdio},
+        process::{Command, Stdio},
         time::Instant,
     };
 
@@ -146,11 +192,11 @@ mod tests {
             child.0.stdout.take().unwrap().read_exact(&mut [0]).unwrap();
             child
         }
-        fn wait(&mut self) -> ExitStatus {
+        fn wait(&mut self, group: &ProcessGroup) -> ExitStatus {
             let until = Instant::now() + STOP_GRACE + Duration::from_secs(3);
             loop {
-                if let Some(status) = self.0.try_wait().unwrap() {
-                    return status;
+                if group.exited(&self.0).unwrap() {
+                    return group.wait(&mut self.0).unwrap();
                 }
                 assert!(Instant::now() < until, "Owned process did not stop");
                 std::thread::sleep(Duration::from_millis(10));
@@ -172,8 +218,7 @@ mod tests {
         std::thread::sleep(STOP_GRACE + Duration::from_millis(100));
         let mut owned = Owned::new(true);
         group.started(owned.0.id());
-        assert!(!owned.wait().success());
-        group.reaped();
+        assert!(!owned.wait(&group).success());
         group.finish();
         assert!(group.is_finished());
     }
@@ -187,8 +232,7 @@ mod tests {
         group.stop();
         group.stop();
         assert!(group.cancelled().load(Ordering::Acquire));
-        assert!(!owned.wait().success());
-        group.reaped();
+        assert!(!owned.wait(&group).success());
         group.finish();
         group.stop();
         assert!(group.is_finished());
@@ -210,9 +254,112 @@ mod tests {
             barrier.wait();
             group.started(owned.0.id());
             worker.join().unwrap();
-            assert!(!owned.wait().success());
-            group.reaped();
+            assert!(!owned.wait(&group).success());
             group.finish();
         }
+    }
+
+    #[test]
+    fn a_previously_reaped_leader_invalidates_signalling_and_reports_lost_ownership() {
+        let group = Arc::new(ProcessGroup::default());
+        let mut owned = Owned::new(false);
+        group.started(owned.0.id());
+        assert!(!group.exited(&owned.0).unwrap());
+        owned.0.kill().unwrap();
+        owned.0.wait().unwrap();
+        // Child::wait caches status. It must not stand in for kernel ownership
+        // before a group signal: the numeric ID has already been released.
+        assert_eq!(
+            group.wait(&mut owned.0).unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+        assert!(group.state.lock().unwrap().pid.is_none());
+    }
+
+    #[test]
+    fn final_signals_end_while_the_leader_is_still_waitable() {
+        let group = Arc::new(ProcessGroup::default());
+        let mut owned = Owned::new(false);
+        group.started(owned.0.id());
+        owned.0.kill().unwrap();
+        group.finish_signalling(&owned.0).unwrap();
+        // Ask the kernel, not Child's status cache, whether the PID is retained.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    owned.0.id(),
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            },
+            0,
+            "{}",
+            io::Error::last_os_error()
+        );
+        assert_eq!(unsafe { info.si_pid() }, owned.0.id() as i32);
+        assert!(group.state.lock().unwrap().pid.is_none());
+        group.stop();
+        owned.0.wait().unwrap();
+    }
+
+    #[test]
+    fn nonblocking_observation_also_refuses_a_reaped_leader() {
+        let group = Arc::new(ProcessGroup::default());
+        let mut owned = Owned::new(false);
+        group.started(owned.0.id());
+        owned.0.kill().unwrap();
+        owned.0.wait().unwrap();
+        assert_eq!(
+            group.exited(&owned.0).unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+        assert!(group.state.lock().unwrap().pid.is_none());
+    }
+
+    #[test]
+    fn an_unpublished_child_cannot_replace_the_owned_group() {
+        let group = Arc::new(ProcessGroup::default());
+        let mut owned = Owned::new(false);
+        let mut independent = Owned::new(false);
+        group.started(owned.0.id());
+        assert_eq!(
+            group.wait(&mut independent.0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(group.state.lock().unwrap().pid, Some(owned.0.id()));
+        group.stop();
+        assert!(!owned.wait(&group).success());
+        assert!(independent.0.try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn natural_exit_preserves_status_and_closes_descendant_output() {
+        let group = Arc::new(ProcessGroup::default());
+        let mut owned = Owned(
+            Command::new("/bin/sh")
+                // The three-second sleep bounds this fixture even on failure.
+                .args(["-c", "/bin/sleep 3 & printf 'final output'; exit 7"])
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        group.started(owned.0.id());
+        let mut stdout = owned.0.stdout.take().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut output = String::new();
+            stdout.read_to_string(&mut output).unwrap();
+            let _ = sent.send(output);
+        });
+        assert_eq!(group.wait(&mut owned.0).unwrap().code(), Some(7));
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "final output"
+        );
+        reader.join().unwrap();
+        group.finish();
     }
 }

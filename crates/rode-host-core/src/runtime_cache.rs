@@ -11,43 +11,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Deserialize)]
-struct Artifact {
-    size: u64,
-    sha256: String,
-}
-#[derive(Deserialize)]
-struct Target {
-    size: u64,
-    sha256: String,
-    #[serde(default)]
-    helpers: BTreeMap<String, Artifact>,
-}
-impl Target {
-    fn artifacts(&self) -> Vec<(&str, u64, &str)> {
-        std::iter::once(("codex", self.size, self.sha256.as_str()))
-            .chain(
-                self.helpers
-                    .iter()
-                    .map(|(name, pin)| (name.as_str(), pin.size, pin.sha256.as_str())),
-            )
-            .collect()
-    }
-    fn key(&self) -> Result<String> {
-        if self.helpers.is_empty() {
-            Ok(self.sha256.clone())
-        } else {
-            Ok(crate::files::digest(&serde_json::to_vec(
-                &self.artifacts(),
-            )?))
-        }
-    }
-}
-#[derive(Deserialize)]
-struct Notice {
-    file: String,
-    sha256: String,
-}
+/// Shared release metadata and immutable cache identity for desktop and host.
+pub mod pins;
+use pins::{Notice, Target, valid_sha256, validate_version};
+
 #[derive(Deserialize)]
 struct Specification {
     action: String,
@@ -69,12 +36,6 @@ struct Reply {
     executable: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cached: Option<bool>,
-}
-fn hash_valid(hash: &str) -> bool {
-    hash.len() == 64
-        && hash
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 fn private_directory(path: &Path, create: bool) -> Result<bool> {
     if create {
@@ -209,30 +170,8 @@ fn run(spec: Specification, input: &mut impl Read) -> Result<Reply> {
         None if spec.action == "probe" => return Ok(reply),
         None => anyhow::bail!("This host needs a configured Codex executable for its architecture"),
     };
-    ensure!(
-        !spec.version.is_empty()
-            && spec.version.len() <= 64
-            && spec.version.as_bytes()[0].is_ascii_digit()
-            && spec
-                .version
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b)),
-        "Invalid Codex runtime version"
-    );
-    ensure!(
-        target.helpers.len() <= 8
-            && target
-                .helpers
-                .keys()
-                .all(|n| matches!(n.as_str(), "codex-code-mode-host" | "codex-exec-server")),
-        "Invalid Codex helper pin"
-    );
-    for (_, size, hash) in target.artifacts() {
-        ensure!(
-            size > 0 && size <= 512 * 1024 * 1024 && hash_valid(hash),
-            "Invalid Codex runtime pin"
-        );
-    }
+    validate_version(&spec.version)?;
+    target.validate()?;
     ensure!(spec.notices.len() <= 32, "Too many Codex notices");
     let mut names = BTreeSet::new();
     for notice in &spec.notices {
@@ -242,7 +181,7 @@ fn run(spec: Specification, input: &mut impl Read) -> Result<Reply> {
                 && !notice.file.contains(['/', '\\', '\0'])
                 && !matches!(notice.file.as_str(), "." | ".." | "manifest.json")
                 && !target.artifacts().iter().any(|(n, _, _)| *n == notice.file)
-                && hash_valid(&notice.sha256)
+                && valid_sha256(&notice.sha256)
                 && names.insert(&notice.file),
             "Invalid Codex notice filename or pin"
         );
@@ -254,7 +193,7 @@ fn run(spec: Specification, input: &mut impl Read) -> Result<Reply> {
     crate::paths::trusted_ancestors(&base).context("Unsafe Codex cache directory ancestors")?;
     let version = base.join(&spec.version);
     let folder = version.join(std::env::consts::ARCH);
-    let key = target.key()?;
+    let key = target.cache_key()?;
     let runtime = folder.join(&key);
     let levels = [base.clone(), version, folder.clone(), runtime.clone()];
     reply.executable = Some(runtime.join("codex").to_string_lossy().into_owned());

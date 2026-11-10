@@ -25,6 +25,7 @@ pub(super) struct Meta {
     pub mode: String,
 }
 
+/// Terminal input waiting for the captured project execution plan to become ready.
 pub(super) struct QueuedCommand {
     command: String,
     plan: sandbox::Plan,

@@ -366,6 +366,8 @@ mod linux {
         )
     }
 
+    /// Probe the available Landlock ruleset and describe that ABI's enforcement limits.
+    /// Return an error when the required rules cannot be created; this does not confine the caller.
     pub(super) fn compatibility_notice() -> Result<String> {
         let abi = abi()?;
         Ruleset::for_abi(abi, true)?;

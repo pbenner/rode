@@ -121,6 +121,8 @@ impl Snapshot {
     }
 }
 
+/// Commit-identity form draft, selected configuration scope and last loaded snapshot.
+/// Dirty edits remain separate from acknowledged host configuration.
 #[derive(Default)]
 pub(super) struct State {
     scope: Scope,
@@ -131,11 +133,13 @@ pub(super) struct State {
     notice: String,
 }
 impl State {
+    /// Discard the loaded identity snapshot/notice while retaining the current form draft.
     pub(super) fn invalidate(&mut self) {
         self.snapshot = None;
         self.notice.clear();
     }
 
+    /// Clear stale identity success text and format the failed job's actionable diagnostic.
     pub(super) fn failure(&mut self, job: &Job, detail: &str) -> String {
         self.notice.clear();
         job.failure(detail)
@@ -228,6 +232,8 @@ fn write_args(scope: Scope, key: &str, value: Option<&str>) -> Vec<String> {
 }
 
 impl EditorApp {
+    /// Render commit identity scope/draft controls and queue selected Git operations.
+    /// The captured host execution mode governs writes; replies update the loaded snapshot.
     pub(super) fn git_identity_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let host = self
@@ -322,6 +328,7 @@ impl EditorApp {
         }
     }
 
+    /// Queue identity discovery on the captured Git host; completion arrives through the workbench worker.
     pub(super) fn git_identity_load(&mut self, ctx: &egui::Context) {
         self.git_command(read_args(), GitJob::Identity(Job::Load), None, ctx);
     }

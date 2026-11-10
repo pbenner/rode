@@ -6,12 +6,14 @@ use crate::{
 };
 use eframe::egui::{self, Align, Button, Layout, RichText, Sense, Ui, Vec2};
 
+/// Retained commit filter and selected commit identity for the history view.
 #[derive(Default)]
 pub(super) struct State {
     filter: String,
     selected: Option<String>,
 }
 
+/// User intent for one selected commit; the owning workbench validates and dispatches it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
     Details,
@@ -55,6 +57,8 @@ pub(super) fn empty_error(output: &crate::project::Output) -> bool {
     output.code == 128 && output.stderr.contains("does not have any commits yet")
 }
 
+/// Render parsed commit rows with filtering and return an optional commit/action intent.
+/// This view neither invokes Git nor changes repository history.
 pub(super) fn show(
     ui: &mut Ui,
     state: &mut State,

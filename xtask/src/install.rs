@@ -55,6 +55,8 @@ pub(super) fn publish(
     Ok(())
 }
 
+/// Build the host's static helper and install editor binaries under the selected prefix.
+/// Publish the staged helper only after Cargo installation succeeds, retaining the old helper on failure.
 pub(super) fn install(workspace: &Workspace, destination: PathBuf) -> Result<()> {
     ensure!(
         env::consts::OS == "linux",

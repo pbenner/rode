@@ -2,14 +2,15 @@
 //!
 //! These are the shared wire contracts for both installed and standalone helpers.
 //! The crate root re-exports them to preserve the public client API. Changes to
-//! wire compatibility or required control protections advance [`PROTOCOL`].
+//! wire compatibility or required service protections advance [`PROTOCOL`].
 use crate::tunnels;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Required service protocol and runtime-directory generation.
-pub const PROTOCOL: u32 = 23;
+/// Generation 24 also requires transport signalling to finish before reaping.
+pub const PROTOCOL: u32 = 24;
 
 /// Host-service metadata for one terminal; no live PTY handle is transferred to clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]

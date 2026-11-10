@@ -193,6 +193,8 @@ impl Api {
     }
 }
 
+/// Owned GSSAPI initiator handles and completion state; drop releases native resources.
+/// The context requests mutual authentication/integrity and optional explicit delegation.
 pub(super) struct Context {
     api: Arc<Api>,
     name: Handle,
@@ -206,6 +208,8 @@ pub(super) struct Context {
 unsafe impl Send for Context {}
 
 impl Context {
+    /// Import `host@hostname` and acquire an existing Kerberos initiator credential.
+    /// Validate the hostname and propagate ticket-acquisition errors without prompting for new tickets.
     pub(super) fn new(host: &str, delegate: bool) -> Result<Self> {
         ensure!(
             !host.is_empty()
@@ -256,6 +260,8 @@ impl Context {
         Ok(this)
     }
 
+    /// Advance one GSSAPI token exchange, with `None` selecting the initial token.
+    /// Reject completed/replayed/error states and require mutual authentication plus integrity on completion.
     pub(super) fn step(&mut self, token: Option<&[u8]>) -> Result<Vec<u8>> {
         ensure!(!self.complete, "Kerberos context already complete");
         let mut input = token.map(Buffer::input);
@@ -292,10 +298,13 @@ impl Context {
         Ok(output)
     }
 
+    /// Whether the mechanism has reached its token-exchange completion status.
     pub(super) fn complete(&self) -> bool {
         self.complete
     }
 
+    /// Generate a nonempty integrity token over the supplied bytes using a completed context.
+    /// Incomplete contexts and native GSSAPI errors fail without returning a MIC.
     pub(super) fn mic(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         ensure!(self.complete, "Kerberos context is not complete");
         let mut minor = 0;

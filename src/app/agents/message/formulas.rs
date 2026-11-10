@@ -5,18 +5,29 @@ use std::{
     ops::Range,
 };
 
+/// One recognized TeX expression and whether it uses display layout.
 pub(super) struct Formula {
+    /// TeX source with its delimiters and normalized Markdown container prefixes.
     pub source: String,
+    /// Whether the expression uses block/display layout instead of inline layout.
     pub display: bool,
 }
 
+/// Markdown rewritten with formula slots and their byte-offset identities.
+/// Recorded guards distinguish inserted separators from literal source text.
 pub(super) struct Prepared {
+    /// Rewritten Markdown containing synthetic code slots for recognized formulas.
     pub text: String,
+    /// Slot start byte offset in `text` mapped to its index in `formulas`.
     pub offsets: HashMap<usize, usize>,
+    /// Byte offsets of inserted separators that the renderer may remove.
     pub guards: HashSet<usize>,
+    /// Original expressions in slot order.
     pub formulas: Vec<Formula>,
 }
 
+/// Replace recognized math with renderer slots while preserving code/link regions.
+/// Offsets and guards address UTF-8 bytes in the returned Markdown, not source character indices.
 pub(super) fn prepare(source: &str, options: Options) -> Prepared {
     if !source.contains(['\\', '$']) {
         return Prepared {

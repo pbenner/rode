@@ -32,6 +32,7 @@ impl Drop for Prompt {
     }
 }
 impl State {
+    /// Whether a Git credential prompt currently owns its modal UI.
     pub(super) fn open(&self) -> bool {
         self.prompt.is_some()
     }

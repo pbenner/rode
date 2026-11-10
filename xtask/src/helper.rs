@@ -13,6 +13,7 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// Supported Linux helper architecture paired with its required ELF machine identifier.
 #[derive(Clone, Copy)]
 pub(super) struct Architecture {
     name: &'static str,
@@ -20,6 +21,7 @@ pub(super) struct Architecture {
 }
 
 impl Architecture {
+    /// Resolve a supported helper architecture name; reject targets outside x86_64/aarch64.
     pub(super) fn parse(name: &str) -> Result<Self> {
         match name {
             "x86_64" => Ok(Self {

@@ -3,6 +3,7 @@
 use super::*;
 use std::ops::Range;
 
+/// Native source-edit command selected by the standard keyboard preset.
 #[derive(Clone, Copy)]
 pub(super) enum Action {
     Indent,
@@ -17,6 +18,8 @@ pub(super) enum Action {
     Redo,
 }
 
+/// Map an exact pressed-key/modifier combination to a standard edit command.
+/// Unrelated input returns `None` so native text handling can retain it.
 pub(super) fn action(event: &egui::Event) -> Option<Action> {
     let egui::Event::Key {
         key,
@@ -131,6 +134,9 @@ impl State {
         }
     }
 
+    /// Translate a source-edit command into selection changes and native undoable events.
+    /// Ranges use character indices. Return `true` to defer remaining input until
+    /// queued native text/undo events have been applied.
     pub(super) fn standard(
         &mut self,
         text: &Text<'_>,

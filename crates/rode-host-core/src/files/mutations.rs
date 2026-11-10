@@ -155,6 +155,8 @@ fn duplicate(source: &Path, destination: &Path) -> Result<()> {
     result
 }
 
+/// Execute one host filesystem mutation and return its resulting entry path.
+/// Creation/copy/rename refuse occupied destinations; removal acts on the selected entry.
 pub(super) fn dispatch(mutation: &Mutation) -> Result<Response> {
     let path = match mutation {
         Mutation::CreateDirectory { path }

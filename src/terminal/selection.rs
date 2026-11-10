@@ -2,12 +2,18 @@
 
 use eframe::egui::{Pos2, Vec2};
 
+/// Zero-based cell boundary in the displayed terminal viewport.
+/// The column may equal the visible width to address an exclusive line end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Point {
+    /// Zero-based displayed row, independent of the scrollback's absolute history.
     pub row: u16,
+    /// Zero-based cell boundary; an exclusive end may equal the displayed width.
     pub col: u16,
 }
 
+/// Anchor/head range bound to a terminal screen snapshot.
+/// Resize, scrollback, alternate-screen or content changes invalidate copying from that range.
 pub(super) struct Selection {
     pub anchor: Point,
     pub head: Point,

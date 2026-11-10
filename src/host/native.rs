@@ -43,6 +43,8 @@ impl Shared {
     }
 }
 
+/// One connection-owned helper subprocess with synchronized input and request-ID reply routing.
+/// Environment-derived contexts are cached under their captured base context and settings.
 pub(crate) struct Client {
     child: Mutex<Child>,
     input: Mutex<ChildStdin>,
@@ -70,6 +72,8 @@ pub(crate) struct State {
     closed: AtomicBool,
 }
 impl State {
+    /// Start/reuse this connection's helper once, caching startup failures until the connection is replaced.
+    /// May block on deployment; a concurrent close prevents the new client from escaping cleanup.
     pub(crate) fn client(&self, remote: &ssh::Remote) -> Result<Arc<Client>> {
         ensure!(
             !self.closed.load(Ordering::Acquire),
@@ -98,6 +102,8 @@ impl State {
         }
         state.as_ref().unwrap().clone().map_err(anyhow::Error::msg)
     }
+    /// Mark the native connection closed immediately and schedule child cleanup off the UI thread.
+    /// A pending startup is joined by the cleanup worker, not by the caller.
     pub(crate) fn close(self: &Arc<Self>) {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
@@ -369,6 +375,8 @@ impl Client {
             }
         }
     }
+    /// Perform a blocking host RPC with the captured project/environment context.
+    /// Preparation requires no existing plan; derived contexts preserve the original host policy.
     pub(crate) fn request(
         &self,
         request: &files::Request,

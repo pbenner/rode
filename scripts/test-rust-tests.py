@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,49 @@ import rust_tests
 
 
 class RustFixtureTests(unittest.TestCase):
+    def test_mise_task_preserves_configured_ruff_and_discovers_it_only_when_unset(self):
+        section = (rust_tests.ROOT / "mise.toml").read_text().split("[tasks.test]", 1)[1]
+        section = section.split("\n[", 1)[0]
+        # This task uses a quoted run string; decoding it needs no TOML package
+        # or newer Python than the other standard-library fixture checks.
+        task = json.loads(
+            next(line[6:] for line in section.splitlines() if line.startswith("run = "))
+        )
+        task = task.replace("{{mise_bin}}", "fixture-mise")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "environment.json"
+            probe = root / "probe.py"
+            probe.write_text(
+                "import json, os\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['RODE_TEST_PROBE_OUTPUT']).write_text("
+                "json.dumps({name:os.environ[name] for name in ['RODE_TEST_RUFF','RODE_TEST_MISE']}))\n"
+            )
+            binary = root / "python3"
+            binary.write_text(
+                '#!/bin/sh\nexec "$RODE_TEST_PROBE_PYTHON" "$RODE_TEST_PROBE_SCRIPT"\n'
+            )
+            binary.chmod(0o755)
+            ruff = root / "ruff"
+            ruff.write_text("#!/bin/sh\nexit 0\n")
+            ruff.chmod(0o755)
+            for configured in [str(root / "configured ruff"), None]:
+                env = dict(os.environ)
+                env.update(
+                    PATH=str(root) + os.pathsep + env["PATH"],
+                    RODE_TEST_PROBE_PYTHON=sys.executable,
+                    RODE_TEST_PROBE_SCRIPT=str(probe),
+                    RODE_TEST_PROBE_OUTPUT=str(output),
+                )
+                env.pop("RODE_TEST_RUFF", None)
+                if configured is not None:
+                    env["RODE_TEST_RUFF"] = configured
+                subprocess.run(["/bin/sh", "-c", task], env=env, check=True)
+                result = json.loads(output.read_text())
+                self.assertEqual(result["RODE_TEST_RUFF"], configured or str(ruff))
+                self.assertEqual(result["RODE_TEST_MISE"], "fixture-mise")
+
     def test_fixture_commands_do_not_inherit_the_development_virtualenv(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

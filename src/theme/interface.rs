@@ -85,6 +85,8 @@ pub(super) struct Overrides {
 }
 
 impl InterfaceStyle {
+    /// Apply optional UI metric overrides and validate finite supported point/alpha ranges.
+    /// Reject a focus outline narrower than the resulting border.
     pub(super) fn merge(self, patch: Overrides) -> Result<Self> {
         let value = Self {
             control_radius: patch.control_radius.unwrap_or(self.control_radius),

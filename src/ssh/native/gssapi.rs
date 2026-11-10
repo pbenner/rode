@@ -10,6 +10,8 @@ const KRB5_DER: &[u8] = b"\x06\x09\x2a\x86\x48\x86\xf7\x12\x01\x02\x02";
 #[cfg(target_os = "linux")]
 const TOKEN_LIMIT: usize = 128 * 1024;
 
+/// Authenticate with existing Kerberos credentials using a completed mutual/integrity context.
+/// Credential acquisition runs on a blocking worker; delegation follows the captured SSH setting.
 pub(super) async fn authenticate(
     session: &mut Session,
     config: &config::Config,

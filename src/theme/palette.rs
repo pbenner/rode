@@ -99,6 +99,8 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// Apply one named palette color, rejecting unknown keys without changing the palette.
+    /// The optional control-border override remains distinct from the general border.
     pub(super) fn override_color(&mut self, key: &str, color: Color32) -> Result<()> {
         if key == "control_border" {
             self.control_border = Some(color);

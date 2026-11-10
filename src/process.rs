@@ -427,9 +427,7 @@ fn run_session(
         }));
     }
     emit(&output, &wake, Event::Started);
-    let status = child.wait()?;
-    // Kill descendants that outlive a process which exits unexpectedly.
-    control.reaped();
+    let status = control.wait(&mut child)?;
     // Preserve the stream's final messages before publishing process exit.
     for reader in readers {
         let _ = reader.join();

@@ -3,6 +3,8 @@
 use super::*;
 
 impl EditorApp {
+    /// Advance asynchronous prompt recall and deliver pages to the current composer.
+    /// Cancelled anchoring releases the send hold; read failures surface as chat notices.
     pub(super) fn poll_prompt_recall(&mut self, ctx: &egui::Context) {
         let requested = self.agents.composer.take_older_request();
         // Before the first page anchors its cursor, metadata loading holds

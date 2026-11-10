@@ -109,17 +109,8 @@ fn remote_native_tools(model_only: bool) {
             .unwrap();
         }
         let program = root.join("agent.py");
-        // PATH can select a mise/venv runtime outside the isolated project.
-        // This peer uses the system interpreter covered by the fixture policy.
-        std::fs::write(
-            &program,
-            include_str!("fixtures/file_only_agent.py").replacen(
-                "#!/usr/bin/env python3",
-                "#!/usr/bin/python3",
-                1,
-            ),
-        )
-        .unwrap();
+        // The shared peer selects the system interpreter covered by this policy.
+        std::fs::write(&program, include_str!("fixtures/file_only_agent.py")).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(root.join("file-tool-steps.json"),serde_json::json!([
             {"params":{"tool":"rode_write_file","arguments":{"path":"remote-source","text":"remote native edit","revision":null}}},

@@ -1,5 +1,8 @@
-#!/usr/bin/env python3
-"""Deterministic coding-agent peer; never calls a model or external service."""
+#!/usr/bin/python3 -I
+"""Deterministic peer using the policy-covered system Python, independent of PATH.
+
+Never calls a model or external service.
+"""
 
 import json
 import os

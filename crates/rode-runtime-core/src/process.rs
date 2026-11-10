@@ -9,6 +9,7 @@ use std::{
 
 mod group;
 pub use group::ProcessGroup;
+pub mod wait;
 
 /// Process events shared with desktop adapters.
 #[derive(Debug)]
@@ -236,8 +237,7 @@ pub fn spawn(mut command: Command) -> Result<Session> {
                 }));
             }
             let _ = output.send(Event::Started);
-            let status = child.wait()?;
-            control.reaped();
+            let status = control.wait(&mut child)?;
             for reader in readers {
                 let _ = reader.join();
             }

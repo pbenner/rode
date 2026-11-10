@@ -246,8 +246,7 @@ fn run(
         }));
     }
     emit(&output, &wake, rode_agent_core::Event::Started);
-    let status = child.wait()?;
-    control.reaped();
+    let status = control.wait(&mut child)?;
     for reader in readers {
         let _ = reader.join();
     }

@@ -21,6 +21,8 @@ pub(super) fn outside_sandbox(project: &sandbox::Plan) -> sandbox::Plan {
 pub(super) struct HostPlan(Arc<Mutex<Option<sandbox::Plan>>>);
 
 impl HostPlan {
+    /// Prepare/cache normal-mode Git execution for an explicitly selected host mode.
+    /// May block on SSH preparation; callers must use a worker and retain the separate project policy.
     pub(super) fn prepare(
         &self,
         project: &sandbox::Plan,

@@ -4,6 +4,8 @@
 use super::*;
 
 impl Chat {
+    /// Normalize an asynchronous question item into a bounded, deduplicated form.
+    /// Preserve matching draft answers and ignore cancelled or already-seen messages.
     pub(super) fn message_questions(&mut self, item: &Value) {
         let Some(item_id) = item["id"]
             .as_str()
@@ -106,6 +108,8 @@ impl Chat {
         self.request_status();
     }
 
+    /// Validate and queue answers as a steer or new turn, retaining the form until acknowledged.
+    /// A successful send marks delivery pending; it does not establish backend acceptance.
     pub(super) fn answer_message(&mut self, result: Value) -> Result<()> {
         ensure!(
             !self.cancelling && self.connected(),
@@ -184,6 +188,8 @@ impl Chat {
         Ok(())
     }
 
+    /// Keep drafts after a failed answer send, clear its pending flag and expose a retry explanation.
+    /// Only reset new-turn busy state when no backend turn identity was established.
     pub(super) fn answer_failed(&mut self, id: &Value, message: &str, new_turn: bool) {
         if new_turn && self.turn.is_empty() {
             self.busy = false;
@@ -209,6 +215,8 @@ impl Chat {
         }
     }
 
+    /// Apply an answer acknowledgement only when its returned turn identity is valid.
+    /// Mark acknowledged questions complete and add the accepted text to transcript/recall.
     pub(super) fn answer_accepted(
         &mut self,
         id: Value,
@@ -257,6 +265,8 @@ impl Chat {
         Ok(())
     }
 
+    /// Poll answer deadlines without blocking or resubmitting input.
+    /// An expired acknowledgement retains its request identity and pending form for a late reply.
     pub(super) fn poll_answers(&mut self) {
         let expired: Vec<_> = self
             .calls

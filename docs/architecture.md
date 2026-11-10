@@ -18,6 +18,7 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | --- | --- |
 | `src/main.rs`, `src/lib.rs` | CLI/helper dispatch, native startup, library entry points |
 | `src/app.rs`, `src/app/lifecycle.rs` | Documents, selected workspace, guarded actions and native window lifecycle |
+| `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
 | `src/app/frame.rs` | Application menus, connection banners, activity controls and pane entry views; routes through the existing lifecycle guards |
 | `src/app/workers.rs`, `src/app/dialogs.rs`, `src/app/appearance.rs` | Captured file/decode jobs and result routing, guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
@@ -44,8 +45,10 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `crates/rode-session/src/runtime_directory.rs` | Owner-only runtime directory validation, Linux inode-anchored artifact paths and startup-only socket permissions |
 | `crates/rode-session/src/attachment.rs` | Shared typed stdin-command forwarding and socket shutdown for agent/runtime attachments; each owner selects its frame budget and retains its output lifecycle |
 | `crates/rode-runtime-core/src/process/group.rs` | Shared process-group cancellation, delayed escalation and acknowledged cleanup for desktop, agent and runtime transports |
+| `crates/rode-runtime-core/src/process/wait.rs` | Nonreaping child-exit observation shared by transport ownership and synchronous capture guards |
 | `crates/rode-session/src/entry.rs` | Early helper dispatch shared by the installed and standalone/static executables; bubblewrap dispatch precedes all worker/runtime initialization |
 | `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `crates/rode-host-core/src/runtime_cache.rs`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
+| `crates/rode-host-core/src/runtime_cache/pins.rs` | Shared runtime artifact/notice model, pin/version validation, deterministic transfer order and backward-compatible immutable cache identity |
 | `crates/rode-agent-core/` | Shared Codex/ACP state machines, bounded chat/history, capabilities, personalities and host-service wire views |
 | `crates/rode-runtime-core/`, `crates/rode-session/src/runtimes.rs`, `src/runtime.rs` | Shared notebook/DAP controllers, bounded output/state replay, exclusive leases, mutation acknowledgements and native runtime discovery |
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs`, `src/app/agents/background.rs` | Project-host preparation, disposable agent attachment, live-session discovery, history and permission/question UI |
@@ -170,6 +173,14 @@ An `auto` executable is resolved only in the process worker after a message. A c
 
 Runtime completeness is part of Codex verification: main and helper executables have independent archive/file pins, a bounded streaming order, and one read-only sandbox tool-directory mount. The SSH cache key covers all executable pins so a previously verified main-only cache cannot satisfy the complete runtime. Explicit setup can add missing helpers to a verified old local installation without replacing a running main executable; publication updates its manifest/selector only after verification, and rejects unrelated or altered files. No extra payload is downloaded during ordinary startup.
 
+Desktop selectors and headless cache deployment share `runtime_cache::pins` in
+`rode-host-core`: artifact/notice types, version/digest validation, target bounds,
+transfer order and cache identity. Main-only targets retain their original
+digest directory name; targets with helpers hash the same ordered metadata at
+both ends. Each adapter retains its existing notice-name and filesystem trust
+checks, while shared pin rules change in one place. The fixed cache-key fixture
+and deployment tests protect compatibility with already installed runtimes.
+
 ### Document models and editing history
 
 Native image/PDF views avoid a viewer/browser runtime and remote rendering dependencies. Static/page-at-a-time rendering trades general viewer features for bounded resources. Shared leases account for old previews and worker snapshots during reload, while serialized image transfer/decode reduces temporary peaks at the cost of parallel loading. Separate text/byte/read-only paths prevent source formatting or saving from corrupting binary previews. See `src/images.rs`, [images](images.md), [PDFs](pdf.md) and [binary editing](binary.md).
@@ -249,12 +260,16 @@ Confirmed runtime terminations use a bounded worker separate from read-only disc
 Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Hidden monitors stop scheduling samples; hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
 
 `rode_runtime_core::process::ProcessGroup` owns shared cancellation and signal
-state for the desktop stdio transport, host agent transport and native runtime
-transport. Each spawning worker still owns its `Child`, executable identity,
-sandbox and pipe readers. It publishes the independently created group with
-`started`, calls `reaped` immediately after waiting for the leader, then calls
-`finish` after pipe cleanup or a startup failure. The 1.5-second escalation grace
-starts when a child exists, including when cancellation happened during slow
+state for the desktop stdio transport, host agent transport, native runtime
+transport and transient stdio supervisor. Each spawning worker still owns its
+`Child`, executable identity, sandbox and pipe readers. It publishes the
+independently created group with `started`, waits through `ProcessGroup::wait`,
+then calls `finish` after pipe
+cleanup or a startup failure. `waitid(WNOWAIT)` observes exit while retaining
+the leader's PID; final group signalling and timer/Stop invalidation happen
+before `Child::wait` releases it. Nonblocking observers use `exited`, which also
+retains the PID. Workers must not use another reaper. The 1.5-second escalation
+grace starts when a child exists, including when cancellation happened during slow
 preparation. PID publication, invalidation and timer signals share one short
 lock; requesting Stop never means cleanup has already completed.
 
@@ -262,6 +277,18 @@ Reuse this lifetime primitive without merging protocol-specific transports.
 Agent, runtime and desktop queues have different message limits, wake callbacks
 and replay/attachment contracts. Those distinctions remain with their adapters;
 an abstraction that hides them would obscure the bounds it is meant to enforce.
+
+PDF tools share the host's bounded binary capture through `capture_bounded`;
+their adapter retains the renderer's limits and diagnostics. Capture keeps its
+scoped child guard for synchronous error cleanup, while `ProcessGroup` shares
+asynchronous Stop state with transport workers.
+
+Both owners use `rode_runtime_core::process::wait` for kernel exit observation.
+Its polling and blocking entry points use one `waitid(WNOWAIT)` implementation,
+retry interruptions and leave status available for the owning `Child::wait`.
+The primitive cannot invalidate another owner's timers or scoped cleanup:
+each caller handles observation errors and disables its own signals when
+ownership is lost. No caller may reap a published leader before final signals.
 
 Dedicated LaTeX, Marp and extension coordinators share request parsing and stdin
 cancellation in `rode-host-core::coordinator`. Each caller supplies its byte limit
@@ -351,6 +378,7 @@ The internal entry points below are included by `--document-private-items`. Thei
 | Operation | Entry points and completion path | Contract to preserve |
 | --- | --- | --- |
 | Open a document | `app/workers.rs`: `open_file` → `dispatch` → `poll` | Capture the selected host and actual plan before reading; a late reply cannot bind a tab to another workspace. |
+| Render/edit the active document | `app/editor_view.rs`: `editor`, `find_bar`; `app/navigation/editing.rs` | Specialized views delegate to their owner. Source changes retain native undo/cursor state and advance the document version; find byte ranges become character selections only at the UI boundary. |
 | Save or format | `app.rs`: `save_document`; `workbench/code_tools.rs`: `save_with_tools`, `analyze_document`; `workbench.rs`: `handle_tool` | `false` from `save_with_tools` delegates to ordinary saving. Analysis accepts only its submitted source/version/epoch. Save acknowledgement advances the saved baseline, preserving newer typing. |
 | Run a notebook | `notebook_view.rs`: `run_notebook`, `poll_notebooks`, `View::sync`; `notebook/kernel.rs` and `runtime.rs` | Parsing/viewing does not start execution. Outputs bind to captured cell/source versions. Accepted structured edits serialize through the document's normal save path. |
 | Stop a notebook | `notebook_view/shutdowns.rs`: `Shutdowns::stop`, `poll`; `sessions/runtimes/ending.rs`: `Queue` | Stopping or removing a tab does not discard cleanup ownership. Confirmed termination retains its original host even if discovery or the project view changes. |

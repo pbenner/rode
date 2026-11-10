@@ -42,6 +42,8 @@ pub(super) fn install(ctx: &egui::Context) {
     }
 }
 
+/// Install viewport-local test hooks that publish controls after accepted layout passes.
+/// The caller supplies the output path; discarded passes do not publish temporary geometry.
 pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
     let probe = Probe::default();
     ctx.data_mut(|data| data.insert_temp(Id::new("native-ui-probe"), probe.clone()));

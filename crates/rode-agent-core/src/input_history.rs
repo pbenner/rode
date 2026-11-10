@@ -2,6 +2,8 @@
 use crate::{personality, protocol::clip};
 use std::collections::VecDeque;
 
+/// Chronological prompt recall with independent entry/encoded-byte budgets.
+/// Newer prompts survive trimming; message IDs merge streamed chunks without merging duplicate submissions.
 #[derive(Default)]
 pub(crate) struct History {
     entries: VecDeque<Entry>,

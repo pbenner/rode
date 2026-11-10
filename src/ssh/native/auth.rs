@@ -10,6 +10,8 @@ use russh::{
 use std::sync::OnceLock;
 use zeroize::Zeroizing;
 
+/// Scoped stdin terminal-mode change that restores the original settings on drop.
+/// A nonterminal input retains no restoration state.
 pub(super) struct TerminalMode(Option<libc::termios>);
 impl TerminalMode {
     fn change(raw: bool, echo: bool) -> Result<Self> {
@@ -40,6 +42,8 @@ impl Drop for TerminalMode {
         }
     }
 }
+/// Strip terminal control characters except newline/tab and retain at most 8,192 characters.
+/// Use before displaying peer-controlled authentication/host text.
 pub(super) fn visible(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
@@ -267,6 +271,8 @@ fn remember(config: &config::Config, key: &PublicKey) -> Result<()> {
     })
 }
 
+/// Per-connection SSH callbacks with captured trust, X11 and agent-forwarding policy.
+/// Forwarding slots bound concurrent channels; agent bindings belong to the verified session.
 pub(super) struct Handler {
     pub config: config::Config,
     pub x11: Option<forwarding::X11>,
@@ -597,6 +603,8 @@ fn allowed(result: &AuthResult, method: MethodKind) -> bool {
     matches!(result,AuthResult::Failure {remaining_methods,..} if remaining_methods.contains(&method))
 }
 
+/// Connect/authenticate the destination through its bounded ProxyJump chain.
+/// Return the destination and retained jump sessions; dropping jumps would break the route.
 pub(super) async fn connect(
     profile: &super::super::Profile,
     target: config::Config,

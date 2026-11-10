@@ -1,6 +1,8 @@
 //! Visible recovery keeps local drafts and host-owned queued prompts intact.
 use super::*;
 
+/// Render recovery choices without starting a backend or sending a prompt.
+/// Return `Some(true)` for a fresh context, `Some(false)` for resume, or `None` for no action.
 pub(super) fn ui(ui: &mut egui::Ui, chat: &Chat, enabled: bool, config: &Config) -> Option<bool> {
     if !chat.recoverable() {
         return None;

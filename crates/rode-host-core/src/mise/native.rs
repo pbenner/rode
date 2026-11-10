@@ -29,6 +29,8 @@ fn run(root: &str, settings: &Settings, arguments: &[&str], timeout: u64) -> Res
     output.checked()
 }
 
+/// Run a selected mise action in the captured project environment on a worker.
+/// Trust/install may modify project/tool state; inspection returns bounded tool/task metadata.
 pub(super) fn execute(root: &str, settings: &Settings, action: Action) -> Result<Snapshot> {
     match action {
         Action::Trust | Action::Install => Ok(Snapshot {

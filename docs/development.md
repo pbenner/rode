@@ -38,6 +38,23 @@ The architecture guide's [operation reference](architecture.md#following-an-oper
 
 Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, `src/app/sessions/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
 
+The **2026-11-10 structure/documentation review** consolidated desktop/helper
+runtime pin contracts in `runtime_cache::pins`, shared nonreaping child-exit
+observation in `process::wait`, and moved active document rendering/find controls
+to `app/editor_view.rs`. The view methods were preserved byte for byte apart from
+module visibility. The internal documentation pass added API contracts to 74
+shared items, including acknowledgement/lifetime rules, worker entry points,
+host authentication state and character/byte/cell coordinates.
+
+Validation passed **948 ordinary Rust tests** across 49 executables, with 40
+declared harness/opt-in cases ignored, zero failures and none filtered out. The
+run used rebuilt editor/helper binaries, explicit real-tool fixtures and required
+Landlock enforcement. The native keyboard/navigation fixture also passed on an
+owned authenticated X display. The fixed cache-key and retained-child-status
+regressions exercise compatibility and process ownership. These checks do not
+establish opt-in SSH/Bubblewrap/FUSE platform coverage; see the existing
+[validation limits](security.md#validation-snapshot).
+
 Session-control schema changes belong in
 `crates/rode-session/src/protocol.rs`; keep its crate-root re-exports stable and
 advance `PROTOCOL` when compatibility or required authentication changes. Frame
@@ -51,18 +68,24 @@ control tests exercise inode substitution and authentication; service integratio
 tests cover retained PTYs, permissions, handshake admission and runtime leases.
 
 Process lifetime changes start at `rode_runtime_core::process::ProcessGroup`,
-shared by desktop, agent and runtime transports. Its regressions run real owned
+shared by desktop, agent and runtime transports and the transient supervisor.
+Its regressions run real owned
 process groups and check stop-before-spawn escalation, concurrent publication
-and cancellation, and isolation from independent groups:
+and cancellation, isolation from independent groups, lost-ownership refusal and
+retention of the leader's PID through final signalling:
 
 ```sh
 cargo test -p rode-runtime-core process::group::tests
-cargo test --test agents --test background_agents --test notebooks --test debugger --test sessions
+cargo test --test agents --test background_agents --test notebooks --test debugger --test sessions --test native_host
 ```
 
-Retain each adapter's protocol limits and captured host/sandbox when changing
-this shared lifetime code. The installed `rode-sessiond` and standalone/static
-helper also share `rode_session::helper_main`; early bootstrap dispatch must
+Use `ProcessGroup::wait` and its nonreaping `exited` poll instead of calling
+`Child::wait` or `try_wait` directly for a published leader. Reaping before final
+signalling releases the numeric ID and permits signals to address a reused group.
+Retain each adapter's protocol
+limits and captured host/sandbox when changing this shared lifetime code.
+The installed `rode-sessiond` and standalone/static helper also share
+`rode_session::helper_main`; early bootstrap dispatch must
 remain before thread/runtime initialization. The service integration tests cover
 the installed helper, and the standalone helper can be checked without GUI
 dependencies using the build command below.
@@ -72,6 +95,8 @@ Synchronous binary helpers and UTF-8 project commands share
 its final group signal and clean up on normal exit as well as errors. Run
 `cargo test -p rode-host-core command::` for real-process cleanup, independent
 work, exact/uncapped binary limits and oversized diagnostics. Run
+`cargo test --lib pdf::tests` for the PDF adapter's capture cleanup and
+`cargo test --test pdf` for actual desktop Poppler tools. Run
 `cargo test --test project command_` for the project runner checks and
 `cargo test --test security` for the real-PTY harness and file-security checks.
 LaTeX, Marp and extension suites cover cancellation/renderer cleanup; terminal,
@@ -79,6 +104,46 @@ agent and runtime integration suites check that retained service jobs keep their
 separate lifetime. Native-host cases require an explicit `RODE_HOST_HELPER`
 pointing to the freshly built helper; a passing invocation without that fixture
 can leave gateway cases unexercised.
+
+Validate the ordinary lane through `mise run test` as well as focused Cargo
+commands. The shared deterministic agent peers use `/usr/bin/python3 -I`, the
+system runtime covered by fixture sandbox policy; a Python selected through
+mise/venv `PATH` may live outside those grants. This choice applies to scripted
+peers, while real interpreter/Jupyter checks retain their explicit tool paths.
+The mise task preserves an explicit `RODE_TEST_RUFF`, including CI's staged copy,
+and discovers Ruff through `PATH` only when no override is set.
+
+The real-mise trust fixture removes inherited `MISE_TRUSTED_CONFIG_PATHS` from
+its child commands. [mise-action's defaults](https://github.com/jdx/mise-action/blob/v5/src/index.ts)
+trust the checkout by prefix, which otherwise also trusts temporary projects
+under `target/`. Isolating mise's data/config directories alone does not establish
+an untrusted starting state. Keep the initial refusal, explicit Trust and
+successful later inspection/task assertions together.
+
+The transport owner and synchronous capture guard share nonreaping kernel
+observation in `rode_runtime_core::process::wait`. Keep blocking observation,
+polling, interruption retries and retained wait status there; each owner still
+invalidates its own signals. Run `cargo test -p rode-runtime-core process::wait`
+and the process/capture checks above when changing it. A cached `Child::wait`
+result cannot substitute for ownership verified by the kernel.
+
+Runtime pins belong in `rode_host_core::runtime_cache::pins`. Desktop release
+selection and host upload/cache handling must use the shared target validation,
+artifact ordering and `cache_key`; adding a local copy can make the desktop
+reject a cache path produced by its own helper. Run
+`cargo test -p rode-host-core runtime_cache::pins`,
+`cargo test --lib bundled::` and `cargo test --test bundled` as separate
+invocations to exercise the shared contract, installer units and host deployment.
+The fixed multi-executable cache-key fixture and legacy main-only key must remain
+stable unless an explicit cache-format migration is intended.
+
+Active document rendering and find/replace live in `src/app/editor_view.rs`.
+Application/project lifecycles remain in `app.rs` and its lifecycle modules;
+native source-edit commands remain under `app/navigation`. Moving a view must
+preserve document IDs, UTF-8 byte/character conversions, undo state and buffer
+version updates. Existing application/navigation regressions exercise these
+contracts; `scripts/test-navigation-ui.py` checks actual keyboard/pane behavior
+on an isolated authenticated display.
 
 `cargo test --lib saved_connection` checks Explorer profile context menus,
 dragging in both directions, Escape cancellation, ordinary clicks and failed

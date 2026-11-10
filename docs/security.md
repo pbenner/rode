@@ -6,6 +6,56 @@ The general Python host backend described in the historical findings below has b
 
 ## Findings fixed
 
+### Transport cleanup could signal a released process-group ID
+
+**Conditional process integrity/availability issue (transport pass, 2026-11-10).**
+Desktop stdio processes, host agents, native runtimes, the transient stdio
+supervisor and the PDF renderer used `Child::wait`/`try_wait` before performing
+their final group signal. Waiting releases the leader's PID. Once the group is
+empty, reuse of that numeric ID could make final
+cleanup or a concurrent Stop/escalation signal address an unrelated same-user
+group. This review reproduced the lost-ownership condition; it did not force PID
+reuse or terminate an unrelated process.
+
+The stdio transports and supervisor now use the shared `ProcessGroup::wait`,
+with nonreaping `ProcessGroup::exited` polling where needed. It observes exit
+with `waitid(WEXITED | WNOWAIT)`, sends the final group signal while the leader
+remains unreaped, and disables further signals under the timer/Stop mutex before
+calling `Child::wait`. Interrupted observations retry; other observation errors
+disable signalling and propagate. In particular, a cached `Child::wait` status
+cannot establish ownership after an earlier reap. This follows Linux's
+[`waitid` semantics](https://man7.org/linux/man-pages/man2/wait.2.html).
+
+The PDF renderer now uses the existing guarded binary-capture implementation
+through `command::capture_bounded`, retaining its 20-second deadline, cancellation,
+binary/stdout and stderr budgets, address-space limit and tool-specific error
+handling. Final group cleanup also precedes pipe collection: previously a
+descendant retaining stdout could turn successful rendering into a pipe timeout.
+PDF tools now start in a separate session, so they cannot acquire the desktop's
+controlling terminal. The supervisor uses the shared 1.5-second Stop grace.
+
+The lost-ownership regression failed with the old wait-then-signal ordering and
+passes with the fix. A kernel-level check verifies that the leader is still
+waitable after final signalling has ended. Other regressions cover cancellation
+during startup, concurrent publication, independent groups, rejection of an
+unpublished child, and natural-exit status/output when descendants retain a pipe.
+The fixture waiters also retain the PID instead of reaping it during polling.
+The PDF pipe regression failed against the old renderer with a two-second output
+timeout; the guarded runner returns the same final bytes after stopping the
+descendant.
+
+Implementation: `crates/rode-runtime-core/src/process/group.rs`, the transport
+adapters, `crates/rode-host-core/src/supervisor.rs`, `command.rs` and `src/pdf.rs`.
+Tests: `process::group::tests` and `pdf::tests`.
+New work requires **service generation 24**, selecting updated supervision code
+instead of reusing an older daemon. Rebuild and install the editor and native
+helper, then end and restart affected chats and runtimes to replace their running
+code. Older daemons keep existing jobs; those jobs are not migrated. A custom
+`RODE_SESSION_DIR` still requires a separate directory for the new generation.
+Each worker must remain the sole reaper of its child; arbitrary external SIGCHLD reapers are not
+supported. Process-group cleanup also cannot contain descendants that deliberately
+create another session, so the existing sandbox policy remains necessary.
+
 ### Transient commands could outlive their capture operation
 
 **Process ownership/availability issue (additional pass, 2026-11-10).** The
@@ -154,8 +204,9 @@ PKCS#8 payloads. Regression coverage checks plain/encrypted key round trips,
 signatures, changed-message rejection and wrong passwords; native SSH tests also
 exercise RSA host verification and modern RSA SHA-2 negotiation.
 
-New work selects **service generation 23**. Rebuild and install both editor and
-native helper. Earlier daemons keep their existing jobs and code; end and restart
+That pass selected **service generation 23**, now superseded by generation 24.
+Rebuild and install both editor and native helper. Earlier daemons keep their
+existing jobs and code; end and restart
 affected work to acquire the fixes. Updated clients do not migrate those jobs.
 
 Implementation: `vendor/russh`, `vendor/ssh-key`, `Cargo.lock` and the service
@@ -240,6 +291,13 @@ Implementation: `src/process.rs`, `crates/rode-host-core/src/command.rs`, `crate
 
 ## Dependency audit
 
+The **2026-11-10 transport pass** refreshed the database to RustSec commit
+`28d73fc95e5972af3403225a217def57dcaba3c4`, updated **2026-11-10** with **1,446
+advisories**. `cargo-audit 0.22.2` checked the same **510 locked packages** and
+reported **zero known vulnerabilities**, with the three maintenance warnings
+below still unsuppressed. This does not replace review of the local patches or
+external tools.
+
 On **2026-11-10**, `cargo-audit` **0.22.2** checked **510 locked packages** against
 RustSec commit `58a64e69d7a08a2b83a80efa6e4b018a9acb51fc`, last updated
 **2026-11-10** (1,430 advisories). The previous RSA prerelease produced one known
@@ -263,6 +321,22 @@ With an installed [cargo-audit](https://github.com/RustSec/rustsec/tree/main/car
 The vendored sandbox manifest pins bubblewrap **0.13.1** and libcap **2.78**. These are beyond the fixes listed in the upstream [bubblewrap setup advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx) (0.12.0), [bubblewrap setuid advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-xq78-7hw4-5jvp) (0.11.2) and [libcap file-capability advisory](https://github.com/AndrewGMorgan/libcap_mirror/security/advisories/GHSA-f78v-p5hx-m7hh) (2.78). Packaging tests verify the vendored file hashes. This check does not establish that every C dependency or installed system executable is free of vulnerabilities; system binaries still need distribution security updates.
 
 ## Validation snapshot
+
+The **2026-11-10 transport pass** passed **945 ordinary Rust tests** across
+49 executables, with 40 declared harness/opt-in cases ignored, zero failures and
+none filtered out. The run used rebuilt editor/helper binaries, an explicit
+`RODE_HOST_HELPER`, the installed real-tool fixtures and
+`RODE_TEST_REQUIRE_LANDLOCK=1`. It includes real-PTY file-security checks, PDF
+rendering, agent/runtime shutdown and retained-service integration tests. The
+focused shared-core run also passed all 65 tests. The lost-ownership and PDF-pipe
+regressions failed under the old behavior before passing with their fixes.
+Workspace Clippy with warnings denied, warning-free private-item Rustdoc,
+formatting, strict MkDocs and standalone-helper compilation passed.
+
+The opt-in real-SSH, required-Bubblewrap and real-FUSE suites were not rerun in
+this pass. Their previously observed host restrictions remain documented below;
+the ordinary pass does not validate those unavailable platform capabilities or
+establish exhaustive vulnerability coverage.
 
 The **2026-11-10 full-suite remediation run** passed **938 ordinary Rust tests**
 across 49 executables, with 40 declared harness/opt-in cases ignored and none

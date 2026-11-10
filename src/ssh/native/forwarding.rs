@@ -1,6 +1,8 @@
 //! X11 forwarding with a per-connection fake cookie and explicit trust/expiry.
 use super::*;
 
+/// Desktop X11 forwarding credentials with a substituted wire cookie and optional expiry.
+/// The real cookie remains on the desktop; screen identifies the requested display screen.
 #[derive(Clone)]
 pub(super) struct X11 {
     display: String,

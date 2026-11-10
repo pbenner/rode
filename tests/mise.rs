@@ -387,6 +387,9 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
         // TMPDIR may be inside a checkout with its own untrusted mise config.
         // Discover only this fixture's config, never its ancestors.
         command.env("MISE_CEILING_PATHS", root.path().parent().unwrap());
+        // mise-action trusts the checkout by prefix. This fixture deliberately
+        // starts untrusted even when its tempdir is inside that checkout.
+        command.env_remove("MISE_TRUSTED_CONFIG_PATHS");
         for name in ["CONFIG", "DATA", "STATE", "CACHE"] {
             command.env(format!("MISE_{name}_DIR"), root.path().join(name));
         }
@@ -426,6 +429,7 @@ fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_whe
         .args(["run", "smoke"])
         .current_dir(root.path())
         .env("MISE_CEILING_PATHS", root.path().parent().unwrap())
+        .env_remove("MISE_TRUSTED_CONFIG_PATHS")
         .env("MISE_AUTO_INSTALL", "0")
         .env("MISE_EXEC_AUTO_INSTALL", "0")
         .env("MISE_PARANOID", "1");
