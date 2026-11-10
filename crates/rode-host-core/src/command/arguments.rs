@@ -126,28 +126,15 @@ mod tests {
     use super::*;
     use std::{
         io::{Read, Write},
-        os::unix::fs::PermissionsExt,
         process::Stdio,
         time::Duration,
     };
 
-    fn fixture(root: &std::path::Path, bundled: bool) -> Vec<String> {
-        let binary = root.join("bwrap");
-        std::fs::write(
-            &binary,
-            r#"#!/bin/sh
-set -eu
-cat /proc/$$/cmdline > "$ARGUMENT_LOG"
-if [ "$1" = --bwrap-launch ]; then shift; fi
-[ "$1" = --args ]
-cat "/proc/self/fd/$2"
-shift 2
-printf '%s\000' "$@"
-cat
-"#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    fn fixture(bundled: bool) -> Vec<String> {
+        // Parallel forks can retain a freshly written executable's writer until
+        // exec, causing ETXTBSY even after the creating thread closes it.
+        let binary =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bwrap.sh");
         let mut argv = vec![binary.to_str().unwrap().into()];
         if bundled {
             argv.push("--bwrap-launch".into());
@@ -175,7 +162,7 @@ cat
     fn compact_commands_keep_literal_policy_stdin_and_independent_spawn_offsets() {
         for bundled in [false, true] {
             let root = tempfile::tempdir().unwrap();
-            let argv = fixture(root.path(), bundled);
+            let argv = fixture(bundled);
             let log = root.path().join("arguments");
             let mut command = from_argv(&argv).unwrap();
             command
@@ -210,7 +197,7 @@ cat
     #[test]
     fn compact_pty_reopens_policy_after_descriptor_cleanup_and_keeps_input() {
         let root = tempfile::tempdir().unwrap();
-        let argv = fixture(root.path(), true);
+        let argv = fixture(true);
         let log = root.path().join("arguments");
         let mut command = portable_pty::CommandBuilder::new(&argv[0]);
         command.args(&argv[1..]);

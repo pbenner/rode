@@ -105,6 +105,13 @@ separate lifetime. Native-host cases require an explicit `RODE_HOST_HELPER`
 pointing to the freshly built helper; a passing invocation without that fixture
 can leave gateway cases unexercised.
 
+The argument-packing unit tests share a checked-in executable shell fixture for
+stdio and PTY launches. Generating that executable during parallel tests lets a
+concurrent fork retain a writable descriptor until exec, causing `ETXTBSY` even
+after the writing thread closes it. Keep the executable static and each test's
+argument log private; literal policy, stdin and independent-offset assertions
+still apply to both launch paths.
+
 Validate the ordinary lane through `mise run test` as well as focused Cargo
 commands. The shared deterministic agent peers use `/usr/bin/python3 -I`, the
 system runtime covered by fixture sandbox policy; a Python selected through
