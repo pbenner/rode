@@ -710,7 +710,10 @@ mod tests {
 
     #[test]
     fn model_and_reasoning_menus_keep_advertised_choices_selectable() {
-        for size in [egui::vec2(1100., 900.), egui::vec2(390., 600.)] {
+        for (size, hover_open) in [egui::vec2(1100., 900.), egui::vec2(390., 600.)]
+            .into_iter()
+            .flat_map(|size| [false, true].map(|hover_open| (size, hover_open)))
+        {
             let ctx = egui::Context::default();
             let mut config = Config::default();
             let mut chat = Chat::default();
@@ -743,7 +746,20 @@ mod tests {
             let pos = position(&output, "Model: model-1");
             let output = click(&ctx, &mut config, &chat, size, pos);
             let pos = position(&output, "Default");
-            let output = click(&ctx, &mut config, &chat, size, pos);
+            let output = if hover_open {
+                // Native fixtures open submenus by hovering and click only the
+                // actual choice after a subsequent layout pass.
+                frame(
+                    &ctx,
+                    &mut config,
+                    &chat,
+                    size,
+                    vec![egui::Event::PointerMoved(pos)],
+                );
+                frame(&ctx, &mut config, &chat, size, vec![])
+            } else {
+                click(&ctx, &mut config, &chat, size, pos)
+            };
             let pos = position(&output, "ultra");
             click(&ctx, &mut config, &chat, size, pos);
             assert_eq!(config.reasoning_effort, "ultra");

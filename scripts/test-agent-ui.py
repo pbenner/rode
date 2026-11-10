@@ -180,8 +180,11 @@ def select_acp_control(
     open_controls("agent-access-menu" if permissions else "agent-model-menu")
     if captures:
         screenshot(window, captures[0])
-    click_control(f"agent-acp-option-{option}")
-    if not isinstance(value, bool):
+    if isinstance(value, bool):
+        click_control(f"agent-acp-option-{option}")
+    else:
+        # Native submenus open on hover; only activate the actual choice.
+        control(f"agent-acp-option-{option}", hovered=True)
         if len(captures) > 1:
             screenshot(window, captures[1])
         click_control(f"agent-acp-choice-{option}-{value}")
@@ -520,7 +523,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             )
             key("Escape")
             open_controls("agent-model-menu")
-            click_control("agent-reasoning-menu")
+            control("agent-reasoning-menu", hovered=True)
             click_control("agent-reasoning-high")
             wait_for(
                 lambda: agent_preferences(preferences).get("reasoning_effort") == "high",
@@ -607,7 +610,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
             calls_before_effort = len(rpc(root))
             for effort in ("high", "low", "high"):
                 open_controls("agent-model-menu")
-                click_control("agent-reasoning-menu")
+                control("agent-reasoning-menu", hovered=True)
                 screenshot(window, f"codex-effort-{effort}.png")
                 click_control(f"agent-reasoning-{effort}")
                 wait_for(

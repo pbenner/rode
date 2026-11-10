@@ -81,7 +81,17 @@ while True:
             stderr=subprocess.DEVNULL,
         )
         Path("adapter-child").write_text(str(child.pid))
-        program = "import os; from pathlib import Path; print('CWD='+os.getcwd(),flush=True); print('TTY='+str(os.isatty(0)),flush=True); print('OUTSIDE='+str(Path('../private.txt').exists()),flush=True); value=input('Name: '); print('HELLO '+value,flush=True); Path('input-result').write_text(value)"
+        # Rust and UI readers use result existence as completion. Publish only
+        # after the complete Unicode value has been written and the file closed.
+        program = (
+            "import os; from pathlib import Path; "
+            "print('CWD='+os.getcwd(),flush=True); "
+            "print('TTY='+str(os.isatty(0)),flush=True); "
+            "print('OUTSIDE='+str(Path('../private.txt').exists()),flush=True); "
+            "value=input('Name: '); print('HELLO '+value,flush=True); "
+            "result=Path('input-result.tmp'); result.write_text(value,encoding='utf-8'); "
+            "result.replace('input-result')"
+        )
         if args.get("blockedInput"):
             program = (
                 "import tty,time; tty.setraw(0); print('RAWREADY',flush=True); time.sleep(600)"
