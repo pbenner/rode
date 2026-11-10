@@ -397,6 +397,7 @@ pub(crate) struct PacketWriter {
     compress: Compress,
     packet_buffer: Vec<u8>,
     write_buffer: SSHBuffer,
+    write_offset: usize,
 }
 
 impl Debug for PacketWriter {
@@ -420,6 +421,7 @@ impl PacketWriter {
             compress,
             packet_buffer: Vec::new(),
             write_buffer: SSHBuffer::new(),
+            write_offset: 0,
         }
     }
 
@@ -607,11 +609,26 @@ impl PacketWriter {
         self.write_buffer.seqn = Wrapping(0);
     }
 
+    pub fn has_pending_output(&self) -> bool {
+        !self.write_buffer.buffer.is_empty()
+    }
+
+    // Track committed bytes so cancellation in the transport select loop cannot
+    // resend a partially written SSH packet.
     pub async fn flush_into<W: AsyncWrite + Unpin>(&mut self, w: &mut W) -> std::io::Result<()> {
+        while self.write_offset < self.write_buffer.buffer.len() {
+            let written = w
+                .write(&self.write_buffer.buffer[self.write_offset..])
+                .await?;
+            if written == 0 {
+                return Err(std::io::ErrorKind::WriteZero.into());
+            }
+            self.write_offset += written;
+        }
         if !self.write_buffer.buffer.is_empty() {
-            w.write_all(&self.write_buffer.buffer).await?;
             w.flush().await?;
             self.write_buffer.buffer.clear();
+            self.write_offset = 0;
         }
         Ok(())
     }

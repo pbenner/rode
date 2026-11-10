@@ -1,4 +1,4 @@
-# RODE RSA dependency security patch
+# RODE SSH dependency patches
 
 Based on the published `russh` 0.65.1 source, upstream revision
 `b33092aad1e51c66258a12e8b83fc473a68d9d34` from
@@ -19,9 +19,8 @@ Serialized private-key data is omitted from the key-format fixture module,
 the inline key module's fixture tests and the no-RSA-feature signing fixture.
 Their fixture-dependent tests are omitted from this vendored copy. The key
 module documentation describes runtime key loading instead of embedding a key.
-Other library implementation and tests are unchanged. RODE's generated-key SSH,
-tunnel and key-format regressions cover the application integration without
-storing serialized private keys in the repository.
+RODE's generated-key SSH, tunnel and key-format regressions cover the application
+integration without storing serialized private keys in the repository.
 Three upstream README lines have trailing whitespace removed.
 The registry cache marker and package-local lockfile are omitted; the repository
 lockfile selects the complete dependency graph.
@@ -32,7 +31,26 @@ The registry release and current upstream main still require the prerelease as
 of 2026-11-10, preventing a lockfile-only upgrade. The workspace patch keeps RSA
 SSH identities and host keys supported while selecting the patched dependency.
 Replace this local patch with an upstream release once it permits the fixed RSA
-version. Do not suppress the advisory or downgrade authentication support.
+version and includes equivalent transport backpressure handling. Do not suppress
+the advisory or downgrade authentication support.
 
 Validate with the native SSH client, tunnel and SSH integration tests, the
 standalone helper build, and a fresh `cargo audit`.
+
+## Full-duplex transport backpressure
+
+The client polls pending socket writes alongside incoming packets instead of
+waiting for each write batch to finish before reading. This avoids deadlocks
+when a remote command echoes input larger than the channel receive window over
+a bounded transport. Outbound application batches remain bounded while the
+socket is blocked; control messages and incoming window adjustments can proceed.
+
+`PacketWriter` tracks committed write offsets so cancelling and resuming its
+flush future neither duplicates nor drops partially written encrypted packets.
+The client still flushes pending disconnect output before closing the transport.
+
+RODE's `ssh::native::duplex_tests` exercises a 2 MiB echo over a 4 KiB in-memory
+transport, checking the complete byte sequence and exit status both with and
+without rekeying during the transfer. The native SSH integration regression also
+covers the same payload over direct SSH and ProxyJump with the client executable
+absent from `PATH`.

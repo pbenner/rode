@@ -25,6 +25,7 @@ from ui_harness import (
     screenshot,
     text,
     theme,
+    wait_for_ui_state,
     x11,
 )
 
@@ -205,6 +206,25 @@ def run(remote=False):
                 x11.XResizeWindow(display, window, 850, 560)
                 x11.XFlush(display)
                 screenshot(window, label + "-compact.png")
+                # Exercise a persistent notice at the compact size, where it can
+                # cover the image. Acknowledge it before measuring rendered bounds.
+                open_file("corrupt.png")
+                pixels(
+                    window,
+                    label + "-corrupt-keeps-current-tab.png",
+                    (240, 160, 24),
+                    size=(850, 560),
+                )
+                click_button(window, process, log_path, state_path, "notice-dismiss")
+                wait_for_ui_state(
+                    process,
+                    log_path,
+                    state_path,
+                    lambda state: all(
+                        button["name"] != "notice-dismiss" for button in state["buttons"]
+                    ),
+                    "Image error notification did not close",
+                )
                 click_button(window, process, log_path, state_path, "image-fit")
                 fitted = pixels(window, label + "-compact-fit.png", (240, 160, 24), size=(850, 560))
                 assert 238 <= fitted[2] - fitted[0] <= 241, fitted
@@ -221,8 +241,6 @@ def run(remote=False):
                 x11.XResizeWindow(display, window, 1380, 900)
                 x11.XFlush(display)
                 time.sleep(0.3)
-                open_file("corrupt.png")
-                pixels(window, label + "-corrupt-keeps-current-tab.png", (240, 160, 24))
                 open_file("notes.txt")
                 key("s", ("Control_L",))
                 wait_for(

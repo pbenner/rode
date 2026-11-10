@@ -21,6 +21,9 @@ mod config;
 mod forwarding;
 mod gssapi;
 
+#[cfg(test)]
+mod duplex_tests;
+
 const MAX_PACKET: usize = 128 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 type Session = client::Handle<auth::Handler>;
