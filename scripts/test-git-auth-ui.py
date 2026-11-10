@@ -310,6 +310,7 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
             )
             enter("git-auth-username", username)
             enter("git-auth-password", password)
+            submitted_pass = json.loads(state.read_text())["pass"]
             click("git-auth-submit")
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -334,6 +335,11 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
                     f"Authenticated fetch did not update the remote tracking branch; accepted={len(accepted)}, rejected={len(rejected)}; layout={state.read_text()}"
                 )
             assert accepted
+            # Ref publication precedes the desktop's fetch reply and subsequent
+            # status refresh. A repository mutation needs that completion too.
+            wait_for_button(
+                window, process, log_path, state, "git-network-Push", after_pass=submitted_pass
+            )
             git("branch", "--set-upstream-to", "origin/main", "main")
             git(
                 "-c",

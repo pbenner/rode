@@ -14,6 +14,10 @@ Use the **Source control** activity icon, **View → Workspace panels → Source
 
 The commit message remains editable during background status refreshes, including over SSH. Refreshed file rows and error messages preserve its keyboard focus, caret and selection. While an explicit commit is pending, the submitted message and amend option are locked; a successful commit clears them, while a failure retains them for retry.
 
+Background status checks skip Git's optional index-cache writes so panel refreshes
+can coexist with another Git client. Staging and commits still require Git's
+normal writer locks; Rode preserves a lock owned by another operation.
+
 When an HTTPS fetch, pull, push, clone or submodule update needs a username and password, Rode opens **Git HTTPS authentication** and displays the server origin. Enter your username and password or access token, then choose **Retry operation**. These entries are held only for the current operation and its authentication prompts. They are not written to preferences, Git configuration, credential files, command arguments or diagnostic output. The retry bypasses configured Git credential stores; later operations ask again. Passwords are masked, failed credentials reopen empty input fields, and **Cancel** discards the pending entries. Multi-server operations keep earlier credentials in memory only until the operation finishes or is cancelled. Existing configured authentication still works on ordinary operations.
 
 For SSH projects, Git runs on the project host and credentials travel through the existing encrypted SSH connection. The helper must support `git_memory_auth`; automatic deployment supplies an updated helper when available. TLS verification and the selected Git execution policy still apply. Use **Git terminal** for SSH passphrases or other interactive authentication flows.

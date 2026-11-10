@@ -43,6 +43,94 @@ fn remote(request: &Request) -> anyhow::Result<Response> {
 }
 
 #[test]
+fn background_git_status_preserves_the_index_and_respects_an_external_writer() {
+    use std::fs::FileTimes;
+    use std::time::UNIX_EPOCH;
+
+    for peer in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "core.fsmonitor", "false"]);
+        git(&["config", "core.untrackedCache", "false"]);
+        let source = root.path().join("tracked.txt");
+        fs::write(&source, "tracked content\n").unwrap();
+        git(&["add", "--", "tracked.txt"]);
+        git(&[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-m",
+            "Fixture",
+        ]);
+        let index = root.path().join(".git/index");
+        let before = fs::read(&index).unwrap();
+        // The content is unchanged, but the stat cache is stale. Ordinary Git
+        // status rewrites the index here, taking a lock that can race a commit.
+        fs::File::open(&source)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(1_000)))
+            .unwrap();
+        let call = |args: &[&str]| {
+            let request = Request::Git {
+                root: root.path().to_string_lossy().into(),
+                args: args.iter().map(|arg| (*arg).into()).collect(),
+                input: None,
+            };
+            let reply = if peer {
+                remote(&request)
+            } else {
+                project::local(&request)
+            }
+            .unwrap();
+            let Response::Command(output) = reply else {
+                panic!("Missing Git output")
+            };
+            output
+        };
+        let status = call(&["status", "--porcelain=v1", "-z"]);
+        assert!(status.success(), "{}", status.stderr);
+        assert!(status.stdout.is_empty());
+        assert_eq!(
+            fs::read(&index).unwrap(),
+            before,
+            "Background status rewrote the index (headless={peer})"
+        );
+
+        let lock = root.path().join(".git/index.lock");
+        fs::write(&lock, "external writer owns this lock").unwrap();
+        fs::write(&source, "changed content\n").unwrap();
+        let status = call(&["status", "--porcelain=v1", "-z"]);
+        assert!(status.success(), "{}", status.stderr);
+        assert!(status.stdout.contains("tracked.txt"));
+        let add = call(&["add", "--", "tracked.txt"]);
+        assert!(!add.success());
+        assert!(add.stderr.contains("index.lock"));
+        assert_eq!(
+            fs::read_to_string(&lock).unwrap(),
+            "external writer owns this lock"
+        );
+        assert_eq!(fs::read(&index).unwrap(), before);
+        fs::remove_file(&lock).unwrap();
+        assert!(call(&["add", "--", "tracked.txt"]).success());
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn command_start_waits_for_a_brief_executable_writer_without_repeating_started_work() {
     let root = tempfile::tempdir().unwrap();

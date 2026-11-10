@@ -483,6 +483,11 @@ pub fn local<S, R>(request: &Request<S>) -> Result<Response<R>> {
                 bail!("Git input exceeds 8 MiB.");
             }
             let mut command = git_command(&crate::files::expand_home(root));
+            // Status is polled in the background. Its optional stat-cache write
+            // can otherwise contend for index.lock with an external Git writer.
+            if args[0] == "status" {
+                command.arg("--no-optional-locks");
+            }
             command.args(args);
             Ok(Response::Command(run(
                 command,

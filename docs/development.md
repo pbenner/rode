@@ -137,6 +137,17 @@ invocations to exercise the shared contract, installer units and host deployment
 The fixed multi-executable cache-key fixture and legacy main-only key must remain
 stable unless an explicit cache-format migration is intended.
 
+Background Git status requests use `--no-optional-locks` in the shared project
+service. Git's optional stat-cache refresh can otherwise race an external commit
+for `index.lock`; see [Git's background-refresh contract](https://git-scm.com/docs/git-status#_background_refresh).
+`cargo test --test project background_git_status` checks unchanged index bytes,
+status during an external lock, and continued refusal of a conflicting writer
+on both desktop and headless paths. The HTTPS Git UI fixture also waits for an
+enabled post-submit control before creating its push commit: publication of a
+remote-tracking ref alone does not acknowledge the desktop's Fetch completion
+and subsequent status refresh. Keep that acknowledgement separate from the
+repository/server-state checks and credential-lifetime assertions.
+
 Active document rendering and find/replace live in `src/app/editor_view.rs`.
 Application/project lifecycles remain in `app.rs` and its lifecycle modules;
 native source-edit commands remain under `app/navigation`. Moving a view must
