@@ -16,6 +16,14 @@ use std::{
 pub struct Client {
     inner: rode_runtime_core::debugger::protocol::Client,
     host: Option<runtime::Client>,
+    last_navigation: Option<Navigation>,
+}
+
+#[derive(PartialEq, Eq)]
+struct Navigation {
+    epoch: u64,
+    frame: Option<i64>,
+    location: (String, usize, usize),
 }
 impl Deref for Client {
     type Target = rode_runtime_core::debugger::protocol::Client;
@@ -148,6 +156,7 @@ impl Client {
             return Ok(Self {
                 inner: rode_runtime_core::debugger::protocol::Client::mirror(settings),
                 host: Some(runtime::Client::start(plan, remote, spec, wake)?),
+                last_navigation: None,
             });
         }
         let session = process::Session::start(
@@ -177,6 +186,7 @@ impl Client {
                 settings,
             )?,
             host: None,
+            last_navigation: None,
         })
     }
     /// Reattach with the original immutable project and policy.
@@ -189,6 +199,7 @@ impl Client {
         Ok(Self {
             inner: rode_runtime_core::debugger::protocol::Client::mirror(Settings::default()),
             host: Some(runtime::Client::attach(plan, remote, info, wake)?),
+            last_navigation: None,
         })
     }
     /// Current stopped epoch.
@@ -322,19 +333,14 @@ impl Client {
             self.inner.poll();
             return;
         };
-        for update in host.poll() {
+        let updates = host.poll();
+        let error = host.error.take();
+        let offline = host.offline();
+        for update in updates {
             match update {
                 Update::State(state) => {
                     if let Some(view) = state.debugger {
-                        let navigation = view.navigation.clone();
-                        let same = self.inner.inspection_epoch() == view.epoch
-                            && self.inner.frame == view.frame;
-                        self.inner.restore_view(view);
-                        if same {
-                            self.inner.navigation = None;
-                        } else {
-                            self.inner.navigation = navigation;
-                        }
+                        self.restore_host_view(view);
                     }
                 }
                 Update::Terminal(event) => self.inner.terminal_events.push_back(event),
@@ -342,13 +348,42 @@ impl Client {
                 _ => {}
             }
         }
-        if let Some(error) = host.error.take() {
+        if let Some(error) = error {
             self.inner.error = error;
         }
-        if host.offline() {
+        if offline {
             self.inner.phase = Phase::Ended;
             self.inner.status = "Debugger view disconnected · Reattach from Sessions".into();
         }
+    }
+    fn restore_host_view(&mut self, view: rode_runtime_core::debugger::protocol::View) {
+        let same = self.inner.inspection_epoch() == view.epoch && self.inner.frame == view.frame;
+        let pending = if same && view.phase == Phase::Paused {
+            self.inner.navigation.take()
+        } else {
+            None
+        };
+        self.inner.restore_view(view);
+        let navigation = self
+            .inner
+            .navigation
+            .take()
+            .filter(|_| self.inner.phase == Phase::Paused);
+        if let Some(location) = navigation {
+            let key = Navigation {
+                epoch: self.inner.inspection_epoch(),
+                frame: self.inner.frame,
+                location,
+            };
+            if self.last_navigation.as_ref() != Some(&key) {
+                self.inner.navigation = Some(key.location.clone());
+                self.last_navigation = Some(key);
+                return;
+            }
+        }
+        // Repeated snapshots must not erase a jump before poll_debugger consumes it.
+        // Once consumed, the same location must not steal focus back from other tools.
+        self.inner.navigation = pending;
     }
     /// End only this host debugger and its owned debuggee; attached targets detach.
     pub fn stop(&mut self) {
@@ -394,5 +429,70 @@ impl rode_runtime_core::process::Sink for TerminalSink {
         } else {
             Ok(false)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rode_runtime_core::debugger::protocol::View;
+
+    fn paused(epoch: u64, frame: i64, row: Option<usize>) -> View {
+        let mut view = rode_runtime_core::debugger::protocol::Client::default().view();
+        view.phase = Phase::Paused;
+        view.epoch = epoch;
+        view.frame = Some(frame);
+        view.navigation = row.map(|row| ("/project/main.py".into(), row, 1));
+        view
+    }
+
+    #[test]
+    fn batched_host_snapshots_keep_navigation_until_the_ui_consumes_it() {
+        let mut client = Client::default();
+        let view = paused(1, 41, Some(3));
+        client.restore_host_view(view.clone());
+        client.restore_host_view(view.clone());
+        client.restore_host_view(paused(1, 41, None));
+        assert_eq!(client.navigation.take(), view.navigation);
+        client.restore_host_view(view);
+        assert!(
+            client.navigation.is_none(),
+            "Repeated snapshots stole focus back"
+        );
+    }
+
+    #[test]
+    fn a_location_arriving_after_its_frame_is_still_delivered() {
+        let mut client = Client::default();
+        client.restore_host_view(paused(1, 41, Some(3)));
+        client.navigation.take();
+        // The adapter reuses its frame ID for a later stop; state and source arrive separately.
+        client.restore_host_view(paused(2, 41, None));
+        let view = paused(2, 41, Some(4));
+        client.restore_host_view(view.clone());
+        assert_eq!(client.navigation.take(), view.navigation);
+        client.restore_host_view(paused(2, 42, Some(4)));
+        assert!(
+            client.navigation.take().is_some(),
+            "Selecting another frame must navigate"
+        );
+        client.restore_host_view(paused(2, 42, Some(5)));
+        assert_eq!(client.navigation.take().unwrap().1, 5);
+    }
+
+    #[test]
+    fn resume_and_frame_changes_discard_unconsumed_source_jumps() {
+        let mut client = Client::default();
+        client.restore_host_view(paused(1, 41, Some(3)));
+        let mut running = paused(2, 41, Some(3));
+        running.phase = Phase::Running;
+        client.restore_host_view(running);
+        assert!(client.navigation.is_none());
+        client.restore_host_view(paused(3, 41, Some(3)));
+        client.restore_host_view(paused(3, 42, None));
+        assert!(client.navigation.is_none());
+        client.restore_host_view(paused(3, 42, Some(4)));
+        client.restore_host_view(paused(4, 42, None));
+        assert!(client.navigation.is_none());
     }
 }
