@@ -4,6 +4,72 @@ use super::*;
 use crate::theme::Palette;
 
 impl EditorApp {
+    /// Present only observed connections; offline/failed discovery is unknown,
+    /// rather than a stale positive count or an invented zero.
+    pub(in crate::app) fn tunnel_status_button(
+        &self,
+        ui: &mut egui::Ui,
+        palette: Palette,
+    ) -> egui::Response {
+        let host = self
+            .workspace
+            .as_ref()
+            .and_then(|w| w.remote.as_ref())
+            .map_or_else(
+                || "this computer".to_owned(),
+                |remote| format!("SSH host {}", remote.profile.endpoint()),
+            );
+        let unavailable = self
+            .tunnel_status_blocked()
+            .or(match &self.tunnels.observation {
+                Some(Err(error)) => Some(error.as_str()),
+                None => Some("Checking tunnel status…"),
+                Some(Ok(())) => None,
+            });
+        let (label, color, details) = if let Some(reason) = unavailable {
+            ("Tunnels (?)".to_owned(), palette.muted, reason.to_owned())
+        } else {
+            let mut connected = 0;
+            let mut connecting = 0;
+            let mut reconnecting = 0;
+            let mut attention = 0;
+            for info in &self.tunnels.available {
+                match info.status {
+                    Status::Connected => connected += 1,
+                    Status::Connecting => connecting += 1,
+                    Status::Reconnecting => reconnecting += 1,
+                    Status::HostKeyRequired | Status::Attention => attention += 1,
+                }
+            }
+            let total = self.tunnels.available.len();
+            let label = if total == 0 {
+                "Tunnels".to_owned()
+            } else if connected == total {
+                format!("Tunnels ({connected})")
+            } else {
+                format!("Tunnels ({connected}/{total})")
+            };
+            let color = if attention > 0 {
+                palette.error
+            } else if connecting + reconnecting > 0 {
+                palette.accent
+            } else if connected > 0 {
+                palette.success
+            } else {
+                palette.text
+            };
+            (
+                label,
+                color,
+                format!(
+                    "{connected} connected · {connecting} connecting · {reconnecting} reconnecting · {attention} need attention\nCounts show connected / total retained tunnels."
+                ),
+            )
+        };
+        ui.button(RichText::new(label).color(color))
+            .on_hover_text(format!("Manage SSH tunnels on {host}.\n{details}"))
+    }
+
     pub(in crate::app) fn tunnels_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let top = ui.cursor().top();

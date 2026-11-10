@@ -165,7 +165,7 @@ fn local_tunnel_manager_is_reachable_without_a_workspace_and_offers_return_detai
     };
     title_frame(vec![]);
     let output = title_frame(vec![]);
-    let (rect, clip) = text_bounds(&output, "Tunnels");
+    let (rect, clip) = text_bounds(&output, "Tunnels (?)");
     assert!(clip.contains_rect(rect));
     for pressed in [true, false] {
         title_frame(vec![
@@ -355,7 +355,7 @@ fn tunnel_results_from_an_old_workspace_cannot_replace_the_new_profile() {
 }
 
 #[test]
-fn tunnel_controls_render_without_starting_workers_and_hidden_manager_does_not_poll() {
+fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_actions_free() {
     for width in [330., 500., 680.] {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -364,7 +364,7 @@ fn tunnel_controls_render_without_starting_workers_and_hidden_manager_does_not_p
         app.tunnel_tick(&ctx);
         assert!(
             app.tunnels.pending.is_none(),
-            "Hidden manager must not poll"
+            "Background checks must not occupy the manager's action slot"
         );
         app.tunnels.available = vec![Info {
             id: "retained".into(),
@@ -501,11 +501,11 @@ fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
     app.tunnel_tick(&ctx);
     assert!(
         app.tunnels.pending.is_none(),
-        "Setup must not schedule status polls"
+        "Background status checks must not block setup actions"
     );
     click(&mut app, &ctx, "Compute tunnel");
     let (tx, rx) = mpsc::channel();
-    app.tunnels.pending = Some(rx); // An already running discovery must not disable fields.
+    app.tunnels.background = Some(rx); // An already running discovery must not disable fields.
     dialog_frame(
         &mut app,
         &ctx,
@@ -522,7 +522,7 @@ fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
         ],
     );
     assert_eq!(app.tunnels.spec.name, "Research node");
-    tx.send(Ok(Outcome::Listed(vec![]))).unwrap();
+    tx.send(Ok(vec![])).unwrap();
     app.tunnel_tick(&ctx);
     assert_eq!(app.tunnels.page, Page::New);
     assert!(app.tunnels.pending.is_none());
@@ -957,4 +957,161 @@ fn older_services_cannot_silently_ignore_a_requested_network_listener() {
         message.contains("service did not apply") && message.contains("Update/restart"),
         "{message}"
     );
+}
+
+fn observed_tunnel(status: Status) -> Info {
+    Info {
+        id: "observed".into(),
+        hostname: "compute".into(),
+        spec: Spec::default(),
+        status,
+        error: String::new(),
+        observed_key: String::new(),
+        fingerprint: String::new(),
+        attempts: 1,
+    }
+}
+
+#[test]
+fn titlebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    for (observation, statuses, label) in [
+        (None, vec![], "Tunnels (?)"),
+        (Some(Ok(())), vec![], "Tunnels"),
+        (Some(Ok(())), vec![Status::Connected; 2], "Tunnels (2)"),
+        (Some(Ok(())), vec![Status::Connecting], "Tunnels (0/1)"),
+        (
+            Some(Ok(())),
+            vec![
+                Status::Connected,
+                Status::Reconnecting,
+                Status::HostKeyRequired,
+                Status::Attention,
+            ],
+            "Tunnels (1/4)",
+        ),
+        (
+            Some(Err("Connection lost".to_owned())),
+            vec![Status::Connected],
+            "Tunnels (?)",
+        ),
+    ] {
+        app.tunnels.observation = observation;
+        app.tunnels.available = statuses.into_iter().map(observed_tunnel).collect();
+        for width in [1000., 1380.] {
+            for _ in 0..3 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 700.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| app.titlebar(ctx),
+                );
+                let (rect, clip) = text_bounds(&output, label);
+                assert!(clip.contains_rect(rect) && ctx.content_rect().contains_rect(rect));
+            }
+        }
+        assert!(
+            app.tunnels.pending.is_none() && app.tunnels.background.is_none(),
+            "Painting the count must not perform host I/O"
+        );
+    }
+}
+
+#[test]
+fn hidden_status_refreshes_are_throttled_and_do_not_occupy_setup_actions() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.tunnels.generation = Some(app.generation);
+    let (tx, rx) = mpsc::channel();
+    app.tunnels.background = Some(rx);
+    app.tunnels.spec.name = "Unfinished setup".into();
+    app.tunnels.page = Page::New;
+    tx.send(Ok(vec![observed_tunnel(Status::Connected)]))
+        .unwrap();
+    app.tunnel_tick(&ctx);
+    assert_eq!(app.tunnels.available.len(), 1);
+    assert!(matches!(app.tunnels.observation, Some(Ok(()))));
+    assert!(app.tunnels.pending.is_none() && app.tunnels.background.is_none());
+    app.tunnel_tick(&ctx);
+    assert!(
+        app.tunnels.background.is_none(),
+        "A fresh observation must not trigger another poll"
+    );
+    app.tunnels.last = Some(Instant::now() - Duration::from_secs(16));
+    app.tunnel_tick(&ctx);
+    assert!(app.tunnels.background.is_some() && app.tunnels.pending.is_none());
+    assert_eq!(app.tunnels.spec.name, "Unfinished setup");
+    assert_eq!(app.tunnels.page, Page::New);
+    // Starting a lifetime action must discard the older background observation.
+    let (tx, rx) = mpsc::channel();
+    app.tunnels.background = Some(rx);
+    app.tunnel_request(
+        Control::StopTunnel {
+            id: "observed".into(),
+        },
+        &ctx,
+    );
+    assert!(app.tunnels.pending.is_some() && app.tunnels.background.is_none());
+    assert!(app.tunnels.observation.is_none());
+    assert!(
+        tx.send(Ok(vec![observed_tunnel(Status::Connected)]))
+            .is_err()
+    );
+    app.workspace
+        .as_ref()
+        .unwrap()
+        .remote
+        .as_ref()
+        .unwrap()
+        .cleanup();
+}
+
+#[test]
+fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.tunnels.generation = Some(app.generation);
+    app.tunnels.available = vec![observed_tunnel(Status::Connected)];
+    app.tunnels.observation = Some(Ok(()));
+    app.vaults.locking = true;
+    app.tunnel_tick(&ctx);
+    assert!(app.tunnels.background.is_none() && app.tunnels.pending.is_none());
+    assert!(app.tunnels.observation.is_none());
+    app.vaults.locking = false;
+    app.workspace.as_mut().unwrap().connected = false;
+    app.tunnel_tick(&ctx);
+    assert!(app.tunnels.background.is_none() && app.tunnels.pending.is_none());
+    assert!(app.tunnels.observation.is_none());
+    let output = ctx.run(egui::RawInput::default(), |ctx| app.titlebar(ctx));
+    text_bounds(&output, "Tunnels (?)");
+    app.workspace.as_mut().unwrap().connected = true;
+    app.workspace.as_mut().unwrap().ready = false;
+    app.tunnel_tick(&ctx);
+    assert!(app.tunnels.background.is_none() && app.tunnels.pending.is_none());
+    app.workspace.as_mut().unwrap().ready = true;
+    let (tx, rx) = mpsc::channel();
+    app.tunnels.background = Some(rx);
+    tx.send(Ok(vec![observed_tunnel(Status::Connected)]))
+        .unwrap();
+    app.generation += 1;
+    app.tunnel_tick(&ctx);
+    assert!(app.tunnels.available.is_empty() && app.tunnels.observation.is_none());
+    assert!(app.tunnels.pending.is_none());
+    app.workspace
+        .as_ref()
+        .unwrap()
+        .remote
+        .as_ref()
+        .unwrap()
+        .cleanup();
 }

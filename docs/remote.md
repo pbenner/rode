@@ -197,8 +197,15 @@ The compute name comes from the owning service. Older remote services use the
 selected SSH host/alias as a display fallback; local tunnels use this computer's
 hostname. These labels do not change the fixed loopback destination on the compute host.
 **New tunnel** groups relay, forwarding and compute-host credentials;
-its draft survives tab switches. Status refreshes pause while setting up a tunnel.
+its draft survives tab switches. Background status checks do not disable setup fields or actions.
 Tabs and the Start/Close controls remain visible while the form scrolls.
+
+The titlebar **Tunnels** button shows the connected count, or connected/total
+when some retained tunnels are connecting, reconnecting or need attention.
+Hover for the breakdown. **Tunnels (?)** means status is unknown or the host
+is unavailable. Status is checked every 15 seconds outside the list and every
+2 seconds while viewing it, on the current host only. These read-only checks
+never start a tunnel service or reconnect SSH.
 
 Choose **Save configuration** in setup or on a running tunnel's card to keep it
 across editor and service restarts. **Saved** lists the reusable setups. Choose

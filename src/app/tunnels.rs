@@ -128,6 +128,10 @@ pub(super) struct Tunnels {
     spec: Spec,
     available: Vec<Info>,
     pending: Option<mpsc::Receiver<Result<Outcome, String>>>,
+    /// Read-only background discovery never occupies the manager's action slot.
+    background: Option<mpsc::Receiver<Result<Vec<Info>, String>>>,
+    /// None until checked; a failed check must not advertise a stale connected count.
+    observation: Option<Result<(), String>>,
     last: Option<Instant>,
     error: String,
     relay_jump: String,
@@ -164,6 +168,20 @@ impl Tunnels {
     }
 }
 impl EditorApp {
+    fn tunnel_status_blocked(&self) -> Option<&'static str> {
+        if self.vaults.locking {
+            return Some("Encrypted project is locking. Tunnel status checks are paused.");
+        }
+        let workspace = self.workspace.as_ref().filter(|w| w.remote.is_some())?;
+        if !workspace.connected {
+            Some("SSH is offline. Reconnect to check this host's tunnels.")
+        } else if !workspace.ready {
+            Some("Waiting for SSH host preparation before checking tunnels.")
+        } else {
+            None
+        }
+    }
+
     pub(super) fn tunnel_tick(&mut self, ctx: &egui::Context) {
         if self.tunnels.generation != Some(self.generation) {
             self.tunnels = Tunnels {
@@ -171,6 +189,22 @@ impl EditorApp {
                 saved: std::mem::take(&mut self.tunnels.saved),
                 ..Default::default()
             };
+        }
+        if let Some(result) = self
+            .tunnels
+            .background
+            .as_ref()
+            .and_then(|rx| match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("Tunnel status worker ended without a response".into()))
+                }
+                Err(mpsc::TryRecvError::Empty) => None,
+            })
+        {
+            self.tunnels.background = None;
+            self.tunnels.last = Some(Instant::now());
+            self.tunnels.observation = Some(result.map(|list| self.tunnels.available = list));
         }
         if let Some(result) = self
             .tunnels
@@ -187,7 +221,10 @@ impl EditorApp {
             self.tunnels.pending = None;
             self.tunnels.last = Some(Instant::now());
             match result {
-                Ok(Outcome::Listed(list)) => self.tunnels.available = list,
+                Ok(Outcome::Listed(list)) => {
+                    self.tunnels.available = list;
+                    self.tunnels.observation = Some(Ok(()));
+                }
                 Ok(Outcome::Route(profile))
                     if self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels =>
                 {
@@ -197,23 +234,69 @@ impl EditorApp {
                     self.set_dialog(Dialog::Connect);
                 }
                 Ok(Outcome::Route(_)) => {}
-                Err(error) => self.tunnels.error = error,
+                Err(error) => {
+                    self.tunnels.observation = Some(Err(error.clone()));
+                    self.tunnels.error = error;
+                }
             }
         }
-        if self.dialog == Dialog::Tunnels
-            && self.tunnels.page == Page::Tunnels
-            && self.tunnels.pending.is_none()
+        if self.tunnel_status_blocked().is_some() {
+            self.tunnels.background = None;
+            self.tunnels.observation = None;
+            self.tunnels.last = None;
+            return;
+        }
+        let manager = self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels;
+        let interval = Duration::from_secs(if manager { 2 } else { 15 });
+        if self.tunnels.pending.is_none()
+            && self.tunnels.background.is_none()
             && self
                 .tunnels
                 .last
-                .is_none_or(|last| last.elapsed() >= Duration::from_secs(2))
+                .is_none_or(|last| last.elapsed() >= interval)
         {
-            self.tunnel_request(Control::Tunnels, ctx);
+            if manager {
+                self.tunnel_request(Control::Tunnels, ctx);
+            } else {
+                self.refresh_tunnel_status(ctx);
+            }
         }
-        if self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels {
+        if self.tunnels.pending.is_some() || self.tunnels.background.is_some() {
             ctx.request_repaint_after(Duration::from_secs(1));
+        } else {
+            ctx.request_repaint_after(
+                interval.saturating_sub(
+                    self.tunnels
+                        .last
+                        .map_or(Duration::ZERO, |last| last.elapsed()),
+                ),
+            );
         }
     }
+
+    /// Discover retained workers on the current host without starting a service,
+    /// opening a new SSH connection or disabling setup and lifetime actions.
+    fn refresh_tunnel_status(&mut self, ctx: &egui::Context) {
+        let host = match Host::for_workspace(self.workspace.as_ref()) {
+            Ok(host) => host,
+            Err(error) => {
+                self.tunnels.observation = Some(Err(error.to_string()));
+                self.tunnels.last = Some(Instant::now());
+                return;
+            }
+        };
+        let (tx, rx) = mpsc::channel();
+        self.tunnels.background = Some(rx);
+        self.tunnels.last = Some(Instant::now());
+        let ctx = ctx.clone();
+        let vault_work = self.vaults.work();
+        std::thread::spawn(move || {
+            let _vault_work = vault_work;
+            let _ = tx.send(list_tunnels(&host).map_err(|error| format!("{error:#}")));
+            ctx.request_repaint();
+        });
+    }
+
     fn tunnel_request(&mut self, request: Control, ctx: &egui::Context) {
         if self.tunnels.pending.is_some() {
             return;
@@ -226,11 +309,14 @@ impl EditorApp {
                 return;
             }
         };
+        // A status reply captured before Start/Stop must not overwrite its result.
+        self.tunnels.background = None;
         let (tx, rx) = mpsc::channel();
         self.tunnels.pending = Some(rx);
         self.tunnels.last = Some(Instant::now());
         if !matches!(request, Control::Tunnels) {
             self.tunnels.error.clear();
+            self.tunnels.observation = None;
         }
         let ctx = ctx.clone();
         let vault_work = self.vaults.work();
@@ -240,10 +326,7 @@ impl EditorApp {
                 if !matches!(request, Control::Tunnels) {
                     host.request(request)?;
                 }
-                match host.request(Control::Tunnels)? {
-                    rode_session::Response::Tunnels(list) => Ok(Outcome::Listed(list)),
-                    _ => anyhow::bail!("Unexpected tunnel listing"),
-                }
+                list_tunnels(&host).map(Outcome::Listed)
             })()
             .map_err(|e| format!("{e:#}"));
             let _ = tx.send(result);
@@ -275,6 +358,13 @@ impl EditorApp {
             let _ = tx.send(result);
             ctx.request_repaint();
         });
+    }
+}
+
+fn list_tunnels(host: &Host) -> anyhow::Result<Vec<Info>> {
+    match host.request(Control::Tunnels)? {
+        rode_session::Response::Tunnels(list) => Ok(list),
+        _ => anyhow::bail!("Unexpected tunnel listing"),
     }
 }
 

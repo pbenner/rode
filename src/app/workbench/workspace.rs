@@ -20,8 +20,8 @@ pub(in crate::app) enum ToolTab {
 
 impl ToolTab {
     const ALL: [Self; 9] = [
-        Self::Terminal,
         Self::Panel(Panel::Agent),
+        Self::Terminal,
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
         Self::Panel(Panel::Problems),
@@ -225,7 +225,8 @@ impl EditorApp {
         }
     }
 
-    /// Hide or restore the last tool surface, updating pane focus and detached-window visibility.
+    /// Hide or restore the last tool surface, initially Chat, updating pane focus
+    /// and detached-window visibility.
     pub(in crate::app) fn toggle_sidebar(&mut self, ctx: &egui::Context) {
         let visible = self.tool_surface();
         self.navigation.zoom = None;
@@ -240,7 +241,10 @@ impl EditorApp {
             }
             self.focus_pane(navigation::Pane::Editor, ctx);
         } else {
-            let tab = self.workbench.last_tool.unwrap_or(ToolTab::Terminal);
+            let tab = self
+                .workbench
+                .last_tool
+                .unwrap_or(ToolTab::Panel(Panel::Agent));
             match tab {
                 ToolTab::Panel(panel) if self.panel_enabled(panel) => {
                     if self.workbench.surface == Surface::Tools
@@ -870,6 +874,15 @@ mod tests {
         app.new_file();
         app.documents[0].text = "unsaved source".into();
         app.agents.chat.notice("retained conversation");
+        // The first sidebar opening selects Chat without starting a shell or model turn.
+        assert!(app.workbench.last_tool.is_none());
+        shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
+        assert!(app.tools_visible());
+        assert_eq!(app.workbench.panel, Some(Panel::Agent));
+        assert!(app.agents.focus);
+        assert!(app.terminal.is_none() && !app.agents.chat.busy);
+        shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
+        assert_eq!(app.workbench.surface, Surface::Editor);
         for panel in [Panel::Agent, Panel::Settings, Panel::Monitor] {
             app.toggle_panel(panel, &ctx);
             shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
