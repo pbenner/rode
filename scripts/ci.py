@@ -264,6 +264,26 @@ def extended_suites(paths, full=False):
     return [name for name in EXTENDED if name in selected]
 
 
+def rust_failure_output(logfile, limit=12000):
+    """Keep bounded libtest failure sections even when later binaries fill the log tail."""
+    result = bytearray()
+    capturing = False
+    with logfile.open("rb") as output:
+        for line in output:
+            if line.strip() == b"failures:":
+                capturing = True
+            if capturing:
+                remaining = limit - len(result)
+                if len(line) > remaining:
+                    result.extend(line[:remaining])
+                    result.extend(b"\n... further failure details are in the log artifact ...\n")
+                    break
+                result.extend(line)
+                if line.startswith(b"test result:"):
+                    capturing = False
+    return bytes(result)
+
+
 def measure(label, command, env=None, timeout=300, group="commands"):
     """Retain failure logs and timings, and stop a timed-out command's children."""
     directory = ROOT / "target/ci-results" / group
@@ -316,6 +336,10 @@ def measure(label, command, env=None, timeout=300, group="commands"):
         if len(rest) > 12000:
             output.seek(-12000, os.SEEK_END)
             rest = b"\n... middle omitted; full output is in the log artifact ...\n" + output.read()
+            if code:
+                failures = rust_failure_output(logfile)
+                if failures:
+                    rest = b"\n... Rust test failure details ...\n" + failures + rest
         # Nested suite output is already captured inside this command's group.
         # Replaying child group markers hides its traceback in another collapsed
         # heading on Actions. Preserve the raw artifact, flatten console output.

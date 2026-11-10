@@ -219,6 +219,41 @@ class RunnerTests(unittest.TestCase):
         log = (self.root / "target/ci-results/commands/verbose.log").read_text()
         self.assertEqual(log.count("daemon chatter"), 6000)
 
+    def test_rust_failure_in_the_omitted_middle_remains_visible(self):
+        failure = (
+            "failures:\n\n---- compact_layout stdout ----\n"
+            "thread 'compact_layout' panicked at src/app/workbench/tests.rs:204:25:\n"
+            "panel overflows at fractional zoom\n\n"
+            "failures:\n    compact_layout\n\n"
+            "test result: FAILED. 425 passed; 1 failed\n"
+        )
+        source = "passing test output\n" * 2000 + failure + "later binaries passed\n" * 2000
+        transcript = self.root / "transcript.log"
+        transcript.write_text(source)
+        console = io.StringIO()
+        with patch("sys.stdout", console), self.assertRaises(SystemExit) as error:
+            ci.measure(
+                "rust",
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys;print(open(sys.argv[1]).read(),end='');sys.exit(101)",
+                    str(transcript),
+                ],
+            )
+        self.assertEqual(error.exception.code, 101)
+        self.assertIn(failure, console.getvalue())
+        self.assertIn("middle omitted", console.getvalue())
+        self.assertLess(len(console.getvalue()), 37000)
+        self.assertEqual((self.root / "target/ci-results/commands/rust.log").read_text(), source)
+
+    def test_rust_failure_excerpt_is_bounded(self):
+        transcript = self.root / "transcript.log"
+        transcript.write_text("failures:\n" + "large assertion detail\n" * 5000)
+        output = ci.rust_failure_output(transcript)
+        self.assertLess(len(output), 12100)
+        self.assertIn(b"further failure details", output)
+
     def test_nested_suite_failure_keeps_one_console_group_and_the_full_raw_log(self):
         child = "::group::child UI test\nTraceback: KeyError: 'git_sandbox'\n::endgroup::\n"
         console = io.StringIO()

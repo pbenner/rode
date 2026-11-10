@@ -425,6 +425,8 @@ impl EditorApp {
                 }
                 egui::ScrollArea::vertical()
                     .id_salt(("workbench-content", panel.title()))
+                    // Keep the solid scrollbar gutter stable while content wraps at fractional zoom.
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .auto_shrink([false, false])
                     .show(ui, |ui| match panel {
                         Panel::Git => self.git_ui(ui, ctx),
