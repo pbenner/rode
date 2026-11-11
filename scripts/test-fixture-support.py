@@ -12,13 +12,60 @@ from unittest.mock import patch
 
 from fixture_support import (
     decode_ron_string,
+    fixture_artifacts,
     fixture_directory,
     fixture_environment,
+    private_directory,
     write_python_launcher,
 )
 
 
 class FixtureSupportTests(unittest.TestCase):
+    def test_nested_and_external_artifact_paths_do_not_overwrite_other_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            results = root / "results"
+            sources = [
+                root / "target/git-identity-ui/ssh",
+                root / "target/execution-modes-ui/ssh",
+                root / "external-one/ssh",
+                root / "external-two/ssh",
+            ]
+            destinations = [fixture_artifacts(root, path, results) for path in sources]
+            self.assertEqual(destinations[0], results / "ui/git-identity-ui/ssh")
+            for index, destination in enumerate(destinations):
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / "failure.png").write_text(str(index))
+            for index, destination in enumerate(destinations):
+                self.assertEqual((destination / "failure.png").read_text(), str(index))
+            self.assertEqual(fixture_artifacts(root, sources[0]), sources[0])
+
+    def test_home_is_private_under_permissive_umasks_without_changing_the_parent(self):
+        script = "from pathlib import Path; from fixture_support import fixture_environment; import sys; env=fixture_environment(sys.argv[1]); assert Path(env['HOME']).stat().st_mode & 0o777 == 0o700"
+        for mask in (0o002, 0o022, 0o077):
+            with tempfile.TemporaryDirectory() as directory:
+                subprocess.run(
+                    [sys.executable, "-c", script, directory],
+                    cwd=Path(__file__).parent,
+                    umask=mask,
+                    check=True,
+                )
+
+    def test_existing_unsafe_or_symlinked_homes_are_rejected_not_repaired(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            home = base / "home"
+            home.mkdir()
+            home.chmod(0o775)
+            with self.assertRaisesRegex(ValueError, "0700"):
+                fixture_environment(base)
+            self.assertEqual(home.stat().st_mode & 0o777, 0o775)
+            home.rmdir()
+            other = private_directory(base / "other")
+            home.symlink_to(other, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "non-symlink"):
+                fixture_environment(base)
+
     def test_ron_storage_decodes_quoted_unicode_paths_before_the_nested_json(self):
         payload = {"project ' with spaces λ": {"path": 'backslash\\ and "quote"'}}
         inner = json.dumps(payload, ensure_ascii=False)

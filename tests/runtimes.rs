@@ -13,6 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "support/capabilities.rs"]
+mod capabilities;
+
 struct Fixture {
     root: tempfile::TempDir,
     ids: Vec<(String, String)>,
@@ -246,7 +249,10 @@ fn publish_python_marker(path: &std::path::Path, value: &str) -> String {
 #[test]
 fn real_kernel_queue_variables_and_outputs_survive_detach_and_exclusive_reattachment() {
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
-        eprintln!("Set RODE_TEST_JUPYTER for real persistent notebook coverage");
+        capabilities::skip(
+            "jupyter",
+            "Set RODE_TEST_JUPYTER for real persistent notebook coverage",
+        );
         return;
     };
     let mut fixture = Fixture::new();

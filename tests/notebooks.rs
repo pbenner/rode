@@ -18,7 +18,7 @@ use std::{
 };
 const FIXTURE: &str = include_str!("fixtures/notebook.ipynb");
 fn interpreter() -> Option<String> {
-    std::env::var("RODE_TEST_JUPYTER").ok()
+    native_peer::capabilities::tool("jupyter", &["RODE_TEST_JUPYTER"])
 }
 fn wait(kernel: &mut Kernel, done: usize) -> Vec<Event> {
     let mut events = vec![];
@@ -121,9 +121,6 @@ fn execution_results_are_version_checked_and_output_limits_roll_back_atomically(
 #[test]
 fn installed_python_kernel_keeps_state_streams_errors_and_real_png_outputs() {
     let Some(python) = interpreter() else {
-        eprintln!(
-            "Set RODE_TEST_JUPYTER to an interpreter with jupyter_client, ipykernel and matplotlib."
-        );
         return;
     };
     let root = tempfile::tempdir().unwrap();
@@ -315,7 +312,7 @@ fn actual_sandbox_encloses_kernel_and_its_file_operations_without_network_sharin
     )
     .unwrap();
     if !plan.active {
-        eprintln!("bwrap unavailable: {}", plan.reason);
+        native_peer::capabilities::skip("bwrap", &plan.reason);
         return;
     }
     let mut kernel = Kernel::start(

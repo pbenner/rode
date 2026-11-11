@@ -20,6 +20,7 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
@@ -99,20 +100,19 @@ def header_height(filename, dpi):
 
 with tempfile.TemporaryDirectory(prefix="rode-scale-ui-") as directory:
     for dpi in (1, 2):
-        root = Path(directory) / str(dpi)
-        root.mkdir()
+        base = Path(directory) / str(dpi)
+        root = base / "project"
+        root.mkdir(parents=True)
         source = root / "main.txt"
         source.write_text("Original text\n")
-        state_path = root / "ui-state.json"
-        environment = dict(
-            os.environ,
+        state_path = base / "ui-state.json"
+        environment = fixture_environment(
+            base,
             WINIT_UNIX_BACKEND="x11",
             WINIT_X11_SCALE_FACTOR=str(dpi),
-            XDG_CONFIG_HOME=str(root / "config"),
-            XDG_DATA_HOME=str(root / "data"),
             RODE_UI_TEST_STATE=str(state_path),
         )
-        saved = root / "data/rode/app.ron"
+        saved = base / "data/rode/app.ron"
         with (ARTIFACTS / f"dpi-{dpi}.log").open("w") as log:
             process = subprocess.Popen(
                 [str(BINARY), str(root)], env=environment, stdout=log, stderr=log

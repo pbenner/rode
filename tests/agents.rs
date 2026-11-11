@@ -960,7 +960,10 @@ fn read_only_projects_block_agent_writes_when_bwrap_is_available() {
     )
     .unwrap();
     if !request.plan.active {
-        eprintln!("Host cannot start bwrap; read-only agent test skipped.");
+        native_peer::capabilities::skip(
+            "bwrap",
+            "Host cannot start bwrap for the read-only agent test",
+        );
         return;
     }
     let mut chat = Chat::default();

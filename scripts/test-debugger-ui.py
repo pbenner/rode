@@ -16,6 +16,7 @@ from ui_harness import (
     NativeUI,
     close_window,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     read_json_lines,
@@ -48,15 +49,14 @@ def run(remote=False, isolated=False):
         adapter = project / "adapter.py"
         shutil.copy2(ROOT / "tests/fixtures/debug_adapter.py", adapter)
         (base / "private.txt").write_text("private")
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             HOME=str(base / "home"),
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             RODE_SESSION_DIR=str(base / "runtime"),
             RODE_UI_TEST_STATE=str(base / "ui-state.json"),
         )
-        Path(environment["HOME"]).mkdir(mode=0o700)
 
         def service_rpc(action, **values):
             result = json.loads(

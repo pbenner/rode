@@ -244,6 +244,7 @@ pub(super) fn rows(
                 })
                 .inner
                 .on_hover_text(&entry.path);
+            ui_probe::value(ui, "file-picker-row", &response, &entry.path);
             if response.clicked() {
                 list.index = index;
                 list.navigated = true;
@@ -446,7 +447,9 @@ impl EditorApp {
         ui.add_space(4.);
         let mut browse = None;
         ui.horizontal(|ui| {
-            if ui.button("Up").clicked() {
+            let up = ui.button("Up");
+            ui_probe::button(ui, "file-dialog-up", &up);
+            if up.clicked() {
                 browse = Some(parent(&self.file_browser.directory));
             }
             let location = ui.add(
@@ -454,6 +457,21 @@ impl EditorApp {
                     .desired_width((ui.available_width() - 155.).max(80.))
                     .hint_text("Folder path"),
             );
+            ui_probe::button(ui, "file-dialog-location", &location);
+            ui_probe::value(
+                ui,
+                "file-dialog-location-value",
+                &location,
+                &self.file_browser.location,
+            );
+            if !self.file_browser.loading {
+                ui_probe::value(
+                    ui,
+                    "file-dialog-directory",
+                    &location,
+                    &self.file_browser.directory,
+                );
+            }
             if location.changed() && self.file_browser.loading {
                 self.file_browser.token = self.file_browser.token.wrapping_add(1);
                 self.file_browser.loading = false;
@@ -552,7 +570,9 @@ impl EditorApp {
                 Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach",
                 _ => "Open",
             };
-            if palette.primary(ui, label).clicked() || keys.1 {
+            let submit = palette.primary(ui, label);
+            ui_probe::button(ui, "file-dialog-submit", &submit);
+            if submit.clicked() || keys.1 {
                 let selected = self
                     .file_browser
                     .rows

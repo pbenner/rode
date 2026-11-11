@@ -44,6 +44,10 @@ fn response(session: &Session, id: u64) -> Value {
 #[test]
 fn bundled_auto_discovery_initializes_on_the_project_host_without_external_auth() {
     let Ok(bundle) = std::env::var("RODE_TEST_CODEX_BUNDLE") else {
+        native_peer::capabilities::skip(
+            "codex",
+            "Set RODE_TEST_CODEX_BUNDLE for the real bundled runtime",
+        );
         return;
     };
     for isolated in [false, true] {
@@ -106,7 +110,10 @@ fn bundled_auto_child() {
 #[test]
 fn installed_codex_initializes_a_project_with_an_isolated_local_provider() {
     let Ok(program) = std::env::var("RODE_TEST_CODEX") else {
-        eprintln!("Set RODE_TEST_CODEX to check a real Codex app-server without inference.");
+        native_peer::capabilities::skip(
+            "codex",
+            "Set RODE_TEST_CODEX to check a real Codex app-server without inference.",
+        );
         return;
     };
     let temp = tempfile::tempdir().unwrap();
@@ -158,6 +165,7 @@ fn installed_codex_initializes_a_project_with_an_isolated_local_provider() {
 #[test]
 fn installed_codex_completes_a_turn_against_a_loopback_responses_fixture() {
     let Ok(program) = std::env::var("RODE_TEST_CODEX") else {
+        native_peer::capabilities::skip("codex", "Set RODE_TEST_CODEX for the real runtime");
         return;
     };
     for (isolated, backend) in [

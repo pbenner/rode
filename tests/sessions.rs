@@ -796,7 +796,10 @@ uid: 1, version: 0, code: "import os\nprint('ALLOCATED', os.environ['SLURM_JOB_I
         }
         running = Some(kernel);
     } else {
-        eprintln!("Set RODE_TEST_JUPYTER for real Slurm notebook kernel/interrupt/expiry coverage");
+        native_peer::capabilities::skip(
+            "jupyter",
+            "Set RODE_TEST_JUPYTER for real Slurm notebook kernel/interrupt/expiry coverage",
+        );
     }
     slurm::cancel(
         fixture.root.path(),

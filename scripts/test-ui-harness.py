@@ -3,9 +3,11 @@
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
@@ -13,6 +15,7 @@ from unittest.mock import Mock, call, patch
 from ui_harness import (
     NativeUI,
     click_button,
+    delayed_input,
     focus_request,
     focus_window,
     palette_command,
@@ -28,6 +31,27 @@ from ui_harness import (
 
 
 class FixtureAcknowledgementTests(unittest.TestCase):
+    def test_delayed_input_always_resumes_only_its_owned_process_after_failure(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)"])
+        status = Path(f"/proc/{process.pid}/stat")
+        try:
+            with patch.dict(os.environ, RODE_TEST_SLOW_UI="1"):
+                with self.assertRaisesRegex(ValueError, "input failed"):
+                    with delayed_input(process):
+                        deadline = time.monotonic() + 2
+                        while status.read_text().rsplit(") ", 1)[1].split()[0] != "T":
+                            self.assertLess(time.monotonic(), deadline)
+                            time.sleep(0.01)
+                        raise ValueError("input failed")
+                deadline = time.monotonic() + 2
+                while status.read_text().rsplit(") ", 1)[1].split()[0] == "T":
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                self.assertIsNone(process.poll())
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
     def test_agent_cleanup_only_ends_the_owned_project_in_its_private_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

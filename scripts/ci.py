@@ -11,8 +11,11 @@ import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from pathlib import Path
+
+from test_capabilities import inventory
 
 ROOT = Path(__file__).resolve().parent.parent
 FAST = ["workspace", "agents", "terminals", "ssh"]
@@ -48,6 +51,7 @@ CONTEXT_ENV = (
     "RODE_TEST_TMPDIR",
     "RODE_TEST_SESSION_HELPER",
     "RODE_SESSION_HELPER",
+    "RODE_HOST_HELPER",
     "RODE_TEST_LLDB",
     "RODE_TEST_DEBUGPY",
     "RODE_TEST_JUPYTER",
@@ -58,6 +62,10 @@ CONTEXT_ENV = (
     "RODE_TEST_REQUIRE_LANDLOCK",
     "RODE_TEST_SANDBOX_BACKEND",
     "RODE_PROJECT_UI_CASE",
+    "RODE_WORKBENCH_UI_CASE",
+    "RODE_WORKBENCH_UI_SCENARIO",
+    "RODE_FILE_BROWSER_UI_CASE",
+    "RODE_FILE_BROWSER_UI_SCENARIO",
     "RODE_GIT_IDENTITY_UI_REMOTE",
     "RODE_GIT_AUTH_UI_REMOTE",
     "RODE_EXECUTION_UI_REMOTE",
@@ -67,6 +75,9 @@ CONTEXT_ENV = (
     "RODE_SSH_TEST_NO_BWRAP",
     "RODE_SSH_TEST_X11",
     "RODE_TEST_REQUIRE_X11",
+    "RODE_TEST_REQUIRED_CAPABILITIES",
+    "RODE_TEST_AWKWARD_PATHS",
+    "RODE_TEST_SLOW_UI",
 )
 
 
@@ -77,7 +88,17 @@ def ui(name, **env):
 
 def rust(name, **env):
     """Describe one prebuilt integration-test executable and its 300-second deadline."""
-    return ([f"target/ci/tests/{name}", "--nocapture"], env, 300)
+    return (
+        [
+            sys.executable,
+            "scripts/rust_tests.py",
+            "--runner",
+            f"target/ci/tests/{name}",
+            "--nocapture",
+        ],
+        env,
+        300,
+    )
 
 
 def remote(group, transport=False):
@@ -174,11 +195,35 @@ SUITES = {
         ui("terminal-colors", RODE_TERMINAL_COLORS_UI_PROMPT_ONLY="1"),
         ui("project", RODE_PROJECT_UI_CASE="sandbox"),
         ui("project", RODE_PROJECT_UI_CASE="fallback"),
+        (
+            [
+                sys.executable,
+                "scripts/ui_display.py",
+                "--screen",
+                "3200x2200x24",
+                "--",
+                sys.executable,
+                "scripts/test-scale-ui.py",
+            ],
+            {},
+            240,
+        ),
     ],
     "documents": [
         ui("binary"),
         ui("large-files"),
-        ui("workbench", RODE_WORKBENCH_UI_CASE="local"),
+        *[
+            ui("workbench", RODE_WORKBENCH_UI_CASE="local", RODE_WORKBENCH_UI_SCENARIO=scenario)
+            for scenario in ("tools", "git", "settings")
+        ],
+        *[
+            ui(
+                "file-browser",
+                RODE_FILE_BROWSER_UI_CASE="local",
+                RODE_FILE_BROWSER_UI_SCENARIO=scenario,
+            )
+            for scenario in ("navigation", "previews")
+        ],
         ui("images", RODE_IMAGES_UI_CASE="local"),
         ui("markdown", RODE_MARKDOWN_UI_CASE="local"),
         ui("pdf", RODE_PDF_UI_CASE="local"),
@@ -188,7 +233,18 @@ SUITES = {
     ],
     "remote": [remote("remote-documents")],
     "remote-documents": [
-        ui("workbench", RODE_WORKBENCH_UI_CASE="ssh"),
+        *[
+            ui("workbench", RODE_WORKBENCH_UI_CASE="ssh", RODE_WORKBENCH_UI_SCENARIO=scenario)
+            for scenario in ("tools", "git", "settings")
+        ],
+        *[
+            ui(
+                "file-browser",
+                RODE_FILE_BROWSER_UI_CASE="ssh",
+                RODE_FILE_BROWSER_UI_SCENARIO=scenario,
+            )
+            for scenario in ("navigation", "previews")
+        ],
         ui("images", RODE_IMAGES_UI_CASE="ssh"),
         ui("markdown", RODE_MARKDOWN_UI_CASE="ssh"),
         ui("pdf", RODE_PDF_UI_CASE="ssh"),
@@ -221,6 +277,20 @@ SUITES = {
         rust("agents"),
         rust("background_agents"),
         rust("sessions"),
+    ],
+    # Small independent cases plus one complete workbench journey. Repeated
+    # stress runs need not repeat every document format and external runtime.
+    "reliability": [
+        ([sys.executable, "scripts/test-readiness-ui.py"], {}, 90),
+        ui("workbench", RODE_WORKBENCH_UI_CASE="local"),
+        *[
+            ui(
+                "file-browser",
+                RODE_FILE_BROWSER_UI_CASE="local",
+                RODE_FILE_BROWSER_UI_SCENARIO=scenario,
+            )
+            for scenario in ("navigation", "previews")
+        ],
     ],
 }
 
@@ -286,10 +356,21 @@ def rust_failure_output(logfile, limit=12000):
     return bytes(result)
 
 
-def measure(label, command, env=None, timeout=300, group="commands"):
+def results_root():
+    return Path(os.environ.get("RODE_CI_RESULTS_DIR", ROOT / "target/ci-results"))
+
+
+def measure(label, command, env=None, timeout=300, group="commands", *, umask=None):
     """Retain failure logs and timings, and stop a timed-out command's children."""
-    directory = ROOT / "target/ci-results" / group
+    directory = results_root() / group
     directory.mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ if env is None else env)
+    skip_directory = directory / (label + "-skips")
+    # Never reuse skip reports from a previous invocation of this command.
+    if skip_directory.exists():
+        shutil.rmtree(skip_directory)
+    skip_directory.mkdir()
+    environment["RODE_TEST_SKIP_DIR"] = str(skip_directory.resolve())
     logfile = directory / f"{label}.log"
     invocation = shlex.join(command)
     title = invocation.replace("\r", r"\r").replace("\n", r"\n")
@@ -302,20 +383,26 @@ def measure(label, command, env=None, timeout=300, group="commands"):
             process = subprocess.Popen(
                 command,
                 cwd=ROOT,
-                env=env,
+                env=environment,
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                **({"umask": umask} if umask is not None else {}),
             )
         except OSError as error:
             output.write(f"Could not start {command[0]}: {error}\n")
             code = 127
         else:
+
+            def terminate(_signum, _frame):
+                raise KeyboardInterrupt
+
+            previous = signal.signal(signal.SIGTERM, terminate)
             try:
                 code = process.wait(timeout=timeout)
                 state = "passed" if code == 0 else "failed"
-            except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                state = "timeout" if time.monotonic() - start >= timeout else "interrupted"
+            except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+                state = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "interrupted"
                 try:
                     os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:
@@ -330,7 +417,9 @@ def measure(label, command, env=None, timeout=300, group="commands"):
                 except ProcessLookupError:
                     pass
                 process.wait()
-                code = 124
+                code = 124 if state == "timeout" else 130
+            finally:
+                signal.signal(signal.SIGTERM, previous)
     elapsed = round(time.monotonic() - start, 2)
     with logfile.open("rb") as output:
         start_output = output.read(12000)
@@ -347,13 +436,18 @@ def measure(label, command, env=None, timeout=300, group="commands"):
         # heading on Actions. Preserve the raw artifact, flatten console output.
         console = (start_output + rest).decode(errors="replace")
         print(console.replace("::group::", "").replace("::endgroup::", ""), flush=True)
+    skipped = [json.loads(path.read_text()) for path in sorted(skip_directory.glob("*.json"))]
+    if not code and skipped:
+        state = "passed-with-skips"
+        for omitted in skipped:
+            print(
+                f"Skipped coverage: {omitted['test']} [{omitted['capability']}]: {omitted['reason']}"
+            )
     print(
-        f"{label}: {state} in {elapsed}s; exit {code}; deadline {timeout}s "
-        f"(log: {logfile.relative_to(ROOT)})",
+        f"{label}: {state} in {elapsed}s; exit {code}; deadline {timeout}s (log: {logfile})",
         flush=True,
     )
     print("::endgroup::", flush=True)
-    environment = os.environ if env is None else env
     record = dict(
         name=label,
         status=state,
@@ -366,6 +460,8 @@ def measure(label, command, env=None, timeout=300, group="commands"):
         python=dict(executable=sys.executable, version=platform.python_version()),
         platform=platform.platform(),
         environment={key: environment[key] for key in CONTEXT_ENV if key in environment},
+        skipped=skipped,
+        umask=umask,
     )
     (directory / f"{label}.json").write_text(json.dumps(record, indent=2) + "\n")
     with (directory / "timings.jsonl").open("a") as output:
@@ -374,7 +470,7 @@ def measure(label, command, env=None, timeout=300, group="commands"):
         with open(summary, "a") as output:
             output.write(
                 f"- `{group}/{label}`: **{state}**, {elapsed}s; exit {code}; deadline {timeout}s. "
-                f"Log: `{logfile.relative_to(ROOT)}`; context: `{directory.relative_to(ROOT)}/{label}.json`.\n"
+                f"Log: `{logfile}`; context: `{directory}/{label}.json`.\n"
             )
             if code:
                 output.write(
@@ -382,9 +478,10 @@ def measure(label, command, env=None, timeout=300, group="commands"):
                 )
     if code:
         raise SystemExit(code)
+    return record
 
 
-def run_suite(name):
+def suite_environment(name):
     """Validate the selected bundle tools, isolate host-specific settings and run each command with timing/deadline logs."""
     env = dict(os.environ)
     env.setdefault("RODE_TEST_BINARY", str(ROOT / "target/ci/rode"))
@@ -396,10 +493,30 @@ def run_suite(name):
     # transport fixtures use RODE_TEST_SESSION_HELPER. Both need the same build.
     env.setdefault("RODE_SESSION_HELPER", env["RODE_TEST_SESSION_HELPER"])
     env.setdefault("RODE_TEST_RUFF", str(ROOT / "target/ci/tools/ruff"))
-    env.setdefault("RODE_SESSION_DIR", str(ROOT / "target/ci-results" / name / "sessions"))
-    env.setdefault("RODE_CI_SSH_LOG_DIR", str(ROOT / "target/ci-results" / name))
+    env.setdefault("RODE_SESSION_DIR", str(results_root() / name / "sessions"))
+    env.setdefault("RODE_CI_SSH_LOG_DIR", str(results_root() / name))
+    if name in FAST + EXTENDED + ["reliability"]:
+        # Enforcement belongs to a lane, not to the shell that launched it.
+        for key in (
+            "RODE_TEST_REQUIRE_SANDBOX",
+            "RODE_TEST_REQUIRE_LANDLOCK",
+            "RODE_TEST_REQUIRED_CAPABILITIES",
+        ):
+            env.pop(key, None)
+    if name in ("runtimes", "remote-runtimes"):
+        env["RODE_TEST_REQUIRED_CAPABILITIES"] = "jupyter,debugpy,lldb"
+    if name == "sandbox":
+        env["RODE_TEST_REQUIRE_LANDLOCK"] = "1"
+        env["RODE_TEST_REQUIRED_CAPABILITIES"] = "bwrap,landlock"
     required = ["RODE_TEST_BINARY", "RODE_TEST_SESSION_HELPER"]
-    if name in {"documents", "remote", "remote-documents", "runtimes", "remote-runtimes"}:
+    if name in {
+        "documents",
+        "remote",
+        "remote-documents",
+        "runtimes",
+        "remote-runtimes",
+        "reliability",
+    }:
         required.append("RODE_TEST_RUFF")
     if "RODE_SESSION_HELPER" in env:
         required.append("RODE_SESSION_HELPER")
@@ -412,30 +529,87 @@ def run_suite(name):
                 f"Missing executable {variable}={env[variable]}; build the CI bundle first"
             )
     # Do not accidentally add remote cases to a local-only shard.
-    if name in FAST + EXTENDED:
+    if name in FAST + EXTENDED + ["reliability"]:
         env.pop("RODE_TEST_SSH_CONFIG", None)
+    return env
+
+
+def run_suite(name):
+    """Run independent cases after failures, retaining a failed aggregate result."""
+    env = suite_environment(name)
+    directory = results_root() / name
+    directory.mkdir(parents=True, exist_ok=True)
+    if name in FAST + EXTENDED + ["reliability"]:
+        capabilities = inventory(env)
+        (directory / "capabilities.json").write_text(json.dumps(capabilities, indent=2) + "\n")
+        required = env.get("RODE_TEST_REQUIRED_CAPABILITIES", "").split(",")
+        missing = [
+            key for key in required if key in capabilities and not capabilities[key]["available"]
+        ]
+        if missing:
+            raise SystemExit("Missing required suite capabilities: " + ", ".join(missing))
+    failed = []
     for index, (command, overrides, timeout) in enumerate(SUITES[name], 1):
         # Name Python/shell fixtures in logs and job summaries, rather than
         # reporting every UI failure as another indistinguishable "python3".
         entry = command[1] if command[0] in (sys.executable, "bash") else command[0]
-        measure(f"{index:02d}-{Path(entry).stem}", command, env | overrides, timeout, name)
+        if command[1:2] == ["scripts/ui_display.py"]:
+            entry = command[command.index("--") + 2]
+        if command[1:3] == ["scripts/rust_tests.py", "--runner"]:
+            entry = command[3]
+        label = f"{index:02d}-{Path(entry).stem}"
+        try:
+            measure(label, command, env | overrides, timeout, name)
+        except SystemExit as error:
+            # Deadlines fail one case after cleanup; interruptions stop launches.
+            if error.code in (130, 143):
+                raise
+            failed.append(label)
+    (directory / "suite.json").write_text(
+        json.dumps(dict(suite=name, failed=failed), indent=2) + "\n"
+    )
+    if failed:
+        raise SystemExit(f"{name}: failed cases: {', '.join(failed)}")
+
+
+def publish_executable(source, destination):
+    """Atomically publish a safe executable without following a stale destination symlink."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
+        pending = Path(temporary.name)
+    try:
+        shutil.copyfile(source, pending)
+        pending.chmod(0o755)
+        pending.replace(destination)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def publish_tests(logfile, destination=None):
+    """Stage only executables reported by this build; replace stale symlinks atomically."""
+    destination = destination or ROOT / "target/ci/tests"
+    found = set()
+    for line in logfile.read_text().splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue  # Cargo diagnostics share the bounded command log.
+        target = record.get("target", {})
+        name = target.get("name")
+        if target.get("kind") != ["test"] or name not in TEST_BINARIES:
+            continue
+        if not (executable := record.get("executable")):
+            continue
+        publish_executable(executable, destination / name)
+        found.add(name)
+    if found != TEST_BINARIES:
+        raise ValueError(f"Build did not produce required tests: {sorted(TEST_BINARIES - found)}")
 
 
 def bundle():
     """Use Cargo's executable paths, rather than guessing hashes from a stale cache."""
-    destination = ROOT / "target/ci/tests"
-    destination.mkdir(parents=True, exist_ok=True)
-    found = set()
-    for line in (ROOT / "target/ci-test-binaries.json").read_text().splitlines():
-        entry = json.loads(line)
-        target = entry.get("target", {})
-        name = target.get("name")
-        if target.get("kind") == ["test"] and name in TEST_BINARIES and entry.get("executable"):
-            shutil.copy2(entry["executable"], destination / name)
-            found.add(name)
-    if found != TEST_BINARIES:
-        raise SystemExit(f"Missing test artifacts: {sorted(TEST_BINARIES - found)}")
-    shutil.copy2(
+    publish_tests(ROOT / "target/ci-test-binaries.json")
+    publish_executable(
         ROOT / "target/release/rode-sessiond-static", ROOT / "target/ci/rode-sessiond-static"
     )
     tools = ROOT / "target/ci/tools"

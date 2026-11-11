@@ -4,12 +4,29 @@ These helpers require no display, daemon, model or account configuration.
 """
 
 import contextlib
+import hashlib
 import os
 import re
 import shlex
+import stat
 import sys
 import tempfile
 from pathlib import Path
+
+
+def fixture_artifacts(root, path, results=None):
+    """Keep each fixture's artifact namespace when relocating output into a run."""
+    path = Path(path)
+    if not results:
+        return path
+    root = Path(root)
+    absolute = (root / path).resolve()
+    try:
+        relative = absolute.relative_to((root / "target").resolve())
+    except ValueError:
+        digest = hashlib.sha256(str(absolute).encode()).hexdigest()[:12]
+        relative = Path(f"{path.name}-{digest}")
+    return Path(results) / "ui" / relative
 
 
 def decode_ron_string(literal):
@@ -57,15 +74,33 @@ def decode_ron_string(literal):
 @contextlib.contextmanager
 def fixture_directory(*, prefix):
     """Own a private fixture directory using the same canonical paths as the host."""
-    with tempfile.TemporaryDirectory(prefix=prefix) as directory:
+    if os.environ.get("RODE_TEST_AWKWARD_PATHS") == "1":
+        prefix += "space ' -"
+    with tempfile.TemporaryDirectory(
+        prefix=prefix, dir=os.environ.get("RODE_TEST_TMPDIR")
+    ) as directory:
         yield Path(directory).resolve()
+
+
+def private_directory(path):
+    """Create fixture storage or reject unsafe existing storage; never chmod a caller's path."""
+    path = Path(path)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = path.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ValueError(f"Fixture directory must be an owned, non-symlink 0700 directory: {path}")
+    return path
 
 
 def fixture_environment(base, **overrides):
     """Isolate each native fixture while preserving explicit tools and SSH settings."""
     base = Path(base).resolve()
     for name in ("home", "config", "data", "cache", "run"):
-        (base / name).mkdir(mode=0o700, exist_ok=True)
+        private_directory(base / name)
     environment = dict(
         os.environ,
         HOME=str(base / "home"),
@@ -79,6 +114,10 @@ def fixture_environment(base, **overrides):
     )
     environment.pop("CODEX_HOME", None)
     environment.update(overrides)
+    # Overrides are allowed for fixtures with deliberate shared state, but
+    # must meet exactly the same contract as the default directories.
+    for name in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"):
+        private_directory(environment[name])
     return environment
 
 

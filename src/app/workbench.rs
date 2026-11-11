@@ -399,8 +399,10 @@ impl EditorApp {
                     .and_then(|w| w.remote.as_ref())
                     .map(|r| format!("SSH · {}", r.profile.endpoint()))
                     .unwrap_or_else(|| "LOCAL HOST".into());
-                ui.add(egui::Label::new(palette.tag(&host)).truncate())
+                let heading = ui
+                    .add(egui::Label::new(palette.tag(&host)).truncate())
                     .on_hover_text(&host);
+                ui_probe::button(ui, &format!("workbench-panel:{}", panel.title()), &heading);
                 if panel == Panel::Monitor && !self.monitor_ready() {
                     layout::empty(
                         ui,

@@ -24,6 +24,7 @@ run = "python3 scripts/ci.py time python-format -- ruff format --check ."
 [tasks."lint:ci"]
 run = [
   "python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py",
+  "python3 scripts/ci.py time validation-regressions -- python3 scripts/test-validation.py",
   "python3 scripts/ci.py time rust-fixture-regressions -- python3 scripts/test-rust-tests.py",
   "python3 scripts/ci.py time fixture-portability-regressions -- python3 scripts/test-fixture-support.py",
   "python3 scripts/ci.py time ssh-fixture-regressions -- python3 scripts/test-ssh-fixture.py",
@@ -66,3 +67,11 @@ run = "RODE_TEST_BINARY=\"$PWD/target/ci/rode\" RODE_TEST_SESSION_HELPER=\"$PWD/
 [tasks.check]
 description = "Run lint and ordinary Rust tests using the shared CI commands"
 run = ["'{{mise_bin}}' run lint", "'{{mise_bin}}' run test"]
+
+[tasks."test-full"]
+description = "Build and run lint, ordinary Rust, doctests and every CI suite; never installs dependencies"
+run = "python3 scripts/validate.py"
+
+[tasks."test-stress"]
+description = "Repeat native UI reliability checks with private homes, varied umasks and delayed frames"
+run = "python3 scripts/validate.py --phases build ui --suite reliability --repeat 3 --stress"

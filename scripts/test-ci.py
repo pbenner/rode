@@ -93,6 +93,7 @@ class SelectionTests(unittest.TestCase):
             "large-files",
             "notebooks",
             "layout",
+            "scale",
             "languages",
             "syntax-themes",
             "agent",
@@ -150,7 +151,11 @@ class RunnerTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.summary = self.root / "summary.md"
         root = patch.object(ci, "ROOT", self.root)
-        environment = patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(self.summary))
+        environment = patch.dict(
+            os.environ,
+            GITHUB_STEP_SUMMARY=str(self.summary),
+            RODE_CI_RESULTS_DIR=str(self.root / "target/ci-results"),
+        )
         root.start()
         environment.start()
         self.addCleanup(root.stop)
@@ -289,6 +294,39 @@ class RunnerTests(unittest.TestCase):
         while not process_exited(status):
             self.assertLess(time.monotonic(), deadline, "Timed-out descendant survived")
             time.sleep(0.01)
+
+    def test_termination_records_interruption_and_reaps_the_owned_command(self):
+        child_pid = self.root / "interrupted.pid"
+        code = (
+            "import os,time;from pathlib import Path;destination=Path("
+            + repr(str(child_pid))
+            + ");pending=destination.with_suffix('.pending');"
+            "pending.write_text(str(os.getpid()));pending.replace(destination);time.sleep(60)"
+        )
+        driver = (
+            "import sys;from pathlib import Path;sys.path.insert(0,"
+            + repr(str(Path(ci.__file__).parent))
+            + ");import ci;ci.ROOT=Path("
+            + repr(str(self.root))
+            + ");ci.measure('interrupted',"
+            + repr([sys.executable, "-c", code])
+            + ")"
+        )
+        process = subprocess.Popen([sys.executable, "-c", driver], stdout=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 5
+            while not child_pid.exists():
+                self.assertIsNone(process.poll())
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            process.terminate()
+            self.assertEqual(process.wait(timeout=8), 130)
+            self.assertEqual(self.record()["status"], "interrupted")
+            self.assertTrue(process_exited(Path(f"/proc/{child_pid.read_text()}/stat")))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
     def test_bundle_uses_cargo_paths_and_retains_executable_modes(self):
         build = self.root / "target/ci"

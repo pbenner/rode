@@ -146,8 +146,10 @@ impl EditorApp {
             ui.label("Acquiring host telemetry…");
             return;
         };
-        ui.add(egui::Label::new(RichText::new(&sample.hostname).strong()).truncate())
+        let hostname = ui
+            .add(egui::Label::new(RichText::new(&sample.hostname).strong()).truncate())
             .on_hover_text(&sample.hostname);
+        ui_probe::button(ui, "monitor-sample", &hostname);
         ui.horizontal_wrapped(|ui| {
             ui.label(format!(
                 "Uptime {}d {}h",

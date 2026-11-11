@@ -391,7 +391,10 @@ fn ruff_formats_and_checks_buffer_without_writing_disk_on_both_backends() {
         .map(Into::into)
         .or_else(|| sandbox::find_program("ruff"));
     let Some(tool): Option<std::path::PathBuf> = tool else {
-        eprintln!("Set RODE_TEST_RUFF to exercise a real Ruff binary.");
+        native_peer::capabilities::skip(
+            "ruff",
+            "Set RODE_TEST_RUFF to exercise a real Ruff binary.",
+        );
         return;
     };
     let directory = tempfile::tempdir().unwrap();
@@ -614,7 +617,10 @@ fn installed_web_and_c_formatters_use_stdin_and_project_configuration() {
             }
         }
     } else {
-        eprintln!("Set RODE_TEST_PRETTIER for real web formatter checks.");
+        native_peer::capabilities::skip(
+            "prettier",
+            "Set RODE_TEST_PRETTIER for real web formatter checks.",
+        );
     }
     if sandbox::find_program("clang-format").is_some() {
         fs::write(
@@ -663,7 +669,7 @@ fn project_local_formatter_obeys_sandbox_grants() {
     )
     .unwrap();
     if !plan.active {
-        eprintln!("bwrap unavailable: {}", plan.reason);
+        native_peer::capabilities::skip("bwrap", &plan.reason);
         return;
     }
     let request = files::Request::Tool {

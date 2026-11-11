@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Shared file/folder picker, keyboard/mouse navigation and host/sandbox scope."""
 
+import hashlib
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -14,13 +14,16 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    NativeUI,
     close_window,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
     text,
+    wait_for_project,
+    wait_for_window,
 )
 
 
@@ -31,22 +34,6 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.5)
-
-
-def choose(name, hex_mode=False):
-    command("Hex: Open file / inspect binary" if hex_mode else "Open file by path")
-    text(name)
-    # Use an actual browser result rather than submitting the typed path.
-    key("Up")
-    key("Return")
-    time.sleep(0.7)
 
 
 def image_pixels(window, name, color, minimum):
@@ -69,8 +56,8 @@ def image_pixels(window, name, color, minimum):
     wait_for(rendered, f"{name}: document did not render {minimum} pixels of {color}")
 
 
-def run(remote=False):
-    label = "ssh" if remote else "local"
+def run(remote=False, scenario="all"):
+    label = ("ssh" if remote else "local") + "-" + scenario
     with fixture_directory(prefix="rode-file-browser-") as base:
         root = base / "project"
         root.mkdir()
@@ -90,8 +77,11 @@ def run(remote=False):
         )
         hidden = root / ".hidden.txt"
         hidden.write_text("hidden\n")
-        environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+        environment = fixture_environment(
+            base,
+            XDG_CONFIG_HOME=str(base / "config"),
+            XDG_DATA_HOME=str(base / "data"),
+            RODE_UI_TEST_STATE=str(ARTIFACTS / (label + "-state.json")),
         )
         args = [str(BINARY), "--theme", "carbon", "--sandbox"]
         if remote:
@@ -122,76 +112,82 @@ def run(remote=False):
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    found = re.search(
-                        r'(0x[0-9a-f]+) "RODE',
-                        subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                    )
-                    if found:
-                        window = int(found[1], 16)
-                    return found
-
-                wait_for(mapped, "No native window")
-                wait_for(
-                    lambda: (
-                        "[Opening project]"
-                        not in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                    ),
-                    "Project did not become ready",
-                )
-                time.sleep(1)
+                window = wait_for_window(process, log.name)
+                wait_for_project(window, process, log.name, root)
                 focus_window(window)
-                command("Open project folder")
-                screenshot(window, label + "-project-folders.png")
-                key("Escape")
-                command("Open file by path")
-                screenshot(window, label + "-open-files.png")
-                # Single click selects a folder; Right enters it. Enter in the
-                # browser then opens its first file with editor focus restored.
-                click(500, 399)
-                key("Right")
-                time.sleep(0.5)
-                screenshot(window, label + "-subfolder.png")
-                key("Return")
-                time.sleep(0.5)
-                key("End", ("Control_L",))
-                text("browser-edit\n")
-                key("s", ("Control_L",))
-                wait_for(lambda: "browser-edit" in source.read_text(), "Browser did not open text")
-                # Save As preserves the entered basename when changing folders.
-                key("s", ("Control_L", "Shift_L"))
-                time.sleep(0.4)
-                key("a", ("Control_L",))
-                text("copy.txt")
-                click(438, 365)  # Up in the common location toolbar.
-                time.sleep(0.5)
-                click(600, 330)  # Destination name.
-                key("Return")
-                wait_for(lambda: (root / "copy.txt").exists(), "Save As lost its filename/folder")
-                assert (root / "copy.txt").read_text() == source.read_text()
-                choose("sample.bin", hex_mode=True)
-                screenshot(window, label + "-hex.png")
-                assert binary.read_bytes() == bytes(range(256))
-                choose("picture.png")
-                image_pixels(window, label + "-image.png", (224, 40, 64), 10000)
-                choose("pages.pdf")
-                image_pixels(window, label + "-pdf.png", (255, 255, 255), 10000)
-                # In an active sandbox /tmp is private: this parent contains
-                # the project mount, without the host's config/data siblings.
-                # Capture the host-aware listing; integration tests assert scope.
-                command("Open file by path")
-                click(600, 365)
-                key("a", ("Control_L",))
-                text(str(base))
-                key("Return")
-                time.sleep(0.5)
-                screenshot(window, label + "-sandbox-parent.png")
-                key("Escape")
+                ui = NativeUI(
+                    window, process, log.name, Path(environment["RODE_UI_TEST_STATE"]), root
+                )
+
+                def directory(path):
+                    ui.value("file-dialog-directory", path)
+
+                def choose(name, hex_mode=False):
+                    ui.command(
+                        "Hex: Open file / inspect binary" if hex_mode else "Open file by path"
+                    )
+                    ui.fill_path(name)
+                    # Exercise the browser result rather than exact-path submission.
+                    ui.value("file-picker-row", root / name)
+                    key("Up")
+                    key("Return")
+                    ui.absent("file-dialog-path")
+                    ui.value("active-document", root / name)
+
+                if scenario in ("all", "navigation"):
+                    ui.command("Open project folder")
+                    ui.control("project-dialog-ready")
+                    screenshot(window, label + "-project-folders.png")
+                    ui.click("project-dialog-cancel")
+                    ui.absent("project-dialog-path")
+                    ui.command("Open file by path")
+                    directory(root)
+                    screenshot(window, label + "-open-files.png")
+                    # Single click selects; Right enters. No guessed row coordinates.
+                    ui.click("file-picker-row:" + hashlib.sha256(str(folder).encode()).hexdigest())
+                    key("Right")
+                    directory(folder)
+                    ui.value("file-picker-row", source)
+                    screenshot(window, label + "-subfolder.png")
+                    key("Return")
+                    ui.absent("file-dialog-path")
+                    ui.value("active-document", source)
+                    ui.control("source-editor", focused=True)
+                    key("End", ("Control_L",))
+                    text("browser-edit\n")
+                    ui.source("original\nbrowser-edit\n")
+                    key("s", ("Control_L",))
+                    ui.control("source-editor-saved")
+                    assert "browser-edit" in source.read_text()
+                    key("s", ("Control_L", "Shift_L"))
+                    ui.fill_path("copy.txt")
+                    ui.click("file-dialog-up")
+                    directory(root)
+                    ui.value("file-dialog-path-value", "copy.txt")
+                    ui.click("file-dialog-submit")
+                    ui.absent("file-dialog-path")
+                    ui.wait(
+                        lambda: (root / "copy.txt").read_text() == source.read_text(),
+                        "Save As lost its filename/folder",
+                    )
+                    ui.command("Open file by path")
+                    ui.click("file-dialog-location")
+                    ui.fill("file-dialog-location", str(base))
+                    key("Return")
+                    directory(base)
+                    screenshot(window, label + "-sandbox-parent.png")
+                    key("Escape")
+                    ui.absent("file-dialog-path")
+                if scenario in ("all", "previews"):
+                    choose("sample.bin", hex_mode=True)
+                    screenshot(window, label + "-hex.png")
+                    assert binary.read_bytes() == bytes(range(256))
+                    choose("picture.png")
+                    image_pixels(window, label + "-image.png", (224, 40, 64), 10000)
+                    choose("pages.pdf")
+                    image_pixels(window, label + "-pdf.png", (255, 255, 255), 10000)
                 close_window(window, process)
-                print(label + ": folder/file rows, mouse/keyboard, Save As, hex, PNG, PDF passed.")
+                print(label + ": file-browser assertions passed.")
             finally:
                 if process.poll() is None:
                     if window:
@@ -201,6 +197,15 @@ def run(remote=False):
 
 
 if __name__ == "__main__":
-    run()
-    if os.environ.get("RODE_TEST_SSH_CONFIG"):
-        run(remote=True)
+    scenario = os.environ.get("RODE_FILE_BROWSER_UI_SCENARIO", "all")
+    case = os.environ.get("RODE_FILE_BROWSER_UI_CASE", "all")
+    assert case in ("all", "local", "ssh"), f"Unknown file-browser host case: {case}"
+    assert scenario in ("all", "navigation", "previews"), (
+        f"Unknown file-browser scenario: {scenario}"
+    )
+    if case == "ssh":
+        assert os.environ.get("RODE_TEST_SSH_CONFIG"), "SSH case requires scripts/test-ssh.sh"
+    if case in ("all", "local"):
+        run(scenario=scenario)
+    if case in ("all", "ssh") and os.environ.get("RODE_TEST_SSH_CONFIG"):
+        run(remote=True, scenario=scenario)

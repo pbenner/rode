@@ -16,6 +16,7 @@ from ui_harness import (
     BINARY,
     NativeUI,
     close_window,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -35,8 +36,8 @@ def run():
         first.write_text("initial\n")
         (project / "second.txt").write_text("other\n")
         state = ARTIFACTS / "state.json"
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             RODE_UI_TEST_STATE=str(state),

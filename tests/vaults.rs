@@ -1,6 +1,9 @@
 //! Encrypted-mount identity, lease/locking safeguards and desktop/headless lifecycle parity, using
 //! real FUSE only when available.
 
+#[path = "support/capabilities.rs"]
+mod capabilities;
+
 use rode::{files, vault};
 use std::{
     fs,
@@ -154,7 +157,10 @@ fn initialization_refuses_existing_plaintext_and_invalid_passwords() {
 #[test]
 fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
     if Command::new("gocryptfs").arg("-version").output().is_err() {
-        eprintln!("Installed gocryptfs is needed for the real encryption test");
+        capabilities::skip(
+            "gocryptfs",
+            "Installed gocryptfs is needed for the real encryption test",
+        );
         return;
     }
     // A device node can exist while the test host forbids opening it. Keep
@@ -181,8 +187,9 @@ fn installed_gocryptfs_initializes_and_mounts_when_fuse_is_available() {
             };
             assert!(message.to_lowercase().contains("fuse"), "{message}");
             assert!(!message.contains(&open.password));
-            eprintln!(
-                "Real gocryptfs initialization passed; mounting cannot open /dev/fuse: {error}"
+            capabilities::skip(
+                "fuse",
+                &format!("Initialization passed; mounting cannot open /dev/fuse: {error}"),
             );
         } else {
             let vault::Reply::Opened { info } = reply else {

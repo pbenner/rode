@@ -65,11 +65,6 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
         f"if cat {shlex.quote(str(secret))} >/dev/null 2>&1; then v=host; else v=blocked; fi\n"
         'printf "%s:%s" "$v" "$$" > "$1.tmp" && mv "$1.tmp" "$1"\n'
     )
-    config = base / "data/rode"
-    config.mkdir(parents=True)
-    (config / "app.ron").write_text(
-        json.dumps({"sandbox_defaults": json.dumps({"enabled": True, "backend": backend})})
-    )
     state_path = base / "ui-state.json"
     environment = fixture_environment(
         base,
@@ -80,6 +75,11 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
         RODE_UI_TEST_STATE=str(state_path),
         GIT_CONFIG_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL="/dev/null",
+    )
+    config = Path(environment["XDG_DATA_HOME"]) / "rode"
+    config.mkdir()
+    (config / "app.ron").write_text(
+        json.dumps({"sandbox_defaults": json.dumps({"enabled": True, "backend": backend})})
     )
 
     def git(*args, check=True):

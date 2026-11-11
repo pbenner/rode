@@ -43,4 +43,9 @@ Debian/Ubuntu packages are built for release version tags or manually through **
 
 [Documentation](https://pbenner.github.io/rode/) · [Setup](docs/getting-started.md) · [Agent setup](docs/agents.md) · [Development and hooks](docs/development.md) · [Source architecture](docs/architecture.md)
 
+Development validation: `python3 scripts/validate.py` builds and runs lint, Rust
+and CI integration/UI suites on private headless displays. Use `--preflight` to
+check prerequisites; dependencies are never installed automatically. See the
+[development guide](docs/development.md) for coverage reports and repeat/stress runs.
+
 MIT licensed; bundled dependencies retain their [own licenses](docs/licensing.md). In-memory text/hex editing without a fixed file-size ceiling, and [image previews](docs/images.md) with bounded decoded pixels; no LSP.

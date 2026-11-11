@@ -162,7 +162,7 @@ jobs:
           install_args: python uv rust
       - run: tar -xzf target/ci-bundle.tar.gz
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh '${{ matrix.suite }}'
-      - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/ci.py run '${{ matrix.suite }}'
+      - run: python3 scripts/ui_display.py -- python3 scripts/ci.py run '${{ matrix.suite }}'
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -205,7 +205,7 @@ jobs:
           if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - run: xvfb-run -a -s "$RODE_XVFB_SCREEN" python3 scripts/ci.py run '${{ matrix.suite }}'
+      - run: python3 scripts/ui_display.py -- python3 scripts/ci.py run '${{ matrix.suite }}'
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -216,6 +216,33 @@ jobs:
             target/ui-smoke/
             !target/ci-results/**/sessions/**
             !target/**/session-runtime/**
+          retention-days: 7
+
+  reliability:
+    needs: build
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-binaries
+          path: target
+      - uses: jdx/mise-action@v5
+        with:
+          version: '2026.10.25'
+          install_args: python uv rust
+      - run: tar -xzf target/ci-bundle.tar.gz
+      - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh documents
+      - run: python3 scripts/validate.py --phases ui --suite reliability --repeat 3 --stress
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-reliability
+          path: target/ci-results/
           retention-days: 7
 
   # Preserve the original required check name while extended checks report

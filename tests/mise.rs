@@ -360,6 +360,10 @@ fn normal_mode_plan_wraps_project_tools_but_leaves_file_io_and_setup_available()
 #[test]
 fn real_mise_requires_trust_and_runs_a_project_task_without_installing_tools_when_requested() {
     let Ok(binary) = std::env::var("RODE_TEST_MISE") else {
+        native_peer::capabilities::skip(
+            "mise",
+            "Set RODE_TEST_MISE for real installed mise coverage",
+        );
         return;
     };
     let root = tempfile::tempdir().unwrap();

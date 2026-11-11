@@ -470,12 +470,70 @@ Check ordinary-suite CI parity with `env -u RODE_SESSION_HELPER -u RODE_TEST_SES
 
 The Rust runner creates its private homes below `/tmp`, independently of the checkout path, to leave room for nested Unix-domain sockets. Set `RODE_TEST_TMPDIR` to another short, executable temporary directory when needed; a deep checkout must not lengthen socket names. `scripts/test-rust-tests.py` checks this with a real nested socket, and `scripts/test-ssh-fixture.py` checks host-helper isolation without changing tool precedence.
 
+For a complete development validation, use:
+
+```sh
+python3 scripts/validate.py --preflight
+python3 scripts/validate.py
+# Equivalent mise task: mise run test-full
+```
+
+The full command runs formatting/lint and harness regressions, builds the current
+checkout, publishes integration binaries from Cargo's reported paths, runs the
+ordinary Rust suite and doctests, then runs every fast and extended CI suite.
+Each UI suite gets its own display through `scripts/ui_display.py`. It installs
+nothing; provide the system prerequisites from `scripts/ci-deps.sh` and the
+explicit installed-tool overrides documented below. `--preflight` reports
+availability, not proof of exercised coverage. `--phases ui --suite documents`
+runs a focused prepared-build check; omitting `build` deliberately uses existing
+binaries. Ordinary full runs always build before using those binaries.
+
+Results live under a fresh `target/ci-results/validation-*/` directory. Its
+`summary.json` distinguishes command success from capability availability,
+lists optional omissions and retains the selected phases/suites. Logs, native
+screenshots and state snapshots stay within the corresponding invocation.
+Nested fixture paths stay distinct, including tests with the same `local` or
+`ssh` directory name. Interrupted commands remain recorded in the summary.
+Independent cases continue after a failure, but the command still exits nonzero;
+interruptions stop further launches. A failed build prevents UI checks against
+stale binaries. Release packaging, opt-in upstream downloads and manual
+benchmarks remain separate workflows, not part of this development command.
+
+Use `python3 scripts/validate.py --phases build ui --suite reliability --repeat 3 --stress`
+(`mise run test-stress`) to exercise delayed GUI input, paths containing spaces
+and quotes, and child umasks `0002`, `0077`, `0022`. Each repetition has distinct
+logs and fresh fixtures; any failed repetition fails the run. This is stress
+coverage, not a retry policy. Scheduled CI and manually requested full CI run
+the same reliability suite. It retains one complete workbench journey alongside
+independent picker cases; the document lanes run separate tools, Git and settings
+cases so an early failure cannot suppress the others.
+The tools suite also runs the 1x/2x DPI regression on its own larger private
+display; a standard-size display cannot contain the doubled window.
+
+Runtime CI requires real Jupyter, debugpy and LLDB. Sandbox CI requires actual
+enforcement. Requirement flags are assigned by their owning suite, not inherited
+from another lane; the deliberate unavailable-sandbox fixture must remain able
+to test normal-mode fallback. Optional runtime tests use
+`tests/support/capabilities.rs`, and Python fixtures use `test_capabilities.skip`:
+missing required capabilities fail, while optional omissions emit individual JSON
+records even when libtest captures successful output. The command record then
+says `passed-with-skips`. Libtest's raw pass count still includes early-returning
+tests; use the coverage reports as well as its totals. Declared `#[ignore]` tests
+remain distinct, including subprocess fixtures and separately invoked SSH tests.
+
 Fixtures that replace `HOME` must create that directory with explicit `0700`
 permissions. The desktop and helper reject group-writable homes, so relying on
 the caller's umask makes tests fail under `0002`. Keep that rejection intact;
 do not change the process-wide umask while Rust tests run concurrently. The
 tunnel fixture must also decode quoted SSH configuration tokens before using
 the relay username; surrounding quotes are syntax, not part of the account.
+Use `fixture_support.fixture_environment` for native Python fixtures. It creates
+private homes/config/cache/runtime directories, clears ambient Codex home state
+and checks explicit directory overrides. It rejects unsafe existing directories
+and symlinks rather than changing permissions on someone else's files. The Rust
+runner uses the same directory primitive, and prebuilt integration tests go
+through that runner too. Preserve explicit tool overrides and private remote
+fixtures. A test must not depend on tools or preferences in the developer's home.
 
 Notebook IPC sockets remain inside the host's private temporary directory.
 On Linux the adapter addresses them through a held `/proc/<pid>/fd/<fd>`

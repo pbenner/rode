@@ -18,6 +18,7 @@ from ui_harness import (
     close_window,
     display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -85,15 +86,14 @@ def run(remote=False, isolated=False):
             checker=str(fake),
             timeout_seconds=120,
         )
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             HOME=str(base / "home"),
             TEXMFVAR=str(base / "texmf-var"),
             TEXMFCONFIG=str(base / "texmf-config"),
         )
-        Path(environment["HOME"]).mkdir(mode=0o700)
         host = ["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""] if remote else None
         context_key = json.dumps([host, str(project)], separators=(",", ":"))
         preferences = {

@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from fixture_support import private_directory
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT = ["--locked", "--profile", "ci", "--workspace", "--all-targets", "--no-fail-fast"]
 
@@ -44,7 +46,7 @@ def isolated(command):
         ):
             environment.setdefault(name, str(fallback))
         for name in (".cache", "config", "data", "run", "t"):
-            (fixture_home / name).mkdir(mode=0o700)
+            private_directory(fixture_home / name)
         environment.update(
             HOME=str(fixture_home),
             XDG_CACHE_HOME=str(fixture_home / ".cache"),

@@ -1,5 +1,7 @@
 //! Exercise the shared host services through a separate headless Rust process.
 #![allow(dead_code)]
+#[path = "capabilities.rs"]
+pub mod capabilities;
 use std::{path::Path, process::Command};
 pub fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_rode-sessiond")

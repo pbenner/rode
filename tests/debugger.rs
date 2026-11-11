@@ -238,11 +238,9 @@ fn protocol_terminal_breakpoints_steps_and_scoped_cleanup() {
 }
 #[test]
 fn real_debugpy_break_step_evaluate_and_interactive_input() {
-    let Some(python) = std::env::var("RODE_TEST_DEBUGPY")
-        .ok()
-        .or_else(|| std::env::var("RODE_TEST_JUPYTER").ok())
+    let Some(python) =
+        native_peer::capabilities::tool("debugpy", &["RODE_TEST_DEBUGPY", "RODE_TEST_JUPYTER"])
     else {
-        eprintln!("Set RODE_TEST_DEBUGPY for real debugpy checks");
         return;
     };
     for peer in [false, true] {
@@ -348,8 +346,7 @@ fn validation_and_placeholder_expansion() {
 
 #[test]
 fn real_lldb_native_breakpoints_and_steps() {
-    let Ok(adapter) = std::env::var("RODE_TEST_LLDB") else {
-        eprintln!("Set RODE_TEST_LLDB for real native checks");
+    let Some(adapter) = native_peer::capabilities::tool("lldb", &["RODE_TEST_LLDB"]) else {
         return;
     };
     for peer in [false, true] {
@@ -449,9 +446,8 @@ fn real_lldb_native_breakpoints_and_steps() {
 
 #[test]
 fn real_debugpy_attach_detaches_without_ending_the_external_process() {
-    let Some(python) = std::env::var("RODE_TEST_DEBUGPY")
-        .ok()
-        .or_else(|| std::env::var("RODE_TEST_JUPYTER").ok())
+    let Some(python) =
+        native_peer::capabilities::tool("debugpy", &["RODE_TEST_DEBUGPY", "RODE_TEST_JUPYTER"])
     else {
         return;
     };

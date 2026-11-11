@@ -8,11 +8,13 @@ Requires Linux, libX11, libXtst, `xwininfo` (x11-utils), and ImageMagick's `impo
 Uses only Python's standard library. Keyboard events and screenshots target this test's window.
 """
 
+import contextlib
 import ctypes as c
 import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -21,6 +23,7 @@ from pathlib import Path
 from fixture_support import (
     decode_ron_string as decode_ron_string,
 )
+from fixture_support import fixture_artifacts
 from fixture_support import (
     fixture_directory as fixture_directory,
 )
@@ -33,7 +36,11 @@ from fixture_support import (
 
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("RODE_TEST_BINARY", ROOT / "target/debug/rode"))
-ARTIFACTS = Path(os.environ.get("RODE_UI_ARTIFACTS", ROOT / "target/ui-smoke"))
+ARTIFACTS = fixture_artifacts(
+    ROOT,
+    os.environ.get("RODE_UI_ARTIFACTS", ROOT / "target/ui-smoke"),
+    os.environ.get("RODE_CI_RESULTS_DIR"),
+)
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("RODE_SESSION_DIR", str(ARTIFACTS / "session-runtime"))
 
@@ -342,6 +349,9 @@ class NativeUI:
         digest = hashlib.sha256(value.encode()).hexdigest()
         self.control("notice-value:" + digest)
 
+    def value(self, name, value, **guards):
+        return self.control(name + ":" + hashlib.sha256(str(value).encode()).hexdigest(), **guards)
+
     def source(self, value, *, changed_after=None):
         """Wait for complete small-buffer text before the next modal can consume its keys."""
         if len(value.encode()) > 64 * 1024:
@@ -364,7 +374,8 @@ class NativeUI:
         before = self.layout()["pass"]
         key("a", ("Control_L",))
         self.control(name, focused=True, after_pass=before)
-        text(str(value))
+        with delayed_input(self.process):
+            text(str(value))
         digest = hashlib.sha256(str(value).encode()).hexdigest()
         self.control(name + "-value:" + digest, focused=True)
 
@@ -462,6 +473,45 @@ class NativeUI:
         self.control(name, focused=True)
         key(key_name, modifiers)
 
+    def terminal(self):
+        """Select the terminal surface and acknowledge its attached, focused input."""
+        self.click("workspace-tab:Terminal")
+        state = self.layout(
+            lambda state: any(
+                button["name"].startswith("terminal-input:") and button["enabled"]
+                for button in state["buttons"]
+            ),
+            "Project terminal did not become ready",
+        )
+        name = next(
+            button["name"]
+            for button in state["buttons"]
+            if button["name"].startswith("terminal-input:") and button["enabled"]
+        )
+        self.click(name)
+        self.control(name, focused=True)
+        return name
+
+
+@contextlib.contextmanager
+def delayed_input(process):
+    """Queue input while the owned GUI is paused; resume before waiting for its acknowledgement."""
+    if os.environ.get("RODE_TEST_SLOW_UI") != "1":
+        yield
+        return
+    descriptor = os.pidfd_open(process.pid)
+    try:
+        signal.pidfd_send_signal(descriptor, signal.SIGSTOP)
+        try:
+            yield
+        finally:
+            try:
+                signal.pidfd_send_signal(descriptor, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+    finally:
+        os.close(descriptor)
+
 
 def palette_command(window, process, log_path, state_path, value, timeout=12):
     """Submit once, after focus and the complete query reach the native palette.
@@ -470,11 +520,13 @@ def palette_command(window, process, log_path, state_path, value, timeout=12):
     processed. A matching prefix or a new paint alone cannot acknowledge typing.
     """
     focus_window(window)
-    key("p", ("Control_L", "Shift_L"))
+    with delayed_input(process):
+        key("p", ("Control_L", "Shift_L"))
     wait_for_button(
         window, process, log_path, state_path, "command-palette-input", timeout, focused=True
     )
-    text(value)
+    with delayed_input(process):
+        text(value)
     click_button(window, process, log_path, state_path, "command-match:" + value, timeout)
     wait_for_ui_state(
         process,

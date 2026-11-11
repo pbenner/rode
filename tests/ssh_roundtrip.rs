@@ -16,6 +16,9 @@ mod tunnels;
 #[path = "ssh_roundtrip/x11.rs"]
 mod x11;
 
+#[path = "support/capabilities.rs"]
+mod capabilities;
+
 use rode::{
     files::Request,
     ssh::{Profile, Remote},
@@ -767,7 +770,10 @@ fn slurm_notebooks_execute_and_stop_over_ssh_and_proxyjump() {
     };
     use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
-        eprintln!("Set RODE_TEST_JUPYTER to exercise Slurm notebooks over SSH");
+        capabilities::skip(
+            "jupyter",
+            "Set RODE_TEST_JUPYTER to exercise Slurm notebooks over SSH",
+        );
         return;
     };
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
@@ -886,7 +892,10 @@ fn persistent_slurm_runtimes_reattach_after_complete_ssh_disconnect() {
     use rode_runtime_core::service::Info;
     use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, sync::Arc};
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
-        eprintln!("Set RODE_TEST_JUPYTER for persistent Slurm runtime coverage");
+        capabilities::skip(
+            "jupyter",
+            "Set RODE_TEST_JUPYTER for persistent Slurm runtime coverage",
+        );
         return;
     };
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
@@ -2865,6 +2874,10 @@ fn interpreter_grants(python: &str) -> Vec<String> {
 fn notebook_roundtrip(remote: &Remote, root: &str, outside: &str) {
     use rode::notebook::kernel::{Event, Kernel, Run};
     let Ok(python) = std::env::var("RODE_TEST_JUPYTER") else {
+        capabilities::skip(
+            "jupyter",
+            "Set RODE_TEST_JUPYTER for remote kernel coverage",
+        );
         return;
     };
     let plan = remote
@@ -3147,6 +3160,10 @@ fn native_debugger_roundtrip(remote: &Remote, root: &str) {
         sync::{Arc, atomic::Ordering},
     };
     let Ok(adapter) = std::env::var("RODE_TEST_LLDB") else {
+        capabilities::skip(
+            "lldb",
+            "Set RODE_TEST_LLDB for remote native debugger coverage",
+        );
         return;
     };
     let source = std::path::Path::new(root).join("native-debug.c");
