@@ -48,6 +48,7 @@ fn fixture(root: &Path) -> Settings {
     }
 }
 fn build(invocation: &Invocation, peer: bool, cancel: &AtomicBool) -> anyhow::Result<latex::Reply> {
+    use std::os::unix::fs::DirBuilderExt;
     let mut command = if peer {
         Command::new(native_peer::binary())
     } else {
@@ -63,7 +64,11 @@ fn build(invocation: &Invocation, peer: bool, cancel: &AtomicBool) -> anyhow::Re
         }
     }
     let home = Path::new(&invocation.root).join("test-home");
-    fs::create_dir_all(&home).unwrap();
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&home)
+        .unwrap();
     command
         .env("HOME", &home)
         .env("TEXMFVAR", home.join("texmf-var"))

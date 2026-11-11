@@ -126,7 +126,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
     shell = root / "fixture-shell"
     shell.write_text(
         "#!/bin/sh\n"
-        "printf '\\033[?25l\\033[30mANSI_DARK\\033[0m\\n"
+        "printf '\\033[2J\\033[H\\033[?25l\\033[30mANSI_DARK\\033[0m\\n"
         "\\033[38;5;17mINDEX_DARK\\033[0m\\n"
         "\\033[38;2;9;10;11mRGB_DARK\\033[0m\\n'\n"
         "exec /bin/sh -i\n"

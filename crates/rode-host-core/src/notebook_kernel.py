@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 
 LIMIT = 256 * 1024
 OUTPUT_LIMIT = 1024 * 1024
@@ -161,6 +162,24 @@ def execute(manager, client, message):
     emit("done", id=request_id, status=status, count=count)
 
 
+@contextmanager
+def ipc_directory(runtime):
+    """Address private Unix sockets through a pinned directory without sun_path overflow.
+
+    Both the adapter and its kernel see this adapter PID in their shared mount/PID
+    namespace. The descriptor stays open until kernel/channel cleanup completes;
+    the sockets themselves remain in the owner-only runtime directory.
+    """
+    if not sys.platform.startswith("linux"):
+        yield runtime
+        return
+    descriptor = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        yield f"/proc/{os.getpid()}/fd/{descriptor}"
+    finally:
+        os.close(descriptor)
+
+
 def run():
     """Start one explicitly installed kernelspec with private IPC runtime data and scoped shutdown."""
     threading.Thread(target=read_commands, daemon=True).start()
@@ -178,14 +197,17 @@ def run():
         ) from error
     manager, client = None, None
     # IPC sockets stay on the project host and work without shared networking.
-    with tempfile.TemporaryDirectory(prefix="rode-notebook-") as runtime:
+    with (
+        tempfile.TemporaryDirectory(prefix="rode-notebook-") as runtime,
+        ipc_directory(runtime) as sockets,
+    ):
         try:
             context = zmq.Context()
             context.setsockopt(zmq.MAXMSGSIZE, 2 * 1024 * 1024)
             manager = KernelManager(
                 kernel_name=spec.get("kernel", "python3"),
                 transport="ipc",
-                ip=os.path.join(runtime, "channel"),
+                ip=os.path.join(sockets, "channel"),
                 connection_file=os.path.join(runtime, "kernel.json"),
                 context=context,
             )

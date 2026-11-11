@@ -261,7 +261,7 @@ def main():
             if args.gui:
                 assert os.environ.get("DISPLAY"), "--gui needs an X display; use xvfb-run"
                 home = root / "home"
-                home.mkdir()
+                home.mkdir(mode=0o700)
                 gui = subprocess.run(
                     [str(binary)],
                     cwd=project,

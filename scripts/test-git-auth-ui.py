@@ -40,7 +40,7 @@ with fixture_directory(prefix="rode-git-auth-ui-") as base:
     root = base / "project"
     root.mkdir()
     home = base / "home"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     real_git = shutil.which("git")
     username, password = "rode-private-user-6842", "rode-private-token-9753"
     wrong_password = "rode-private-rejected-3865"

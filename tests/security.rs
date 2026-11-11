@@ -268,13 +268,14 @@ fn ssh_alias_discovery_is_bounded_and_rejects_fifos_without_hanging() {
 
 #[test]
 fn symlinked_home_cannot_be_exposed_by_project_or_additional_grants() {
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{PermissionsExt, symlink};
     let root = tempfile::tempdir().unwrap();
     let private = root.path().join("private");
     let home = private.join("actual-home");
     let alias = root.path().join("login-home");
     let project = root.path().join("project");
     fs::create_dir_all(home.join("allowed-project")).unwrap();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
     fs::create_dir(&project).unwrap();
     symlink(&home, &alias).unwrap();
     let mut cases = vec![];

@@ -93,7 +93,7 @@ def run(remote=False, isolated=False):
             TEXMFVAR=str(base / "texmf-var"),
             TEXMFCONFIG=str(base / "texmf-config"),
         )
-        Path(environment["HOME"]).mkdir()
+        Path(environment["HOME"]).mkdir(mode=0o700)
         host = ["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""] if remote else None
         context_key = json.dumps([host, str(project)], separators=(",", ":"))
         preferences = {

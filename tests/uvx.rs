@@ -12,7 +12,10 @@ use std::{
 
 #[test]
 fn default_ruff_uses_uvx_with_a_writable_registry_on_both_backends() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let bin = directory.path().join("bin");
     fs::create_dir(&bin).unwrap();
     let uvx = bin.join("uvx");

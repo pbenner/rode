@@ -557,7 +557,11 @@ struct Gateway {
 }
 impl Gateway {
     fn start(helper: &Path) -> Self {
-        let home = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let mut child = Command::new(helper)
             .arg("host-rpc")
             .env("HOME", home.path())

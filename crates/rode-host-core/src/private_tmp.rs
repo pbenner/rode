@@ -212,13 +212,23 @@ fn exports(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+
+    fn private_home() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
 
     #[test]
     fn remote_shell_defaults_match_the_host_resolver_with_literal_home_paths() {
         let fixture = tempfile::tempdir().unwrap();
         let home = fixture.path().join("home with ' quotes and $(literal)");
-        std::fs::create_dir(&home).unwrap();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&home)
+            .unwrap();
         let expected = root(&home).unwrap();
         let script = format!(
             "{}printf '%s\\n' \"$TMPDIR\" \"$TMP\" \"$TEMP\"; umask",
@@ -255,7 +265,7 @@ mod tests {
 
     #[test]
     fn directories_are_private_stable_and_separate_for_each_project() {
-        let home = tempfile::tempdir().unwrap();
+        let home = private_home();
         let base = root(home.path()).unwrap();
         assert!(base.starts_with(home.path()));
         assert_eq!(base.metadata().unwrap().mode() & 0o777, 0o700);
@@ -272,7 +282,7 @@ mod tests {
 
     #[test]
     fn unsafe_existing_directories_and_symlinks_are_rejected_without_repair() {
-        let home = tempfile::tempdir().unwrap();
+        let home = private_home();
         let base = root(home.path()).unwrap();
         std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o750)).unwrap();
         assert!(root(home.path()).is_err());
@@ -291,7 +301,7 @@ mod tests {
 
     #[test]
     fn concurrent_creation_reuses_only_verified_directories() {
-        let home = tempfile::tempdir().unwrap();
+        let home = private_home();
         std::thread::scope(|scope| {
             let workers = (0..8)
                 .map(|_| scope.spawn(|| project(home.path(), Path::new("/project")).unwrap().0))

@@ -183,11 +183,12 @@ fn default_policy_keeps_resolver_and_command_lookup_readable() {
 
 #[test]
 fn login_shell_profiles_load_aliases_without_exposing_other_home_files() {
+    use std::os::unix::fs::DirBuilderExt;
     for profile in [".bash_profile", ".bash_login"] {
         let base = tempfile::tempdir().unwrap();
         let home = base.path().join("home");
         let project = base.path().join("project");
-        fs::create_dir(&home).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&home).unwrap();
         fs::create_dir(&project).unwrap();
         fs::write(home.join(profile), ". \"$HOME/.bashrc\"\n").unwrap();
         fs::write(home.join(".bashrc"), ". \"$HOME/.bash_aliases\"\n").unwrap();

@@ -16,6 +16,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click,
     click_button,
     close_window,
@@ -26,6 +27,7 @@ from ui_harness import (
     key,
     screenshot,
     text,
+    wait_for_project,
     wait_for_ui_state,
     x11,
 )
@@ -114,6 +116,24 @@ def run(remote=False):
                 def control(name):
                     click_button(window, process, log_path, state_path, name)
 
+                def focus_terminal():
+                    ui = NativeUI(window, process, log_path, state_path, root)
+                    ui.click("workspace-tab:Terminal")
+                    state = ui.layout(
+                        lambda state: any(
+                            button["name"].startswith("terminal-input:") and button["enabled"]
+                            for button in state["buttons"]
+                        ),
+                        "Project terminal did not become ready",
+                    )
+                    name = next(
+                        button["name"]
+                        for button in state["buttons"]
+                        if button["name"].startswith("terminal-input:") and button["enabled"]
+                    )
+                    ui.click(name)
+                    ui.control(name, focused=True)
+
                 def mapped():
                     nonlocal window
                     assert process.poll() is None, "RODE exited unexpectedly"
@@ -166,8 +186,7 @@ def run(remote=False):
                 screenshot(window, label + "-python.png")
                 # A command uses the actual selected virtual environment in the terminal.
                 command("Code: Run current file / project")
-                time.sleep(0.4)
-                click(500, 750)
+                focus_terminal()
                 text('python -c \'import sys;open("venv.ok","w").write(sys.prefix)\'\n')
                 wait_for(
                     lambda: (root / "venv.ok").exists(), "Project terminal did not execute Python"
@@ -269,11 +288,11 @@ def run(remote=False):
                 process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
                 window = None
                 wait_for(mapped, "No native window on restart")
-                time.sleep(1.0)
+                wait_for_project(window, process, log_path, root)
                 focus_window(window)
                 state = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
                 if "[Sandbox]" in state:
-                    click(500, 750)
+                    focus_terminal()
                     text(
                         "echo blocked > policy-blocked.ok; echo done > '"
                         + str(output / "done.ok")

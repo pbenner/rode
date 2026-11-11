@@ -641,10 +641,18 @@ impl Plan {
 #[cfg(test)]
 mod private_tmp_tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn private_home() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap()
+    }
 
     #[test]
     fn bubblewrap_binds_home_temporary_storage_after_project_grants() {
-        let home = tempfile::tempdir().unwrap();
+        let home = private_home();
         let project = tempfile::tempdir().unwrap();
         let args = arguments(
             Path::new("bwrap"),
@@ -707,7 +715,7 @@ mod private_tmp_tests {
 
     #[test]
     fn temporary_mounts_preserve_child_restrictions_and_reject_read_only_roots() {
-        let home = tempfile::tempdir().unwrap();
+        let home = private_home();
         let project = tempfile::tempdir().unwrap();
         let temporary = crate::private_tmp::project(home.path(), project.path())
             .unwrap()

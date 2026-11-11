@@ -56,7 +56,7 @@ def run(remote=False, isolated=False):
             RODE_SESSION_DIR=str(base / "runtime"),
             RODE_UI_TEST_STATE=str(base / "ui-state.json"),
         )
-        Path(environment["HOME"]).mkdir()
+        Path(environment["HOME"]).mkdir(mode=0o700)
 
         def service_rpc(action, **values):
             result = json.loads(

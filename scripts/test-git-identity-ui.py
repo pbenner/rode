@@ -33,7 +33,7 @@ with fixture_directory(prefix="rode-git-identity-ui-") as base:
     root = base / "project"
     root.mkdir()
     home = base / "home"
-    home.mkdir()
+    home.mkdir(mode=0o700)
     global_config = (Path(os.environ["RODE_TEST_SSH_HOME"]) if remote else home) / ".gitconfig"
     environment = fixture_environment(
         base,

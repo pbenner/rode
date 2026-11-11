@@ -327,7 +327,13 @@ fn actual_sandbox_encloses_kernel_and_its_file_operations_without_network_sharin
     )
     .unwrap();
     let code = format!(
-        "import os\nprint(os.path.exists({:?}))\nopen('inside','w').write('sandbox')",
+        concat!(
+            "import os\nfrom ipykernel.connect import get_connection_info\n",
+            "connection = get_connection_info(unpack=True)\n",
+            "assert connection['transport'] == 'ipc'\n",
+            "assert os.path.realpath(connection['ip']).startswith(os.path.realpath(os.environ['TMPDIR']) + '/')\n",
+            "print(os.path.exists({:?}))\nopen('inside','w').write('sandbox')"
+        ),
         outside.to_string_lossy()
     );
     kernel

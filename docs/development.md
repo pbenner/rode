@@ -470,6 +470,21 @@ Check ordinary-suite CI parity with `env -u RODE_SESSION_HELPER -u RODE_TEST_SES
 
 The Rust runner creates its private homes below `/tmp`, independently of the checkout path, to leave room for nested Unix-domain sockets. Set `RODE_TEST_TMPDIR` to another short, executable temporary directory when needed; a deep checkout must not lengthen socket names. `scripts/test-rust-tests.py` checks this with a real nested socket, and `scripts/test-ssh-fixture.py` checks host-helper isolation without changing tool precedence.
 
+Fixtures that replace `HOME` must create that directory with explicit `0700`
+permissions. The desktop and helper reject group-writable homes, so relying on
+the caller's umask makes tests fail under `0002`. Keep that rejection intact;
+do not change the process-wide umask while Rust tests run concurrently. The
+tunnel fixture must also decode quoted SSH configuration tokens before using
+the relay username; surrounding quotes are syntax, not part of the account.
+
+Notebook IPC sockets remain inside the host's private temporary directory.
+On Linux the adapter addresses them through a held `/proc/<pid>/fd/<fd>`
+directory handle, keeping socket names within Unix pathname limits even with
+long home paths and project-specific temporary directories. Keep the handle
+alive until the kernel and channels have stopped. The real sandbox notebook
+regression verifies IPC transport and the resolved private directory with
+network sharing disabled.
+
 The document, binary, language, debugger, layout, queued-prompt and attachment UI fixtures use `NativeUI` in `scripts/ui_harness.py` for complete command/path input, focused controls, document identity and resize acknowledgements. Opt-in snapshots expose value fingerprints instead of input text; they only observe state. Queue edits wait for the acknowledged row contents, and attachment snapshots must finish reading before tests mutate their source files. Fixture protocol logs are read as completed newline-terminated records, including when the last UTF-8 character arrives in pieces. Activating input is sent once through XTest, never retried. Window discovery checks the owning PID, and focus retries mapping races without letting Xlib terminate the test process. Polling intervals and deliberate gesture/idle measurement intervals remain; arbitrary startup and dialog sleeps do not establish readiness.
 
 Failed UI fixtures terminate and reap their owned process without attempting another UI interaction, so cleanup cannot replace the original assertion with a close-window timeout. Queue and attachment fixtures also end their own project's agents in a private service directory; other projects' agents are left alone. Natural terminal exit drains queued output before publishing exit; the reader owns the quiet interval, with byte and time limits for descendants that continue writing. Regressions cover a slow reader with an open descendant and a continuously writing descendant.

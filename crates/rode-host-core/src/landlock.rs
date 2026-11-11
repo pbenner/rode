@@ -86,8 +86,11 @@ mod linux {
     }
     #[test]
     fn scratch_replacement_keeps_the_original_inode_and_rejects_other_symlinks() {
-        use std::os::unix::fs::MetadataExt;
-        let home = tempfile::tempdir().unwrap();
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let home = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let project = tempfile::tempdir().unwrap();
         let private = tempfile::tempdir().unwrap();
         let (path, descriptor) = scratch(home.path(), project.path()).unwrap();

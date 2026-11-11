@@ -2,10 +2,17 @@
 use std::{
     fs,
     io::Write,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::Path,
     process::{Command, Stdio},
 };
+
+fn private_home() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
 
 #[test]
 fn desktop_and_helper_children_use_private_home_storage_instead_of_inherited_tmp() {
@@ -17,7 +24,7 @@ fn desktop_and_helper_children_use_private_home_storage_instead_of_inherited_tmp
             let fixture = tempfile::tempdir().unwrap();
             let home = fixture.path().join("home");
             let project = fixture.path().join("project");
-            fs::create_dir(&home).unwrap();
+            fs::DirBuilder::new().mode(0o700).create(&home).unwrap();
             fs::create_dir(&project).unwrap();
             let expected = if sandboxed {
                 rode_host_core::private_tmp::project(&home, &project)
@@ -99,7 +106,7 @@ fn startup_refuses_public_or_redirected_temporary_storage() {
         env!("CARGO_BIN_EXE_rode"),
         env!("CARGO_BIN_EXE_rode-sessiond"),
     ] {
-        let home = tempfile::tempdir().unwrap();
+        let home = private_home();
         let path = rode_host_core::private_tmp::root(home.path()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         let result = Command::new(executable)
@@ -129,7 +136,7 @@ fn native_service_state_and_home_less_terminal_requests_stay_in_the_host_home() 
         time::{Duration, Instant},
     };
 
-    let home = tempfile::tempdir().unwrap();
+    let home = private_home();
     let rpc = |request: &Request| {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rode-sessiond"))
             .arg("request")

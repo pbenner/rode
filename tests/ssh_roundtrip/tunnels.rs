@@ -125,21 +125,51 @@ fn interface_address() -> Option<IpAddr> {
     (!address.is_loopback() && !address.is_unspecified()).then_some(address)
 }
 
+// Read single-valued directives from the generated fixture, whose values are
+// quoted by scripts/ssh_fixture.py. Whitespace splitting keeps the quotes in
+// the username and makes an otherwise valid key fail authentication.
+fn fixture_setting(config: &str, key: &str) -> String {
+    config
+        .lines()
+        .find_map(|line| {
+            let mut words = shell_words::split(line)
+                .expect("Invalid SSH fixture configuration tokens")
+                .into_iter();
+            (words.next().as_deref() == Some(key)).then(|| {
+                let value = words.next().expect("Missing SSH fixture setting value");
+                assert!(words.next().is_none(), "Expected a single {key} value");
+                value
+            })
+        })
+        .unwrap_or_else(|| panic!("Missing {key} in SSH fixture configuration"))
+}
+
+#[test]
+fn fixture_settings_decode_quoted_tokens_without_changing_literal_values() {
+    for user in [
+        "runner",
+        "worker with spaces",
+        r#"worker"quoted""#,
+        r"domain\runner",
+    ] {
+        let config = format!(
+            "Host rode-test rode-jump\n    User {}\n    Port 22022\n",
+            serde_json::to_string(user).unwrap()
+        );
+        assert_eq!(fixture_setting(&config, "User"), user);
+        assert_eq!(fixture_setting(&config, "Port"), "22022");
+    }
+    let config = "User runner\nPort \"22022\"\n";
+    assert_eq!(fixture_setting(config, "User"), "runner");
+    assert_eq!(fixture_setting(config, "Port"), "22022");
+}
+
 #[test]
 #[ignore = "requires the isolated OpenSSH relay started by scripts/test-ssh.sh"]
 fn relay_listener_scope_controls_localhost_and_network_access() {
     let config = std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh");
     let directory = Path::new(&config).parent().unwrap();
     let config = fs::read_to_string(&config).unwrap();
-    let setting = |key: &str| {
-        config
-            .lines()
-            .find_map(|line| {
-                let mut words = line.split_whitespace();
-                (words.next() == Some(key)).then(|| words.next().unwrap().to_owned())
-            })
-            .unwrap()
-    };
     let echo = Echo::new();
     let service = Service::new();
     let id = rode_session::new_id().unwrap();
@@ -150,8 +180,8 @@ fn relay_listener_scope_controls_localhost_and_network_access() {
         drop(reserved);
         let spec = Spec {
             relay_host: "127.0.0.1".into(),
-            relay_port: setting("Port").parse().unwrap(),
-            relay_user: setting("User"),
+            relay_port: fixture_setting(&config, "Port").parse().unwrap(),
+            relay_user: fixture_setting(&config, "User"),
             identity: directory.join("client").to_string_lossy().into(),
             relay_key: fs::read_to_string(directory.join("host-known.pub")).unwrap(),
             listen_on,

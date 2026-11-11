@@ -50,16 +50,23 @@ def choose(name, hex_mode=False):
 
 
 def image_pixels(window, name, color, minimum):
-    screenshot(window, name)
-    raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
-    # Ignore bars/explorer; inspect the editor body only.
-    width = 1380
-    count = sum(
-        raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(color)
-        for y in range(200, 760)
-        for x in range(310, 1370)
-    )
-    assert count >= minimum, (name, color, count)
+    # Opening and rendering a document are asynchronous. Observe the result
+    # rather than assuming that the previous tab has disappeared after a sleep.
+    def rendered():
+        screenshot(window, name)
+        raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
+        # Ignore bars/explorer; inspect the editor body only.
+        width = 1380
+        return (
+            sum(
+                raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(color)
+                for y in range(200, 760)
+                for x in range(310, 1370)
+            )
+            >= minimum
+        )
+
+    wait_for(rendered, f"{name}: document did not render {minimum} pixels of {color}")
 
 
 def run(remote=False):
