@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify SSH helper isolation without changing unrelated tool selection."""
+"""Verify SSH helper isolation and portable probes in the existing shell process."""
 
 import os
 import shutil
@@ -8,10 +8,33 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ssh_fixture import isolated_path
+from ssh_fixture import isolated_path, shell_probe
 
 
-class SSHPathTests(unittest.TestCase):
+class SSHFixtureTests(unittest.TestCase):
+    def test_access_probes_keep_arguments_and_the_existing_pid_in_sh_and_bash(self):
+        for shell in ("/bin/sh", "/bin/bash"):
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "check-access").write_text(
+                    'printf "host:%s" "$$" > "$1.tmp" && mv "$1.tmp" "$1"\n'
+                )
+                names = ["first marker", "retained-$(false); marker"]
+                result = subprocess.run(
+                    [shell, "-c", "".join(shell_probe(name) for name in names)],
+                    cwd=root,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                    timeout=5,
+                )
+                first, retained = [(root / name).read_text() for name in names]
+                self.assertEqual(first, retained)
+                mode, pid = first.split(":")
+                self.assertEqual(mode, "host")
+                self.assertGreater(int(pid), 0)
+                self.assertEqual(result.stderr, "")
+
     def test_host_helper_is_hidden_without_reordering_or_copying_other_tools(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

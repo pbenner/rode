@@ -11,6 +11,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from ssh_fixture import shell_probe
+
 remote = os.environ.get("RODE_EXECUTION_UI_REMOTE") == "1"
 expect_fallback = remote and os.environ.get("RODE_SSH_TEST_NO_BWRAP") == "1"
 label = "ssh-fallback" if expect_fallback else "ssh" if remote else "local"
@@ -173,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
             def shell_check(info, name, expected):
                 click("terminal-input:" + info["id"])
                 control("terminal-input:" + info["id"], focused=True)
-                text(f". ./check-access {name}\n")
+                text(shell_probe(name))
                 result = wait(lambda: contents(root / name), f"Shell did not acknowledge {name}")
                 mode, pid = result.split(":")
                 assert mode == expected and int(pid) > 0, result

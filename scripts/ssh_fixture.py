@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Keep installed RODE helpers on the invoking machine out of the SSH fixture PATH."""
+"""Portable shell probes and isolated tool paths for the SSH fixtures."""
 
 import os
+import shlex
 import sys
 from pathlib import Path
+
+
+def shell_probe(marker):
+    """Source the access probe in the existing shell, including shells without dot arguments."""
+    return f"set -- {shlex.quote(marker)}; . ./check-access\n"
 
 
 def isolated_path(path, destination):
