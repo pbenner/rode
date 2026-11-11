@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Verify SSH helper isolation and portable probes in the existing shell process."""
+"""SSH quoting, helper isolation and shell probes without a daemon, account or display."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from ssh_fixture import isolated_path, shell_probe
+from ssh_fixture import config_token, configure, isolated_path, shell_probe
 
 
 class SSHFixtureTests(unittest.TestCase):
@@ -65,6 +66,102 @@ class SSHFixtureTests(unittest.TestCase):
                 (first / "rode-sessiond").read_text().splitlines()[-1],
                 "printf '%s' 'ambient helper'",
             )
+
+    def configure(self, root, **options):
+        (root / "home").mkdir()
+        (root / "host-known.pub").write_text("ecdsa-sha2-nistp256 fixture-public-key\n")
+        values = dict(
+            search_path="/bin:/usr/bin",
+            project_shell="",
+            xauth="",
+            port=12345,
+            user="fixture-user",
+            x11="yes",
+        )
+        values.update(options)
+        configure(root, **values)
+
+    def test_quoted_paths_are_literal_in_forced_commands_and_host_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ssh fixture ' $(literal) with spaces"
+            root.mkdir()
+            path = str(root / "bin ' with spaces") + ":/bin:/usr/bin"
+            shell = str(root / "shell ' with spaces")
+            self.configure(root, search_path=path, project_shell=shell)
+            environment = dict(
+                os.environ,
+                SSH_ORIGINAL_COMMAND='printf "%s\\000" "$HOME" "$TMPDIR" "$PATH" "$SHELL"',
+            )
+            result = subprocess.check_output([root / "host-shell"], env=environment, timeout=5)
+            self.assertEqual(
+                result.split(b"\0")[:-1],
+                [
+                    str(value).encode()
+                    for value in (
+                        root / "home",
+                        root,
+                        path,
+                        shell,
+                    )
+                ],
+            )
+            directives = dict(
+                line.split(" ", 1) for line in (root / "sshd_config").read_text().splitlines()
+            )
+            self.assertEqual(shlex.split(directives["ForceCommand"]), [str(root / "host-shell")])
+            self.assertEqual(shlex.split(directives["HostKey"]), [str(root / "host-known")])
+            for name in ("PermitUserRC", "PermitUserEnvironment", "UseDNS"):
+                self.assertEqual(directives[name], "no")
+            self.assertIn(
+                "SetEnv " + config_token("HOME=" + str(root / "home")),
+                (root / "sshd_config").read_text(),
+            )
+
+    def test_xauth_and_config_tokens_preserve_paths_with_spaces_and_quotes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "private ' ssh fixture"
+            root.mkdir()
+            binary = root / "xauth ' program"
+            binary.write_text('#!/bin/sh\nprintf "%s\\000" "$@"\n')
+            binary.chmod(0o700)
+            self.configure(root, xauth=str(binary))
+            result = subprocess.check_output([root / "xauth", "list", "literal ' value"], timeout=5)
+            self.assertEqual(
+                result.split(b"\0")[:-1],
+                [
+                    b"-f",
+                    str(root / "home/.Xauthority").encode(),
+                    b"list",
+                    b"literal ' value",
+                ],
+            )
+            config = (root / "ssh_config").read_text()
+            self.assertIn("IdentityFile " + config_token(root / "client"), config)
+            self.assertIn("XAuthLocation " + config_token(binary), config)
+            self.assertIn(
+                "GlobalKnownHostsFile " + config_token(root / "global_known_hosts"), config
+            )
+            self.assertEqual((root / "global_known_hosts").read_text(), "")
+            self.assertEqual((root / "host-shell").stat().st_mode & 0o777, 0o700)
+
+    def test_config_values_cannot_add_directives(self):
+        for value in ("path\nInjected yes", "path\rInjected yes", "path\0tail"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                config_token(value)
+        with tempfile.TemporaryDirectory() as directory:
+            for options in (
+                {"x11": "yes\nPasswordAuthentication yes"},
+                {"port": "22\nListenAddress 0.0.0.0"},
+                {"port": 0},
+                {"port": 65536},
+            ):
+                values = dict(
+                    search_path="/bin", project_shell="", xauth="", port=12345, user="fixture"
+                )
+                values.update(options)
+                with self.subTest(options=options), self.assertRaises(ValueError):
+                    configure(directory, **values)
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
 
 if __name__ == "__main__":

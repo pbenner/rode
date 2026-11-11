@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from ui_harness import (
     BINARY,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -53,8 +53,7 @@ def open_file(name):
 
 def run(remote=False, isolated=False):
     label = "ssh" if remote else "sandbox" if isolated else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-latex-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-latex-ui-") as base:
         project = base / "project"
         project.mkdir()
         source = project / "main.tex"

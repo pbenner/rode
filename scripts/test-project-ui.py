@@ -9,27 +9,25 @@ import signal
 import socket
 import struct
 import subprocess
-import tempfile
-import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/project-ui")
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    assert_running,
-    click_button,
+    NativeUI,
     close_window,
     display,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
     screenshot,
     text,
-    wait_for_button,
     wait_for_project,
-    wait_for_ui_state,
     wait_for_window,
+    write_python_launcher,
     x11,
 )
 
@@ -42,42 +40,12 @@ def window_for(process, log_path):
     return window
 
 
-class ProjectUI:
-    """Drive the real controls, with acknowledgements before dependent input."""
+class ProjectUI(NativeUI):
+    """Project-specific checks built on the shared native interaction driver."""
 
     def __init__(self, window, process, log_path, environment):
-        self.window = window
-        self.process = process
-        self.log_path = log_path
+        super().__init__(window, process, log_path, environment["RODE_UI_TEST_STATE"])
         self.environment = environment
-        self.state_path = Path(environment["RODE_UI_TEST_STATE"])
-
-    def wait(self, check, message):
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            assert_running(self.process, self.log_path)
-            result = check()
-            if result:
-                return result
-            time.sleep(0.05)
-        raise AssertionError(message + ". Log: " + str(self.log_path))
-
-    def layout(self, check=lambda state: True, message="No rendered layout"):
-        return wait_for_ui_state(self.process, self.log_path, self.state_path, check, message)
-
-    def control(self, name, **guards):
-        return wait_for_button(
-            self.window, self.process, self.log_path, self.state_path, name, **guards
-        )
-
-    def click(self, name):
-        click_button(self.window, self.process, self.log_path, self.state_path, name)
-
-    def absent(self, name):
-        self.layout(
-            lambda state: all(button["name"] != name for button in state["buttons"]),
-            name + " did not close",
-        )
 
     def command(self, value):
         palette_command(self.window, self.process, self.log_path, self.state_path, value)
@@ -93,29 +61,6 @@ class ProjectUI:
     def project(self, project, remote=False):
         wait_for_project(self.window, self.process, self.log_path, project)
         assert ("[SSH" in self.title()) == remote, self.title()
-
-    def clipboard(self):
-        result = subprocess.run(
-            ["xclip", "-selection", "clipboard", "-o"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        return result.stdout if result.returncode == 0 else None
-
-    def copy(self, name, expected):
-        self.control(name, focused=True)
-        before = self.layout()["pass"]
-        key("a", ("Control_L",))
-        self.control(name, focused=True, after_pass=before)
-        key("c", ("Control_L",))
-        self.wait(
-            lambda: self.clipboard() == expected,
-            f"{name} did not contain {expected!r}",
-        )
-        before = self.layout()["pass"]
-        key("End", ("Control_L",))
-        self.control(name, focused=True, after_pass=before)
 
     def path(self, name, value):
         self.click(name)
@@ -287,8 +232,7 @@ def session_rpc(environment, action, **values):
 
 def run(remote=False, fallback=False):
     label = "ssh" if remote else "fallback" if fallback else "sandbox"
-    with tempfile.TemporaryDirectory(prefix="rode-project-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-project-ui-") as base:
         first, second, local = (
             base / name for name in ("first-project", "second-project", "local-project")
         )
@@ -298,8 +242,8 @@ def run(remote=False, fallback=False):
             (project / filename).write_text(
                 f'// {filename}\nfn main() {{\n    println!("remote host");\n}}\n' + "\n" * 5
             )
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data-home"),
             RODE_SESSION_DIR=str(base / "sessions"),
@@ -333,14 +277,14 @@ def run(remote=False, fallback=False):
             tools = base / "ssh-fixture-tools"
             tools.mkdir()
             wrapper = tools / "ssh"
-            wrapper.write_text(
-                "#!/usr/bin/python3\nimport os, sys\n"
+            write_python_launcher(
+                wrapper,
+                "import os, sys\n"
                 + "binary = "
                 + repr(real_ssh)
                 + "\n"
-                + "os.execv(binary, [binary] + ['-T' if arg == '-tt' else arg for arg in sys.argv[1:]])\n"
+                + "os.execv(binary, [binary] + ['-T' if arg == '-tt' else arg for arg in sys.argv[1:]])\n",
             )
-            wrapper.chmod(0o755)
             environment["PATH"] = str(tools) + os.pathsep + os.environ["PATH"]
         args = [str(BINARY), "--sandbox"]
         launch_copy = None
@@ -514,8 +458,7 @@ def run(remote=False, fallback=False):
 
 def failed_connection(backend):
     """A real refused SSH login must leave copyable diagnostics, not a local shell."""
-    with tempfile.TemporaryDirectory(prefix="rode-ssh-failure-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-ssh-failure-ui-") as base:
         # Reserve a loopback port without listening; no real host/account is contacted.
         with socket.socket() as reserved:
             reserved.bind(("127.0.0.1", 0))
@@ -528,8 +471,8 @@ def failed_connection(backend):
                 " BatchMode yes\n ConnectTimeout 2\n ConnectionAttempts 1\n"
                 f" UserKnownHostsFile {known_hosts}\n GlobalKnownHostsFile {known_hosts}\n"
             )
-            environment = dict(
-                os.environ,
+            environment = fixture_environment(
+                base,
                 XDG_CONFIG_HOME=str(base / "config"),
                 XDG_DATA_HOME=str(base / "data"),
                 RODE_SESSION_DIR=str(base / "sessions"),

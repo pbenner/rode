@@ -258,6 +258,7 @@ impl EditorApp {
         if item(ui, "explorer-refresh", "Refresh", ready) {
             self.list(parent.path, ctx);
         }
+        ui_probe::button(ui, &format!("explorer-menu:{}", entry.path), &ui.response());
     }
 
     /// File-operation dialogs retain their originating workspace and literal name.
@@ -347,6 +348,13 @@ impl EditorApp {
                 self.dialog_focus = false;
             }
             ui_probe::button(ui, "explorer-apply", &button);
+            if kind == Kind::Delete {
+                ui_probe::button(
+                    ui,
+                    &format!("explorer-confirm-delete:{}", entry.path),
+                    &button,
+                );
+            }
             apply = button.clicked() || enter;
             let cancel = ui.button("Cancel");
             ui_probe::button(ui, "explorer-cancel", &cancel);

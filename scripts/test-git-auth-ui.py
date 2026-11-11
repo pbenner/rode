@@ -5,10 +5,10 @@ import base64
 import http.server
 import json
 import os
+import shlex
 import shutil
 import ssl
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -24,6 +24,8 @@ from ui_harness import (
     assert_running,
     click_button,
     close_window,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     text,
@@ -31,10 +33,10 @@ from ui_harness import (
     wait_for_project,
     wait_for_ui_state,
     wait_for_window,
+    write_python_launcher,
 )
 
-with tempfile.TemporaryDirectory(prefix="rode-git-auth-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-git-auth-ui-") as base:
     root = base / "project"
     root.mkdir()
     home = base / "home"
@@ -49,8 +51,8 @@ with tempfile.TemporaryDirectory(prefix="rode-git-auth-ui-") as directory:
         base64.b64encode(f"{username}:{wrong_password}".encode()).decode(),
         base64.b64encode(f"{username}:{password}".encode()).decode(),
     ]
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         HOME=str(home),
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
@@ -64,9 +66,9 @@ with tempfile.TemporaryDirectory(prefix="rode-git-auth-ui-") as directory:
     wrapper = tools / "git"
     # Inspect inherited credentials in memory, without recording the user's
     # ambient environment or writing a credential into the test wrapper itself.
-    wrapper.write_text(
-        f"""#!{shutil.which("python3")}
-import json,os,shlex,sys
+    write_python_launcher(
+        wrapper,
+        f"""import json,os,shlex,sys
 try:
     spec=next(arg.removeprefix('credential.helper=!') for arg in sys.argv if arg.startswith('credential.helper=!'))
     descriptor=int(shlex.split(spec)[-1])
@@ -79,9 +81,9 @@ for credential in credentials:
 with open({str(base / "commands.jsonl")!r},'a') as out:
     out.write(json.dumps(dict(argv=sys.argv,credential_fd=bool(credentials)))+'\\n')
 os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
-"""
+""",
+        python=shutil.which("python3"),
     )
-    wrapper.chmod(0o700)
     environment["PATH"] = str(tools) + os.pathsep + environment["PATH"]
 
     def git(*args):
@@ -210,10 +212,14 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
     git("config", "trace2.eventTarget", str(base / "trace-events.jsonl"))
     store = base / "credential-store.log"
     store_helper = base / "store-helper"
-    store_helper.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{store}'\ncat >> '{store}'\n")
+    store_helper.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> {shlex.quote(str(store))}\n"
+        f"cat >> {shlex.quote(str(store))}\n"
+    )
     store_helper.chmod(0o700)
-    git("config", "credential.helper", str(store_helper))
-    git("config", f"credential.{origin}.helper", str(store_helper))
+    helper_command = "!" + shlex.quote(str(store_helper))
+    git("config", "credential.helper", helper_command)
+    git("config", f"credential.{origin}.helper", helper_command)
     args = [str(BINARY), "--theme", "studio-neutral"]
     args += (
         [

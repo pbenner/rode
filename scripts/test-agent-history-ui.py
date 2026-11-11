@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,7 +20,9 @@ from ui_harness import (
     assert_running,
     click_button,
     close_window,
+    decode_ron_string,
     display,
+    fixture_directory,
     focus_window,
     key,
     read_json_lines,
@@ -105,7 +106,7 @@ def preferences():
     if not path.exists():
         return {}
     match = re.search(r'"agent_preferences"\s*:\s*("(?:\\.|[^"\\])*")', path.read_text())
-    return next(iter(json.loads(json.loads(match[1])).values()), {}) if match else {}
+    return next(iter(json.loads(decode_ron_string(match[1])).values()), {}) if match else {}
 
 
 def refresh_history(button="agent-history-refresh"):
@@ -118,8 +119,7 @@ def refresh_history(button="agent-history-refresh"):
     control("agent-history-ready")
 
 
-with tempfile.TemporaryDirectory(prefix="rode-agent-history-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-agent-history-ui-") as base:
     root = base / "project"
     root.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/agent.py", root / "agent.py")

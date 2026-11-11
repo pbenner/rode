@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     palette_command,
@@ -64,8 +64,7 @@ def tools_window():
     return tool_window("Project tools")
 
 
-with tempfile.TemporaryDirectory(prefix="rode-workspace-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-workspace-ui-") as base:
     project = base / "project"
     project.mkdir()
     source = project / "main.txt"

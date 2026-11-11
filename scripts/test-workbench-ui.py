@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -20,7 +19,9 @@ from ui_harness import (
     click,
     click_button,
     close_window,
+    decode_ron_string,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -52,8 +53,7 @@ def run(remote=False):
     label = "ssh" if remote else "local"
     ruff = os.environ.get("RODE_TEST_RUFF") or shutil.which("ruff")
     assert ruff, "Set RODE_TEST_RUFF to a real Ruff executable"
-    with tempfile.TemporaryDirectory(prefix="rode-workbench-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-workbench-ui-") as base:
         root = base / "project"
         root.mkdir()
         subprocess.run(["python3", "-m", "venv", "--without-pip", str(root / ".venv")], check=True)
@@ -242,7 +242,7 @@ def run(remote=False):
                     )
                     if not match:
                         return False
-                    data = json.loads(json.loads(match[1]))
+                    data = json.loads(decode_ron_string(match[1]))
                     return any(value.get("format_on_save") is False for value in data.values())
 
                 wait_for(saved_settings, "Changed UI settings were not flushed to the config")
@@ -252,7 +252,7 @@ def run(remote=False):
                 match = re.search(
                     r'"project_preferences"\s*:\s*("(?:\\.|[^"\\])*")', preferences.read_text()
                 )
-                saved = json.loads(json.loads(match[1]))
+                saved = json.loads(decode_ron_string(match[1]))
                 output = base / "shared-output"
                 output.mkdir()
                 for value in saved.values():

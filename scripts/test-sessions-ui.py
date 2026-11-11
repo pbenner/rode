@@ -4,7 +4,6 @@
 import json
 import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     palette_command,
@@ -88,8 +88,7 @@ def rpc(environment, action, **values):
 
 
 def run():
-    with tempfile.TemporaryDirectory(prefix="rode-sessions-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-sessions-ui-") as base:
         root = base / "project"
         root.mkdir()
         tools = root / "tools"

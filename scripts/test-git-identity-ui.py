@@ -4,7 +4,6 @@
 import json
 import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -19,6 +18,8 @@ from ui_harness import (
     assert_running,
     click_button,
     close_window,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -28,15 +29,14 @@ from ui_harness import (
     wait_for_window,
 )
 
-with tempfile.TemporaryDirectory(prefix="rode-git-identity-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-git-identity-ui-") as base:
     root = base / "project"
     root.mkdir()
     home = base / "home"
     home.mkdir()
     global_config = (Path(os.environ["RODE_TEST_SSH_HOME"]) if remote else home) / ".gitconfig"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         HOME=str(home),
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),

@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from ui_harness import (
     BINARY,
     NativeUI,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     read_json_lines,
@@ -39,8 +39,7 @@ def wait_for(check, message):
 
 def run(remote=False, isolated=False):
     label = "ssh" if remote else "sandbox" if isolated else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-debugger-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-debugger-ui-") as base:
         project = base / "project"
         project.mkdir()
         source = project / "main.py"

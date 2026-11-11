@@ -8,7 +8,6 @@ import shutil
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 import zlib
 from pathlib import Path
@@ -23,6 +22,7 @@ from ui_harness import (
     NativeUI,
     assert_running,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     read_json_lines,
@@ -33,8 +33,7 @@ from ui_harness import (
     wait_for_window,
 )
 
-with tempfile.TemporaryDirectory(prefix="rode-attach-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-attach-ui-") as base:
     project = base / "project"
     project.mkdir()
     fixture = (ROOT / "tests/fixtures/persistent_agent.py").read_text()

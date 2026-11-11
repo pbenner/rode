@@ -1,6 +1,47 @@
-//! Whole-document transfers retain their policy, revision and connection identity over SSH.
+//! Raw and whole-document transfers cross SSH windows while retaining policy and revisions.
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
+
+#[test]
+#[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]
+fn native_proxyjump_uploads_cross_channel_windows_without_relying_on_a_warm_helper_cache() {
+    let remote = Remote::new(Profile {
+        host: "rode-test".into(),
+        config: std::env::var("RODE_TEST_SSH_CONFIG").expect("Use scripts/test-ssh.sh"),
+        jump: "rode-jump".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let login = Terminal::remote(&eframe::egui::Context::default(), &remote).unwrap();
+    let until = Instant::now() + Duration::from_secs(15);
+    while !remote.connected() {
+        assert!(
+            login.is_alive() && Instant::now() < until,
+            "{}",
+            login.contents()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut command = remote.command();
+    command.arg("wc -c");
+    let length = 8 * 1024 * 1024;
+    let output =
+        rode_host_core::command::run_bounded(command, vec![0x91; length], Duration::from_secs(15))
+            .unwrap();
+    assert_eq!(
+        String::from_utf8(output).unwrap().trim(),
+        length.to_string()
+    );
+    let mut command = remote.command();
+    command.arg("cat");
+    let payload = vec![0x91; length];
+    let output =
+        rode_host_core::command::run_bounded(command, payload.clone(), Duration::from_secs(15))
+            .unwrap();
+    assert_eq!(output, payload);
+    assert!(remote.connected());
+    remote.cleanup();
+}
 
 #[test]
 #[ignore = "requires the isolated sshd started by scripts/test-ssh.sh"]

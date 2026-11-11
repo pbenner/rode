@@ -385,6 +385,46 @@ Real LLDB regressions report language, desktop/headless transport, requested san
 
 UI fixtures can opt into `RODE_UI_TEST_STATE` to locate named controls in the current rendered layout, including menus and SSH profile fields. They still click with native X11 input and verify persisted settings, process activity and real file effects; snapshots contain control geometry, availability, final focus, composer emptiness and the last native edit's frame number, without chat or document text. Focus/edit barriers keep dependent actions such as New file → Paste → Save As in separate processed frames on busy runners. The chat draft regression waits for an empty composer after cleanup, copies each draft through the real clipboard before sending, and requires an enabled Send control before pressing Enter. A missed focus or incomplete edit therefore fails before submitting an unintended prompt; exact expected/actual fixture text is retained on failure. Prompt-recall checks wait for an unselected caret at the beginning of the composer and for the accepted turn to finish, then verify each recalled prompt through Copy before editing or navigating again. Headless composer tests deliberately batch arrows and edits into one frame to catch lost input independently of runner speed. On failure, the native agent fixture also retains its backend request log and submitted prompts. Use a separate snapshot path for each process in multi-window tests. Prefer these controls over fixed menu coordinates or counts of Tab presses, which change when forms gain fields or sandbox options. Test log names include the script, for example `02-test-agent-file-only-ui.log`, so the failing check is identifiable in the job summary.
 
+The shared `NativeUI` driver acknowledges hover before either mouse button,
+checks complete edits through native Copy, and keeps keyboard actions tied to a
+focused named control. Callers then require the actual effect: modal closure,
+host file contents or the corresponding service reply. Explorer menus and delete
+confirmations include their target path in the read-only probe, so a directory
+refresh cannot silently redirect the test to a different row. Input is sent once;
+effect waits tolerate a missing file while it is being created, and still fail
+on permission errors or malformed data. `scripts/test-ui-harness.py` exercises
+row movement, focus, incomplete snapshots and literal paths.
+
+The SSH smoke fixtures use `fixture_directory` and `fixture_environment` for
+canonical project paths and private HOME/XDG/session/vault state. Explicit tools
+and SSH settings remain inherited. Other standard UI fixtures reuse the same
+canonical directory helper. Resolve temporary-directory aliases before
+constructing path-based control names; the host canonicalizes the same paths.
+These data helpers live in `scripts/fixture_support.py` and are re-exported by
+the UI harness. `python3 scripts/test-fixture-support.py` runs their filesystem,
+launcher and RON regressions without a display in `lint:ci`.
+`write_python_launcher` quotes both interpreter and script paths, including
+spaces and apostrophes. Preference checks decode the outer RON string with
+`decode_ron_string` before parsing the embedded JSON; RON's apostrophe and Unicode
+escapes are not JSON string escapes.
+
+`scripts/ssh_fixture.py` owns shell and OpenSSH configuration quoting. The SSH
+fixture retains a directory descriptor and passes its `/proc` alias to OpenSSH,
+whose generated ProxyJump command otherwise mishandles metacharacters in its
+config filename. The descriptor belongs to that fixture and expires with it.
+`python3 scripts/test-ssh-fixture.py` checks literal exports, Xauth arguments and
+config boundaries without an account, daemon or display; it runs in `lint:ci`.
+The project disconnect check uses the current window's reported SSH master
+endpoint and verifies its peer credentials before stopping that fixture master.
+Connection runtime directories use compact unique names to leave room for Unix
+sockets beneath private-home temporary roots.
+
+The ignored
+`native_proxyjump_uploads_cross_channel_windows_without_relying_on_a_warm_helper_cache`
+regression uploads and echoes 8 MiB without deploying a helper, so another test
+warming the remote helper cache cannot hide a cold-upload deadlock. Run it with
+`RODE_SSH_TEST_FILTER=native_proxyjump_uploads bash scripts/test-ssh.sh`.
+
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
 
 The workspace fixture resolves tab, detach, dock and reattach controls by name,

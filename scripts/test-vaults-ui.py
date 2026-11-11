@@ -9,7 +9,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     request_close,
@@ -95,8 +95,7 @@ def cleanup_result(cipher, remote, environment):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-vault-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-vault-ui-") as base:
         project, cipher = base / "plain-project", base / "encrypted"
         project.mkdir()
         cipher.mkdir()

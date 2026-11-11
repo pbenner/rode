@@ -7,7 +7,6 @@ import re
 import shutil
 import struct
 import subprocess
-import tempfile
 import time
 import zlib
 from pathlib import Path
@@ -19,6 +18,7 @@ from ui_harness import (
     NativeUI,
     click_button,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -109,8 +109,7 @@ def pixel_bounds(window, name, color, size):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-images-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-images-ui-") as base:
         root = base / "pictures"
         root.mkdir()
         source = root / "notes.txt"

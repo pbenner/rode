@@ -7,7 +7,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -26,6 +25,9 @@ from ui_harness import (
     assert_running,
     click_button,
     close_window,
+    decode_ron_string,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
@@ -35,6 +37,7 @@ from ui_harness import (
     wait_for_project,
     wait_for_ui_state,
     wait_for_window,
+    write_python_launcher,
 )
 
 
@@ -45,8 +48,7 @@ def contents(path):
         return None
 
 
-with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-execution-ui-") as base:
     root = base / "project"
     root.mkdir()
     secret = base / "outside-project"
@@ -69,8 +71,8 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
         json.dumps({"sandbox_defaults": json.dumps({"enabled": True, "backend": backend})})
     )
     state_path = base / "ui-state.json"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "sessions"),
@@ -106,12 +108,12 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
         tools.mkdir()
         ssh = shutil.which("ssh")
         wrapper = tools / "ssh"
-        wrapper.write_text(
-            "#!/usr/bin/python3\nimport os, sys\n"
+        write_python_launcher(
+            wrapper,
+            "import os, sys\n"
             f"binary = {ssh!r}\n"
-            "os.execv(binary, [binary] + ['-T' if a == '-tt' else a for a in sys.argv[1:]])\n"
+            "os.execv(binary, [binary] + ['-T' if a == '-tt' else a for a in sys.argv[1:]])\n",
         )
-        wrapper.chmod(0o755)
         environment["PATH"] = str(tools) + os.pathsep + environment["PATH"]
         args += [
             "--ssh",
@@ -294,7 +296,7 @@ with tempfile.TemporaryDirectory(prefix="rode-execution-ui-") as directory:
                 (config / "app.ron").read_text(),
             )
             assert stored, "Project preferences were not saved"
-            saved = json.loads(json.loads(stored[1]))
+            saved = json.loads(decode_ron_string(stored[1]))
             preferences = next(v for k, v in saved.items() if str(root) in k)
             # Persistence records changed fields, not every effective default.
             # In fallback mode Git was never switched, so its default false may

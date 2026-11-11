@@ -4,69 +4,44 @@
 import json
 import os
 import subprocess
-import tempfile
-import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/explorer-ui")
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
-    click_button,
+    NativeUI,
     close_window,
-    display,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
     screenshot,
     text,
-    wait_for_button,
     wait_for_project,
-    wait_for_ui_state,
     wait_for_window,
-    x11,
-    xtest,
 )
 
-
-def wait(check, message):
-    deadline = time.monotonic() + 12
-    while time.monotonic() < deadline:
-        assert process.poll() is None, "RODE exited: " + log.name
-        if check():
-            return
-        time.sleep(0.05)
-    raise AssertionError(message)
-
-
-def clipboard_matches(expected):
-    """An absent owner is normal until the native Copy action reaches its frame."""
-    try:
-        result = subprocess.run(
-            ["xclip", "-selection", "clipboard", "-o"],
-            capture_output=True,
-            text=True,
-            timeout=1,
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    return result.returncode == 0 and result.stdout == expected
-
-
-with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-explorer-ui-") as base:
     root = base / "project"
     root.mkdir()
     (root / "another-project").mkdir()
     (root / "another-project/README.md").write_text("another project\n")
     state = base / "ui-state.json"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_UI_TEST_STATE=str(state),
     )
+    backend = os.environ.get("RODE_TEST_SANDBOX_BACKEND")
+    if backend:
+        config = base / "data/rode"
+        config.mkdir(parents=True)
+        (config / "app.ron").write_text(
+            json.dumps({"sandbox_defaults": json.dumps({"enabled": True, "backend": backend})})
+        )
     with (ARTIFACTS / "explorer.log").open("w") as log:
         remote = os.environ.get("RODE_EXPLORER_UI_REMOTE") == "1"
         arguments = [str(BINARY), str(root), "--theme", "studio-neutral"]
@@ -82,6 +57,8 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
                 "--theme",
                 "studio-neutral",
             ]
+        if backend:
+            arguments.append("--sandbox")
         process = subprocess.Popen(
             arguments,
             env=environment,
@@ -93,44 +70,38 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             window = wait_for_window(process, log.name)
             wait_for_project(window, process, log.name, root)
             focus_window(window)
-
-            def point(name, **guards):
-                return wait_for_button(window, process, log.name, state, name, **guards)
-
-            def button(name):
-                click_button(window, process, log.name, state, name)
+            ui = NativeUI(window, process, log.name, state)
+            point, button, wait = ui.control, ui.click, ui.wait
+            if (
+                os.environ.get("RODE_TEST_REQUIRE_SANDBOX") == "1"
+                or os.environ.get("RODE_TEST_REQUIRE_LANDLOCK") == "1"
+            ):
+                title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                assert "[Sandbox]" in title, title
 
             def idle():
                 point("explorer-refresh-expanded")
 
             def menu(path=None):
                 idle()
-                location = point("explorer-root" if path is None else "explorer-row:" + str(path))
-                xtest.XTestFakeMotionEvent(display, -1, *location, 0)
-                xtest.XTestFakeButtonEvent(display, 3, 1, 0)
-                xtest.XTestFakeButtonEvent(display, 3, 0, 0)
-                x11.XFlush(display)
+                target = root if path is None else path
+                button(
+                    "explorer-root" if path is None else "explorer-row:" + str(path),
+                    mouse_button=3,
+                )
+                point("explorer-menu:" + str(target))
 
             def named(value):
-                point("explorer-name", focused=True)
-                key("a", ("Control_L",))
-                text(value)
+                ui.edit("explorer-name", value)
                 button("explorer-apply")
+                ui.absent("explorer-apply")
 
             if remote:
                 palette_command(window, process, log.name, state, "Toggle explorer")
             menu()
             screenshot(window, "root-menu.png")
             key("Escape")
-            wait(
-                lambda: (
-                    not any(
-                        button["name"] == "explorer-new-file"
-                        for button in json.loads(state.read_text())["buttons"]
-                    )
-                ),
-                "Explorer consumed Escape instead of closing its context menu",
-            )
+            ui.absent("explorer-new-file")
             menu()
             button("explorer-new-folder")
             named("created")
@@ -150,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             moved = root / "renamed"
             wait(moved.is_dir, "Folder rename did not finish")
             idle()
-            click(*point("source-editor"))
+            button("source-editor")
             key("s", ("Control_L",))
             saved = moved / "child.txt"
             wait(
@@ -168,12 +139,12 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             assert (duplicate / "child.txt").read_text() == "unsaved contents"
 
             idle()
-            click(*point("explorer-row:" + str(moved)))
+            button("explorer-row:" + str(moved))
             menu(saved)
             screenshot(window, "file-menu.png")
             button("explorer-copy-relative")
             wait(
-                lambda: clipboard_matches("renamed/child.txt"),
+                lambda: ui.clipboard() == "renamed/child.txt",
                 "Relative path was not copied",
             )
             menu(saved)
@@ -182,37 +153,36 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             renamed = moved / "renamed.txt"
             wait(renamed.is_file, "File rename did not finish")
             idle()
-            click(*point("source-editor"))
+            button("source-editor")
             key("End", ("Control_L",))
             text(" kept after delete")
             menu(renamed)
             button("explorer-delete")
             screenshot(window, "delete-confirmation.png")
-            button("explorer-apply")
+            button("explorer-confirm-delete:" + str(renamed))
+            ui.absent("explorer-apply")
             wait(lambda: not renamed.exists(), "File deletion did not finish")
             # A retained editor still owns the deleted path. A new file must
             # not reopen that old draft or acquire a duplicate path binding.
             menu(moved)
             button("explorer-new-file")
-            point("explorer-name", focused=True)
-            key("a", ("Control_L",))
-            text("renamed.txt")
-            wait(
-                lambda: any(
+            ui.edit("explorer-name", "renamed.txt")
+            ui.layout(
+                lambda layout: any(
                     button["name"] == "explorer-apply" and not button["enabled"]
-                    for button in json.loads(state.read_text())["buttons"]
+                    for button in layout["buttons"]
                 ),
                 "Creating a new file reused the retained editor's path",
             )
             button("explorer-cancel")
+            ui.absent("explorer-apply")
             assert not renamed.exists()
             idle()
-            click(*point("source-editor"))
+            button("source-editor")
             key("s", ("Control_L", "Shift_L"))
-            point("file-dialog-path", focused=True)
-            key("a", ("Control_L",))
-            text(str(root / "rescued.txt"))
-            key("Return")
+            ui.edit("file-dialog-path", str(root / "rescued.txt"))
+            ui.press("file-dialog-path", "Return")
+            ui.absent("file-dialog-path")
             wait(
                 lambda: (root / "rescued.txt").is_file(),
                 "Deleted file's open buffer could not be saved separately",
@@ -222,11 +192,11 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
 
             menu(duplicate)
             button("explorer-delete")
-            point("explorer-apply", focused=True)
-            key("Return")
+            ui.press("explorer-confirm-delete:" + str(duplicate), "Return")
+            ui.absent("explorer-apply")
             wait(lambda: not duplicate.exists(), "Recursive folder deletion did not finish")
             idle()
-            click(*point("source-editor"))
+            button("source-editor")
             key("End", ("Control_L",))
             text(" dirty")
             menu(root / "another-project")
@@ -235,24 +205,18 @@ with tempfile.TemporaryDirectory(prefix="rode-explorer-ui-") as directory:
             key("a", ("Control_L",))
             key("c", ("Control_L",))
             wait(
-                lambda: clipboard_matches(str(root / "another-project")),
+                lambda: ui.clipboard() == str(root / "another-project"),
                 "The project dialog did not prefill the selected folder",
             )
-            assert not any(
-                item["name"].startswith("guard-")
-                for item in json.loads(state.read_text())["buttons"]
-            ), "Project switching began before confirming its options"
+            ui.layout(
+                lambda layout: (
+                    not any(item["name"].startswith("guard-") for item in layout["buttons"])
+                ),
+                "Project switching began before confirming its options",
+            )
             screenshot(window, "project-options.png")
             button("project-dialog-cancel")
-            wait_for_ui_state(
-                process,
-                log.name,
-                state,
-                lambda layout: all(
-                    item["name"] != "project-dialog-path" for item in layout["buttons"]
-                ),
-                "Cancelling did not close the project dialog",
-            )
+            ui.absent("project-dialog-path")
             wait_for_project(window, process, log.name, root)
             menu(root / "another-project")
             button("explorer-open-project")

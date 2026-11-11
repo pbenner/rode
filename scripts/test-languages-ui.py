@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from ui_harness import (
     BINARY,
     NativeUI,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -39,8 +39,7 @@ def wait_for(check, message):
 def run():
     assert shutil.which("go") and shutil.which("gofmt"), "Add Go to PATH"
     prettier = Path(os.environ["RODE_TEST_PRETTIER"])
-    with tempfile.TemporaryDirectory(prefix="rode-languages-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-languages-ui-") as base:
         root = base / "project"
         root.mkdir()
         # os.WriteFile needs Go 1.16. A newer minimum makes older CI Go

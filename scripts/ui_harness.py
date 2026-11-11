@@ -18,6 +18,19 @@ import sys
 import time
 from pathlib import Path
 
+from fixture_support import (
+    decode_ron_string as decode_ron_string,
+)
+from fixture_support import (
+    fixture_directory as fixture_directory,
+)
+from fixture_support import (
+    fixture_environment as fixture_environment,
+)
+from fixture_support import (
+    write_python_launcher as write_python_launcher,
+)
+
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("RODE_TEST_BINARY", ROOT / "target/debug/rode"))
 ARTIFACTS = Path(os.environ.get("RODE_UI_ARTIFACTS", ROOT / "target/ui-smoke"))
@@ -108,11 +121,11 @@ def move_pointer(x, y):
     x11.XFlush(display)
 
 
-def click(x, y):
+def click(x, y, *, button=1):
     """Click absolute display coordinates; UI tests use a known window size/position."""
     move_pointer(x, y)
-    xtest.XTestFakeButtonEvent(display, 1, 1, 0)
-    xtest.XTestFakeButtonEvent(display, 1, 0, 0)
+    xtest.XTestFakeButtonEvent(display, button, 1, 0)
+    xtest.XTestFakeButtonEvent(display, button, 0, 0)
     x11.XFlush(display)
     time.sleep(0.2)
 
@@ -254,11 +267,11 @@ def wait_for_button(
     )
 
 
-def click_button(window, process, log_path, state_path, name, timeout=20):
+def click_button(window, process, log_path, state_path, name, timeout=20, *, mouse_button=1):
     """Click once after the real control acknowledges hover and input readiness."""
     focus_window(window)
     point = wait_for_button(window, process, log_path, state_path, name, timeout, hovered=True)
-    click(*point)
+    click(*point, button=mouse_button)
 
 
 def wait_for_ui_state(process, log_path, state_path, check, description, timeout=12):
@@ -291,7 +304,7 @@ class NativeUI:
         self.process = process
         self.log_path = log_path
         self.state_path = state_path
-        self.project = Path(project) if project is not None else None
+        self.project_root = Path(project) if project is not None else None
 
     def layout(self, check=lambda state: True, description="No rendered layout", timeout=12):
         return wait_for_ui_state(
@@ -303,8 +316,15 @@ class NativeUI:
             self.window, self.process, self.log_path, self.state_path, name, **guards
         )
 
-    def click(self, name):
-        click_button(self.window, self.process, self.log_path, self.state_path, name)
+    def click(self, name, *, mouse_button=1):
+        click_button(
+            self.window,
+            self.process,
+            self.log_path,
+            self.state_path,
+            name,
+            mouse_button=mouse_button,
+        )
 
     def absent(self, name, after_pass=None):
         return self.layout(
@@ -361,9 +381,9 @@ class NativeUI:
         else:
             document = Path(path)
             if not document.is_absolute():
-                if self.project is None:
+                if self.project_root is None:
                     raise ValueError("Relative file opens require a project path")
-                document = self.project / document
+                document = self.project_root / document
             digest = hashlib.sha256(str(document).encode()).hexdigest()
             self.control("active-document:" + digest)
 
@@ -382,6 +402,65 @@ class NativeUI:
             ),
             f"Window did not render at {width} × {height}",
         )
+
+    def wait(self, check, message, *, timeout=20):
+        """Poll an effect; missing files are transient, other fixture errors remain failures."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            assert_running(self.process, self.log_path)
+            try:
+                value = check()
+            except FileNotFoundError:
+                value = None
+            if value:
+                return value
+            time.sleep(0.05)
+        raise AssertionError(f"{message}. Log: {self.log_path}; layout: {self.state_path}")
+
+    def edit(self, name, value):
+        self.click(name)
+        self.control(name, focused=True)
+        before = self.layout()["pass"]
+        key("a", ("Control_L",))
+        if value:
+            text(value)
+        else:
+            key("BackSpace")
+        self.control(name, focused=True, changed_after=before)
+        self.copy(name, value)
+
+    def clipboard(self):
+        """An absent or not-yet-serving clipboard owner is a pending acknowledgement."""
+        try:
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        return result.stdout if result.returncode == 0 else None
+
+    def copy(self, name, expected):
+        """Verify the full native field value without publishing document text in metadata."""
+        self.control(name, focused=True)
+        before = self.layout()["pass"]
+        key("a", ("Control_L",))
+        self.control(name, focused=True, after_pass=before)
+        key("c", ("Control_L",))
+        self.wait(
+            lambda: self.clipboard() == expected, name + " did not contain the complete value"
+        )
+        before = self.layout()["pass"]
+        key("End", ("Control_L",))
+        self.control(name, focused=True, after_pass=before)
+
+    def press(self, name, key_name, modifiers=()):
+        """Send one key to a focused control; callers must acknowledge its actual effect."""
+        focus_window(self.window)
+        self.control(name, focused=True)
+        key(key_name, modifiers)
 
 
 def palette_command(window, process, log_path, state_path, value, timeout=12):

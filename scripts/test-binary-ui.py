@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from ui_harness import (
     BINARY,
     NativeUI,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -60,8 +60,7 @@ def preferences(path):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-binary-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-binary-ui-") as base:
         root = base / "project"
         root.mkdir()
         source = root / "sample.bin"

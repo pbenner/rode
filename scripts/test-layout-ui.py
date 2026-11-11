@@ -4,7 +4,6 @@
 import hashlib
 import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -99,8 +99,7 @@ def active_line(filename, width, height, accent, left=302, right=None, minimum=8
     )
 
 
-with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-layout-ui-") as base:
     root = base / "project-with-a-long-descriptive-name"
     names = [
         "README.md",

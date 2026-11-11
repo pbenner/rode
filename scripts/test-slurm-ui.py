@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -61,8 +61,7 @@ def filled(window, name, expected, width=1380, height=900, accent=(220, 163, 37)
     assert (count > 500) if expected else (count < 100), (name, count)
 
 
-with tempfile.TemporaryDirectory(prefix="rode-slurm-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-slurm-ui-") as base:
     root = base / "project"
     tools = root / "tools"
     tools.mkdir(parents=True)

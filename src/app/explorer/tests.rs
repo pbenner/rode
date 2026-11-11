@@ -519,6 +519,73 @@ fn a_confirmation_dialog_keeps_its_enter_key_instead_of_toggling_a_tree_row() {
 }
 
 #[test]
+fn focused_delete_confirmations_submit_one_enter_and_remove_files_or_nonempty_folders() {
+    for directory in [false, true] {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().to_string_lossy().into_owned();
+        let target = base.path().join("target ' with spaces");
+        if directory {
+            std::fs::create_dir(&target).unwrap();
+            std::fs::write(target.join("child.txt"), "saved contents").unwrap();
+        } else {
+            std::fs::write(&target, "saved contents").unwrap();
+        }
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.workspace = Some(Workspace {
+            root: root.clone(),
+            remote: None,
+            connected: true,
+            ready: true,
+            plan: sandbox::Plan {
+                root,
+                ..Default::default()
+            },
+            sandbox_options: Default::default(),
+        });
+        app.explorer_form(Kind::Delete, entry(target.to_str().unwrap(), directory));
+        let mut render = |events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1380., 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.dialogs(ctx),
+            );
+        };
+        for _ in 0..3 {
+            render(vec![]);
+        }
+        assert!(ctx.memory(|memory| memory.focused().is_some()));
+        render(
+            [true, false]
+                .map(|pressed| egui::Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Default::default(),
+                })
+                .into(),
+        );
+        assert!(app.dialog == Dialog::None);
+        assert!(app.explorer_state.busy);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.explorer_state.busy {
+            app.poll(&ctx);
+            assert!(std::time::Instant::now() < until, "{}", app.status);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!target.exists(), "{}", app.status);
+    }
+}
+
+#[test]
 fn a_deleted_files_retained_editor_blocks_reusing_its_path() {
     let base = tempfile::tempdir().unwrap();
     let root = base.path().to_string_lossy().into_owned();

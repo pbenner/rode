@@ -4,7 +4,6 @@
 import json
 import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,6 +20,8 @@ from ui_harness import (
     BINARY,
     click_button,
     close_window,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
@@ -48,8 +49,7 @@ def tail(path):
         return source.read(1)
 
 
-with tempfile.TemporaryDirectory(prefix="rode-large-files-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-large-files-ui-") as base:
     root = base / "project"
     root.mkdir()
     path = root / "large.bin"
@@ -60,8 +60,8 @@ with tempfile.TemporaryDirectory(prefix="rode-large-files-ui-") as directory:
         source.seek(-1, os.SEEK_END)
         source.write(b"\xcc")
     state = base / "ui-state.json"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_UI_TEST_STATE=str(state),

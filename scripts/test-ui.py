@@ -17,6 +17,7 @@ from ui_harness import (
     click,
     click_button,
     close_window,
+    decode_ron_string,
     focus_window,
     key,
     saved_theme,
@@ -301,7 +302,7 @@ with tempfile.TemporaryDirectory(prefix="rode-file-ui-") as directory:
             saved = re.search(
                 r'"sandbox_defaults"\s*:\s*("(?:\\.|[^"\\])*")', preferences.read_text()
             )
-            assert saved and json.loads(json.loads(saved[1])) == defaults, (
+            assert saved and json.loads(decode_ron_string(saved[1])) == defaults, (
                 "Standalone startup must not change project sandbox preferences"
             )
             print(

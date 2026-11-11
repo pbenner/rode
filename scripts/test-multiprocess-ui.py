@@ -7,7 +7,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -22,6 +21,7 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -113,8 +113,7 @@ def save_profile(window):
     control(window, "ssh-save-profile")
 
 
-with tempfile.TemporaryDirectory(prefix="rode-multiprocess-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-multiprocess-ui-") as base:
     roots = [base / "project-one", base / "project-two"]
     for root in roots:
         root.mkdir()

@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -20,7 +19,9 @@ from ui_harness import (
     click,
     click_button,
     close_window,
+    decode_ron_string,
     display,
+    fixture_directory,
     focus_window,
     key,
     palette_command,
@@ -76,7 +77,7 @@ def agent_preferences(path):
     """Read the fixture's one workspace profile from the shared RON string map."""
     match = re.search(r'"agent_preferences"\s*:\s*("(?:\\.|[^"\\])*")', path.read_text())
     assert match, "No saved agent settings"
-    return next(iter(json.loads(json.loads(match[1])).values()))
+    return next(iter(json.loads(decode_ron_string(match[1])).values()))
 
 
 def submitted(root):
@@ -455,8 +456,7 @@ def long_composer(root, window, process, state_path, prompt):
     control("agent-composer-empty", focused=True, after_pass=before)
 
 
-with tempfile.TemporaryDirectory(prefix="rode-agent-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-agent-ui-") as base:
     root = base / "project"
     root.mkdir()
     (base / "private.txt").write_text("outside the project")

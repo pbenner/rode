@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from ui_harness import (
     assert_running,
     click_button,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     palette_command,
@@ -36,8 +36,7 @@ def contents(path):
         return None
 
 
-with tempfile.TemporaryDirectory(prefix="rode-mise-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-mise-ui-") as base:
     project = base / "project"
     project.mkdir()
     program = project / "mise"

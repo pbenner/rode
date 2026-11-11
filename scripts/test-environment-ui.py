@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from ui_harness import (
     assert_running,
     click_button,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     palette_command,
@@ -46,8 +46,7 @@ def replace_control(name, value):
     wait_for_button(window, process, log_path, state_path, name, changed_after=before)
 
 
-with tempfile.TemporaryDirectory(prefix="rode-environment-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-environment-ui-") as base:
     project = base / "project"
     project.mkdir()
     (project / "main.js").write_text("// fixture: the selected runtime records its invocation\n")

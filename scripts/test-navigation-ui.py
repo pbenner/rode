@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from ui_harness import (
     BINARY,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -63,8 +63,7 @@ def append(path, value):
 
 
 def run():
-    with tempfile.TemporaryDirectory(prefix="rode-navigation-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-navigation-") as base:
         root = base / "project"
         root.mkdir()
         folder = root / "a-folder"

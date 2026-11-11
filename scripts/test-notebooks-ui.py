@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -68,8 +68,7 @@ def run(remote=False):
         "Set RODE_TEST_JUPYTER to an interpreter with jupyter_client, ipykernel and matplotlib"
     )
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-notebook-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-notebook-ui-") as base:
         project = base / "project"
         project.mkdir()
         (project / ".venv").symlink_to(PYTHON.parent.parent)

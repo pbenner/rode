@@ -4,7 +4,6 @@
 import json
 import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     palette_command,
@@ -108,8 +108,7 @@ def check_selection(window, root, click_control, command, focus_terminal):
 
 
 def run():
-    with tempfile.TemporaryDirectory(prefix="rode-terminal-keys-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-terminal-keys-") as base:
         root = base / "project"
         root.mkdir()
         (root / "completion-target.txt").write_text("completed filename\n")

@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -56,8 +56,7 @@ def open_file(name):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-marp-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-marp-ui-") as base:
         project = base / "project"
         project.mkdir()
         source = project / "deck.marp.md"

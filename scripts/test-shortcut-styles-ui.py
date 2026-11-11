@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -14,7 +13,16 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent
     / ("target/shortcut-styles-ssh-ui" if remote_config else "target/shortcut-styles-ui")
 )
-from ui_harness import ARTIFACTS, BINARY, close_window, focus_window, key, screenshot, text
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    close_window,
+    fixture_directory,
+    focus_window,
+    key,
+    screenshot,
+    text,
+)
 
 
 def wait_for(check, message):
@@ -40,8 +48,7 @@ def prefix(name, ctrl=False, leader="x"):
 
 
 def run():
-    with tempfile.TemporaryDirectory(prefix="rode-shortcuts-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-shortcuts-") as base:
         root = base / "project"
         root.mkdir()
         source = root / "main.txt"

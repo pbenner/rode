@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,7 +20,9 @@ from ui_harness import (
     click,
     click_button,
     close_window,
+    decode_ron_string,
     display,
+    fixture_directory,
     focus_window,
     key,
     read_json_lines,
@@ -50,12 +51,11 @@ def preferences(path):
     match = re.search(r'"agent_preferences"\s*:\s*("(?:\\.|[^"\\])*")', path.read_text())
     if not match:
         return {}
-    saved = json.loads(json.loads(match[1]))
+    saved = json.loads(decode_ron_string(match[1]))
     return next(iter(saved.values()), {})
 
 
-with tempfile.TemporaryDirectory(prefix="rode-agent-files-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-agent-files-ui-") as base:
     root = base / "project"
     root.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/file_only_agent.py", root / "agent.py")

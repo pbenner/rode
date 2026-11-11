@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from ui_harness import (
     click,
     click_button,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     read_json_lines,
@@ -30,8 +30,7 @@ from ui_harness import (
     wait_for_window,
 )
 
-with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-agent-questions-ui-") as base:
     project = base / "project"
     project.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/agent.py", project / "agent.py")

@@ -4,7 +4,6 @@
 import os
 import re
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from ui_harness import (
     background,
     click,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -48,8 +48,7 @@ def open_source():
 
 
 def run():
-    with tempfile.TemporaryDirectory(prefix="rode-syntax-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-syntax-ui-") as base:
         project = base / "project"
         project.mkdir()
         source = project / "main.rs"

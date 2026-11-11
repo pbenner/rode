@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from ui_harness import (
     click,
     click_button,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     read_json_lines,
@@ -60,8 +60,7 @@ def show_chat(process, log):
     return window
 
 
-with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
     root = base / "project"
     root.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/persistent_agent.py", root / "agent.py")

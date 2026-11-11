@@ -555,7 +555,7 @@ class SshFixtureTests(unittest.TestCase):
                 sys.executable,
                 "-c",
                 "import os,subprocess\nfrom pathlib import Path\n"
-                "host=Path(os.environ['RODE_TEST_SSH_CONFIG']).with_name('host-shell')\n"
+                "host=Path(os.environ['RODE_TEST_SSH_CONFIG']).resolve().with_name('host-shell')\n"
                 'expected="/fixture/shell with \' quote"\n'
                 'env=dict(os.environ,SHELL=expected,SSH_ORIGINAL_COMMAND="printf \'%s\' \\"$SHELL\\"")\n'
                 "result=subprocess.run([host],env=env,text=True,capture_output=True)\n"

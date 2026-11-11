@@ -25,7 +25,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 #[cfg(unix)]
@@ -87,8 +86,6 @@ pub fn client_cli(args: &[String]) -> Result<i32> {
         bail!("RODE SSH clients currently require Unix")
     }
 }
-
-static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 /// Alternate network route to a compute host, retaining its original SSH identity.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -348,17 +345,15 @@ impl Remote {
         bail!("Remote workspaces currently require Unix; Linux is the validated platform.");
         #[cfg(unix)]
         {
-            use std::os::unix::fs::DirBuilderExt;
-            let directory = std::env::temp_dir().join(format!(
-                "rode-{}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)?
-                    .as_nanos(),
-                CONNECTION_SERIAL.fetch_add(1, Ordering::Relaxed)
-            ));
-            let mut builder = std::fs::DirBuilder::new();
-            builder.mode(0o700).create(&directory)?;
+            use std::os::unix::fs::PermissionsExt;
+            // Keep the name compact: private-home temporary roots already use
+            // part of the Unix socket path budget. Create it atomically with
+            // owner-only permissions; workspace cleanup owns its lifetime.
+            let directory = tempfile::Builder::new()
+                .prefix("r-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()?
+                .keep();
             Ok(Self {
                 profile,
                 socket: directory.join("ssh"),

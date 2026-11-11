@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from ui_harness import (
     click,
     close_window,
     display,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -64,8 +64,7 @@ def color(window, name, kind):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-pdf-ui-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-pdf-ui-") as base:
         root = base / "project"
         root.mkdir()
         pdf = root / "report.PDF"

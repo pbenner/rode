@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from ui_harness import (
     ROOT,
     click,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -42,8 +42,7 @@ def command(name):
     time.sleep(0.4)
 
 
-with tempfile.TemporaryDirectory(prefix="rode-slurm-notebook-ui-") as directory:
-    base = Path(directory)
+with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
     root = base / "project"
     tools = root / "tools"
     tools.mkdir(parents=True)

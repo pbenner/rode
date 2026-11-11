@@ -14,6 +14,7 @@ if [[ -n "${RODE_TEST_SESSION_HELPER:-}" && -z "${RODE_HOST_HELPER+x}" && -z "${
     export RODE_SESSION_HELPER="$RODE_TEST_SESSION_HELPER"
 fi
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/rode-ssh-test.XXXXXX")
+test_dir=$(cd "$test_dir" && pwd -P)
 mkdir -m 700 "$test_dir/codex-home" "$test_dir/home"
 sshd_pid=
 cleanup() {
@@ -37,26 +38,13 @@ ssh-keygen -q -t ed25519 -N '' -f "$test_dir/client"
 test_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 test_user=$(id -un)
 # A developer's installed helper must not outrank the private-home fixture.
-test_path=$(python3 scripts/ssh_fixture.py "$test_dir/path" "$PATH")
+test_path=$(python3 scripts/ssh_fixture.py path "$test_dir/path" "$PATH")
 # Pin sshd's X11 cookies to the fixture independently of shell environment
 # setup, even though the account database points at the real user's home.
 xauth_bin=$(command -v xauth || true)
 if [[ -z "$xauth_bin" && "${RODE_TEST_REQUIRE_X11:-0}" == 1 ]]; then
     echo 'Install xauth for required X11 forwarding coverage.' >&2
     exit 1
-fi
-x11_config='X11Forwarding no'
-client_xauth=
-if [[ -n "$xauth_bin" ]]; then
-    client_xauth="XAuthLocation \"$xauth_bin\""
-    cat > "$test_dir/xauth" <<EOF
-#!/bin/sh
-exec '$xauth_bin' -f '$test_dir/home/.Xauthority' "\$@"
-EOF
-    chmod 700 "$test_dir/xauth"
-    x11_config="X11Forwarding ${RODE_SSH_TEST_X11:-yes}
-X11UseLocalhost yes
-XAuthLocation $test_dir/xauth"
 fi
 mkdir -p "$test_dir/home/.local/bin"
 test_shell="$test_dir/home/.local/bin/project-shell"
@@ -102,70 +90,10 @@ EOF
         test_path="$test_dir/no-bwrap:$test_path"
     fi
 fi
-cat > "$test_dir/host-shell" <<EOF
-#!/bin/sh
-# Retain the fixture environment in every forced command.
-export HOME='$test_dir/home'
-export PATH='$test_path'
-export TMPDIR='$test_dir'
-export RODE_SESSION_DIR='$test_dir/home/sessions'
-export RODE_VAULT_DIR='$test_dir/home/vaults'
-export XAUTHORITY='$test_dir/home/.Xauthority'
-export SHELL='$test_shell'
-if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then
-    exec /bin/sh -c "\$SSH_ORIGINAL_COMMAND"
-fi
-exec /bin/sh
-EOF
-chmod 700 "$test_dir/host-shell"
-cat > "$test_dir/sshd_config" <<EOF
-Port $test_port
-ListenAddress 127.0.0.1
-HostKey $test_dir/host
-HostKey $test_dir/host-known
-PidFile $test_dir/sshd.pid
-AuthorizedKeysFile $test_dir/client.pub
-StrictModes no
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-UsePAM no
-PermitUserRC no
-PermitUserEnvironment no
-UseDNS no
-AllowUsers $test_user
-LogLevel VERBOSE
-GatewayPorts clientspecified
-# Parallel direct/ProxyJump tests exceed sshd's default ten-login throttle.
-# Keep a bounded limit on this private loopback daemon without random drops.
-MaxStartups 64
-$x11_config
-AcceptEnv CODEX_HOME RODE_CODEX_CACHE
-# Isolate account-shell startup too, before the forced command runs.
-SetEnv "HOME=$test_dir/home"
-# The fixture runs on this host; expose the same CI-installed tools to its child shells.
-SetEnv "PATH=$test_path"
-# Keep helper deployment and tool preferences out of the real user's home.
-ForceCommand $test_dir/host-shell
-EOF
-read -r key_type key_data _ < "$test_dir/host-known.pub"
-printf '[127.0.0.1]:%s %s %s\n' "$test_port" "$key_type" "$key_data" > "$test_dir/known_hosts"
-: > "$test_dir/global_known_hosts"
-cat > "$test_dir/ssh_config" <<EOF
-Host rode-test rode-jump
-    HostName 127.0.0.1
-    User $test_user
-    Port $test_port
-    IdentityFile $test_dir/client
-    IdentitiesOnly yes
-    UserKnownHostsFile $test_dir/known_hosts
-    GlobalKnownHostsFile $test_dir/global_known_hosts
-    StrictHostKeyChecking yes
-    BatchMode yes
-    # Common system default: enabling an optional method must not block keys.
-    GSSAPIAuthentication yes
-    $client_xauth
-    SetEnv CODEX_HOME=$test_dir/codex-home RODE_CODEX_CACHE=$test_dir/codex-cache
-EOF
+# Quote shell exports and OpenSSH tokens separately; TMPDIR may contain spaces
+# or quotes, and the remote host uses the canonical private fixture directory.
+python3 scripts/ssh_fixture.py configure "$test_dir" "$test_path" "$test_shell" "$xauth_bin" \
+    "$test_port" "$test_user" "${RODE_SSH_TEST_X11:-yes}"
 "$sshd_bin" -D -e -f "$test_dir/sshd_config" > "$test_dir/sshd.log" 2>&1 &
 sshd_pid=$!
 if ! python3 - "$test_port" <<'PY'
@@ -187,14 +115,18 @@ then
     cat "$test_dir/sshd.log" >&2
     exit 1
 fi
-export RODE_TEST_SSH_CONFIG="$test_dir/ssh_config"
+# OpenSSH builds a shell command for ProxyJump and cannot quote every -F path.
+# Keep a live directory handle so its config path has no shell metacharacters,
+# regardless of the caller's temporary directory. This fixture is Linux-only.
+exec {fixture_dir_fd}<"$test_dir"
+export RODE_TEST_SSH_CONFIG="/proc/$$/fd/$fixture_dir_fd/ssh_config"
 export RODE_TEST_SSH_HOME="$test_dir/home"
 export RODE_TEST_SSH_X11="${RODE_SSH_TEST_X11:-yes}"
 if [[ -z "$xauth_bin" ]]; then export RODE_TEST_SSH_X11=no; fi
 export RODE_TEST_CODEX_REMOTE_HOME="$test_dir/codex-home"
 # A non-root sshd can accept commands yet lack permission to create login-recorded
 # PTYs in a container. Detect that fixture limitation independently of RODE.
-if timeout 10 ssh -F "$test_dir/ssh_config" -tt rode-test true </dev/null >"$test_dir/pty-probe.log" 2>&1; then
+if timeout 10 ssh -F "$RODE_TEST_SSH_CONFIG" -tt rode-test true </dev/null >"$test_dir/pty-probe.log" 2>&1; then
     export RODE_TEST_SSH_PTY=1
 else
     export RODE_TEST_SSH_PTY=0
@@ -232,51 +164,51 @@ esac
 # below remain supported for standalone developer invocations.
 if [[ $# != 0 ]]; then "$@"; fi
 if [[ "${RODE_SSH_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-project-ui.py
+    python3 scripts/test-project-ui.py
 fi
 if [[ "${RODE_FILE_BROWSER_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-file-browser-ui.py
+    python3 scripts/test-file-browser-ui.py
 fi
 if [[ "${RODE_WORKBENCH_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-workbench-ui.py
+    python3 scripts/test-workbench-ui.py
 fi
 if [[ "${RODE_IMAGES_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-images-ui.py
+    python3 scripts/test-images-ui.py
 fi
 if [[ "${RODE_MARKDOWN_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-markdown-ui.py
+    python3 scripts/test-markdown-ui.py
 fi
 
 if [[ "${RODE_PDF_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-pdf-ui.py
+    python3 scripts/test-pdf-ui.py
 fi
 
 if [[ "${RODE_BINARY_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-binary-ui.py
+    python3 scripts/test-binary-ui.py
 fi
 
 if [[ "${RODE_NOTEBOOK_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-notebooks-ui.py
+    python3 scripts/test-notebooks-ui.py
 fi
 
 if [[ "${RODE_MARP_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-marp-ui.py
+    python3 scripts/test-marp-ui.py
 fi
 if [[ "${RODE_LATEX_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-latex-ui.py
+    python3 scripts/test-latex-ui.py
 fi
 if [[ "${RODE_VAULT_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-vaults-ui.py
+    python3 scripts/test-vaults-ui.py
 fi
 
 if [[ "${RODE_DEBUGGER_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-debugger-ui.py
+    python3 scripts/test-debugger-ui.py
 fi
 
 if [[ "${RODE_NAVIGATION_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-navigation-ui.py
+    python3 scripts/test-navigation-ui.py
 fi
 
 if [[ "${RODE_SHORTCUT_STYLES_UI:-0}" == "1" ]]; then
-    RODE_TEST_SSH_CONFIG="$test_dir/ssh_config" python3 scripts/test-shortcut-styles-ui.py
+    python3 scripts/test-shortcut-styles-ui.py
 fi

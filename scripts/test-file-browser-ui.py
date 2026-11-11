@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from ui_harness import (
     BINARY,
     click,
     close_window,
+    fixture_directory,
     focus_window,
     key,
     screenshot,
@@ -64,8 +64,7 @@ def image_pixels(window, name, color, minimum):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-file-browser-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-file-browser-") as base:
         root = base / "project"
         root.mkdir()
         folder = root / "a-folder"
