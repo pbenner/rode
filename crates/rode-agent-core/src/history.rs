@@ -69,7 +69,6 @@ pub struct Entry {
     /// Short saved-message preview when supplied by the agent.
     pub preview: String,
     /// Backend-reported project path; empty means the backend did not provide one.
-    #[serde(default)]
     pub cwd: String,
     /// Relative recency or backend-supplied metadata.
     pub updated: String,

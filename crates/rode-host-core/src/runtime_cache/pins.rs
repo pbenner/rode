@@ -1,9 +1,9 @@
 //! Runtime release pins shared by desktop selection and host cache deployment.
 //!
 //! Deserialize metadata, then validate versions and targets before deriving a
-//! pathname or trusting an upload size. Artifact order and cache identity are a
-//! compatibility contract: the main executable comes first, helpers follow in
-//! sorted filename order, and legacy main-only targets retain their digest key.
+//! pathname or trusting an upload size. The main executable comes first and
+//! helpers follow in sorted filename order. Every cache key covers that complete
+//! ordered artifact metadata, including targets with only a main executable.
 //! Filesystem ownership, notice-name policies, downloads and publication belong
 //! to the calling desktop installer or host cache, not to these data types.
 use anyhow::{Result, ensure};
@@ -67,16 +67,11 @@ impl Target {
     }
 
     /// Derive the immutable directory key for a previously validated target.
-    /// Main-only targets keep the legacy digest key. Targets with helpers hash
-    /// the ordered artifact metadata so missing/changed helpers select a new cache.
+    /// Hash ordered artifact metadata so changes to any member select a new cache.
     pub fn cache_key(&self) -> Result<String> {
-        if self.helpers.is_empty() {
-            Ok(self.sha256.clone())
-        } else {
-            Ok(crate::files::digest(&serde_json::to_vec(
-                &self.artifacts(),
-            )?))
-        }
+        Ok(crate::files::digest(&serde_json::to_vec(
+            &self.artifacts(),
+        )?))
     }
 }
 
@@ -130,10 +125,14 @@ mod tests {
     }
 
     #[test]
-    fn cache_identity_preserves_legacy_and_ordered_multi_executable_paths() {
-        let single = target(false);
+    fn cache_identity_covers_metadata_and_ordered_single_and_multi_executable_paths() {
+        let mut single = target(false);
         single.validate().unwrap();
-        assert_eq!(single.cache_key().unwrap(), "a".repeat(64));
+        let single_key = single.cache_key().unwrap();
+        assert_ne!(single_key, single.sha256);
+        assert_eq!(single_key, target(false).cache_key().unwrap());
+        single.size += 1;
+        assert_ne!(single_key, single.cache_key().unwrap());
         let mut multiple = target(true);
         multiple.validate().unwrap();
         assert_eq!(
@@ -144,8 +143,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["codex", "codex-code-mode-host", "codex-exec-server"]
         );
-        // Existing desktop/helper cache identity; changing serialization or
-        // transfer order must not silently invalidate deployed runtimes.
+        // Desktop and helper must derive the same key from the same metadata.
         assert_eq!(
             multiple.cache_key().unwrap(),
             "e0e15a0cdf1000dbff809ae7c512dc2dc1a013f08380a1cb1c446335fb2474ef"

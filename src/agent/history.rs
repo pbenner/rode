@@ -251,14 +251,10 @@ impl Browser {
         self.diagnostics.clear();
         Ok(())
     }
-    /// Unknown paths from older project-scoped hosts remain compatible; the
-    /// all-project view never treats an unknown path as the current project.
+    /// Only an explicit matching backend path identifies this project's history.
     pub fn is_current_project(&self, entry: &Entry) -> bool {
-        if entry.cwd.is_empty() {
-            self.view.scope == Scope::Project
-        } else {
-            std::path::Path::new(&entry.cwd) == std::path::Path::new(&self.project)
-        }
+        !entry.cwd.is_empty()
+            && std::path::Path::new(&entry.cwd) == std::path::Path::new(&self.project)
     }
     /// Restore exactly the backend row selected by the user.
     pub fn resume(&mut self, id: &str) -> Result<()> {
@@ -396,10 +392,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_project_rows_remain_usable_but_unknown_all_project_rows_cannot_restore() {
-        let entry: Entry = serde_json::from_value(serde_json::json!({"id":"legacy", "title":"Saved chat", "preview":"", "updated":"", "active":false})).unwrap();
+    fn history_requires_explicit_project_metadata_in_every_scope() {
+        let mut value = serde_json::json!({"id":"saved", "title":"Saved chat", "preview":"", "updated":"", "active":false});
+        assert!(serde_json::from_value::<Entry>(value.clone()).is_err());
+        value["cwd"] = "".into();
+        let entry: Entry = serde_json::from_value(value).unwrap();
         let mut browser = presentation(HistoryView::default());
-        assert!(browser.is_current_project(&entry));
+        assert!(!browser.is_current_project(&entry));
         browser.view.scope = Scope::AllProjects;
         assert!(!browser.is_current_project(&entry));
         let entry = Entry {
@@ -414,7 +413,8 @@ mod tests {
         let error = "Agent history: Cannot read saved chat\nPermission denied\n\nCheck directory permissions";
         let view: HistoryView = serde_json::from_value(serde_json::json!({
             "entries": [], "status": error, "busy": false, "can_resume": false,
-            "more": false, "backend_output": "", "owners": {}, "can_delete": false, "deleting": false
+            "more": false, "backend_output": "", "owners": {}, "can_delete": false, "deleting": false,
+            "scope": "project", "can_list": false
         }))
         .unwrap();
         let mut browser = presentation(view);

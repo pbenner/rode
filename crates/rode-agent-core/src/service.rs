@@ -169,11 +169,9 @@ pub struct ChatView {
 /// Explicit history browsing state; no inference is requested by listing.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct HistoryView {
-    /// Explicit listing scope; older hosts retain project-only browsing.
-    #[serde(default)]
+    /// Explicit listing scope.
     pub scope: crate::history::Scope,
     /// Whether the backend acknowledged history-list support.
-    #[serde(default)]
     pub can_list: bool,
     /// Bounded saved-chat rows.
     pub entries: Vec<Entry>,

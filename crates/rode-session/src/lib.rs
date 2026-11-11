@@ -21,8 +21,8 @@
 //!
 //! Persistence is a property of the session, not a particular window: closing
 //! one of several views must not end another view's shell. Explicit termination
-//! and last-view cleanup therefore differ. Clients require the current protocol;
-//! they never discover or route requests to earlier service generations.
+//! and last-view cleanup therefore differ. Clients use a single private runtime
+//! directory and require the current protocol before dispatching any operation.
 //!
 //! Agent controllers share this host lifetime but use a single controlling view
 //! rather than PTY-style shared input. Their complete protocol/history state
@@ -272,7 +272,7 @@ fn service_offline(error: &anyhow::Error) -> bool {
     })
 }
 fn request_current(request: &Request, launcher: &Launcher) -> Result<Response> {
-    let response = match request_once(request, launcher, &directory()) {
+    let response = match request_once(request, launcher, &directory()?) {
         Err(error) if service_offline(&error) => match request {
             Request::List => Response::Sessions(vec![]),
             Request::Agents => Response::Agents(vec![]),
@@ -565,13 +565,14 @@ impl Server {
             mode,
             argv,
             initial_input,
-            env,
+            mut env,
             persistent,
             allocation,
         } = request
         else {
             unreachable!()
         };
+        rode_host_core::private_tmp::apply(&mut env)?;
         ensure!(
             !self.stop.load(Ordering::Acquire),
             "Session service is stopping"
@@ -1235,7 +1236,7 @@ pub fn attach(id: &str, policy: &str, framed: bool) -> Result<()> {
 }
 
 fn attach_stream(id: &str, policy: &str, framed: bool, heartbeat: bool) -> Result<()> {
-    let mut stream = connect_control(&directory())?;
+    let mut stream = connect_control(&directory()?)?;
     send_json(
         &mut stream,
         &Request::Attach {

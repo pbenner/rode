@@ -82,7 +82,7 @@ impl Input {
             rode_host_protocol::framing::CONNECTION_TIMEOUT,
         ))
     }
-    /// Preserve legacy streams that did not negotiate periodic heartbeats.
+    /// Allow interactive local streams without periodic heartbeats.
     pub fn unbounded(&mut self) {
         self.bounded = false;
     }
@@ -98,7 +98,7 @@ impl Read for Input {
         }
         loop {
             // A PTY may share stdin/stdout's open-file flags. Poll even for
-            // legacy input after the output writer enables O_NONBLOCK.
+            // interactive input after the output writer enables O_NONBLOCK.
             match ready(
                 self.file.as_raw_fd(),
                 libc::POLLIN,
@@ -263,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_input_waits_when_output_shares_its_nonblocking_descriptor() {
+    fn interactive_input_waits_when_output_shares_its_nonblocking_descriptor() {
         let (read, mut write) = UnixStream::pair().unwrap();
         let mut input = Input::new(
             duplicate(read.as_raw_fd()).unwrap(),

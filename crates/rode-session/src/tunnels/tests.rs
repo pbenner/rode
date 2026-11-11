@@ -361,12 +361,12 @@ fn blank_credentials_use_defaults_and_explicit_key_or_agent_settings_are_preserv
 
 #[test]
 fn listener_scope_defaults_to_loopback_and_only_accepts_requested_address_kinds() {
-    let legacy: Spec = serde_json::from_value(serde_json::json!({
+    let defaults: Spec = serde_json::from_value(serde_json::json!({
         "relay_host": "relay.example.org", "relay_user": "researcher"
     }))
     .unwrap();
-    assert_eq!(legacy.listen_on, ListenOn::Loopback);
-    assert_eq!(legacy.listener(), "127.0.0.1:22022");
+    assert_eq!(defaults.listen_on, ListenOn::Loopback);
+    assert_eq!(defaults.listener(), "127.0.0.1:22022");
     for address in ["", "0.0.0.0", "::", "::1", "192.0.2.1", "2001:db8::1"] {
         assert!(!ListenOn::Loopback.accepts_address(address));
         assert!(ListenOn::AllInterfaces.accepts_address(address));
@@ -375,7 +375,7 @@ fn listener_scope_defaults_to_loopback_and_only_accepts_requested_address_kinds(
     assert!(!ListenOn::AllInterfaces.accepts_address("not-an-address"));
     let public = Spec {
         listen_on: ListenOn::AllInterfaces,
-        ..legacy
+        ..defaults
     };
     assert_eq!(public.listener(), "*:22022");
     assert_eq!(
@@ -783,16 +783,9 @@ async fn verifies_relay_forwards_reconnects_and_stops_only_its_worker() {
     until(|| store.list()[0].status == Status::HostKeyRequired).await;
     let untrusted = store.list().remove(0);
     assert_eq!(untrusted.hostname, local_hostname().unwrap());
-    // New clients still accept retained tunnels from services started before
-    // hostname metadata was introduced, without restarting those services.
-    let mut legacy = serde_json::to_value(&untrusted).unwrap();
-    legacy.as_object_mut().unwrap().remove("hostname");
-    assert!(
-        serde_json::from_value::<Info>(legacy)
-            .unwrap()
-            .hostname
-            .is_empty()
-    );
+    let mut incomplete = serde_json::to_value(&untrusted).unwrap();
+    incomplete.as_object_mut().unwrap().remove("hostname");
+    assert!(serde_json::from_value::<Info>(incomplete).is_err());
     assert_eq!(
         relay.auths.load(Ordering::SeqCst),
         0,

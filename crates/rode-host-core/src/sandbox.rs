@@ -512,11 +512,30 @@ pub fn arguments(
             mounts.push((flag, path));
         }
     }
-    // A parent grant must never mask a more specific child's restrictions.
+    let temporary = if options.backend == Backend::Bwrap {
+        let path = crate::private_tmp::project(home, root)?.0;
+        if let Some((flag, _)) = mounts.iter().find(|(_, grant)| grant == &path) {
+            if *flag != "--bind" {
+                bail!("The private temporary directory must remain writable");
+            }
+        } else {
+            mounts.push(("--bind", path.clone()));
+        }
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    // A parent grant must never mask a more specific child's restrictions,
+    // including explicit restrictions inside private temporary storage.
     mounts.sort_by_key(|(_, path)| path.components().count());
     for (flag, path) in mounts {
         let path = path.to_string_lossy().into_owned();
         args.extend([flag.into(), path.clone(), path]);
+    }
+    if let Some(temporary) = temporary {
+        for name in crate::private_tmp::VARIABLES {
+            args.extend(["--setenv".into(), name.into(), temporary.clone()]);
+        }
     }
     let root = root.to_string_lossy().into_owned();
     if options.backend == Backend::Landlock {
@@ -549,6 +568,16 @@ pub fn arguments(
 }
 
 impl Plan {
+    /// Host-local private temporary directory for the actual execution mode.
+    pub fn temporary_directory(&self) -> Result<PathBuf> {
+        let home = crate::private_tmp::home()?;
+        if self.active {
+            Ok(crate::private_tmp::project(&home, Path::new(&self.root))?.0)
+        } else {
+            crate::private_tmp::root(&home)
+        }
+    }
+
     /// Persistent UI label for actual isolation/read-only/fallback state.
     pub fn label(&self) -> &'static str {
         if self.active {
@@ -606,5 +635,118 @@ impl Plan {
         } else {
             mounted.into()
         }
+    }
+}
+
+#[cfg(test)]
+mod private_tmp_tests {
+    use super::*;
+
+    #[test]
+    fn bubblewrap_binds_home_temporary_storage_after_project_grants() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let args = arguments(
+            Path::new("bwrap"),
+            project.path(),
+            home.path(),
+            &Options {
+                enabled: true,
+                backend: Backend::Bwrap,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let temporary = crate::private_tmp::project(home.path(), project.path())
+            .unwrap()
+            .0;
+        let temporary = temporary.to_string_lossy();
+        let binding = args
+            .windows(3)
+            .position(|v| v == ["--bind", temporary.as_ref(), temporary.as_ref()])
+            .unwrap();
+        let project_binding = args
+            .windows(3)
+            .position(|v| {
+                v == [
+                    "--bind",
+                    project.path().to_str().unwrap(),
+                    project.path().to_str().unwrap(),
+                ]
+            })
+            .unwrap();
+        assert!(binding > project_binding);
+        for name in crate::private_tmp::VARIABLES {
+            assert!(
+                args.windows(3)
+                    .any(|v| v == ["--setenv", name, temporary.as_ref()])
+            );
+        }
+        assert!(args.windows(2).any(|v| v == ["--tmpfs", "/tmp"]));
+    }
+
+    #[test]
+    fn normal_mode_and_unavailable_sandboxes_use_the_same_private_root() {
+        let normal = Plan::default();
+        let fallback = Plan {
+            requested: true,
+            reason: "sandbox unavailable".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            normal.temporary_directory().unwrap(),
+            fallback.temporary_directory().unwrap()
+        );
+        assert!(
+            normal
+                .temporary_directory()
+                .unwrap()
+                .starts_with(crate::files::expand_home("~"))
+        );
+    }
+
+    #[test]
+    fn temporary_mounts_preserve_child_restrictions_and_reject_read_only_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let temporary = crate::private_tmp::project(home.path(), project.path())
+            .unwrap()
+            .0;
+        let restricted = temporary.join("read-only");
+        std::fs::create_dir(&restricted).unwrap();
+        let mut options = Options {
+            enabled: true,
+            read_only: vec![restricted.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        let args = arguments(Path::new("bwrap"), project.path(), home.path(), &options).unwrap();
+        let temporary_binding = args
+            .windows(3)
+            .position(|v| {
+                v == [
+                    "--bind",
+                    temporary.to_str().unwrap(),
+                    temporary.to_str().unwrap(),
+                ]
+            })
+            .unwrap();
+        let child_binding = args
+            .windows(3)
+            .position(|v| {
+                v == [
+                    "--ro-bind",
+                    restricted.to_str().unwrap(),
+                    restricted.to_str().unwrap(),
+                ]
+            })
+            .unwrap();
+        assert!(child_binding > temporary_binding);
+        options.read_only = vec![temporary.to_string_lossy().into_owned()];
+        assert!(
+            arguments(Path::new("bwrap"), project.path(), home.path(), &options)
+                .unwrap_err()
+                .to_string()
+                .contains("must remain writable")
+        );
     }
 }

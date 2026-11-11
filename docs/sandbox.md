@@ -24,6 +24,36 @@ The persistent workspace banner reports the actual result:
 
 Sandbox preparation never installs tools or escalates privileges. The default `uvx ruff` command may populate its isolated tool cache on first use; warm that cache before disabling network access. After a sandbox has been selected successfully, a later sandbox operation failure is reported as an error; that operation is not retried outside it.
 
+## Private temporary storage
+
+RODE creates temporary storage in `~/.cache/rode/tmp`, with mode `0700`. It sets
+`TMPDIR`, `TMP` and `TEMP` to that directory in normal mode, including when a
+requested sandbox is unavailable. Active Landlock and bubblewrap projects use
+separate subdirectories named by a digest of the project path. Over SSH and on
+Slurm compute nodes, these paths belong to the home directory on the execution
+host, not the desktop.
+
+Desktop and helper processes, tools, agents and native terminals start with
+`umask 077`: ordinary newly created files default to `0600` and directories to
+`0700`. Existing files retain their permissions. Terminal setup restores these
+defaults after shell startup files and environment activation. Project variables
+cannot override the three managed temporary-directory variables, and environment
+providers cannot redirect them to shared storage.
+
+The home must exist, belong to the current user, and not be writable by other
+users. RODE rejects unsafe ownership, permissions or symlinks in its temporary
+directory chain; it does not fall back to shared `/tmp`. Bubblewrap binds only
+the project's private temporary directory into its namespace and retains a
+private `/tmp` tmpfs for programs that use that absolute path directly.
+
+These are private defaults, not a guarantee about arbitrary programs: a tool can
+explicitly change permissions or use another path, especially without a
+sandbox. Unix ownership does not protect against root or another process running
+as the same user. Temporary files can remain after a crash; remove them only
+after the corresponding work has stopped. Updating RODE does not move existing
+files or change already running jobs. Update remote helpers together with the
+editor; helpers without the `private_home_tmp` capability cannot start new work.
+
 ## Landlock without user namespaces
 
 Landlock requires a Linux x86_64 or aarch64 project host and **Landlock ABI 4 or newer** enabled by the kernel. RODE probes the ABI rather than assuming support from the version string and requests only features that kernel supports:
@@ -48,11 +78,11 @@ Landlock differs materially from bubblewrap:
 
 - It does not create mount, PID, user or network namespaces. Processes remain visible in host process listings, and `/proc` exposes the host process view read-only. **Hidden** denies content/directory access; it does not conceal path existence or metadata. The supported policy does not restrict operations such as `chmod`, ownership/timestamp changes and extended attributes. Read-only here protects file contents and directory entries, not all metadata mutations.
 - It grants a small set of existing `/dev` devices for stdio, randomness and PTYs. It does not expose all host devices or create a private `/dev`.
-- A private, owner-only scratch directory under `~/.cache/rode/landlock/<project-hash>` is granted writable and exported as `TMPDIR`, `TMP` and `TEMP`. The launcher validates and grants the same opened directory, without following replacement symlinks. A read-only rule on scratch or one of its children is rejected rather than overridden. Host `/tmp` is not broadly granted. Tools hard-coding `/tmp` may fail. Scratch survives persisted sessions and reopening the project; remove a project's scratch only after its jobs have ended. It is shared by that project's sessions, not an ephemeral mount.
+- A private, owner-only scratch directory under `~/.cache/rode/tmp/<project-hash>` is granted writable and exported as `TMPDIR`, `TMP` and `TEMP`. The launcher validates and grants the same opened directory, without following replacement symlinks. A read-only rule on scratch or one of its children is rejected rather than overridden. Host `/tmp` is not broadly granted. Tools hard-coding `/tmp` may fail. Scratch survives persisted sessions and reopening the project; remove a project's scratch only after its jobs have ended. It is shared by that project's sessions, not an ephemeral mount.
 - With **Allow network access** off, Landlock TCP denial is supplemented by a seccomp filter blocking socket creation/connect/bind/send and io_uring on every supported ABI. This includes UDP and pathname Unix sockets; tools needing IPC sockets, including notebook kernels, may therefore fail. With networking on, host networking and pathname Unix sockets remain reachable; filesystem grants do not filter those socket connections. On ABI 6+, abstract Unix sockets and signals outside the launch's Landlock domain are restricted in either mode. On ABI 4/5, abstract sockets remain reachable when networking is on, and signals follow ordinary host permissions.
 - The launcher closes inherited descriptors above stderr. Stdin/stdout/stderr remain the deliberate editor/terminal transport capability. Existing environment variables and explicitly shared writable caches retain their usual risks.
 
-The current native session service authenticates its abstract Unix control socket on Linux before accepting requests or attachments. A random capability stays in a sealed, non-executable, anonymous memory file held by the service; the runtime directory contains only its `/proc/<service-pid>/fd/<descriptor>` reference. Landlock's ptrace boundary prevents project tools reading that descriptor on all supported ABIs, even when the runtime directory itself is explicitly granted. ABI 6 additionally blocks the abstract connection. The filesystem discovery socket rejects control requests, and the existing same-UID/mount-namespace checks still protect bubblewrap. This prevents project tools using the current service as an unrestricted process broker, including when ordinary host processes already have `no_new_privs` set. The current session protocol is 19 and requires rebuilding/updating the native helper alongside RODE. Every control connection checks that protocol after authentication. Earlier service generations and unauthenticated endpoints are not supported. Updating does not add protection to earlier binaries or other host services; with networking enabled, reachable host services remain outside Landlock's filesystem boundary.
+The current native session service authenticates its abstract Unix control socket on Linux before accepting requests or attachments. A random capability stays in a sealed, non-executable, anonymous memory file held by the service; the runtime directory contains only its `/proc/<service-pid>/fd/<descriptor>` reference. Landlock's ptrace boundary prevents project tools reading that descriptor on all supported ABIs, even when the runtime directory itself is explicitly granted. ABI 6 additionally blocks the abstract connection. The filesystem discovery socket rejects control requests, and the existing same-UID/mount-namespace checks still protect bubblewrap. This prevents project tools using the current service as an unrestricted process broker, including when ordinary host processes already have `no_new_privs` set. The current service generation requires rebuilding/updating the native helper alongside RODE. Every control connection checks that protocol after authentication. Earlier service generations and unauthenticated endpoints are not supported. Updating does not add protection to earlier binaries or other host services; with networking enabled, reachable host services remain outside Landlock's filesystem boundary.
 
 See the kernel's [Landlock interface and limitations](https://docs.kernel.org/6.12/userspace-api/landlock.html) and [seccomp filter interface](https://docs.kernel.org/userspace-api/seccomp_filter.html). Neither backend supplies CPU or memory quotas, and these development policies are not a guarantee for arbitrary hostile code.
 
@@ -70,7 +100,7 @@ The local implementation uses a private Rust file-helper entry point from the ed
 | Read-only home paths, if present | `~/.local`, `~/.rustup`, `~/.bashrc`, `~/.bash_profile`, `~/.bash_login`, `~/.bash_aliases`, `~/.profile`, `~/.gitconfig`, `~/.config/git` |
 | Writable shared tool paths, if present | `~/.cargo`, `~/.cache/uv`, `~/.codex` |
 | Writable project | The canonical selected project directory |
-| Private temporary locations | Fresh `/tmp` and `/home`; the user's home path and an empty `.config` directory are created inside the sandbox |
+| Private temporary locations | Fresh `/tmp` and `/home`; the user's home path and an empty `.config` directory are created inside the sandbox, with the project's `~/.cache/rode/tmp/<project-hash>` bound writable |
 | Process/device views | A new `/proc` and minimal `/dev` |
 
 The namespace/mount flags follow [bubblewrap's documented interface](https://github.com/containers/bubblewrap). RODE uses `--unshare-all`, `--die-with-parent`, and the selected project's directory as the working directory. Network access is shared by default, matching the supplied example; turn off **Allow network access** to retain a private network namespace. `HOME` points to the isolated home path and `UV_LINK_MODE=copy` avoids cross-mount hard-link assumptions.

@@ -8,9 +8,8 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Required service protocol and runtime-directory generation.
-/// Generation 24 also requires transport signalling to finish before reaping.
-pub const PROTOCOL: u32 = 24;
+/// Required service protocol, including private temporary storage and child masks.
+pub const PROTOCOL: u32 = 25;
 
 /// Host-service metadata for one terminal; no live PTY handle is transferred to clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]

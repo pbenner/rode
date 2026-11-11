@@ -324,11 +324,8 @@ fn terminal_request(operation: &Operation) -> Result<crate::Request> {
             let activation = initial_input(&python);
             let provider = rode_host_core::mise::shell_environment(&plan.environment, &plan.root);
             let exports = environment.exports()?;
-            if exports.is_empty() {
-                provider + &activation
-            } else {
-                format!("{provider}{activation}{exports}\n")
-            }
+            let privacy = rode_host_core::private_tmp::shell_exports(&plan.temporary_directory()?);
+            format!("{provider}{activation}{exports}\n{privacy}")
         },
         env,
         persistent: *persistent,

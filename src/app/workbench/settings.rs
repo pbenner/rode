@@ -120,7 +120,7 @@ impl EditorApp {
                 .color(palette.heading_color()),
         );
         let root = self.root();
-        ui.add(egui::Label::new(RichText::new(&root).small().color(palette.muted)).truncate())
+        ui.add(egui::Label::new(RichText::new(&root).small().color(palette.muted)).wrap())
             .on_hover_text(&root);
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {

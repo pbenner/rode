@@ -141,8 +141,8 @@ reject a cache path produced by its own helper. Run
 `cargo test -p rode-host-core runtime_cache::pins`,
 `cargo test --lib bundled::` and `cargo test --test bundled` as separate
 invocations to exercise the shared contract, installer units and host deployment.
-The fixed multi-executable cache-key fixture and legacy main-only key must remain
-stable unless an explicit cache-format migration is intended.
+Single- and multi-executable targets use the same ordered artifact-metadata
+hash. The fixed cache-key fixture checks agreement between desktop and helper.
 
 Background Git status requests use `--no-optional-locks` in the shared project
 service. Git's optional stat-cache refresh can otherwise race an external commit
@@ -228,7 +228,7 @@ copied return-connection details and refusal to fall back from a disconnected SS
 workspace. Local controls do not depend on project readiness or sandbox settings.
 Endpoint rendering checks show the tunnel listener port and named compute
 destination, without confusing the listener with the relay's SSH login port.
-They include IPv6 and older services without hostname metadata. The service
+They include IPv6 and rejection of service replies without hostname metadata. The service
 fixture checks that new replies report the owning hostname.
 The local-service fixture also checks that a missing helper override names the
 selected executable and `RODE_SESSION_HELPER` while preserving the OS cause.
@@ -242,8 +242,8 @@ They also cover long multiline diagnostics and copying request/tunnel errors
 without dispatching host work.
 
 The service embeds russh and needs Rust 1.89. Rebuild the matching helper
-alongside the editor; `rode_session::PROTOCOL` defines the required service
-generation, and existing daemon generations keep their own jobs. Validate
+alongside the editor; `rode_session::PROTOCOL` defines the required wire
+contract, and mismatched services are rejected. Validate
 the static musl helper against the existing 24 MiB deployment limit. Native UI
 checks must use the isolated headless display workflow below.
 

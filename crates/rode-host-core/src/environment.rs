@@ -45,6 +45,10 @@ impl Settings {
         );
         for (name, value) in &self.variables {
             ensure!(
+                !crate::private_tmp::VARIABLES.contains(&name.as_str()),
+                "{name} is managed by RODE to keep temporary files private."
+            );
+            ensure!(
                 variable_name(name) && name.len() <= 128,
                 "Invalid environment variable name: {name}"
             );
@@ -174,6 +178,20 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn project_variables_cannot_redirect_managed_temporary_storage() {
+        for name in crate::private_tmp::VARIABLES {
+            let mut settings = Settings::default();
+            settings.variables.insert(name.into(), "/tmp/shared".into());
+            assert!(
+                settings
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("managed by RODE")
+            );
+        }
+    }
     #[test]
     fn values_are_literal_and_runtime_paths_are_shared_by_tasks_and_shells() {
         let mut settings = Settings {

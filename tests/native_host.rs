@@ -166,7 +166,7 @@ fn installed_helper_reports_the_same_contract_as_its_rpc_handshake() {
 fn native_handshake_rejects_wrong_version_identity_and_oversized_frames() {
     let Some(helper) = helper() else { return };
     let digest = files::digest(&fs::read(&helper).unwrap());
-    for case in ["version", "digest", "architecture", "frame"] {
+    for case in ["version", "digest", "architecture", "frame", "capabilities"] {
         let mut input = framing::MAGIC.to_vec();
         if case == "frame" {
             input.extend_from_slice(&u32::MAX.to_be_bytes());
@@ -190,7 +190,11 @@ fn native_handshake_rejects_wrong_version_identity_and_oversized_frames() {
                         std::env::consts::ARCH
                     }
                     .into(),
-                    capabilities: vec![],
+                    capabilities: if case == "capabilities" {
+                        vec![]
+                    } else {
+                        vec!["connection_heartbeats".into()]
+                    },
                     info: None,
                 },
             )
@@ -553,9 +557,6 @@ struct Gateway {
 }
 impl Gateway {
     fn start(helper: &Path) -> Self {
-        Self::start_transport(helper, false)
-    }
-    fn start_transport(helper: &Path, heartbeat: bool) -> Self {
         let home = tempfile::tempdir().unwrap();
         let mut child = Command::new(helper)
             .arg("host-rpc")
@@ -590,11 +591,7 @@ impl Gateway {
                 version: framing::VERSION,
                 architecture: std::env::consts::ARCH.into(),
                 digest: digest.clone(),
-                capabilities: if heartbeat {
-                    vec!["connection_heartbeats".into()]
-                } else {
-                    vec![]
-                },
+                capabilities: vec!["connection_heartbeats".into()],
                 info: None,
             },
         )
@@ -682,7 +679,7 @@ impl Gateway {
 #[test]
 fn abandoned_native_gateway_expires_with_its_input_pipe_still_open() {
     let Some(helper) = helper() else { return };
-    let mut gateway = Gateway::start_transport(&helper, true);
+    let mut gateway = Gateway::start(&helper);
     // An incomplete next message must expire too, without waiting for a
     // complete request or relying on the remote sshd to close its pipes.
     gateway.input.as_mut().unwrap().write_all(&[0, 0]).unwrap();
@@ -697,7 +694,7 @@ fn abandoned_native_gateway_expires_with_its_input_pipe_still_open() {
 #[test]
 fn native_heartbeats_do_not_produce_replies_or_occupy_workers() {
     let Some(helper) = helper() else { return };
-    let mut gateway = Gateway::start_transport(&helper, true);
+    let mut gateway = Gateway::start(&helper);
     for _ in 0..32 {
         gateway.send(Operation::Heartbeat);
     }

@@ -263,7 +263,14 @@ fn packed_stash_refs_and_linked_worktrees_preserve_other_refs_for_both_hash_form
                     .unwrap()
                     .permissions()
                     .mode(),
-                reference_mode
+                // Packing removed the loose ref. A native helper's replacement
+                // follows its private mask; an in-process library call retains
+                // this test process's mask.
+                if peer {
+                    reference_mode & !0o077
+                } else {
+                    reference_mode
+                }
             );
             assert_eq!(git(root, &["rev-parse", "refs/stash"]), a);
             git(root, &["pack-refs", "--all"]);

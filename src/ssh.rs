@@ -40,7 +40,7 @@ pub enum Backend {
     #[default]
     Russh,
     /// Explicit compatibility mode using the installed OpenSSH client.
-    #[serde(rename = "openssh", alias = "open_ssh")]
+    #[serde(rename = "openssh")]
     OpenSsh,
 }
 
@@ -104,7 +104,7 @@ pub struct TunnelRoute {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Profile {
-    /// Client transport; omitted fields in older profiles select Rust.
+    /// Client transport; new profiles default to Rust.
     pub backend: Backend,
     /// Optional friendly profile name.
     pub name: String,
@@ -127,7 +127,7 @@ pub struct Profile {
     /// Request X11 forwarding when the desktop has a display, using configured
     /// trust/timeout policy and server capability negotiation.
     pub x11_forwarding: bool,
-    /// Optional override of ForwardX11Trusted; older profiles retain SSH configuration.
+    /// Optional override of ForwardX11Trusted; defaults to SSH configuration.
     pub x11_trust: X11Trust,
     /// Initial project directory on the remote host.
     pub root: String,
@@ -516,7 +516,7 @@ impl Remote {
         format!(
             "sh -c {}",
             quote(&format!(
-                "cd -- {} && exec {prefix}\"${{SHELL:-/bin/sh}}\" -l",
+                "umask 077; export TMPDIR=\"${{HOME:?}}/.cache/rode/tmp\"; export TMP=\"$TMPDIR\" TEMP=\"$TMPDIR\"; cd -- {} && exec {prefix}\"${{SHELL:-/bin/sh}}\" -l",
                 quote(&plan.root)
             ))
         )

@@ -195,7 +195,7 @@ impl EditorApp {
                     .small()
                     .color(palette.muted),
             )
-            .truncate(),
+            .wrap(),
         )
         .on_hover_text(&self.workbench.git.git_root);
         ui.horizontal_wrapped(|ui| {

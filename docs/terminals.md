@@ -51,7 +51,7 @@ RODE protects unsaved source buffers, then closes without asking about terminals
 
 The same rule applies on project changes, desktop crashes, lost SSH connections and **Disconnect** in the SSH banner. The native service owns this choice; no whole-file editor configuration is involved. **Terminal: New persistent terminal** in the command palette (or the equivalent session-manager button) explicitly creates a session with persistence already on.
 
-The editor and native helper must use the same current session protocol. RODE discovers and controls only that protocol's service; there is no attachment or routing support for earlier services. Updating does not terminate earlier jobs, but the updated editor cannot manage them. Finish or end those jobs with their original client before switching versions. New terminals still default to **Persist: off**.
+The editor and native helper must use the same current session protocol. A mismatch is an error; update both together and stop retained work before replacing the service. New terminals default to **Persist: off**.
 
 If startup or a persistence change is still in flight, closing waits briefly for its result instead of asking for a policy. A failed persistence change reports the error; if closing was waiting for it, the window stays open so you can check the session state. Persistent-startup errors remain visible rather than silently substituting a temporary shell.
 
@@ -87,9 +87,9 @@ The [native SSH helper](remote.md#host-service-backends) is verified and publish
 
 The service owns the PTYs independently of the desktop and SSH master. It runs outside the project sandbox; the actual shell and descendants run **inside the project's original prepared sandbox**. Control/attachment clients run on the host. The Linux service checks UID and mount namespace so sandboxed tools cannot use an exposed control socket to start unrestricted host commands.
 
-The default runtime is `/tmp/rode-session-v<protocol>-<uid>/`, with mode `0700`,
+The default runtime is `~/.cache/rode/session-<host-hash>/`, with mode `0700`,
 a stable singleton lock, and `service.log`. `rode_session::PROTOCOL` defines the
-generation. Linux control uses an authenticated abstract Unix socket bound to
+required wire contract. Linux control uses an authenticated abstract Unix socket bound to
 the runtime directory's identity; `control.capability` contains a reference to
 the service's sealed memory descriptor, rather than the secret itself. Its mode
 `0600` filesystem socket is a discovery marker and accepts no control commands.
@@ -103,7 +103,7 @@ remains.
 
 The service also exits automatically after five seconds without a retained terminal, agent, notebook/debugger runtime or SSH tunnel, including an unused startup or the last shell exiting naturally. A live shell counts even at an idle prompt or with no attached windows. Explicitly started [SSH return tunnels](remote.md#compute-node-return-tunnels) also keep the service alive, including tunnels awaiting reconnection or credential/host-key attention; stop them explicitly to allow shutdown. Session-list requests and completed tabs do not keep an empty service running. Shutdown removes its socket and releases its singleton lock; creating a terminal starts a fresh service automatically. The stable lock file stays in place for safe concurrent startup.
 
-Control connections authenticate and require the current session protocol. An explicit `RODE_SESSION_DIR` must point to a matching current service or an unused private directory. A protocol mismatch is an error; RODE does not search historical subdirectories or start a compatibility service.
+Control connections authenticate and require the current session protocol. An explicit `RODE_SESSION_DIR` must point to a matching current service or an unused private directory. The default uses one stable directory per hostname, so cluster nodes sharing a home directory do not share service locks. There is no version-specific discovery or migration. A missing hostname is an error.
 
 At most 32 clients can be in the authentication/protocol handshake at once.
 Excess connections close immediately. A completed handshake releases its slot;

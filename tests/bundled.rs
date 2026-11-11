@@ -412,6 +412,7 @@ fn cargo_installed_editors_find_user_runtimes_and_reject_damaged_selectors() {
         let editor = bin.join("rode");
         fs::copy(env!("CARGO_BIN_EXE_rode"), &editor).unwrap();
         let home = root.path().join("home");
+        private_directories(&home);
         let data = if data_setting == Some("absolute") {
             root.path().join("custom user data")
         } else {

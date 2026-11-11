@@ -103,6 +103,7 @@ impl rode_agent_core::Factory for Factory {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        rode_host_core::private_tmp::command(&mut command)?;
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {

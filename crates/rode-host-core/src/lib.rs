@@ -19,6 +19,7 @@ pub mod marp;
 pub mod mise;
 pub mod paths;
 pub mod persistence;
+pub mod private_tmp;
 pub mod project;
 pub mod runtime_cache;
 pub mod sandbox;

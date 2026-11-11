@@ -7,6 +7,11 @@
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
+    // SAFETY: startup precedes GUI, runtime and worker-thread initialization.
+    if let Err(error) = unsafe { rode_host_core::private_tmp::initialize() } {
+        eprintln!("Cannot prepare private temporary storage: {error:#}");
+        std::process::exit(1);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args
         .first()

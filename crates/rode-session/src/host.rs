@@ -308,13 +308,6 @@ pub fn serve() -> Result<()> {
         "Incompatible host protocol preamble"
     );
     let hello: wire::Hello = framing::read(&mut stdin)?.context("Missing host handshake")?;
-    if !hello
-        .capabilities
-        .iter()
-        .any(|s| s == "connection_heartbeats")
-    {
-        stdin.unbounded();
-    }
     ensure!(
         hello.version == framing::VERSION,
         "Incompatible host protocol version"
@@ -322,6 +315,13 @@ pub fn serve() -> Result<()> {
     ensure!(
         hello.architecture == std::env::consts::ARCH,
         "Incompatible host architecture"
+    );
+    ensure!(
+        hello
+            .capabilities
+            .iter()
+            .any(|s| s == "connection_heartbeats"),
+        "Native host connections require connection_heartbeats"
     );
     let executable = std::env::current_exe()?;
     let bytes =

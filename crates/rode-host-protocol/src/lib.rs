@@ -15,7 +15,7 @@ pub struct Hello {
     pub digest: String,
     /// Operations implemented by this helper build.
     pub capabilities: Vec<String>,
-    /// Complete helper contract. Absent in helpers predating installed discovery.
+    /// Complete helper contract on host replies; unused on desktop requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<helper::Info>,
 }

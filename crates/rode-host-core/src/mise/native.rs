@@ -148,6 +148,8 @@ pub fn environment(
         .collect();
     env.extend(values);
     settings.apply(&mut env)?;
+    // Provider output must not redirect private temporary storage to a shared path.
+    crate::private_tmp::apply(&mut env)?;
     let python = project::python_path(Path::new(root), python);
     if python.is_absolute()
         && let Some(bin) = python.parent()

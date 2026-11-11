@@ -204,20 +204,14 @@ fn unauthenticated_connections_are_bounded_without_ending_retained_work() {
         fs::metadata(fixture.runtime.join("socket")).unwrap().mode() & 0o777,
         0o600
     );
-    let expected_mask = Command::new("/bin/sh")
-        .args(["-c", "umask"])
-        .env_clear()
-        .output()
-        .unwrap();
-    assert!(expected_mask.status.success());
     terminal
         .send(b"umask > inherited.umask\n".to_vec())
         .unwrap();
     let mask_path = fixture.root.path().join("inherited.umask");
     wait(|| fs::read_to_string(&mask_path).is_ok_and(|text| !text.is_empty()));
     assert_eq!(
-        fs::read_to_string(&mask_path).unwrap().trim(),
-        String::from_utf8(expected_mask.stdout).unwrap().trim()
+        u32::from_str_radix(fs::read_to_string(&mask_path).unwrap().trim(), 8).unwrap(),
+        0o077
     );
     let metadata = fs::metadata(&fixture.runtime).unwrap();
     let address = SocketAddr::from_abstract_name(format!(

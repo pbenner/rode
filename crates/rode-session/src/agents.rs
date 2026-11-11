@@ -93,7 +93,8 @@ impl Store {
     /// Validate bounded launch metadata and reserve a registry slot before starting its worker.
     /// An existing ID with the same policy returns its current metadata; a different policy
     /// fails. The returned starting record is not proof that subprocess startup succeeded.
-    pub fn create(&self, spec: Spec) -> Result<Info> {
+    pub fn create(&self, mut spec: Spec) -> Result<Info> {
+        rode_host_core::private_tmp::apply(&mut spec.env)?;
         ensure!(
             valid_id(&spec.id) && valid_name(&spec.name),
             "Invalid background agent ID/name"
@@ -522,7 +523,7 @@ fn run(
                                     result
                                 }
                                 rode_agent_core::queue::Action::Dispatch { id, config } => {
-                                    // An older UI can retry a head that the host has already
+                                    // A stale view can retry a head that the host has already
                                     // submitted. A removed identity must never send twice.
                                     if queue.removed(id) {
                                         Ok(())
@@ -726,7 +727,7 @@ fn configure(
 /// Bridge bounded stdio messages through the current service's authenticated
 /// local socket; require the original policy.
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
-    let mut stream = connect_control(&directory())?;
+    let mut stream = connect_control(&directory()?)?;
     send_json(
         &mut stream,
         &Request::AttachAgent {

@@ -91,6 +91,7 @@ pub(crate) fn run(
     limits: Limits,
     terminate_grace: Duration,
 ) -> Result<Output> {
+    crate::private_tmp::command(&mut command)?;
     let cancelled = || cancel.load(Ordering::Acquire) || super::CANCELLED.load(Ordering::Acquire);
     ensure!(!cancelled(), "Extension task cancelled.");
     let description = command.get_program().to_string_lossy().into_owned();

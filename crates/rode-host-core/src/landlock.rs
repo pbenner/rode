@@ -12,7 +12,7 @@ mod linux {
         fs::File,
         os::{
             fd::{AsRawFd, FromRawFd},
-            unix::{fs::MetadataExt, process::CommandExt},
+            unix::process::CommandExt,
         },
         path::{Path, PathBuf},
         process::Command,
@@ -75,41 +75,7 @@ mod linux {
         Ok(directory)
     }
     fn scratch(home: &Path, root: &Path) -> Result<(PathBuf, File)> {
-        let key = crate::files::digest(root.as_os_str().as_encoded_bytes());
-        let mut path = home.to_owned();
-        let mut directory = captured(home)?;
-        for component in [".cache", "rode", "landlock", &key] {
-            path.push(component);
-            let name = CString::new(component)?;
-            let result = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
-            if result != 0
-                && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
-            {
-                checked(result as _, "Create Landlock scratch")?;
-            }
-            directory = fd(
-                unsafe {
-                    libc::openat(
-                        directory.as_raw_fd(),
-                        name.as_ptr(),
-                        libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-                    )
-                },
-                "Open Landlock scratch",
-            )?;
-            let metadata = directory.metadata()?;
-            ensure!(
-                metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o022 == 0,
-                "Unsafe Landlock scratch directory: {}",
-                path.display()
-            );
-            ensure!(
-                component == ".cache" || metadata.mode() & 0o077 == 0,
-                "Landlock scratch directory must be owner-only: {}",
-                path.display()
-            );
-        }
-        Ok((path, directory))
+        crate::private_tmp::project(home, root)
     }
     fn grant_descriptor(path: &Path, scratch_path: &Path, scratch_fd: &File) -> Result<File> {
         if path == scratch_path {
@@ -120,6 +86,7 @@ mod linux {
     }
     #[test]
     fn scratch_replacement_keeps_the_original_inode_and_rejects_other_symlinks() {
+        use std::os::unix::fs::MetadataExt;
         let home = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         let private = tempfile::tempdir().unwrap();

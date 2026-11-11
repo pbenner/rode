@@ -42,6 +42,7 @@ pub const CAPABILITIES: &[&str] = &[
     "large_document_transfer",
     "connection_heartbeats",
     "agent_auto_persist",
+    "private_home_tmp",
 ];
 
 /// Metadata repeated in the live handshake after discovery and cache publication.
@@ -173,6 +174,17 @@ impl Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn helpers_without_private_home_temporary_storage_require_an_upgrade() {
+        let mut info = Info::current("test", 11);
+        info.capabilities
+            .retain(|capability| capability != "private_home_tmp");
+        assert!(
+            info.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
+                .unwrap_err()
+                .contains("private_home_tmp")
+        );
+    }
 
     #[test]
     fn compatibility_uses_explicit_contracts_not_release_labels() {

@@ -107,7 +107,8 @@ impl Store {
     /// Validate bounded launch metadata and reserve a registry slot before starting its worker.
     /// An existing ID with the same policy returns its current metadata; a different policy
     /// fails. The returned starting record is not proof that subprocess startup succeeded.
-    pub fn create(&self, spec: Spec) -> Result<Info> {
+    pub fn create(&self, mut spec: Spec) -> Result<Info> {
+        rode_host_core::private_tmp::apply(&mut spec.env)?;
         ensure!(
             spec.sources.len() <= 128
                 && serde_json::to_vec(&spec.sources)?.len() <= 64 * 1024
@@ -408,6 +409,7 @@ fn launch(spec: &Spec) -> Result<Controller> {
         .env_clear()
         .envs(&spec.env)
         .env("NO_COLOR", "1");
+    rode_host_core::private_tmp::command(&mut command)?;
     let session = rode_runtime_core::process::spawn(command)?;
     match &spec.start {
         Start::Notebook { name } => Ok(Controller::Notebook(Box::new(
@@ -910,7 +912,7 @@ fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T>
 /// Bridge bounded stdio messages through the current service's authenticated
 /// local socket; require the original policy.
 pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
-    let mut stream = connect_control(&directory())?;
+    let mut stream = connect_control(&directory()?)?;
     send_json(
         &mut stream,
         &Request::AttachRuntime {

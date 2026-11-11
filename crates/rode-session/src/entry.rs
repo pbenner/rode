@@ -11,6 +11,11 @@
 /// Call only at process startup before creating worker threads or initializing
 /// a runtime. The bubblewrap branch may replace process state and exec in place.
 pub unsafe fn helper_main() {
+    // SAFETY: required by this entry point, before any runtime or worker thread.
+    if let Err(error) = unsafe { rode_host_core::private_tmp::initialize() } {
+        eprintln!("Cannot prepare private temporary storage: {error:#}");
+        std::process::exit(1);
+    }
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     if arguments.first().is_some_and(|arg| arg == "--bwrap-launch") {
         // SAFETY: this entry point requires a fresh, single-threaded process.

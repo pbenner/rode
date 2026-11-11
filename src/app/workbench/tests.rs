@@ -115,7 +115,13 @@ fn app(root: &std::path::Path) -> (EditorApp, egui::Context) {
 }
 #[test]
 fn tool_pages_fit_compact_and_detached_widths() {
-    let root = tempfile::tempdir().unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    // Exercise wrapping independently of the invoking user's home/TMPDIR length.
+    let root = fixture.path().join(format!(
+        "project with spaces and Unicode ユニコード-{}",
+        "long-path-".repeat(12)
+    ));
+    std::fs::create_dir(&root).unwrap();
     for (theme, width) in [
         ("phosphor", 360.),
         ("phosphor", 680.),
@@ -143,10 +149,10 @@ fn tool_pages_fit_compact_and_detached_widths() {
                 Panel::Settings,
                 Panel::Debug,
             ] {
-                let (mut app, ctx) = app(root.path());
+                let (mut app, ctx) = app(&root);
                 app.themes.select(theme, &ctx).unwrap();
                 ctx.set_zoom_factor(scale);
-                app.workbench.git.git_root = root.path().to_string_lossy().into();
+                app.workbench.git.git_root = root.to_string_lossy().into();
                 app.workbench.git.branch = "main".into();
                 app.workbench.draft.sandbox.read_only = vec![format!(
                     "/data/ユニコード/{}measurements.csv",

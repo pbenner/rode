@@ -100,7 +100,7 @@ pub struct Spec {
     pub agent_socket: String,
     /// Explicitly trusted relay public key in OpenSSH format. Blank requests trust confirmation.
     pub relay_key: String,
-    /// Relay listener scope; older configurations default to loopback.
+    /// Relay listener scope; loopback is the default for new configurations.
     pub listen_on: ListenOn,
     /// Stable listener port on the relay. Zero/dynamic ports are not accepted.
     pub listen_port: u16,
@@ -225,8 +225,7 @@ impl Status {
 pub struct Info {
     /// Stable service-owned tunnel identity.
     pub id: String,
-    /// Hostname of the service owning this tunnel; absent in older service replies.
-    #[serde(default)]
+    /// Hostname of the service owning this tunnel.
     pub hostname: String,
     /// Captured host-side settings.
     pub spec: Spec,
