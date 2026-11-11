@@ -1,7 +1,7 @@
 //! Opt-in, read-only geometry for native UI fixtures. Normal startup installs no
 //! hooks or file I/O. Fixtures still use real X11 input and observe real effects;
 //! this reports controls' geometry, focus and edit revisions, plus opaque IDs in
-//! the open session manager, never chat or document text.
+//! the open session manager and the current SSH endpoint, never chat or document text.
 use eframe::egui::{self, Id};
 use serde::Serialize;
 use std::{
@@ -30,6 +30,7 @@ struct Controls {
     visible: Vec<Button>,
     last_change: HashMap<Id, u64>,
     session_ids: Option<Vec<String>>,
+    ssh_master_socket: Option<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -55,6 +56,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             let controls = viewports.entry(ctx.viewport_id()).or_default();
             controls.visible.clear();
             controls.session_ids = None;
+            controls.ssh_master_socket = None;
         }),
     );
     ctx.on_end_pass(
@@ -68,6 +70,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             let controls = viewports.entry(ctx.viewport_id()).or_default();
             let mut buttons = controls.visible.clone();
             let session_ids = controls.session_ids.clone();
+            let ssh_master_socket = controls.ssh_master_socket.clone();
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
@@ -99,6 +102,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
                 "buttons": buttons,
                 "session_ids": session_ids,
+                "ssh_master_socket": ssh_master_socket,
             });
             let destination = viewport_path(&path, ctx.viewport_id());
             if let Err(error) = publish(&destination, &value) {
@@ -109,6 +113,20 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             }
         }),
     );
+}
+
+/// Report the connection-owned endpoint without reconstructing its directory layout.
+/// Calling this without an installed probe does not allocate paths or write files.
+pub(super) fn ssh_master_socket(ctx: &egui::Context, socket: &Path) {
+    if let Some(probe) = ctx.data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe"))) {
+        probe
+            .0
+            .lock()
+            .unwrap()
+            .entry(ctx.viewport_id())
+            .or_default()
+            .ssh_master_socket = Some(socket.to_path_buf());
+    }
 }
 
 /// Report the manager's complete cached list, including rows outside its scroll
@@ -198,6 +216,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ssh_endpoints_follow_reconnections_and_clear_without_assuming_a_directory_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let first = directory.path().join("custom layout/first connection.sock");
+        let second = directory
+            .path()
+            .join("another layout/second-ユニコード.sock");
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| ssh_master_socket(ctx, &first));
+        assert!(!path.exists() && !first.exists());
+        install_at(&ctx, path.clone());
+        for endpoint in [Some(first.as_path()), Some(second.as_path()), None] {
+            let _ = ctx.run(Default::default(), |ctx| {
+                if let Some(endpoint) = endpoint {
+                    ssh_master_socket(ctx, endpoint);
+                }
+            });
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                state["ssh_master_socket"],
+                serde_json::to_value(endpoint).unwrap()
+            );
+        }
+        assert!(
+            !first.exists() && !second.exists(),
+            "The probe created an endpoint"
+        );
+    }
+
+    #[test]
     fn complete_values_are_distinct_from_prefixes_and_never_publish_the_input() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state.json");
@@ -234,6 +283,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
         let child = egui::ViewportId::from_hash_of("independent-chat");
+        let endpoint = directory.path().join("connection/socket");
         install_at(&ctx, path.clone());
         let render = |viewport, changed| {
             let _ = ctx.run(
@@ -261,6 +311,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
+                    if viewport == egui::ViewportId::ROOT {
+                        ssh_master_socket(ctx, &endpoint);
+                    }
                     egui::CentralPanel::default().show(ctx, |ui| {
                         let mut response = ui.button("Fixture control");
                         if changed {
@@ -295,6 +348,7 @@ mod tests {
         assert_eq!(other["buttons"][0]["name"], "child");
         assert!(other["buttons"][0]["changed_pass"].is_null());
         assert_eq!(other["session_ids"], serde_json::json!(["child"]));
+        assert!(other["ssh_master_socket"].is_null());
         render(egui::ViewportId::ROOT, false);
         let after: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -304,6 +358,10 @@ mod tests {
             root["buttons"][0]["changed_pass"]
         );
         assert_eq!(after["session_ids"], serde_json::json!(["root"]));
+        assert_eq!(
+            after["ssh_master_socket"],
+            serde_json::to_value(&endpoint).unwrap()
+        );
     }
 
     #[test]

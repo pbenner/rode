@@ -1665,6 +1665,13 @@ impl eframe::App for EditorApp {
         self.navigation_finish(ctx);
         self.detached_tools(ctx);
         self.detached_tabs(ctx);
+        if let Some(remote) = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+        {
+            ui_probe::ssh_master_socket(ctx, &remote.socket);
+        }
         if self.profiles_loading.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }

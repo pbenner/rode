@@ -978,4 +978,103 @@ mod tests {
         assert!(app.tools_visible());
         assert_eq!(app.workbench.panel, Some(Panel::Agent));
     }
+
+    #[test]
+    fn terminal_shortcut_restores_editor_focus_before_following_text() {
+        use crate::terminal::StreamControl;
+        use std::sync::mpsc;
+
+        fn frame(
+            app: &mut EditorApp,
+            ctx: &egui::Context,
+            size: egui::Vec2,
+            events: Vec<egui::Event>,
+        ) {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.navigation_shortcuts(ctx);
+                    app.editing_shortcuts(ctx);
+                    app.shortcuts(ctx);
+                    app.navigation.begin_layout();
+                    app.activity(ctx);
+                    app.explorer(ctx);
+                    app.workspace_content(ctx);
+                    app.navigation_finish(ctx);
+                },
+            );
+        }
+
+        let toggle = || egui::Event::Key {
+            key: Key::T,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        };
+        for theme in ["carbon", "phosphor"] {
+            for size in [egui::vec2(850., 560.), egui::vec2(1380., 900.)] {
+                for batched in [false, true] {
+                    let ctx = egui::Context::default();
+                    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                    let mut app = EditorApp::new(&cc, Startup::default());
+                    app.themes.select(theme, &ctx).unwrap();
+                    app.new_file();
+                    app.documents[0].text = "retained source".into();
+                    let (input, received) = mpsc::channel();
+                    let (terminal, _stream) =
+                        Terminal::stream(&ctx, "Existing shell".into(), move |event| {
+                            if let StreamControl::Input(bytes) = event {
+                                input.send(bytes).unwrap();
+                            }
+                        });
+                    app.terminal = Some(terminal);
+                    for _ in 0..2 {
+                        frame(&mut app, &ctx, size, vec![]);
+                    }
+                    frame(&mut app, &ctx, size, vec![toggle()]);
+                    assert!(app.terminal_visible() && Terminal::focused(&ctx));
+                    frame(
+                        &mut app,
+                        &ctx,
+                        size,
+                        vec![egui::Event::Text("shell".into())],
+                    );
+                    assert_eq!(
+                        received.recv_timeout(Duration::from_secs(2)).unwrap(),
+                        b"shell"
+                    );
+                    let mut events = vec![toggle()];
+                    if batched {
+                        events.push(egui::Event::Text("editor".into()));
+                    }
+                    frame(&mut app, &ctx, size, events);
+                    assert!(!app.terminal_visible());
+                    assert!(ctx.memory(|memory| {
+                        memory.has_focus(egui::Id::new(("document", app.documents[0].id)))
+                    }));
+                    if !batched {
+                        frame(
+                            &mut app,
+                            &ctx,
+                            size,
+                            vec![egui::Event::Text("editor".into())],
+                        );
+                    }
+                    assert!(
+                        app.documents[0].text.contains("editor")
+                            && app.documents[0].text.contains("retained source")
+                    );
+                    assert!(
+                        received.try_recv().is_err(),
+                        "Editor input reached the hidden terminal"
+                    );
+                }
+            }
+        }
+    }
 }

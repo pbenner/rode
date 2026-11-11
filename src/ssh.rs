@@ -516,7 +516,8 @@ impl Remote {
         format!(
             "sh -c {}",
             quote(&format!(
-                "umask 077; export TMPDIR=\"${{HOME:?}}/.cache/rode/tmp\"; export TMP=\"$TMPDIR\" TEMP=\"$TMPDIR\"; cd -- {} && exec {prefix}\"${{SHELL:-/bin/sh}}\" -l",
+                "{}cd -- {} && exec {prefix}\"${{SHELL:-/bin/sh}}\" -l",
+                rode_host_core::private_tmp::shell_home_exports(),
                 quote(&plan.root)
             ))
         )

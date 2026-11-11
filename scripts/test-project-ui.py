@@ -468,17 +468,20 @@ def run(remote=False, fallback=False):
                     ui.terminal(second)
                     # Close only this GUI's private master to exercise
                     # unexpected transport loss rather than a palette action.
-                    sockets = list(Path(tempfile.gettempdir()).glob(f"rode-{process.pid}-*/ssh"))
-                    assert len(sockets) == 1, sockets
+                    state = ui.layout(
+                        lambda state: state["ssh_master_socket"] is not None,
+                        "The connected GUI did not report its SSH master endpoint",
+                    )
+                    master_socket = Path(state["ssh_master_socket"])
                     with socket.socket(socket.AF_UNIX) as control:
-                        control.connect(str(sockets[0]))
+                        control.connect(str(master_socket))
                         owner, uid, _ = struct.unpack(
                             "3i", control.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
                         )
                         assert uid == os.getuid()
                         arguments = Path(f"/proc/{owner}/cmdline").read_bytes().split(b"\0")
                         assert b"--ssh-client-master" in arguments, arguments
-                        assert str(sockets[0]).encode() in arguments, arguments
+                        assert str(master_socket).encode() in arguments, arguments
                         os.kill(owner, signal.SIGTERM)
                     ui.disconnected()
                     screenshot(window, "ssh-lost-local-mode.png")

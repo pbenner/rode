@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native tab and responsive-layout regression checks on an isolated X display."""
 
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -60,11 +61,30 @@ def drag(start, end):
     time.sleep(0.4)
 
 
-def append_save(path, marker):
+def append_save(ui, path, marker, *, unsaved=""):
+    # Verify the shortcut restored the intended editor; never fix focus by clicking it.
+    identity = hashlib.sha256(str(path).encode()).hexdigest()
+    ui.control("active-document:" + identity)
+    ui.control("source-editor", focused=True)
+    before = ui.layout()["pass"]
     key("End", ("Control_L",))
+    ui.control("source-editor", focused=True, after_pass=before)
+    contents = path.read_text() + unsaved + "\n# " + marker
+    before = ui.layout()["pass"]
     text("\n# " + marker)
+    ui.source(contents, changed_after=before)
     key("s", ("Control_L",))
     wait_for(lambda: marker in path.read_text(), "Editing focus/selection is wrong: " + marker)
+
+
+def terminal_focus(ui):
+    ui.layout(
+        lambda state: any(
+            button["name"].startswith("terminal-input:") and button["enabled"] and button["focused"]
+            for button in state["buttons"]
+        ),
+        "The terminal shortcut did not focus its input",
+    )
 
 
 def active_line(filename, width, height, accent, left=302, right=None, minimum=80):
@@ -127,9 +147,9 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             ui = NativeUI(window, process, log_path, base / "ui-state.json", root)
             for name in names:
                 ui.open_file(name)
-            append_save(root / "notes.txt", "active_tab_focus")
+            append_save(ui, root / "notes.txt", "active_tab_focus")
             ui.open_file("notes.txt")
-            append_save(root / "notes.txt", "same_file_refocus")
+            append_save(ui, root / "notes.txt", "same_file_refocus")
             ui.command("Save file as")
             renamed = root / "notes_saved_with_a_much_longer_filename_for_layout_checks.txt"
             ui.fill_path(renamed.name)
@@ -140,29 +160,32 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             click(1356, 66)  # All open editors
             screenshot(window, "open-editors.png")
             click(1130, 101)  # README, first item
-            append_save(root / "README.md", "selected_from_editors_list")
+            append_save(ui, root / "README.md", "selected_from_editors_list")
             button(505, 66, 2)  # Close inactive main.rs with the middle button.
             key("Next", ("Control_L",))
-            append_save(root / "api/config.toml", "api_tab")
+            append_save(ui, root / "api/config.toml", "api_tab")
             key("Next", ("Control_L",))
-            append_save(root / "worker/config.toml", "worker_tab")
+            append_save(ui, root / "worker/config.toml", "worker_tab")
             screenshot(window, "duplicate-filenames.png")
             click(1304, 66)  # Scroll to the first tab without changing selection.
             click(1304, 66)
             drag((355, 66), (610, 66))  # README after api/config.toml.
             key("Prior", ("Control_L",))
-            append_save(root / "README.md", "selection_survives_reorder")
+            append_save(ui, root / "README.md", "selection_survives_reorder")
             key("End", ("Control_L",))
             text("\n# unsaved_layout_change")
             key("w", ("Control_L",))
             screenshot(window, "unsaved-tab-close.png")
             key("Escape")
-            append_save(root / "README.md", "focus_after_cancel")
+            append_save(
+                ui, root / "README.md", "focus_after_cancel", unsaved="\n# unsaved_layout_change"
+            )
             assert "unsaved_layout_change" in (root / "README.md").read_text()
             ui.command("System: Monitor")
             screenshot(window, "monitor-full-workspace.png")
             key("t", ("Control_L", "Shift_L"))
             ui.resize(850, 560)
+            terminal_focus(ui)
             screenshot(window, "minimum-terminal.png")
             text("echo layout_terminal_ok > terminal.ok\n")
             wait_for(
@@ -178,8 +201,8 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
                 "minimum-window.png", 850, 560, (220, 163, 37), left=250, right=750, minimum=140
             )
             key("Escape")
-            append_save(root / "README.md", "focus_after_find")
-            append_save(root / "README.md", "focus_after_terminal")
+            append_save(ui, root / "README.md", "focus_after_find")
+            append_save(ui, root / "README.md", "focus_after_terminal")
             ui.command("Git: Source control")
             time.sleep(0.5)
             screenshot(window, "minimum-git.png")
@@ -189,9 +212,8 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             screenshot(window, "tabs-phosphor.png")
             active_line("tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
             key("t", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            terminal_focus(ui)
             screenshot(window, "terminal-full-height.png")
-            click(600, 400)
             text("stty size > terminal.size\n")
             wait_for(
                 lambda: (root / "terminal.size").exists(),
@@ -200,7 +222,7 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             rows, _ = map(int, (root / "terminal.size").read_text().split())
             assert rows >= 40, f"Terminal height is still capped: {rows} rows"
             key("t", ("Control_L", "Shift_L"))
-            append_save(root / "README.md", "focus_after_full_terminal")
+            append_save(ui, root / "README.md", "focus_after_full_terminal")
             screenshot(window, "terminal-restored-editor.png")
             close_window(window, process)
             print(

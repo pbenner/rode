@@ -14,6 +14,9 @@ use std::{
 /// Temporary-directory environment variables managed by RODE.
 pub const VARIABLES: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
 
+/// Default private temporary root, relative to the execution host's home.
+const RELATIVE_DIRECTORY: &str = ".cache/rode/tmp";
+
 fn opened(raw: libc::c_int) -> std::io::Result<File> {
     if raw < 0 {
         Err(std::io::Error::last_os_error())
@@ -50,7 +53,7 @@ fn directory(home: &Path, project: Option<&str>) -> Result<(PathBuf, File)> {
         home.display()
     );
     let mut path = home;
-    let mut components = vec![".cache", "rode", "tmp"];
+    let mut components = RELATIVE_DIRECTORY.split('/').collect::<Vec<_>>();
     if let Some(project) = project {
         components.push(project);
     }
@@ -129,7 +132,7 @@ pub unsafe fn initialize() -> Result<()> {
 
 fn from_environment() -> Result<PathBuf> {
     let home = home()?;
-    let base = home.join(".cache/rode/tmp");
+    let base = home.join(RELATIVE_DIRECTORY);
     let inherited = std::env::var_os("TMPDIR").map(PathBuf::from);
     let project = inherited
         .as_ref()
@@ -190,6 +193,19 @@ pub fn command(command: &mut std::process::Command) -> Result<()> {
 /// Restore private defaults after a shell's startup files or environment provider.
 pub fn shell_exports(path: &Path) -> String {
     let value = crate::command::quote(&path.to_string_lossy());
+    exports(&value)
+}
+
+/// Restore defaults in a remote shell using that host's HOME, not the desktop's.
+/// Host preparation creates and validates the private directory before this launch.
+pub fn shell_home_exports() -> String {
+    exports(&format!(
+        "\"${{HOME:?}}\"/{}",
+        crate::command::quote(RELATIVE_DIRECTORY)
+    ))
+}
+
+fn exports(value: &str) -> String {
     format!("umask 077; export TMPDIR={value} TMP={value} TEMP={value};\n")
 }
 
@@ -197,6 +213,45 @@ pub fn shell_exports(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn remote_shell_defaults_match_the_host_resolver_with_literal_home_paths() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home with ' quotes and $(literal)");
+        std::fs::create_dir(&home).unwrap();
+        let expected = root(&home).unwrap();
+        let script = format!(
+            "{}printf '%s\\n' \"$TMPDIR\" \"$TMP\" \"$TEMP\"; umask",
+            shell_home_exports()
+        );
+        let result = std::process::Command::new("/bin/sh")
+            .env("HOME", &home)
+            .envs(VARIABLES.map(|name| (name, "/tmp/inherited")))
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let text = String::from_utf8(result.stdout).unwrap();
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 4);
+        for line in &lines[..3] {
+            assert_eq!(Path::new(line), expected);
+        }
+        assert_eq!(u32::from_str_radix(lines[3], 8).unwrap(), 0o077);
+        let missing = std::process::Command::new("/bin/sh")
+            .env_remove("HOME")
+            .args(["-c", &shell_home_exports()])
+            .output()
+            .unwrap();
+        assert!(
+            !missing.status.success(),
+            "Missing HOME selected a fallback directory"
+        );
+    }
 
     #[test]
     fn directories_are_private_stable_and_separate_for_each_project() {
