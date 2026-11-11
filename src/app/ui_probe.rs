@@ -147,6 +147,22 @@ fn publish(path: &Path, value: &serde_json::Value) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Acknowledge a complete field value or document identity without publishing
+/// its contents. Hash only when the read-only fixture probe is enabled.
+pub(super) fn value(ui: &egui::Ui, name: &str, response: &egui::Response, value: &str) {
+    if ui
+        .ctx()
+        .data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe")))
+        .is_some()
+    {
+        button(
+            ui,
+            &format!("{name}:{}", crate::files::digest(value.as_bytes())),
+            response,
+        );
+    }
+}
+
 /// Register an existing response without changing its layout, state or input handling.
 pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
     let Some(probe) = ui
@@ -180,6 +196,36 @@ pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_values_are_distinct_from_prefixes_and_never_publish_the_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        let full = "/private/project/document with spaces.txt";
+        let expected = format!("input-value:{}", crate::files::digest(full.as_bytes()));
+        for input in ["/private/project/doc", full] {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut text = input.to_owned();
+                    let response = ui.text_edit_singleline(&mut text);
+                    value(ui, "input-value", &response, &text);
+                });
+            });
+            let raw = std::fs::read_to_string(&path).unwrap();
+            assert!(!raw.contains(input));
+            let state: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(
+                state["buttons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|button| button["name"] == expected),
+                input == full,
+            );
+        }
+    }
 
     #[test]
     fn native_viewports_keep_separate_controls_revisions_and_session_lists() {

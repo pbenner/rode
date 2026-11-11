@@ -173,6 +173,8 @@ impl EditorApp {
                 .desired_width(f32::INFINITY)
                 .char_limit(256),
         );
+        ui_probe::button(ui, "extension-filter", &filter);
+        ui_probe::value(ui, "extension-filter-value", &filter, &self.dialog_input);
         if self.dialog_focus {
             filter.request_focus();
             self.dialog_focus = false;
@@ -217,7 +219,13 @@ impl EditorApp {
                     layout::card(ui, palette, |ui| {
                         let mut enabled = self.extensions.registry.enabled(&entry.id);
                         ui.horizontal_wrapped(|ui| {
-                            if ui.checkbox(&mut enabled, &entry.name).changed() {
+                            let checkbox = ui.checkbox(&mut enabled, &entry.name);
+                            ui_probe::button(
+                                ui,
+                                &format!("extension-toggle:{}", entry.id),
+                                &checkbox,
+                            );
+                            if checkbox.changed() {
                                 toggle = Some((entry.id.clone(), enabled));
                             }
                             ui.small(if entry.feature.is_some() {
@@ -383,10 +391,16 @@ impl EditorApp {
                         self.themes.active().palette,
                     );
                     egui::ScrollArea::both().show(ui, |ui| {
-                        ui.add(
+                        let output = ui.add(
                             egui::TextEdit::multiline(&mut self.extensions.output.as_str())
                                 .code_editor()
                                 .desired_width(f32::INFINITY),
+                        );
+                        ui_probe::value(
+                            ui,
+                            "extension-output-value",
+                            &output,
+                            &self.extensions.output,
                         );
                     });
                 });

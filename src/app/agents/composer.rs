@@ -422,6 +422,10 @@ pub(super) fn editor(
                 ..Default::default()
             })
             .show_viewport(ui, |ui, viewport| {
+                // ScrollArea expands its clip for widget shadows. This editor
+                // has a separate fixed frame: text, selection and the caret
+                // must stop at the viewport instead of painting over its border.
+                ui.shrink_clip_rect(viewport.translate(ui.max_rect().min.to_vec2()));
                 let size_id = id.with("viewport-size");
                 let old = ui.ctx().data_mut(|d| d.get_temp::<Vec2>(size_id));
                 let mut output = egui::TextEdit::multiline(text)
@@ -503,6 +507,64 @@ mod tests {
             )),
             "Chat composer did not draw the full keyboard focus outline"
         );
+    }
+
+    #[test]
+    fn scrolled_draft_paint_stays_inside_the_composer_viewport() {
+        for theme in crate::theme::Theme::builtins() {
+            for scale in [1., 1.25, 2.] {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx, theme.palette);
+                ctx.set_pixels_per_point(scale);
+                let id = egui::Id::new("clipped-composer");
+                let mut draft = "A wrapped line of prompt text. ".repeat(120);
+                let mut render = |events| {
+                    let mut viewport = Rect::NOTHING;
+                    let mut offset = 0.;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(280., 240.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                ui.memory_mut(|memory| memory.request_focus(id));
+                                let area = editor(ui, &mut draft, id, 0.);
+                                viewport = area.inner_rect;
+                                offset = area.state.offset.y;
+                                let _ = ui.button("Send");
+                            });
+                        },
+                    );
+                    (output, viewport, offset)
+                };
+                render(vec![]);
+                render(vec![]);
+                // Exercise the actual Shift+Enter binding with a wrapped,
+                // already-scrolled draft, then select across hidden lines.
+                for _ in 0..5 {
+                    render(vec![history_key(Key::Enter, egui::Modifiers::SHIFT)]);
+                }
+                render(vec![history_key(Key::A, egui::Modifiers::COMMAND)]);
+                let (output, viewport, offset) = render(vec![]);
+                assert!(offset > 0., "{} at {scale}: draft did not scroll", theme.id);
+                let text = output.shapes.iter().find(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == draft)
+                }).expect("Missing painted draft");
+                // Fractional scaling rounds the scrolling content origin to a
+                // pixel. It must not grant the scroll area's shadow margin.
+                assert!(
+                    viewport.expand(0.6 / scale).contains_rect(text.clip_rect),
+                    "{} at {scale}: text clip {:?} escapes viewport {viewport:?}",
+                    theme.id,
+                    text.clip_rect,
+                );
+            }
+        }
     }
 
     struct RecallView {

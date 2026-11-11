@@ -67,6 +67,7 @@ mod framing;
 mod protocol;
 mod runtime_directory;
 mod runtimes;
+mod terminal_output;
 pub mod tunnels;
 
 pub use entry::helper_main;
@@ -747,59 +748,25 @@ impl Server {
                 Err(error) => {
                     let _ = ready_tx.send(Err(format!("{error:#}")));
                 }
-                Ok((session, mut reader, stop_read, mut child, arguments)) => {
+                Ok((session, reader, stop_read, mut child, arguments)) => {
                     let read_session = session.clone();
                     let (drained_tx, drained_rx) = mpsc::sync_channel(1);
                     std::thread::spawn(move || {
-                        let mut data = [0; 8192];
-                        loop {
-                            let mut fds = [
-                                libc::pollfd {
-                                    fd: reader.as_raw_fd(),
-                                    events: libc::POLLIN,
-                                    revents: 0,
-                                },
-                                libc::pollfd {
-                                    fd: stop_read.as_raw_fd(),
-                                    events: libc::POLLIN,
-                                    revents: 0,
-                                },
-                            ];
-                            let polled = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
-                            if polled < 0 {
-                                if std::io::Error::last_os_error().kind()
-                                    == std::io::ErrorKind::Interrupted
-                                {
-                                    continue;
-                                }
-                                break;
-                            }
-                            if fds[1].revents != 0 {
-                                break;
-                            }
-                            let n = match reader.read(&mut data) {
-                                Err(error)
-                                    if error.kind() == std::io::ErrorKind::WouldBlock
-                                        || error.kind() == std::io::ErrorKind::Interrupted =>
-                                {
-                                    continue;
-                                }
-                                Ok(0) | Err(_) => break,
-                                Ok(n) => n,
-                            };
+                        terminal_output::read(reader, stop_read, |data| {
                             let mut state = read_session.state.lock().unwrap();
-                            state.parser.process(&data[..n]);
-                            Session::broadcast(&mut state, b'O', &data[..n]);
-                        }
+                            state.parser.process(data);
+                            Session::broadcast(&mut state, b'O', data);
+                        });
                         let _ = drained_tx.send(());
                     });
                     let _ = ready_tx.send(Ok(session.clone()));
                     let status = child.wait();
                     drop(arguments);
-                    // Drain final output before publishing exit. Descendants may
-                    // retain the slave, so bound this wait and keep the spawning
-                    // supervisor thread alive for bwrap PDEATHSIG semantics.
-                    let _ = drained_rx.recv_timeout(Duration::from_millis(200));
+                    // Let the reader drain queued bytes before publishing exit.
+                    // It bounds idle/live descendants itself, so descheduling the
+                    // reader cannot make a supervisor timer discard the tail.
+                    let _ = session.stop.lock().unwrap().write_all(b"D");
+                    let _ = drained_rx.recv();
                     session.close_pty();
                     let mut sessions = server.sessions.lock().unwrap();
                     let mut state = session.state.lock().unwrap();

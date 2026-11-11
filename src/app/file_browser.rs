@@ -437,6 +437,7 @@ impl EditorApp {
                 }),
         );
         ui_probe::button(ui, "file-dialog-path", &response);
+        ui_probe::value(ui, "file-dialog-path-value", &response, &self.dialog_input);
         if response.changed() {
             self.file_browser.query = self.dialog_input.clone();
             self.file_browser.selected = None;

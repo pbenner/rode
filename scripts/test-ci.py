@@ -560,7 +560,7 @@ class SshFixtureTests(unittest.TestCase):
                 'env=dict(os.environ,SHELL=expected,SSH_ORIGINAL_COMMAND="printf \'%s\' \\"$SHELL\\"")\n'
                 "result=subprocess.run([host],env=env,text=True,capture_output=True)\n"
                 "assert result.returncode == 0, result.stderr\n"
-                "assert result.stdout == expected, result.stdout\n"
+                "assert result.stdout == os.environ['RODE_TEST_PROJECT_SHELL'], result.stdout\n"
                 "env['SSH_ORIGINAL_COMMAND']='env'\n"
                 "result=subprocess.run([host],env=env,text=True,capture_output=True,check=True)\n"
                 "state=dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)\n"

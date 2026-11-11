@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Native tab and responsive-layout regression checks on an isolated X display."""
 
-import ctypes
 import os
-import re
 import subprocess
 import tempfile
 import time
@@ -13,19 +11,20 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click,
     close_window,
     display,
     focus_window,
     key,
     screenshot,
+    stop_process,
     text,
-    theme,
+    wait_for_project,
+    wait_for_window,
     x11,
     xtest,
 )
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
 def wait_for(check, message):
@@ -35,13 +34,6 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.3)
 
 
 def button(x, y, number=1):
@@ -121,41 +113,26 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
     git("config", "user.email", "rode@example.invalid")
     git("add", ".")
     git("commit", "-m", "Layout fixture")
-    with (ARTIFACTS / "layout.log").open("w") as log:
+    environment["RODE_UI_TEST_STATE"] = str(base / "ui-state.json")
+    log_path = ARTIFACTS / "layout.log"
+    with log_path.open("w") as log:
         process = subprocess.Popen(
             [str(BINARY), str(root), "--theme", "carbon"], env=environment, stdout=log, stderr=log
         )
         window = None
         try:
-            for _ in range(100):
-                found = re.search(
-                    r'(0x[0-9a-f]+) "RODE',
-                    subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                )
-                if found:
-                    window = int(found[1], 16)
-                    break
-                assert process.poll() is None
-                time.sleep(0.05)
-            assert window
-            time.sleep(0.8)
+            window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, root)
             focus_window(window)
+            ui = NativeUI(window, process, log_path, base / "ui-state.json", root)
             for name in names:
-                key("p", ("Control_L",))
-                text(name)
-                key("Return")
-                time.sleep(0.2)
+                ui.open_file(name)
             append_save(root / "notes.txt", "active_tab_focus")
-            key("p", ("Control_L",))
-            text("notes.txt")
-            key("Return")
-            time.sleep(0.2)
+            ui.open_file("notes.txt")
             append_save(root / "notes.txt", "same_file_refocus")
-            key("s", ("Control_L", "Shift_L"))
-            time.sleep(0.2)
-            key("a", ("Control_L",))
+            ui.command("Save file as")
             renamed = root / "notes_saved_with_a_much_longer_filename_for_layout_checks.txt"
-            text(renamed.name)
+            ui.fill_path(renamed.name)
             key("Return")
             wait_for(renamed.exists, "Save As did not finish")
             screenshot(window, "tabs-carbon.png")
@@ -182,12 +159,10 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             key("Escape")
             append_save(root / "README.md", "focus_after_cancel")
             assert "unsaved_layout_change" in (root / "README.md").read_text()
-            command("System: Monitor")
+            ui.command("System: Monitor")
             screenshot(window, "monitor-full-workspace.png")
             key("t", ("Control_L", "Shift_L"))
-            x11.XResizeWindow(display, window, 850, 560)
-            x11.XFlush(display)
-            time.sleep(0.6)
+            ui.resize(850, 560)
             screenshot(window, "minimum-terminal.png")
             text("echo layout_terminal_ok > terminal.ok\n")
             wait_for(
@@ -205,14 +180,12 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
             key("Escape")
             append_save(root / "README.md", "focus_after_find")
             append_save(root / "README.md", "focus_after_terminal")
-            command("Git: Source control")
+            ui.command("Git: Source control")
             time.sleep(0.5)
             screenshot(window, "minimum-git.png")
-            command("Git: Source control")  # Hide panel.
-            x11.XResizeWindow(display, window, 1380, 900)
-            x11.XFlush(display)
-            time.sleep(0.4)
-            theme("phosphor")
+            ui.command("Git: Source control")  # Hide panel.
+            ui.resize(1380, 900)
+            ui.command("Theme: Phosphor")
             screenshot(window, "tabs-phosphor.png")
             active_line("tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
             key("t", ("Control_L", "Shift_L"))
@@ -241,6 +214,4 @@ with tempfile.TemporaryDirectory(prefix="rode-layout-ui-") as directory:
                 screenshot(window, "layout-failure.png")
             raise
         finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=5)
+            stop_process(process)

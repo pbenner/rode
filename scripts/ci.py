@@ -45,6 +45,7 @@ CONTEXT_ENV = (
     "__GLX_VENDOR_LIBRARY_NAME",
     "__EGL_VENDOR_LIBRARY_FILENAMES",
     "RODE_TEST_BINARY",
+    "RODE_TEST_TMPDIR",
     "RODE_TEST_SESSION_HELPER",
     "RODE_SESSION_HELPER",
     "RODE_TEST_LLDB",
@@ -97,6 +98,7 @@ SUITES = {
     "workspace": [
         ([sys.executable, "scripts/test-ui-display.py"], {}, 30),
         ([sys.executable, "scripts/test-ui-harness.py"], {}, 30),
+        ([sys.executable, "scripts/test-readiness-ui.py"], {}, 90),
         ui("project", RODE_PROJECT_UI_CASE="failure"),
         ([sys.executable, "scripts/test-ui.py"], {}, 180),
         ui("workspace"),

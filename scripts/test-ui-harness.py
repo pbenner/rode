@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Window/control readiness regressions; run under the UI tests' isolated X display."""
 
+import hashlib
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from ui_harness import (
+    NativeUI,
     click_button,
+    focus_request,
     focus_window,
     palette_command,
     read_json_lines,
+    stop_fixture_agents,
+    stop_process,
     viewport_state_path,
     wait_for_button,
     wait_for_project,
@@ -22,6 +28,89 @@ from ui_harness import (
 
 
 class FixtureAcknowledgementTests(unittest.TestCase):
+    def test_agent_cleanup_only_ends_the_owned_project_in_its_private_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = base / "runtime"
+            runtime.mkdir()
+            project = base / "project"
+            environment = {"RODE_SESSION_DIR": str(runtime)}
+            agents = {
+                "kind": "agents",
+                "data": [
+                    dict(id="own", root=str(project), policy="own-policy"),
+                    dict(id="other", root="/other/project", policy="other-policy"),
+                ],
+            }
+            with patch("ui_harness.subprocess.run") as run:
+                run.side_effect = [
+                    Mock(stdout=json.dumps(agents).encode()),
+                    Mock(stdout=b'{"kind":"ok"}'),
+                ]
+                self.assertTrue(stop_fixture_agents(environment, project))
+                requests = [json.loads(call.kwargs["input"]) for call in run.call_args_list]
+                self.assertEqual(
+                    requests,
+                    [
+                        dict(action="agents"),
+                        dict(action="end_agent", id="own", policy="own-policy"),
+                    ],
+                )
+                run.assert_called_with(
+                    run.call_args.args[0],
+                    input=json.dumps(requests[-1]).encode(),
+                    env=environment,
+                    capture_output=True,
+                    check=True,
+                    timeout=5,
+                )
+
+    def test_agent_cleanup_cannot_use_an_ambient_service(self):
+        with patch("ui_harness.subprocess.run") as run:
+            for environment in ({}, {"RODE_SESSION_DIR": "/ambient/runtime"}):
+                with self.assertRaisesRegex(ValueError, "temporary fixture"):
+                    stop_fixture_agents(environment, Path("/tmp/fixture/project"))
+            run.assert_not_called()
+
+    def test_agent_cleanup_timeout_preserves_the_active_test_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = base / "runtime"
+            runtime.mkdir()
+            with (
+                patch(
+                    "ui_harness.subprocess.run", side_effect=subprocess.TimeoutExpired("service", 5)
+                ),
+                patch("ui_harness.sys.stderr"),
+            ):
+                try:
+                    raise AssertionError("original test failure")
+                except AssertionError as original:
+                    self.assertFalse(
+                        stop_fixture_agents({"RODE_SESSION_DIR": str(runtime)}, base / "project")
+                    )
+                    self.assertIs(sys.exc_info()[1], original)
+
+    def test_cleanup_escalates_a_child_ignoring_termination_without_another_ui_close(self):
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('ready',flush=True);time.sleep(600)",
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            self.assertTrue(stop_process(child, timeout=0.1))
+            self.assertIsNotNone(child.poll())
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            child.stdout.close()
+
     def test_missing_log_has_no_acknowledgements(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(read_json_lines(Path(directory) / "missing.jsonl"), [])
@@ -48,7 +137,7 @@ class FixtureAcknowledgementTests(unittest.TestCase):
 
 class WindowReadinessTests(unittest.TestCase):
     def setUp(self):
-        self.process = Mock()
+        self.process = Mock(pid=42)
         self.process.poll.return_value = None
         self.tree = patch("ui_harness.subprocess.check_output", return_value='0x123 "RODE"')
         self.attributes = patch("ui_harness.subprocess.run")
@@ -56,6 +145,7 @@ class WindowReadinessTests(unittest.TestCase):
         self.query_tree = self.tree.start()
         self.query_attributes = self.attributes.start()
         self.sleep.start()
+        self.owner = patch("ui_harness.window_pid", return_value=42).start()
         self.addCleanup(patch.stopall)
 
     @staticmethod
@@ -75,6 +165,13 @@ class WindowReadinessTests(unittest.TestCase):
         self.query_tree.return_value = '0x123 "RODE hidden"\n0x456 "RODE visible"'
         self.query_attributes.side_effect = [self.state("IsUnMapped"), self.state("IsViewable")]
         self.assertEqual(wait_for_window(self.process, "startup.log"), 0x456)
+
+    def test_mapped_window_from_another_process_is_not_the_test_window(self):
+        self.query_tree.return_value = '0x123 "RODE other process"\n0x456 "RODE fixture"'
+        self.owner.side_effect = [41, 42]
+        self.query_attributes.return_value = self.state("IsViewable")
+        self.assertEqual(wait_for_window(self.process, "startup.log"), 0x456)
+        self.assertEqual(self.query_attributes.call_count, 1)
 
     def test_retries_a_window_that_disappeared_during_discovery(self):
         self.query_attributes.side_effect = [self.state("", 1), self.state("IsViewable")]
@@ -103,14 +200,20 @@ class WindowReadinessTests(unittest.TestCase):
             self.state("IsViewable"),
         ]
         with (
-            patch("ui_harness.x11.XSetInputFocus") as focus,
-            patch("ui_harness.x11.XRaiseWindow") as raise_window,
-            patch("ui_harness.x11.XFlush"),
+            patch("ui_harness.focus_request", return_value=True) as focus,
         ):
             focus_window(0x123)
             self.assertEqual(self.query_attributes.call_count, 3)
-            focus.assert_called_once()
-            raise_window.assert_called_once()
+            focus.assert_called_once_with(0x123)
+
+    def test_mapping_race_during_focus_is_retried_without_replaying_input(self):
+        self.query_attributes.return_value = self.state("IsViewable")
+        with patch("ui_harness.focus_request", side_effect=[False, True]) as focus:
+            focus_window(0x123)
+            self.assertEqual(focus.call_count, 2)
+
+    def test_disappeared_window_does_not_terminate_the_python_test_process(self):
+        self.assertFalse(focus_request(0))
 
     def test_project_waits_past_initial_mapping_and_pending_preparation(self):
         for suffix in ("", " [Sandbox]"):
@@ -459,6 +562,73 @@ class PaletteReadinessTests(unittest.TestCase):
             self.process, "log", "state", lambda state: not state["buttons"], "Dialog stayed open"
         )
         self.assertEqual(self.read.call_count, 5)
+
+
+class NativeUIReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.process = Mock(pid=42)
+        self.process.poll.return_value = None
+        self.ui = NativeUI(0x123, self.process, "log", "state", "/project")
+
+    def test_complete_path_not_just_the_first_edit_is_required_before_submission(self):
+        path = "folder/file with spaces.txt"
+        digest = hashlib.sha256(path.encode()).hexdigest()
+        with (
+            patch.object(self.ui, "command") as command,
+            patch.object(self.ui, "control") as control,
+            patch.object(self.ui, "layout", return_value={"pass": 10}),
+            patch.object(self.ui, "absent") as absent,
+            patch("ui_harness.key") as key,
+            patch("ui_harness.text") as text,
+        ):
+
+            def ready(name, **_):
+                if name == "file-dialog-path-value:" + digest:
+                    self.assertNotIn(call("Return"), key.call_args_list)
+
+            control.side_effect = ready
+            self.ui.open_file(path)
+            command.assert_called_once_with("Open file by path")
+            text.assert_called_once_with(path)
+            key.assert_has_calls([call("a", ("Control_L",)), call("Return")])
+            self.assertIn(
+                call("file-dialog-path-value:" + digest, focused=True), control.call_args_list
+            )
+            absolute = hashlib.sha256(("/project/" + path).encode()).hexdigest()
+            control.assert_any_call("active-document:" + absolute)
+            absent.assert_called_once_with("file-dialog-path", after_pass=10)
+
+    def test_partial_or_unfocused_path_times_out_without_submitting_or_retrying(self):
+        with (
+            patch.object(self.ui, "command"),
+            patch.object(self.ui, "control") as control,
+            patch.object(self.ui, "layout", return_value={"pass": 10}),
+            patch("ui_harness.key") as key,
+            patch("ui_harness.text"),
+        ):
+
+            def ready(name, **_):
+                if name.startswith("file-dialog-path-value:"):
+                    raise AssertionError("Complete path did not arrive")
+
+            control.side_effect = ready
+            with self.assertRaisesRegex(AssertionError, "Complete path"):
+                self.ui.open_file("file.txt")
+            key.assert_called_once_with("a", ("Control_L",))
+
+    def test_absence_cannot_acknowledge_a_snapshot_from_before_the_action(self):
+        states = [
+            {"pid": 41, "pass": 20, "buttons": []},
+            {"pid": 42, "pass": 10, "buttons": []},
+            {"pid": 42, "pass": 11, "buttons": [{"name": "dialog"}]},
+            {"pid": 42, "pass": 12, "buttons": []},
+        ]
+        with (
+            patch("ui_harness.Path.read_text", side_effect=[json.dumps(s) for s in states]) as read,
+            patch("ui_harness.time.sleep"),
+        ):
+            self.assertEqual(self.ui.absent("dialog", after_pass=10)["pass"], 12)
+            self.assertEqual(read.call_count, 4)
 
 
 if __name__ == "__main__":

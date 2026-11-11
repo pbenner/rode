@@ -1,6 +1,7 @@
 //! Queue presentation and unsent edits; native conversations own the queued payloads. Only acknowledged,
 //! successful turns advance the queue. Editing and Stop suspend dispatch.
 use super::super::icons::{self, Icon};
+use crate::app::ui_probe;
 use eframe::egui::{self, RichText};
 use std::collections::VecDeque;
 
@@ -255,9 +256,10 @@ impl Queue {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Queued ({})", self.prompts.len())).strong())
                     .on_hover_text("Pending prompts belong to this agent. With Persist on, the host continues the queue and retains its attachments after detaching or closing Rode. Pause, Stop, failures and permission requests still hold work.");
-                if ui.add_enabled(!self.paused || can_resume, egui::Button::new(if self.paused { "Resume queue" } else { "Pause queue" }).small())
-                    .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.")
-                    .clicked() {
+                let toggle = ui.add_enabled(!self.paused || can_resume, egui::Button::new(if self.paused { "Resume queue" } else { "Pause queue" }).small())
+                    .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.");
+                ui_probe::button(ui, if self.paused { "agent-queue-resume" } else { "agent-queue-pause" }, &toggle);
+                if toggle.clicked() {
                     self.set_paused(!self.paused);
                 }
                 if self.edit.is_some() {
@@ -275,34 +277,49 @@ impl Queue {
                         ui.push_id(prompt.id, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{}.", index + 1));
-                                if ui.add_enabled_ui(index > 0, |ui| icons::small(ui, Icon::ChevronUp, "Move earlier")).inner.clicked() {
+                                let earlier = ui.add_enabled_ui(index > 0, |ui| icons::small(ui, Icon::ChevronUp, "Move earlier")).inner;
+                                ui_probe::button(ui, &format!("agent-queue-{index}-earlier"), &earlier);
+                                if earlier.clicked() {
                                     action = Some(Action::Move(prompt.id, true));
                                 }
-                                if ui.add_enabled_ui(index + 1 < self.prompts.len(), |ui| icons::small(ui, Icon::ChevronDown, "Move later")).inner.clicked() {
+                                let later = ui.add_enabled_ui(index + 1 < self.prompts.len(), |ui| icons::small(ui, Icon::ChevronDown, "Move later")).inner;
+                                ui_probe::button(ui, &format!("agent-queue-{index}-later"), &later);
+                                if later.clicked() {
                                     action = Some(Action::Move(prompt.id, false));
                                 }
-                                if ui.add_enabled(self.edit.is_none(), egui::Button::new("Edit").small()).clicked() {
+                                let edit = ui.add_enabled(self.edit.is_none(), egui::Button::new("Edit").small());
+                                ui_probe::button(ui, &format!("agent-queue-{index}-edit"), &edit);
+                                if edit.clicked() {
                                     action = Some(Action::Edit(prompt.id));
                                 }
-                                if ui.small_button("Delete").clicked() {
+                                let delete = ui.small_button("Delete");
+                                ui_probe::button(ui, &format!("agent-queue-{index}-delete"), &delete);
+                                if delete.clicked() {
                                     action = Some(Action::Remove(prompt.id));
                                 }
                                 if !prompt.files.is_empty() { ui.label(format!("{} files", prompt.files.len())).on_hover_text(prompt.files.join("\n")); }
-                                ui.add(egui::Label::new(prompt.text.lines().find(|line| !line.trim().is_empty()).unwrap_or_default()).truncate())
+                                let summary = ui.add(egui::Label::new(prompt.text.lines().find(|line| !line.trim().is_empty()).unwrap_or_default()).truncate())
                                     .on_hover_text(&prompt.text);
+                                ui_probe::value(ui, &format!("agent-queue-{index}-value"), &summary, &prompt.text);
                             });
                             if let Some(edit) = &mut self.edit
                                 && edit.id == prompt.id {
-                                ui.add(egui::TextEdit::multiline(&mut edit.text)
+                                let input = ui.add(egui::TextEdit::multiline(&mut edit.text)
                                     .id_salt(("queued-edit", edit.id))
                                     .desired_rows(3)
                                     .desired_width(f32::INFINITY)
                                     .char_limit(crate::agent::PROMPT_LIMIT));
+                                ui_probe::button(ui, "agent-queue-edit-input", &input);
+                                ui_probe::value(ui, "agent-queue-edit-input-value", &input, &edit.text);
                                 ui.horizontal(|ui| {
-                                    if ui.add_enabled(valid(&edit.text) || edit.text.len() <= crate::agent::PROMPT_LIMIT && !prompt.files.is_empty(), egui::Button::new("Save prompt").small()).clicked() {
+                                    let save = ui.add_enabled(valid(&edit.text) || edit.text.len() <= crate::agent::PROMPT_LIMIT && !prompt.files.is_empty(), egui::Button::new("Save prompt").small());
+                                    ui_probe::button(ui, "agent-queue-save", &save);
+                                    if save.clicked() {
                                         action = Some(Action::Save);
                                     }
-                                    if ui.small_button("Cancel edit").clicked() {
+                                    let cancel = ui.small_button("Cancel edit");
+                                    ui_probe::button(ui, "agent-queue-cancel-edit", &cancel);
+                                    if cancel.clicked() {
                                         action = Some(Action::Cancel);
                                     }
                                 });

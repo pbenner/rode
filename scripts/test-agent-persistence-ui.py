@@ -23,6 +23,7 @@ from ui_harness import (
     close_window,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
     text,
     wait_for_button,
@@ -181,10 +182,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-persistence-ui-") as directo
                 lambda: (root / "work-done").read_text() == "2",
                 "Completed queued work was lost on restart/reattach",
             )
-            recorded = [
-                json.loads(line)
-                for line in (root / "recorded-inputs.jsonl").read_text().splitlines()
-            ]
+            recorded = read_json_lines(root / "recorded-inputs.jsonl")
             assert len(recorded) == 2
             assert recorded[1][0]["text"] == "queued across restart"
             assert any(

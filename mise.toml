@@ -25,6 +25,7 @@ run = "python3 scripts/ci.py time python-format -- ruff format --check ."
 run = [
   "python3 scripts/ci.py time ci-regressions -- python3 scripts/test-ci.py",
   "python3 scripts/ci.py time rust-fixture-regressions -- python3 scripts/test-rust-tests.py",
+  "python3 scripts/ci.py time ssh-fixture-regressions -- python3 scripts/test-ssh-fixture.py",
 ]
 
 [tasks."lint:packaging"]

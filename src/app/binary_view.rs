@@ -290,6 +290,9 @@ impl EditorApp {
         ui.horizontal_wrapped(|ui| {
             let ready = ui.label(palette.tag(format!("{} BYTES", view.buffer.bytes().len())));
             ui_probe::button(ui, "hex-ready", &ready);
+            if view.worker.is_none() && view.analysis_serial > 0 {
+                ui_probe::button(ui, "hex-analysis-ready", &ready);
+            }
             if !doc.modified && !doc.saving {
                 ui_probe::button(ui, "hex-saved", &ready);
             }
@@ -303,7 +306,9 @@ impl EditorApp {
                 (View::Exports, "Exports"),
                 (View::Disassembly, "Disassembly"),
             ] {
-                if ui.selectable_label(view.mode == mode, name).clicked() {
+                let tab = ui.selectable_label(view.mode == mode, name);
+                ui_probe::button(ui, &format!("binary-tab:{name}"), &tab);
+                if tab.clicked() {
                     view.mode = mode;
                 }
             }
@@ -317,6 +322,7 @@ impl EditorApp {
                     .char_limit(16),
             );
             ui_probe::button(ui, "hex-offset", &jump);
+            ui_probe::value(ui, "hex-offset-value", &jump, &view.offset_text);
             let go = ui.button("Go");
             ui_probe::button(ui, "hex-go", &go);
             if go.clicked() || (jump.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
@@ -329,13 +335,12 @@ impl EditorApp {
                     _ => view.error = "Offset is outside the file.".into(),
                 }
             }
-            if ui
-                .add_enabled(
-                    view.worker.is_none(),
-                    egui::Button::new("Analyze / decode here"),
-                )
-                .clicked()
-            {
+            let analyze = ui.add_enabled(
+                view.worker.is_none(),
+                egui::Button::new("Analyze / decode here"),
+            );
+            ui_probe::button(ui, "hex-analyze", &analyze);
+            if analyze.clicked() {
                 view.analyze(ctx);
             }
             if ui
@@ -363,6 +368,7 @@ impl EditorApp {
                             .char_limit(12288),
                     );
                     ui_probe::button(ui, "hex-patch", &patch);
+                    ui_probe::value(ui, "hex-patch-value", &patch, &view.patch);
                     let overwrite = ui.button("Overwrite");
                     ui_probe::button(ui, "hex-overwrite", &overwrite);
                     if overwrite.clicked() {

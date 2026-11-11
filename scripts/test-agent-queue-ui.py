@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Native queued follow-ups with a deterministic agent and no inference."""
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -16,14 +18,16 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    NativeUI,
     assert_running,
-    click,
-    click_button,
     close_window,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
-    text,
+    stop_fixture_agents,
+    stop_process,
+    wait_for_project,
     wait_for_window,
 )
 
@@ -44,6 +48,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_UI_TEST_STATE=str(base / "ui-state.json"),
+        RODE_SESSION_DIR=str(base / "runtime"),
     )
     log_path = ARTIFACTS / "queue.log"
     with log_path.open("w") as log:
@@ -63,12 +68,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
                 raise AssertionError(message)
 
             def prompts():
-                path = project / "agent-rpc.jsonl"
-                calls = (
-                    [json.loads(line) for line in path.read_text().splitlines()]
-                    if path.exists()
-                    else []
-                )
+                calls = read_json_lines(project / "agent-rpc.jsonl")
                 return [
                     call["params"]["input"][0]["text"]
                     for call in calls
@@ -76,43 +76,57 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
                 ]
 
             def send(message):
-                click(700, 790)
-                text(message)
+                ui.click("agent-composer")
+                ui.fill("agent-composer", message)
+                ui.control("agent-send")
+                before = ui.layout()["pass"]
                 key("Return")
-                time.sleep(0.2)
+                ui.control("agent-composer-empty", after_pass=before)
+
+            def queued(index, message):
+                digest = hashlib.sha256(message.encode()).hexdigest()
+                ui.control(f"agent-queue-{index}-value:" + digest)
 
             window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus_window(window)
+            ui = NativeUI(window, process, log_path, base / "ui-state.json", project)
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            ui.control("agent-composer")
             send("wait")
             wait(lambda: prompts() == ["wait"], "Initial turn was not started")
             send("first queued")
+            queued(0, "first queued")
             send("second queued")
+            queued(1, "second queued")
             send("delete this")
+            queued(2, "delete this")
             assert prompts() == ["wait"], "A queued prompt interrupted the running turn"
             screenshot(window, "queued.png")
             # The bounded queue sits immediately above the unchanged composer.
-            click(347, 657)  # Move the second prompt earlier.
-            click(421, 632)  # Edit that prompt in place.
-            time.sleep(0.2)
+            ui.click("agent-queue-1-earlier")
+            queued(0, "second queued")
+            ui.click("agent-queue-0-edit")
             screenshot(window, "editing.png")
-            click(700, 540)
-            key("a", ("Control_L",))
-            text("edited second queued")
-            click(360, 593)  # Save prompt.
-            time.sleep(0.2)
-            click(480, 682)  # Delete the final prompt.
-            click(700, 790)
-            text("untouched composer draft")
-            click(404, 850)  # Stop pauses the remaining follow-ups.
-            time.sleep(0.6)
+            ui.click("agent-queue-edit-input")
+            ui.fill("agent-queue-edit-input", "edited second queued")
+            ui.click("agent-queue-save")
+            ui.absent("agent-queue-edit-input")
+            queued(0, "edited second queued")
+            ui.click("agent-queue-2-delete")
+            ui.absent("agent-queue-2-delete")
+            ui.click("agent-composer")
+            ui.fill("agent-composer", "untouched composer draft")
+            ui.click("agent-stop")
+            ui.control("agent-queue-resume")
             assert prompts() == ["wait"], "Stop started the next queued prompt"
             screenshot(window, "paused.png")
-            click(440, 637)  # Resume queue.
+            ui.click("agent-queue-resume")
             wait(lambda: len(prompts()) == 3, "The queue did not resume and drain automatically")
             assert prompts() == ["wait", "edited second queued", "first queued"], prompts()
-            click(700, 790)
+            ui.absent("agent-queue-resume")
+            ui.control("agent-idle")
+            ui.click("agent-composer")
             key("Return")
             wait(
                 lambda: len(prompts()) == 4,
@@ -124,19 +138,24 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
             send("wait")
             wait(lambda: prompts()[-1] == "wait", "Second held turn did not start")
             send("bad-protocol")
+            queued(0, "bad-protocol")
             send("after failure")
-            click(404, 850)
-            time.sleep(0.6)
-            click(440, 637)
+            queued(1, "after failure")
+            ui.click("agent-stop")
+            ui.click("agent-queue-resume")
             wait(lambda: prompts()[-1] == "bad-protocol", "Failed-turn fixture was not dispatched")
-            time.sleep(0.8)
+            queued(0, "after failure")
+            # A broken protocol pauses pending work and disables Resume until
+            # the backend is usable again. New chat remains available.
+            ui.control("agent-queue-resume", enabled=False)
             assert "after failure" not in prompts(), "Failure did not pause the queue"
             screenshot(window, "failed-paused.png")
-            click_button(window, process, log_path, base / "ui-state.json", "agent-new-chat")
-            time.sleep(0.3)
+            ui.click("agent-new-chat")
+            ui.absent("agent-queue-resume")
+            ui.control("agent-idle")
             send("new conversation")
             wait(lambda: prompts()[-1] == "new conversation", "New chat did not accept input")
-            time.sleep(0.3)
+            ui.control("agent-idle")
             assert "after failure" not in prompts(), (
                 "A queued prompt leaked into a new conversation"
             )
@@ -149,6 +168,6 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-queue-ui-") as directory:
                 screenshot(window, "failure.png")
             raise
         finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=10)
+            stop_process(process)
+            if not stop_fixture_agents(environment, project) and sys.exc_info()[0] is None:
+                raise AssertionError("The fixture's agent service did not clean up")

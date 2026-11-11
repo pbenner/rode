@@ -24,6 +24,7 @@ from ui_harness import (
     display,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
     text,
     wait_for_project,
@@ -137,11 +138,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-files-ui-") as directory:
                     return False
                 return any(
                     call.get("id") == 101 and call.get("result", {}).get("success") is False
-                    for call in (
-                        json.loads(line)
-                        for line in path.read_text().splitlines(keepends=True)
-                        if line.endswith("\n")
-                    )
+                    for call in read_json_lines(path)
                 )
 
             wait(declined, "The execution tool request was not declined")

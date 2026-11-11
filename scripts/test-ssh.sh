@@ -4,6 +4,15 @@ set -euo pipefail
 # All fixture caches and credentials must stay private under permissive caller umasks.
 umask 077
 cd "$(dirname "$0")/.."
+# Direct test binaries live in deps/ or tests/, away from the packaged helper.
+# Use the supplied artifact rather than a helper installed on the invoking host.
+if [[ -n "${RODE_TEST_SESSION_HELPER:-}" && -z "${RODE_HOST_HELPER+x}" && -z "${RODE_SESSION_HELPER+x}" ]]; then
+    if [[ ! -x "$RODE_TEST_SESSION_HELPER" ]]; then
+        echo "Missing executable RODE_TEST_SESSION_HELPER=$RODE_TEST_SESSION_HELPER" >&2
+        exit 1
+    fi
+    export RODE_SESSION_HELPER="$RODE_TEST_SESSION_HELPER"
+fi
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/rode-ssh-test.XXXXXX")
 mkdir -m 700 "$test_dir/codex-home" "$test_dir/home"
 sshd_pid=
@@ -27,10 +36,10 @@ ssh-keygen -q -t ecdsa -b 256 -N '' -f "$test_dir/host-known"
 ssh-keygen -q -t ed25519 -N '' -f "$test_dir/client"
 test_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 test_user=$(id -un)
-test_path=$PATH
-test_shell_export=
-# Keep sshd's X11 cookies in the fixture, even though its account database points
-# at the real user's home. The forced command changes HOME only after xauth ran.
+# A developer's installed helper must not outrank the private-home fixture.
+test_path=$(python3 scripts/ssh_fixture.py "$test_dir/path" "$PATH")
+# Pin sshd's X11 cookies to the fixture independently of shell environment
+# setup, even though the account database points at the real user's home.
 xauth_bin=$(command -v xauth || true)
 if [[ -z "$xauth_bin" && "${RODE_TEST_REQUIRE_X11:-0}" == 1 ]]; then
     echo 'Install xauth for required X11 forwarding coverage.' >&2
@@ -49,6 +58,16 @@ EOF
 X11UseLocalhost yes
 XAuthLocation $test_dir/xauth"
 fi
+mkdir -p "$test_dir/home/.local/bin"
+test_shell="$test_dir/home/.local/bin/project-shell"
+cat > "$test_shell" <<'EOF'
+#!/bin/sh
+unset ENV BASH_ENV
+export PS1='RODE_TEST_SHELL_READY> '
+exec /bin/sh -i
+EOF
+chmod 700 "$test_shell"
+export RODE_TEST_PROJECT_SHELL="$test_shell"
 if [[ "${RODE_SSH_TEST_NO_PYTHON:-0}" == 1 ]]; then
     mkdir -m 700 "$test_dir/native-path"
     for program in sh uname id stat sha256sum wc head mktemp ln chmod cut mkdir rm rmdir readlink git bwrap true env; do
@@ -57,18 +76,6 @@ if [[ "${RODE_SSH_TEST_NO_PYTHON:-0}" == 1 ]]; then
         if [[ "$program_path" == /* ]]; then ln -s "$program_path" "$test_dir/native-path/$program"; fi
     done
     test_path="$test_dir/native-path"
-    # Login profiles belong to the machine, not this fixture, and can invoke
-    # Python or consume terminal input. Use a private interactive shell with no
-    # profile loading; the Rust sandbox fixture grants this exact script read-only.
-    test_shell="$test_dir/project-shell"
-    cat > "$test_shell" <<'EOF'
-#!/bin/sh
-unset ENV
-exec /bin/sh -i
-EOF
-    chmod 700 "$test_shell"
-    export RODE_TEST_PROJECT_SHELL="$test_shell"
-    test_shell_export="export SHELL='$test_shell'"
 else
     # The sandbox exposes this fixture's home, not the invoking user's home.
     # Copy the installed uv tools together so default Ruff can find uvx and its
@@ -97,14 +104,14 @@ EOF
 fi
 cat > "$test_dir/host-shell" <<EOF
 #!/bin/sh
-# Apply the fixture home after the account's initial shell startup files.
+# Retain the fixture environment in every forced command.
 export HOME='$test_dir/home'
 export PATH='$test_path'
 export TMPDIR='$test_dir'
 export RODE_SESSION_DIR='$test_dir/home/sessions'
 export RODE_VAULT_DIR='$test_dir/home/vaults'
 export XAUTHORITY='$test_dir/home/.Xauthority'
-$test_shell_export
+export SHELL='$test_shell'
 if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then
     exec /bin/sh -c "\$SSH_ORIGINAL_COMMAND"
 fi
@@ -122,6 +129,9 @@ StrictModes no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 UsePAM no
+PermitUserRC no
+PermitUserEnvironment no
+UseDNS no
 AllowUsers $test_user
 LogLevel VERBOSE
 GatewayPorts clientspecified
@@ -130,6 +140,8 @@ GatewayPorts clientspecified
 MaxStartups 64
 $x11_config
 AcceptEnv CODEX_HOME RODE_CODEX_CACHE
+# Isolate account-shell startup too, before the forced command runs.
+SetEnv "HOME=$test_dir/home"
 # The fixture runs on this host; expose the same CI-installed tools to its child shells.
 SetEnv "PATH=$test_path"
 # Keep helper deployment and tool preferences out of the real user's home.
@@ -137,6 +149,7 @@ ForceCommand $test_dir/host-shell
 EOF
 read -r key_type key_data _ < "$test_dir/host-known.pub"
 printf '[127.0.0.1]:%s %s %s\n' "$test_port" "$key_type" "$key_data" > "$test_dir/known_hosts"
+: > "$test_dir/global_known_hosts"
 cat > "$test_dir/ssh_config" <<EOF
 Host rode-test rode-jump
     HostName 127.0.0.1
@@ -145,6 +158,7 @@ Host rode-test rode-jump
     IdentityFile $test_dir/client
     IdentitiesOnly yes
     UserKnownHostsFile $test_dir/known_hosts
+    GlobalKnownHostsFile $test_dir/global_known_hosts
     StrictHostKeyChecking yes
     BatchMode yes
     # Common system default: enabling an optional method must not block keys.

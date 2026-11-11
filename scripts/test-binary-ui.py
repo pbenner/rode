@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Native hex edits, protected saves, static analysis and extension preferences."""
 
+import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -14,12 +14,15 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    NativeUI,
     close_window,
     focus_window,
     key,
     screenshot,
+    stop_process,
     text,
+    wait_for_project,
+    wait_for_window,
 )
 
 
@@ -32,26 +35,19 @@ def wait_for(check, message):
     raise AssertionError(message)
 
 
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.35)
-
-
-def open_file(name):
-    command("Open file by path")
-    text(name)
-    key("Return")
-    time.sleep(0.5)
-
-
-def toggle_extension(identity):
+def toggle_extension(ui, identity):
     """Filter by stable ID, then activate the checkbox using native keyboard focus."""
     key("x", ("Control_L", "Shift_L"))
-    text(identity)
-    key("Tab")
-    key("space")
+    ui.fill("extension-filter", identity)
+    ui.click("extension-toggle:" + identity)
+
+
+def first_byte(ui):
+    ui.click("hex-offset")
+    ui.fill("hex-offset", "0")
+    ui.click("hex-go")
+    ui.click("hex-byte:0")
+    ui.control("hex-grid", focused=True)
 
 
 def preferences(path):
@@ -124,81 +120,75 @@ def run(remote=False):
             ]
         else:
             args += [str(root)]
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
+        env["RODE_UI_TEST_STATE"] = str(base / "ui-state.json")
+        log_path = ARTIFACTS / (label + ".log")
+        with log_path.open("w") as log:
             process = subprocess.Popen(args, env=env, stdout=log, stderr=log)
             window = None
             try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No binary editor window")
-                time.sleep(0.8)
+                window = wait_for_window(process, log_path)
+                wait_for_project(window, process, log_path, root)
                 focus_window(window)
-                # Remote workspaces add a status strip and, on sandbox fallback,
-                # an extra warning row above the document controls.
-                dy = 0
-                if remote:
-                    title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                    dy = 44 if "[Sandbox]" in title else 74
-                open_file("sample.bin")
+                ui = NativeUI(window, process, log_path, env["RODE_UI_TEST_STATE"], root)
+                ui.open_file("sample.bin")
                 screenshot(window, label + "-hex.png")
-                click(315, 215 + dy)  # Edit bytes
-                click(480, 215 + dy)
-                key("a", ("Control_L",))
-                text("90 90 C3")
-                click(592, 215 + dy)  # Overwrite
+                ui.click("hex-edit")
+                ui.click("hex-patch")
+                ui.fill("hex-patch", "90 90 C3")
+                ui.click("hex-overwrite")
+                ui.absent("hex-saved")
                 key("s", ("Control_L",))
                 wait_for(
                     lambda: source.read_bytes()[:3] == b"\x90\x90\xc3",
                     "Hex overwrite was not saved",
                 )
-                click(405, 310 + dy)  # byte zero; direct typing and undo should reach the grid
+                first_byte(ui)
                 text("cc")
+                ui.absent("hex-saved")
                 key("z", ("Control_L",))
+                ui.control("hex-saved")
                 key("s", ("Control_L",))
-                time.sleep(0.3)
+                ui.control("hex-saved")
                 assert source.read_bytes()[:3] == b"\x90\x90\xc3", (
                     "Byte undo did not restore the saved patch"
                 )
-                click(405, 310 + dy)
+                first_byte(ui)
                 text("cc")
+                ui.absent("hex-saved")
                 key("s", ("Control_L",))
                 wait_for(lambda: source.read_bytes()[0] == 0xCC, "Direct hex input failed")
                 # Save conflict must preserve both external data and dirty byte edits.
-                click(405, 310 + dy)
+                ui.dismiss_notice()
+                first_byte(ui)
                 text("aa")
+                ui.absent("hex-saved")
                 external = b"\xee" + source.read_bytes()[1:]
                 source.write_bytes(external)
                 key("s", ("Control_L",))
-                time.sleep(0.4)
+                ui.control("notice-dismiss")
                 assert source.read_bytes() == external, "Binary conflict overwrote external changes"
                 screenshot(window, label + "-conflict.png")
                 key("w", ("Control_L",))
-                time.sleep(0.2)
+                ui.control("guard-keep-editing")
                 screenshot(window, label + "-dirty-guard.png")
                 key("Escape")
+                ui.absent("guard-keep-editing")
                 key("s", ("Control_L", "Shift_L"))
-                key("a", ("Control_L",))
-                text("copy.bin")
+                ui.fill_path("copy.bin")
                 key("Return")
                 wait_for(lambda: (root / "copy.bin").exists(), "Binary Save As failed")
+                ui.absent("file-dialog-path")
+                ui.control("hex-saved")
                 assert (root / "copy.bin").read_bytes()[0] == 0xAA
-                open_file("program")
-                click(466, 150 + dy)  # Overview
+                ui.open_file("program")
+                ui.click("binary-tab:Overview")
                 screenshot(window, label + "-object.png")
-                click(930, 150 + dy)  # Disassembly
-                click(580, 182 + dy)  # Analyze / decode here
-                time.sleep(0.6)
+                ui.click("binary-tab:Disassembly")
+                ui.click("hex-analyze")
+                ui.control("hex-analysis-ready")
                 screenshot(window, label + "-disassembly.png")
                 # The direct shortcut opens the manager; toggles save immediately.
-                toggle_extension("rode.monitor")
+                toggle_extension(ui, "rode.monitor")
                 screenshot(window, label + "-extension-manager.png")
                 prefs = base / "data/rode/app.ron"
                 wait_for(
@@ -206,7 +196,8 @@ def run(remote=False):
                     "Extension preference was not persisted",
                 )
                 key("Escape")
-                toggle_extension("test.adapter")
+                ui.absent("extension-filter")
+                toggle_extension(ui, "test.adapter")
                 screenshot(window, label + "-installed-adapter.png")
                 wait_for(
                     lambda: preferences(prefs).get("test.adapter", {}).get("enabled") is True,
@@ -214,19 +205,23 @@ def run(remote=False):
                 )
                 screenshot(window, label + "-adapter-enabled.png")
                 key("Escape")
-                open_file("note.txt")
+                ui.absent("extension-filter")
+                ui.open_file("note.txt")
                 key("a", ("Control_L",))
                 key("x", ("Control_L", "Shift_L"))  # Must not cut the selected source.
+                ui.control("extension-filter")
                 key("Escape")
-                command("Code: Format document")
-                time.sleep(0.5)
+                ui.absent("extension-filter")
+                ui.command("Code: Format document")
+                ui.control("source-editor-modified")
                 key("s", ("Control_L",))
                 wait_for(
                     lambda: (root / "note.txt").read_text() == "KEEP SOURCE\n",
                     "Installed formatter did not update/save the buffer",
                 )
-                command("Test adapter: Inspect project")
-                time.sleep(0.4)
+                ui.command("Test adapter: Inspect project")
+                output = f"Adapter on {root} · test.inspect"
+                ui.control("extension-output-value:" + hashlib.sha256(output.encode()).hexdigest())
                 screenshot(window, label + "-adapter-output.png")
                 close_window(window, process)
             except Exception:
@@ -234,12 +229,7 @@ def run(remote=False):
                     screenshot(window, label + "-failure.png")
                 raise
             finally:
-                if process.poll() is None:
-                    if window:
-                        close_window(window, process)
-                    else:
-                        process.terminate()
-                        process.wait(timeout=5)
+                stop_process(process)
     print(label + " hex / extension UI checks passed")
 
 

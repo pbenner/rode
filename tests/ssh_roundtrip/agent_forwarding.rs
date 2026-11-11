@@ -222,6 +222,7 @@ fn native_terminal(remote: &Remote, plan: &rode::sandbox::Plan, expected: &str, 
         panic!("Expected native terminal");
     };
     let terminal = super::native_attach(remote, &reply, info);
+    super::terminal_ui::wait_for_prompt(&terminal);
     terminal
         .send(b"ssh-add -l > agent-identities 2>&1; printf '%s' $? > agent-status\n".to_vec())
         .unwrap();

@@ -2,6 +2,61 @@
 use super::*;
 
 #[test]
+fn ordinary_text_fields_keep_paint_inside_their_own_frames_when_scrolled() {
+    for theme in crate::theme::Theme::builtins() {
+        for scale in [1., 1.25, 2.] {
+            for multiline in [false, true] {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx, theme.palette);
+                ctx.set_pixels_per_point(scale);
+                let id = egui::Id::new("framed-text-field");
+                let mut value = if multiline {
+                    "Long text in a framed multiline input.\n".repeat(35)
+                } else {
+                    "A horizontally scrolling input field. ".repeat(35)
+                };
+                let mut bounds = egui::Rect::NOTHING;
+                let mut output = None;
+                for _ in 0..4 {
+                    output = Some(ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(300., 220.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    ui.memory_mut(|memory| memory.request_focus(id));
+                                    let editor = if multiline {
+                                        egui::TextEdit::multiline(&mut value).desired_rows(3)
+                                    } else {
+                                        egui::TextEdit::singleline(&mut value)
+                                    };
+                                    bounds = editor.id(id).show(ui).response.rect;
+                                });
+                            });
+                        },
+                    ));
+                }
+                let output = output.unwrap();
+                let text = output.shapes.iter().find(|shape| {
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == value)
+                }).expect("Missing painted input");
+                assert!(
+                    bounds.contains_rect(text.clip_rect),
+                    "{} at {scale}, multiline={multiline}: text clip {:?} escapes field {bounds:?}",
+                    theme.id,
+                    text.clip_rect,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn form_labels_align_with_text_and_numeric_controls_across_themes() {
     for theme in crate::theme::Theme::builtins() {
         for scale in [1., 1.25, 1.5] {

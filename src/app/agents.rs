@@ -782,6 +782,9 @@ impl EditorApp {
                 }
             }
             ui_probe::button(ui, "agent-composer", &response);
+            if agents.draft.len() <= 64 * 1024 {
+                ui_probe::value(ui, "agent-composer-value", &response, &agents.draft);
+            }
             if agents.draft.is_empty() {
                 ui_probe::button(ui, "agent-composer-empty", &response);
             }
@@ -862,8 +865,10 @@ impl EditorApp {
                         .chat
                         .notice("Agent disconnected. The next message starts a new conversation.");
                             }
-                            if ui.add_enabled(!offline && !modal && !agents.history_open && !agents.files.pending && agents.files.files.len() < rode_agent_core::attachment::MAX_ATTACHMENTS,
-                                egui::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.").clicked() { attach = true; }
+                            let attach_button = ui.add_enabled(!offline && !modal && !agents.history_open && !agents.files.pending && agents.files.files.len() < rode_agent_core::attachment::MAX_ATTACHMENTS,
+                                egui::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.");
+                            ui_probe::button(ui, "agent-attach", &attach_button);
+                            if attach_button.clicked() { attach = true; }
                             if ui.available_width() > 100. {
                                 let hint = ui.add(
                                     egui::Label::new(palette.tag(if agents.composer.waiting_older() { "Loading earlier prompts…" } else { "Enter · Shift+Enter" })).truncate(),

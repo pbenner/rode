@@ -51,6 +51,27 @@ fn execute(request: &Request, peer: bool) -> anyhow::Result<Response> {
 }
 #[test]
 fn interactive_compute_uses_the_headless_helper_after_the_desktop_image_is_released() {
+    // A stale optional static helper in target/ must not replace Cargo's matching
+    // artifact. Set the override in a child, never in the parallel test process.
+    if std::env::var_os("RODE_SLURM_HELPER_CHILD").is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "interactive_compute_uses_the_headless_helper_after_the_desktop_image_is_released",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("RODE_SLURM_HELPER_CHILD", "1")
+            .env("RODE_SESSION_HELPER", env!("CARGO_BIN_EXE_rode-sessiond"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let tools = root.path().join("tools");
     fs::create_dir(&tools).unwrap();

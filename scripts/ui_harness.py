@@ -9,10 +9,12 @@ Uses only Python's standard library. Keyboard events and screenshots target this
 """
 
 import ctypes as c
+import hashlib
 import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -277,6 +279,111 @@ def wait_for_ui_state(process, log_path, state_path, check, description, timeout
     raise AssertionError(f"{description} within {timeout}s. Last layout: {last}. Log: {log_path}")
 
 
+class NativeUI:
+    """Drive native controls using focus, complete input and document acknowledgements.
+
+    Polling only observes the application; activating actions are sent once via
+    XTest. Timeouts report the process log and last accepted layout.
+    """
+
+    def __init__(self, window, process, log_path, state_path, project=None):
+        self.window = window
+        self.process = process
+        self.log_path = log_path
+        self.state_path = state_path
+        self.project = Path(project) if project is not None else None
+
+    def layout(self, check=lambda state: True, description="No rendered layout", timeout=12):
+        return wait_for_ui_state(
+            self.process, self.log_path, self.state_path, check, description, timeout
+        )
+
+    def control(self, name, **guards):
+        return wait_for_button(
+            self.window, self.process, self.log_path, self.state_path, name, **guards
+        )
+
+    def click(self, name):
+        click_button(self.window, self.process, self.log_path, self.state_path, name)
+
+    def absent(self, name, after_pass=None):
+        return self.layout(
+            lambda state: (
+                (after_pass is None or state["pass"] > after_pass)
+                and all(button["name"] != name for button in state["buttons"])
+            ),
+            name + " did not close",
+        )
+
+    def command(self, value):
+        palette_command(self.window, self.process, self.log_path, self.state_path, value)
+
+    def notice(self, value):
+        digest = hashlib.sha256(value.encode()).hexdigest()
+        self.control("notice-value:" + digest)
+
+    def source(self, value, *, changed_after=None):
+        """Wait for complete small-buffer text before the next modal can consume its keys."""
+        if len(value.encode()) > 64 * 1024:
+            raise ValueError("Source value acknowledgements are limited to 64 KiB")
+        digest = hashlib.sha256(value.encode()).hexdigest()
+        self.control("source-editor-value:" + digest, focused=True, changed_after=changed_after)
+
+    def dismiss_notice(self):
+        if any(button["name"] == "notice-dismiss" for button in self.layout()["buttons"]):
+            before = self.layout()["pass"]
+            self.click("notice-dismiss")
+            self.absent("notice-dismiss", after_pass=before)
+
+    def fill_path(self, value):
+        self.fill("file-dialog-path", value)
+
+    def fill(self, name, value):
+        """Replace a probe-backed input and wait for its complete value and focus."""
+        self.control(name, focused=True)
+        before = self.layout()["pass"]
+        key("a", ("Control_L",))
+        self.control(name, focused=True, after_pass=before)
+        text(str(value))
+        digest = hashlib.sha256(str(value).encode()).hexdigest()
+        self.control(name + "-value:" + digest, focused=True)
+
+    def open_file(self, path, *, expect_error=False):
+        if expect_error:
+            self.dismiss_notice()
+        self.command("Open file by path")
+        self.fill_path(path)
+        before = self.layout()["pass"]
+        key("Return")
+        self.absent("file-dialog-path", after_pass=before)
+        if expect_error:
+            self.control("notice-dismiss")
+        else:
+            document = Path(path)
+            if not document.is_absolute():
+                if self.project is None:
+                    raise ValueError("Relative file opens require a project path")
+                document = self.project / document
+            digest = hashlib.sha256(str(document).encode()).hexdigest()
+            self.control("active-document:" + digest)
+
+    def resize(self, width, height):
+        x11.XResizeWindow.argtypes = [c.c_void_p, c.c_ulong, c.c_uint, c.c_uint]
+        before = self.layout()["pass"]
+        x11.XResizeWindow(display, self.window, width, height)
+        x11.XFlush(display)
+        return self.layout(
+            lambda state: (
+                state["pass"] > before
+                and all(
+                    abs(actual - logical * state["pixels_per_point"]) <= 2
+                    for actual, logical in zip((width, height), state["size"])
+                )
+            ),
+            f"Window did not render at {width} × {height}",
+        )
+
+
 def palette_command(window, process, log_path, state_path, value, timeout=12):
     """Submit once, after focus and the complete query reach the native palette.
 
@@ -328,6 +435,10 @@ def wait_for_window(process, log_path, timeout=20):
         )
         states = {}
         for window in re.findall(r'(0x[0-9a-f]+) "RODE', tree):
+            owner = window_pid(int(window, 16))
+            if owner != process.pid:
+                states[window] = f"different process: {owner}"
+                continue
             attributes = subprocess.run(
                 ["xwininfo", "-id", window],
                 capture_output=True,
@@ -347,6 +458,19 @@ def wait_for_window(process, log_path, timeout=20):
     raise AssertionError(
         f"No viewable RODE window within {timeout}s. Map states: {states}. Startup log: {log_path}"
     )
+
+
+def window_pid(window):
+    """Resolve the native owner so another RODE process cannot satisfy readiness."""
+    result = subprocess.run(
+        ["xprop", "-id", hex(window), "_NET_WM_PID"],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, LC_ALL="C.UTF-8"),
+        timeout=3,
+    )
+    match = re.search(r"_NET_WM_PID\([^)]*\)\s*=\s*(\d+)", result.stdout)
+    return int(match[1]) if result.returncode == 0 and match else None
 
 
 def wait_for_project(window, process, log_path, project, timeout=20):
@@ -376,6 +500,51 @@ def wait_for_project(window, process, log_path, project, timeout=20):
     )
 
 
+class XError(c.Structure):
+    """Xlib error event used to catch windows disappearing between native requests."""
+
+    _fields_ = [
+        ("type", c.c_int),
+        ("display", c.c_void_p),
+        ("resourceid", c.c_ulong),
+        ("serial", c.c_ulong),
+        ("error_code", c.c_ubyte),
+        ("request_code", c.c_ubyte),
+        ("minor_code", c.c_ubyte),
+    ]
+
+
+x11.XSetErrorHandler.argtypes = [c.c_void_p]
+x11.XSetErrorHandler.restype = c.c_void_p
+x11.XSync.argtypes = [c.c_void_p, c.c_int]
+x11.XGetInputFocus.argtypes = [c.c_void_p, c.POINTER(c.c_ulong), c.POINTER(c.c_int)]
+
+
+def focus_request(window):
+    """Trap only expected mapping races; Xlib's default handler otherwise exits Python."""
+    errors = []
+
+    @c.CFUNCTYPE(c.c_int, c.c_void_p, c.POINTER(XError))
+    def on_error(_display, error):
+        errors.append(error.contents.error_code)
+        return 0
+
+    previous = x11.XSetErrorHandler(c.cast(on_error, c.c_void_p))
+    try:
+        x11.XRaiseWindow(display, window)
+        x11.XSetInputFocus(display, window, 1, 0)
+        x11.XSync(display, 0)
+        if any(code not in (3, 8) for code in errors):  # BadWindow, BadMatch
+            raise AssertionError(f"Unexpected X11 errors focusing {hex(window)}: {errors}")
+        if errors:
+            return False
+        focused, revert = c.c_ulong(), c.c_int()
+        x11.XGetInputFocus(display, c.byref(focused), c.byref(revert))
+        return focused.value == window
+    finally:
+        x11.XSetErrorHandler(previous)
+
+
 def focus_window(window, timeout=20):
     """Raise and focus a mapped window so another fixture view cannot intercept mouse input."""
     deadline = time.monotonic() + timeout
@@ -391,10 +560,7 @@ def focus_window(window, timeout=20):
         )
         mapped = re.search(r"Map State:\s*(\w+)", attributes.stdout)
         state = mapped[1] if attributes.returncode == 0 and mapped else "disappeared"
-        if state == "IsViewable":
-            x11.XRaiseWindow(display, window)
-            x11.XSetInputFocus(display, window, 1, 0)
-            x11.XFlush(display)
+        if state == "IsViewable" and focus_request(window):
             return
         time.sleep(0.05)
     raise AssertionError(f"Cannot focus RODE window {hex(window)} within {timeout}s: {state}")
@@ -502,3 +668,54 @@ def close_window(window, process):
     # Each session's explicit Persist setting determines its lifetime. Tests
     # never answer a terminal-policy prompt; source-buffer guards still apply.
     assert process.wait(timeout=15) == 0
+
+
+def stop_process(process, timeout=5):
+    """Reap an owned fixture after failure without retrying UI actions or masking its error."""
+    if process.poll() is not None:
+        return True
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"Fixture process {process.pid} did not exit after SIGKILL", file=sys.stderr)
+            return False
+    return True
+
+
+def stop_fixture_agents(environment, project):
+    """End agents owned by this project in an explicitly private fixture service."""
+    runtime = environment.get("RODE_SESSION_DIR")
+    if not runtime or not Path(runtime).resolve().is_relative_to(Path(project).parent.resolve()):
+        raise ValueError("Agent cleanup requires a runtime under the temporary fixture root")
+    if not Path(runtime).exists():
+        return True
+
+    def request(value):
+        reply = subprocess.run(
+            [str(BINARY), "--session-service", "request"],
+            input=json.dumps(value).encode(),
+            env=environment,
+            capture_output=True,
+            check=True,
+            timeout=5,
+        )
+        return json.loads(reply.stdout)
+
+    try:
+        response = request({"action": "agents"})
+        if response["kind"] != "agents":
+            raise ValueError("Unexpected fixture service reply: " + response["kind"])
+        for agent in response["data"]:
+            if Path(agent["root"]).resolve() == Path(project).resolve():
+                response = request(dict(action="end_agent", id=agent["id"], policy=agent["policy"]))
+                if response["kind"] == "error":
+                    raise ValueError("Fixture agent did not stop")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+        print(f"Could not end fixture agents: {error}", file=sys.stderr)
+        return False
+    return True

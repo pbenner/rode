@@ -499,10 +499,12 @@ impl EditorApp {
                 self.refresh_slurm(None, ctx);
             }
             let on = self.debugger.client.as_ref().map_or(self.debugger.persistent, Client::persistent);
-            if ui.add_enabled(
+            let persist = ui.add_enabled(
                 self.debugger.client.as_ref().is_none_or(|c| !c.lifetime_pending()),
                 egui::Button::new(if on { "Persist debugger: on" } else { "Persist debugger: off" }),
-            ).clicked() {
+            );
+            ui_probe::button(ui, "debugger-persist", &persist);
+            if persist.clicked() {
                 if let Some(client) = &mut self.debugger.client {
                     match client.set_persistent(!on) {
                         Ok(()) => self.debugger.persistent = !on,
@@ -527,9 +529,12 @@ impl EditorApp {
             .client
             .as_ref()
             .is_none_or(|c| c.phase == Phase::Ended)
-            && ui.small_button("Reattach debugger").clicked()
         {
-            self.find_debugger_runtime(ctx);
+            let reattach = ui.small_button("Reattach debugger");
+            ui_probe::button(ui, "debugger-reattach", &reattach);
+            if reattach.clicked() {
+                self.find_debugger_runtime(ctx);
+            }
         }
         let actions = ui::show(
             ui,

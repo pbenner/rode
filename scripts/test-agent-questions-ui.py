@@ -22,6 +22,7 @@ from ui_harness import (
     close_window,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
     text,
     wait_for_button,
@@ -77,12 +78,7 @@ with tempfile.TemporaryDirectory(prefix="rode-agent-questions-ui-") as directory
                 raise AssertionError(message)
 
             def calls():
-                path = project / "agent-rpc.jsonl"
-                return (
-                    [json.loads(line) for line in path.read_text().splitlines()]
-                    if path.exists()
-                    else []
-                )
+                return read_json_lines(project / "agent-rpc.jsonl")
 
             def enabled(name):
                 state = json.loads(state_path.read_text())

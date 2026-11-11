@@ -3,7 +3,6 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -13,7 +12,19 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/languages-ui"
 )
-from ui_harness import ARTIFACTS, BINARY, click, close_window, focus_window, key, screenshot, text
+from ui_harness import (
+    ARTIFACTS,
+    BINARY,
+    NativeUI,
+    close_window,
+    focus_window,
+    key,
+    screenshot,
+    stop_process,
+    text,
+    wait_for_project,
+    wait_for_window,
+)
 
 
 def wait_for(check, message):
@@ -23,20 +34,6 @@ def wait_for(check, message):
             return
         time.sleep(0.1)
     raise AssertionError(message)
-
-
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.35)
-
-
-def open_file(path):
-    command("Open file by path")
-    text(path)
-    key("Return")
-    time.sleep(0.6)
 
 
 def run():
@@ -93,41 +90,36 @@ def run():
         )
         (ARTIFACTS / "toolchain.json").write_text(toolchain_log + "\n")
         print(toolchain_log, flush=True)
-        with (ARTIFACTS / "native.log").open("w") as log:
+        environment["RODE_UI_TEST_STATE"] = str(base / "ui-state.json")
+        log_path = ARTIFACTS / ("native.log")
+        with log_path.open("w") as log:
             process = subprocess.Popen(
                 [str(BINARY), str(root)], env=environment, stdout=log, stderr=log
             )
             window = None
             try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None, "RODE exited"
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    found = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                    if found:
-                        window = int(found[1], 16)
-                    return found
-
-                wait_for(mapped, "No native window")
-                time.sleep(1)
+                window = wait_for_window(process, log_path)
+                wait_for_project(window, process, log_path, root)
                 focus_window(window)
-                open_file("main.go")
-                command("Code: Format document")
+                ui = NativeUI(window, process, log_path, environment["RODE_UI_TEST_STATE"], root)
+                ui.open_file("main.go")
+                ui.command("Code: Format document")
+                ui.control("source-editor-modified")
                 key("s", ("Control_L",))
                 wait_for(lambda: "func main() {" in go.read_text(), "Go formatting was not saved")
                 screenshot(window, "go-highlight.png")
-                command("Code: Run current file / project")
+                ui.command("Code: Run current file / project")
                 wait_for(
                     lambda: (root / "ran.ok").exists(), "Go Run did not execute in the project"
                 )
-                command("Code: Build current file / project")
+                ui.command("Code: Build current file / project")
                 wait_for(
                     lambda: (root / "rode-languages").exists(), "Go Build did not produce a binary"
                 )
                 screenshot(window, "go-run-build.png")
-                open_file("main.ts")
-                command("Code: Format document")
+                ui.open_file("main.ts")
+                ui.command("Code: Format document")
+                ui.control("source-editor-modified")
                 key("s", ("Control_L",))
                 wait_for(
                     lambda: ts.read_text() == 'const value: string = "hello";\n',
@@ -135,16 +127,18 @@ def run():
                 )
                 screenshot(window, "typescript-highlight.png")
                 # Focus the text editor before replacing the buffer.
-                click(550, 140)
+                ui.click("source-editor")
+                ui.control("source-editor", focused=True)
                 key("a", ("Control_L",))
                 text("const value = ;")
-                command("Code: Check document")
-                command("Code: Problems")
+                ui.source("const value = ;")
+                ui.command("Code: Check document")
+                ui.command("Code: Problems")
                 time.sleep(0.6)
                 screenshot(window, "typescript-problems.png")
                 assert ts.read_text() == 'const value: string = "hello";\n', "Checking changed disk"
                 # Saving invalid syntax must still complete without changing the buffer.
-                command("Save file")
+                ui.command("Save file")
                 wait_for(
                     lambda: ts.read_text() == "const value = ;", "Syntax errors prevented saving"
                 )
@@ -155,9 +149,7 @@ def run():
                     screenshot(window, "failure.png")
                 raise
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=5)
+                stop_process(process)
 
 
 if __name__ == "__main__":

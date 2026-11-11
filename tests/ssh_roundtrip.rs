@@ -1566,9 +1566,26 @@ fn roundtrip(jump: &str) {
             .unwrap();
         assert_eq!(response.path, directory.to_str().unwrap());
         let plan = response.project.unwrap();
+        // Exercise the real project-shell command without account login files
+        // reading terminal input or changing the working directory.
+        let fixture_shell = directory.join("fixture-shell");
+        std::fs::write(
+            &fixture_shell,
+            "#!/bin/sh\nunset ENV BASH_ENV\nexec /bin/sh -i\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fixture_shell, std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
         let mut command = portable_pty::CommandBuilder::new(remote.client_program());
         command.args(remote.channel_args(false));
-        command.arg(remote.shell_command(&plan));
+        command.arg(format!(
+            "SHELL={} {}",
+            rode::ssh::quote(&fixture_shell.to_string_lossy()),
+            remote.shell_command(&plan)
+        ));
         let shell = Terminal::spawn(
             &eframe::egui::Context::default(),
             command,
@@ -1577,18 +1594,22 @@ fn roundtrip(jump: &str) {
         .unwrap();
         let marker = directory.join("terminal-marker.txt");
         shell
-            .send(format!("printf 'project-{index}' > terminal-marker.txt\r").into_bytes())
+            .send(format!("printf 'project-{index}' > terminal-marker.txt\n").into_bytes())
             .unwrap();
-        let start = Instant::now();
-        while !marker.exists() && start.elapsed() < Duration::from_secs(5) {
+        let until = Instant::now() + Duration::from_secs(10);
+        let expected = format!("project-{index}");
+        loop {
+            let actual = std::fs::read_to_string(&marker);
+            if actual.as_deref().is_ok_and(|value| value == expected) {
+                break;
+            }
+            assert!(
+                shell.is_alive() && Instant::now() < until,
+                "Project shell did not write its complete marker: {actual:?}\n{}",
+                shell.contents()
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(
-            std::fs::read_to_string(marker).unwrap(),
-            format!("project-{index}"),
-            "{}",
-            shell.contents()
-        );
         drop(shell);
         assert!(
             remote.connected(),
@@ -2374,6 +2395,7 @@ fn interactive_allocation_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan)
     };
     assert_eq!(info.allocation, Some(format!("rode-{id}")));
     let view = native_attach(remote, &reply, info);
+    terminal_ui::wait_for_prompt(&view);
     view.send(b"printf 'SSH_SLURM_%s_%s_%s\\n' \"$SLURM_JOB_ID\" \"$SLURM_STEP_ID\" \"$CUDA_VISIBLE_DEVICES\"\n".to_vec()).unwrap();
     let end = Instant::now() + Duration::from_secs(10);
     while !view.contents().contains("SSH_SLURM_4242_0_0,1") {

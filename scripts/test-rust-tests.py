@@ -14,6 +14,18 @@ import rust_tests
 
 
 class RustFixtureTests(unittest.TestCase):
+    def test_long_checkouts_do_not_overflow_nested_unix_socket_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ("long-checkout-" * 10)
+            root.mkdir()
+            code = """import os, socket
+path = os.path.join(os.environ['TMPDIR'], 'nested-ssh-control-' + 'x' * 48)
+with socket.socket(socket.AF_UNIX) as control:
+    control.bind(path)
+"""
+            with patch.object(rust_tests, "ROOT", root):
+                self.assertEqual(rust_tests.isolated([sys.executable, "-c", code]), 0)
+
     def test_mise_task_preserves_configured_ruff_and_discovers_it_only_when_unset(self):
         section = (rust_tests.ROOT / "mise.toml").read_text().split("[tasks.test]", 1)[1]
         section = section.split("\n[", 1)[0]

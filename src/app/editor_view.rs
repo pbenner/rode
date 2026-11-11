@@ -53,8 +53,11 @@ impl EditorApp {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(18, 7))
                     .show(ui, |ui| {
-                        chrome::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
+                        let response = chrome::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
                             .on_hover_text(path);
+                        if !self.documents[self.active].preview_loading() {
+                            ui_probe::value(ui, "active-document", &response, path);
+                        }
                     });
                 if self.documents[self.active].recovery.is_some() {
                     let doc = &self.documents[self.active];
@@ -186,6 +189,15 @@ impl EditorApp {
                                 .show(ui);
                             editing.after_source(ui,doc.id,&mut output,&doc.text,palette);
                             ui_probe::button(ui, "source-editor", &output.response);
+                            if output.cursor_range.is_some_and(|range| range.primary.index == 0 && range.secondary.index == 0) {
+                                ui_probe::button(ui, "source-editor-at-start", &output.response);
+                            }
+                            if doc.text.len() <= 64 * 1024 {
+                                ui_probe::value(ui, "source-editor-value", &output.response, &doc.text);
+                            }
+                            if !debug_breakpoints.is_empty() {
+                                ui_probe::button(ui, "source-editor-breakpoints", &output.response);
+                            }
                             if jump_requested
                                 && let Some(cursor) = output
                                     .cursor_range
@@ -330,6 +342,9 @@ impl EditorApp {
                             }
                             if !doc.saving && !doc.dirty() {
                                 ui_probe::button(ui, "source-editor-saved", &output.response);
+                            }
+                            if doc.dirty() {
+                                ui_probe::button(ui, "source-editor-modified", &output.response);
                             }
                             if let Some(range) = output.cursor_range
                                 && (range.primary.index != doc.last_cursor

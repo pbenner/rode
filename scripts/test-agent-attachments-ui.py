@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Attach local images/documents, queue snapshots and inspect real protocol payloads."""
 
+import hashlib
 import json
 import os
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 import zlib
@@ -18,13 +20,16 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    NativeUI,
     assert_running,
-    click,
     close_window,
     focus_window,
     key,
+    read_json_lines,
     screenshot,
-    text,
+    stop_fixture_agents,
+    stop_process,
+    wait_for_project,
     wait_for_window,
 )
 
@@ -71,6 +76,7 @@ with tempfile.TemporaryDirectory(prefix="rode-attach-ui-") as directory:
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
+        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
     )
     log_path = ARTIFACTS / "attachments.log"
     with log_path.open("w") as log:
@@ -90,50 +96,56 @@ with tempfile.TemporaryDirectory(prefix="rode-attach-ui-") as directory:
                 raise AssertionError(message)
 
             def turns():
-                path = project / "agent-rpc.jsonl"
-                if not path.exists():
-                    return []
                 return [
                     call["params"]["input"]
-                    for line in path.read_text().splitlines()
-                    if (call := json.loads(line)).get("method") == "turn/start"
+                    for call in read_json_lines(project / "agent-rpc.jsonl")
+                    if call.get("method") == "turn/start"
                 ]
 
-            def attach(path, busy=False, connected=False):
-                click(460 if busy else 500 if connected else 410, 850)
-                time.sleep(0.3)
-                key("a", ("Control_L",))
-                text(str(path))
+            def attachment(path):
+                return "agent-attachment:" + hashlib.sha256(path.name.encode()).hexdigest()
+
+            def attach(path):
+                ui.click("agent-attach")
+                ui.fill_path(path)
                 key("Return")
-                time.sleep(0.8)
+                ui.absent("file-dialog-path")
+                ui.control(attachment(path))
+
+            def send(message):
+                ui.click("agent-composer")
+                ui.fill("agent-composer", message)
+                ui.control("agent-send")
+                before = ui.layout()["pass"]
+                key("Return")
+                ui.control("agent-composer-empty", after_pass=before)
 
             window = wait_for_window(process, log_path)
+            wait_for_project(window, process, log_path, project)
             focus_window(window)
-            time.sleep(0.8)
+            ui = NativeUI(window, process, log_path, base / "ui-state.json", project)
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.4)
+            ui.control("agent-composer")
             attach(image)
             screenshot(window, "image-attached.png")
-            click(480, 757)  # Remove the first image before adding it again.
+            ui.click("agent-attachment-remove:0")
+            ui.absent(attachment(image))
             attach(image)
             attach(document)
             document.write_text("Changed after attaching")
             screenshot(window, "ready-to-send.png")
-            click(700, 790)
-            text("Inspect these files")
-            key("Return")
+            send("Inspect these files")
             wait(lambda: len(turns()) == 1, "Attached message did not reach the agent")
             first = turns()[0]
             assert first[0]["text"] == "Inspect these files"
             assert sum(block.get("type") == "image" for block in first) == 1
             assert any(block.get("text", "").endswith(snapshot) for block in first)
-            attach(pdf, busy=True)
-            attach(queued, busy=True)
+            attach(pdf)
+            attach(queued)
             screenshot(window, "queued-files-draft.png")
-            click(700, 790)
-            text("Follow-up with documents")
-            key("Return")
-            time.sleep(0.4)
+            send("Follow-up with documents")
+            digest = hashlib.sha256(b"Follow-up with documents").hexdigest()
+            ui.control("agent-queue-0-value:" + digest)
             queued.write_text("Changed after queuing")
             assert len(turns()) == 1, "Queued attachments interrupted the active turn"
             screenshot(window, "queued-files.png")
@@ -144,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix="rode-attach-ui-") as directory:
             assert any(block.get("text", "").endswith("Queued snapshot") for block in second)
             assert any("Attached document: pages.pdf" in block.get("text", "") for block in second)
             assert not any("Changed after" in block.get("text", "") for block in second)
-            time.sleep(0.6)
+            ui.control("agent-idle")
             screenshot(window, "sent-files.png")
             close_window(window, process)
             print(
@@ -155,6 +167,6 @@ with tempfile.TemporaryDirectory(prefix="rode-attach-ui-") as directory:
                 screenshot(window, "failure.png")
             raise
         finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=10)
+            stop_process(process)
+            if not stop_fixture_agents(environment, project) and sys.exc_info()[0] is None:
+                raise AssertionError("The fixture's agent service did not clean up")

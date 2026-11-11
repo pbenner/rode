@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Native debugger controls, source guards, PTY input and SSH sandbox UI."""
 
-import ctypes
 import json
 import os
 import shutil
@@ -15,21 +14,18 @@ os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/debugger-ui")
 from ui_harness import (
     ARTIFACTS,
     BINARY,
-    click,
+    NativeUI,
     close_window,
-    display,
     focus_window,
     key,
     read_json_lines,
     screenshot,
+    stop_process,
     text,
-    theme,
+    wait_for_project,
     wait_for_ui_state,
     wait_for_window,
-    x11,
 )
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
 def wait_for(check, message):
@@ -39,13 +35,6 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def command(value):
-    key("p", ("Control_L", "Shift_L"))
-    text(value)
-    key("Return")
-    time.sleep(0.2)
 
 
 def run(remote=False, isolated=False):
@@ -137,16 +126,18 @@ def run(remote=False, isolated=False):
             window = None
             try:
                 window = wait_for_window(process, log_path)
+                wait_for_project(window, process, log_path, project)
                 focus_window(window)
-                time.sleep(1.5)
-                command("Open file by path")
-                text("main.py")
-                key("Return")
-                time.sleep(0.4)
+                ui = NativeUI(window, process, log_path, base / "ui-state.json", project)
+                ui.open_file("main.py")
+                ui.control("source-editor", focused=True)
                 key("End", ("Control_L",))
                 text("# unsaved\n")
+                ui.source(original + "# unsaved\n")
                 key("F5")
-                time.sleep(0.3)
+                ui.notice(
+                    "Save modified sources before debugging. The debugger runs saved project files."
+                )
                 rpc = project / "debug-rpc.jsonl"
                 assert not rpc.exists(), "Dirty source launched a debugger"
                 key("s", ("Control_L",))
@@ -155,19 +146,21 @@ def run(remote=False, isolated=False):
                 key("space", ("Control_L",))
                 key("e")
                 key("Home", ("Control_L",))
+                ui.control("source-editor-at-start", focused=True)
                 key("F9")
+                ui.control("source-editor-breakpoints")
                 key("F5")
                 wait_for(
                     lambda: rpc.exists() and '"command": "scopes"' in rpc.read_text(),
                     "Debugger never paused",
                 )
-                time.sleep(0.5)
+                ui.control("source-editor", focused=True)
                 screenshot(window, label + "-paused.png")
                 if not remote and not isolated:
-                    command("Debug: Show debugger")
+                    ui.command("Debug: Show debugger")
                     screenshot(window, "persistent-controls.png")
                     runtime = next(i for i in service_rpc("runtimes") if i["kind"] == "debugger")
-                    click(760, 181)  # Persistence in the debugger's execution toolbar.
+                    ui.click("debugger-persist")
                     # Quit immediately after requesting persistence; closing must
                     # preserve the mutation until the host acknowledges it.
                     close_window(window, process)
@@ -180,11 +173,12 @@ def run(remote=False, isolated=False):
                     )
                     process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
                     window = wait_for_window(process, log_path)
+                    wait_for_project(window, process, log_path, project)
                     focus_window(window)
-                    time.sleep(0.8)
-                    command("Debug: Show debugger")
+                    ui = NativeUI(window, process, log_path, base / "ui-state.json", project)
+                    ui.command("Debug: Show debugger")
                     screenshot(window, "before-reattach.png")
-                    click(410, 210)  # Reattach below the execution toolbar.
+                    ui.click("debugger-reattach")
                     wait_for(
                         lambda: any(
                             i["id"] == runtime["id"] and i["attached"]
@@ -192,9 +186,8 @@ def run(remote=False, isolated=False):
                         ),
                         "Debugger did not reattach",
                     )
-                    time.sleep(0.5)
                     screenshot(window, "reattached.png")
-                messages = [json.loads(line) for line in rpc.read_text().splitlines()]
+                messages = read_json_lines(rpc)
                 assert any(
                     m.get("command") == "setBreakpoints" and m["arguments"]["breakpoints"]
                     for m in messages
@@ -241,9 +234,20 @@ def run(remote=False, isolated=False):
                     ),
                     "Debug terminal did not acquire input focus",
                 )
+                wait_for(
+                    lambda: (
+                        (project / "output-ready").exists()
+                        and (project / "output-ready").read_text() == "ready"
+                    ),
+                    "Debuggee did not finish its output burst before requesting input",
+                )
                 text("RODE\n")
                 wait_for(
-                    lambda: (project / "input-result").exists(), "Debug PTY input was not delivered"
+                    lambda: (
+                        (project / "input-result").exists()
+                        and (project / "input-result").read_text() == "RODE"
+                    ),
+                    "Debug PTY input was not delivered completely",
                 )
                 assert (project / "input-result").read_text() == "RODE"
                 # No background RPC or busy redraw loop while stopped and idle.
@@ -267,11 +271,9 @@ def run(remote=False, isolated=False):
                 )
                 assert rpc.read_text() == rpc_before, "Idle debugger issued new requests"
                 # Show the saved project's UI under both themes and min size.
-                theme("phosphor")
+                ui.command("Theme: Phosphor")
                 screenshot(window, label + "-phosphor.png")
-                x11.XResizeWindow(display, window, 850, 560)
-                x11.XFlush(display)
-                time.sleep(0.4)
+                ui.resize(850, 560)
                 screenshot(window, label + "-compact.png")
                 key("F5", ("Shift_L",))
                 wait_for(
@@ -284,10 +286,18 @@ def run(remote=False, isolated=False):
                 assert "breakpoints" in contents, "Breakpoint settings were not saved"
                 assert process.returncode == 0
                 print(label + " debugger UI passed")
+            except Exception:
+                if window is not None and process.poll() is None:
+                    screenshot(window, label + "-failure.png")
+                for source_path, suffix in (
+                    (base / "ui-state.json", "layout.json"),
+                    (project / "debug-rpc.jsonl", "rpc.jsonl"),
+                ):
+                    if source_path.exists():
+                        shutil.copyfile(source_path, ARTIFACTS / (label + "-failure-" + suffix))
+                raise
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=8)
+                stop_process(process)
                 for runtime in service_rpc("runtimes") or []:
                     service_rpc("end_runtime", id=runtime["id"], policy=runtime["policy"])
 

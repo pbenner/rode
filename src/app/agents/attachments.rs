@@ -78,17 +78,31 @@ impl State {
                                     ui.horizontal(|ui| {
                                         let label =
                                             if file.is_image() { "Image" } else { "Document" };
-                                        ui.add_sized(
-                                            [140., 18.],
-                                            egui::Label::new(format!("{label} · {}", file.name()))
+                                        let summary = ui
+                                            .add_sized(
+                                                [140., 18.],
+                                                egui::Label::new(format!(
+                                                    "{label} · {}",
+                                                    file.name()
+                                                ))
                                                 .truncate(),
-                                        )
-                                        .on_hover_text(file.name());
-                                        if ui
+                                            )
+                                            .on_hover_text(file.name());
+                                        ui_probe::value(
+                                            ui,
+                                            "agent-attachment",
+                                            &summary,
+                                            file.name(),
+                                        );
+                                        let button = ui
                                             .add_enabled(enabled, egui::Button::new("×").small())
-                                            .on_hover_text("Remove attachment")
-                                            .clicked()
-                                        {
+                                            .on_hover_text("Remove attachment");
+                                        ui_probe::button(
+                                            ui,
+                                            &format!("agent-attachment-remove:{index}"),
+                                            &button,
+                                        );
+                                        if button.clicked() {
                                             remove = Some(index);
                                         }
                                     });

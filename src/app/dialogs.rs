@@ -539,9 +539,10 @@ impl EditorApp {
                                     palette.success
                                 },
                             ));
-                            ui.add(egui::Label::new(text).wrap());
+                            ui.add(egui::Label::new(text.as_str()).wrap());
                             let dismiss = icons::small(ui, Icon::Close, "Dismiss notification");
                             ui_probe::button(ui, "notice-dismiss", &dismiss);
+                            ui_probe::value(ui, "notice-value", &dismiss, &text);
                             if dismiss.clicked() {
                                 self.notice = None;
                             }

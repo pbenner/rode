@@ -21,9 +21,11 @@ DEFAULT = ["--locked", "--profile", "ci", "--workspace", "--all-targets", "--no-
 
 def isolated(command):
     """Execute one test binary without changing the parent process environment."""
-    # Short fixture paths leave room for nested Unix-domain socket names.
-    (ROOT / "target").mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="rt-", dir=ROOT / "target") as directory:
+    # Checkout paths can exceed the Unix-domain socket limit before a test has
+    # even created its nested SSH agent/control socket. Keep the fixture short
+    # independently of the checkout; callers can select an executable tmpfs.
+    parent = os.environ.get("RODE_TEST_TMPDIR", "/tmp")
+    with tempfile.TemporaryDirectory(prefix="rt-", dir=parent) as directory:
         fixture_home = Path(directory)
         environment = dict(os.environ)
         original_home = Path.home()

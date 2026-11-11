@@ -13,32 +13,22 @@ os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click,
     close_window,
     display,
     focus_window,
     key,
     screenshot,
+    stop_process,
     text,
+    wait_for_project,
+    wait_for_window,
     x11,
     xtest,
 )
 
 FIXTURE = Path(__file__).resolve().parent.parent / "tests/fixtures/pages.pdf"
-
-
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.35)
-
-
-def open_file(path):
-    command("Open file by path")
-    text(path)
-    key("Return")
-    time.sleep(0.5)
 
 
 def wait_for(check, message):
@@ -110,24 +100,17 @@ def run(remote=False):
             ]
         else:
             args += [str(root)]
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
+        environment["RODE_UI_TEST_STATE"] = str(base / "ui-state.json")
+        log_path = ARTIFACTS / (label + ".log")
+        with log_path.open("w") as log:
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None, "RODE exited"
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No PDF viewer window")
-                time.sleep(1)
+                window = wait_for_window(process, log_path)
+                wait_for_project(window, process, log_path, root)
                 focus_window(window)
-                open_file("report.PDF")
+                ui = NativeUI(window, process, log_path, environment["RODE_UI_TEST_STATE"], root)
+                ui.open_file("report.PDF")
                 wait_for(
                     lambda: color(window, label + "-first-page.png", "red"),
                     "First PDF page missing",
@@ -169,30 +152,36 @@ def run(remote=False):
                 screenshot(window, label + "-zoom.png")
                 key("minus", ("Control_L",))
                 original = pdf.read_bytes()
-                command("Save file")
-                command("Save file as")
+                ui.command("Save file")
+                ui.notice("Image and PDF previews are read-only.")
+                ui.dismiss_notice()
+                ui.command("Save file as")
+                ui.notice("Image and PDF previews are read-only.")
+                ui.dismiss_notice()
                 assert pdf.read_bytes() == original, "Read-only PDF was saved"
-                open_file("notes.txt")
+                ui.open_file("notes.txt")
+                ui.control("source-editor", focused=True)
                 key("End", ("Control_L",))
                 text("\n// keep_dirty_text")
-                open_file("report.PDF")
+                ui.source("Keep this note.\n\n// keep_dirty_text")
+                ui.open_file("report.PDF")
                 assert notes.read_text() == "Keep this note.\n"
                 pdf.write_bytes(original.replace(b"0.1 0.25 0.9 rg", b"0.1 0.80 0.1 rg"))
-                command("PDF: Reload preview")
+                ui.command("PDF: Reload preview")
                 wait_for(
                     lambda: color(window, label + "-reload.png", "green"),
                     "Reload lost the selected page",
                 )
-                command("Theme: Matrix")
+                ui.command("Theme: Matrix")
                 assert color(window, label + "-matrix.png", "green"), "Theme tinted PDF content"
                 pdf.write_bytes(b"%PDF-1.4\nbroken\n")
-                command("PDF: Reload preview")
-                time.sleep(0.6)
+                ui.command("PDF: Reload preview")
+                ui.control("notice-dismiss")
                 assert color(window, label + "-failed-reload.png", "green"), (
                     "Failed reload lost previous page"
                 )
                 key("w", ("Control_L",))
-                command("Save file")
+                ui.command("Save file")
                 wait_for(
                     lambda: "keep_dirty_text" in notes.read_text(),
                     "Switching previews lost unsaved text",
@@ -207,9 +196,7 @@ def run(remote=False):
                     screenshot(window, label + "-failure.png")
                 raise
             finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=5)
+                stop_process(process)
 
 
 if __name__ == "__main__":
