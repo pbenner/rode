@@ -3,10 +3,10 @@
 
 import ctypes
 import os
-import re
 import shutil
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(
@@ -23,36 +23,25 @@ from ui_harness import (
     close_window,
     display,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     screenshot,
     text,
+    wait_for_effect,
     x11,
 )
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
+from ui_fixture import project_ui
 
-def wait_for(check, message):
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.05)
-    raise AssertionError(message)
+wait_for = partial(wait_for_effect, timeout=10)
 
 
 def nav(name, modifiers=(), leader="space", leader_modifiers=("Control_L",)):
     key(leader, leader_modifiers)
     key(name, modifiers)
     time.sleep(0.15)
-
-
-def command(value):
-    key("p", ("Control_L", "Shift_L"))
-    text(value)
-    key("Return")
-    time.sleep(0.3)
 
 
 def append(path, value):
@@ -78,8 +67,8 @@ def run():
         shell = base / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         shell.chmod(0o755)
-        env = dict(
-            os.environ,
+        env = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             SHELL=str(shell),
@@ -122,27 +111,9 @@ def run():
                     stderr=log,
                 )
 
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    output = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE', output)
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No native window")
-                wait_for(
-                    lambda: (
-                        "project"
-                        in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                        and "[Opening project]"
-                        not in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                    ),
-                    "Project did not become ready",
-                )
-                time.sleep(0.9)
-                focus_window(window)
+                ui = project_ui(process, env, root, log.name)
+                window = ui.window
+                command = partial(ui.command, keyboard=True)
                 # Enter a directory and open its child entirely with arrows.
                 nav("f")
                 key("Home")

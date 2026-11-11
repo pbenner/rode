@@ -607,6 +607,25 @@ class PaletteReadinessTests(unittest.TestCase):
         self.key.assert_called_once_with("p", ("Control_L", "Shift_L"))
         self.text.assert_called_once()
 
+    def test_keyboard_palette_waits_for_complete_query_and_never_clicks(self):
+        input_name = "command-palette-input"
+        matched = "command-match:Terminal: New terminal"
+        self.read.side_effect = [
+            self.state(input_name),
+            self.state(input_name),
+            self.state(input_name, matched),
+            self.state(input_name, matched),
+            self.state(input_name, matched),
+            self.state(input_name),
+            self.state(),
+        ]
+        palette_command(
+            0x123, self.process, "log", "state", "Terminal: New terminal", keyboard=True
+        )
+        self.click.assert_not_called()
+        self.key.assert_has_calls([call("p", ("Control_L", "Shift_L")), call("Return")])
+        self.assertEqual(self.key.call_count, 2)
+
     def test_absence_checks_reject_missing_malformed_and_other_process_snapshots(self):
         self.read.side_effect = [
             FileNotFoundError(),

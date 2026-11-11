@@ -72,10 +72,14 @@ impl EditorApp {
                     }
                     ui.separator();
                     let insert_at = view.active_index().map_or(view.book.cells.len(), |at| at + 1);
-                    if ui.button("+ Code cell").on_hover_text("Insert a code cell below the selected cell").clicked() {
+                    let code = ui.button("+ Code cell").on_hover_text("Insert a code cell below the selected cell");
+                    ui_probe::button(ui, "notebook-add-code", &code);
+                    if code.clicked() {
                         action = Some(Action::Add("code", insert_at));
                     }
-                    if ui.button("+ Markdown cell").on_hover_text("Insert a text cell below the selected cell").clicked() {
+                    let markdown = ui.button("+ Markdown cell").on_hover_text("Insert a text cell below the selected cell");
+                    ui_probe::button(ui, "notebook-add-markdown", &markdown);
+                    if markdown.clicked() {
                         action = Some(Action::Add("markdown", insert_at));
                     }
                     ui.menu_button("Notebook…", |ui| {
@@ -104,16 +108,18 @@ impl EditorApp {
                             view.execution_target.as_ref().map(|t| format!("Slurm job {}", t.id)).unwrap_or_else(|| "Project host".into()));
                         ui.label(egui::RichText::new(execution).small().color(palette.muted));
                     });
-                    egui::CollapsingHeader::new("Kernel settings")
+                    let settings = egui::CollapsingHeader::new("Kernel settings")
                         .id_salt(("notebook-settings", id))
                         .show(ui, |ui| {
 
                     ui.horizontal_wrapped(|ui| {
                         let on = view.kernel.as_ref().map_or(view.persistent, Kernel::persistent);
-                        if ui.add_enabled(
+                        let persistence = ui.add_enabled(
                             view.kernel.as_ref().is_none_or(|k| !k.pending()),
                             egui::Button::new(if on { "Persist kernel: on" } else { "Persist kernel: off" }),
-                        ).on_hover_text("Keep the kernel, queued cells and outputs on the project host after closing this notebook, exiting RODE or losing SSH. Reattach from Sessions with the same project and sandbox.").clicked() {
+                        ).on_hover_text("Keep the kernel, queued cells and outputs on the project host after closing this notebook, exiting RODE or losing SSH. Reattach from Sessions with the same project and sandbox.");
+                        ui_probe::button(ui, "notebook-persistence", &persistence);
+                        if persistence.clicked() {
                             if !on && self.documents[index].path.is_none() {
                                 view.error = "Save this notebook before enabling persistence".into();
                             } else if let Some(kernel) = &mut view.kernel {
@@ -128,11 +134,15 @@ impl EditorApp {
                         if ui.button("Running kernels…").clicked() {
                             self.open_sessions(ctx);
                         }
-                        if view.kernel.is_none() && ui.button("Reattach kernel").clicked() {
+                        if view.kernel.is_none() {
+                            let reattach = ui.button("Reattach kernel");
+                            ui_probe::button(ui, "notebook-reattach", &reattach);
+                            if reattach.clicked() {
                             if let Some(path) = &self.documents[index].path {
                                 self.find_notebook_runtime(path.clone(), ctx);
                             } else {
                                 view.error = "Save this notebook before reattaching a kernel".into();
+                            }
                             }
                         }
                         if view.kernel.as_ref().is_some_and(Kernel::persistent)
@@ -149,14 +159,15 @@ impl EditorApp {
                         let mut selected = view.execution_target.clone();
                         let (queue, _) = self.slurm_programs();
                         let runner = self.workbench.slurm_allocation().runner.clone();
-                        egui::ComboBox::from_id_salt(("notebook-execution", id))
+                        let target = egui::ComboBox::from_id_salt(("notebook-execution", id))
                             .selected_text(
                                 selected.as_ref()
                                     .map(|t| format!("Slurm job {}", t.id))
                                     .unwrap_or_else(|| "Project host".into()),
                             )
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut selected, None, "Project host");
+                                let host = ui.selectable_value(&mut selected, None, "Project host");
+                                ui_probe::button(ui, "notebook-target:host", &host);
                                 if let Some(snapshot) = &self.sessions.slurm {
                                     for job in &snapshot.jobs {
                                         if job.state == "RUNNING"
@@ -168,21 +179,29 @@ impl EditorApp {
                                                 queue: queue.clone(),
                                                 runner: runner.clone(),
                                             };
-                                            ui.selectable_value(
+                                            let job_response = ui.selectable_value(
                                                 &mut selected, Some(target),
                                                 format!("Job {} · {} · {}", job.id, job.nodes, job.name),
                                             );
+                                            ui_probe::button(ui, &format!("notebook-target:{}", job.id), &job_response);
                                         }
                                     }
                                 }
                             }).response.on_hover_text(
                                 "Changing execution target stops this kernel and clears its live variables. Run a cell to start a new kernel. Slurm kernels share the selected allocation's resources."
                             );
+                        ui_probe::button(ui, "notebook-target", &target);
+                        ui_probe::value(ui, "notebook-target-value", &target, selected.as_ref().map(|target| target.id.as_str()).unwrap_or("host"));
                         view.set_execution_target(selected);
-                        if ui.add_enabled(
+                        let refresh = ui.add_enabled(
                             !self.sessions.slurm_busy,
                             egui::Button::new("Refresh Slurm targets"),
-                        ).clicked() {
+                        );
+                        ui_probe::button(ui, "notebook-refresh-targets", &refresh);
+                        if !self.sessions.slurm_busy && self.sessions.slurm.is_some() {
+                            ui_probe::button(ui, "notebook-targets-ready", &refresh);
+                        }
+                        if refresh.clicked() {
                             self.refresh_slurm(None, ctx);
                         }
                         if ui.button("Allocate…").clicked() {
@@ -242,6 +261,7 @@ impl EditorApp {
                         if previous != view.kernel_name { action = Some(Action::Kernel); }
                     });
                     });
+                    ui_probe::button(ui, "notebook-settings", &settings.header_response);
                     if self.show_find {
                         ui.horizontal(|ui| {
                             let response = ui.add(
@@ -253,6 +273,8 @@ impl EditorApp {
                                 response.request_focus();
                                 self.find_focus = false;
                             }
+                            ui_probe::button(ui, "notebook-find", &response);
+                            ui_probe::value(ui, "notebook-find-value", &response, &self.find);
                             if (ui.button("Next").clicked()
                                 || (response.has_focus() || response.lost_focus())
                                     && ui.input(|i| i.key_pressed(Key::Enter)))
@@ -460,7 +482,8 @@ impl EditorApp {
                                         }
                                         match view.pictures.get(&key) {
                                             Some(Picture::Ready(texture, _lease)) => {
-                                                ui.add(egui::Image::new(texture).fit_to_original_size(1.).max_width(ui.available_width()).max_height(600.));
+                                                let image = ui.add(egui::Image::new(texture).fit_to_original_size(1.).max_width(ui.available_width()).max_height(600.));
+                                                ui_probe::button(ui, "notebook-output-image", &image);
                                             },
                                             Some(Picture::Error(error)) => { ui.colored_label(palette.error, error); },
                                             Some(Picture::Pending) => { ui.label("Loading image output…"); },
@@ -484,7 +507,9 @@ impl EditorApp {
                                 cell_toolbar(ui, |ui| {
                                     if ui.button("+ Code cell").on_hover_text("Insert a code cell here").clicked()
                                     { action = Some(Action::Add("code", at + 1)); }
-                                    if ui.button("+ Markdown cell").on_hover_text("Insert a text cell here").clicked()
+                                    let markdown = ui.button("+ Markdown cell").on_hover_text("Insert a text cell here");
+                                    ui_probe::button(ui, &format!("notebook-insert-markdown:{at}"), &markdown);
+                                    if markdown.clicked()
                                     { action = Some(Action::Add("markdown", at + 1)); }
                                 });
                             });
@@ -593,6 +618,13 @@ impl EditorApp {
             }
         }
         let source = view.source_mode;
+        ui_probe::notebook(
+            ctx,
+            &view.book,
+            view.kernel.as_ref().is_some_and(Kernel::busy),
+            source,
+            !self.documents[index].dirty() && !self.documents[index].saving,
+        );
         self.notebook_picture_jobs(&view, jobs, ctx);
         self.documents[index].notebook = Some(view);
         match action {

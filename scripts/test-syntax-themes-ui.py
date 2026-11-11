@@ -4,12 +4,13 @@
 import os
 import re
 import subprocess
-import time
+from functools import partial
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/syntax-themes-ui"
 )
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
@@ -17,34 +18,14 @@ from ui_harness import (
     click,
     close_window,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     screenshot,
     text,
+    wait_for_effect,
 )
 
-
-def wait_for(check, message):
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.08)
-    raise AssertionError(message)
-
-
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.3)
-
-
-def open_source():
-    command("Open file by path")
-    text("main.rs")
-    key("Return")
-    time.sleep(0.5)
+wait_for = partial(wait_for_effect, timeout=8)
 
 
 def run():
@@ -71,14 +52,12 @@ fn dispatch<'a>(packet: &Packet<'a>) -> Option<String> {
 }
 """
         source.write_text(original)
+        environment = fixture_environment(base)
         custom = base / "config/rode/syntax-themes"
         custom.mkdir(parents=True)
         (custom / "custom.json").write_text(
             '{"name":"Custom Scope","base":"dracula","rules":['
             '{"scope":"source.rust comment","foreground":"#9988aa","font_style":"italic"}]}'
-        )
-        environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
         )
         prefs = base / "data/rode/app.ron"
 
@@ -96,20 +75,10 @@ fn dispatch<'a>(packet: &Packet<'a>) -> Option<String> {
                 process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
                 window = None
                 try:
-
-                    def mapped():
-                        nonlocal window
-                        assert process.poll() is None, "RODE exited"
-                        tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                        match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                        if match:
-                            window = int(match[1], 16)
-                        return match
-
-                    wait_for(mapped, "No native window")
-                    time.sleep(0.6)
-                    focus_window(window)
-                    open_source()
+                    ui = project_ui(process, environment, project, log.name)
+                    window = ui.window
+                    command = ui.command
+                    ui.open_file("main.rs")
                     if restart:
                         assert saved("syntax_theme", "nord") and saved("color_theme", "carbon")
                         background(window, "restored-nord.png", (16, 16, 16))

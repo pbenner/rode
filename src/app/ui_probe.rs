@@ -31,6 +31,7 @@ struct Controls {
     last_change: HashMap<Id, u64>,
     session_ids: Option<Vec<String>>,
     ssh_master_socket: Option<PathBuf>,
+    notebook: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Default)]
@@ -57,6 +58,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             controls.visible.clear();
             controls.session_ids = None;
             controls.ssh_master_socket = None;
+            controls.notebook = None;
         }),
     );
     ctx.on_end_pass(
@@ -71,6 +73,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             let mut buttons = controls.visible.clone();
             let session_ids = controls.session_ids.clone();
             let ssh_master_socket = controls.ssh_master_socket.clone();
+            let notebook = controls.notebook.clone();
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
@@ -103,6 +106,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "buttons": buttons,
                 "session_ids": session_ids,
                 "ssh_master_socket": ssh_master_socket,
+                "notebook": notebook,
             });
             let destination = viewport_path(&path, ctx.viewport_id());
             if let Err(error) = publish(&destination, &value) {
@@ -113,6 +117,41 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             }
         }),
     );
+}
+
+/// Observe bounded notebook execution and source revisions, without exposing cell
+/// text or outputs. No serialization or hashing occurs without an installed probe.
+pub(super) fn notebook(
+    ctx: &egui::Context,
+    book: &crate::notebook::Notebook,
+    busy: bool,
+    source_mode: bool,
+    saved: bool,
+) {
+    if let Some(probe) = ctx.data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe"))) {
+        let cells: Vec<_> = book
+            .cells
+            .iter()
+            .take(crate::notebook::MAX_CELLS)
+            .map(|cell| {
+                serde_json::json!({
+                    "uid": cell.uid,
+                    "kind": match cell.kind() { "code" => "code", "markdown" => "markdown", _ => "raw" },
+                    "source": crate::files::digest(cell.source.as_bytes()),
+                    "execution_count": cell.data["execution_count"].as_u64(),
+                })
+            })
+            .collect();
+        probe
+            .0
+            .lock()
+            .unwrap()
+            .entry(ctx.viewport_id())
+            .or_default()
+            .notebook = Some(
+            serde_json::json!({"busy": busy, "source_mode": source_mode, "saved": saved, "cells": cells}),
+        );
+    }
 }
 
 /// Report the connection-owned endpoint without reconstructing its directory layout.
@@ -564,6 +603,41 @@ mod tests {
         }
         assert_eq!(app.dialog_input, "Terminal: Sessions and Slurm allocations");
         assert!(matches!(app.dialog, crate::app::Dialog::Commands));
+    }
+
+    #[test]
+    fn notebook_snapshots_are_bounded_read_only_and_clear_when_hidden() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("widgets.json");
+        let ctx = egui::Context::default();
+        install_at(&ctx, path.clone());
+        let mut book = crate::notebook::Notebook::default();
+        book.cells[0].set_source("private cell source".into());
+        book.cells[0].data["execution_count"] = serde_json::json!("private cell source");
+        let original = book.serialize().unwrap();
+        for visible in [true, false] {
+            let _ = ctx.run(Default::default(), |ctx| {
+                if visible {
+                    notebook(ctx, &book, true, false, false);
+                }
+            });
+            let text = std::fs::read_to_string(&path).unwrap();
+            let state: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert!(!text.contains("private cell source"));
+            if visible {
+                assert_eq!(state["notebook"]["busy"], true);
+                assert_eq!(state["notebook"]["saved"], false);
+                assert!(state["notebook"]["cells"][0]["execution_count"].is_null());
+                assert_eq!(state["notebook"]["cells"].as_array().unwrap().len(), 1);
+                assert_eq!(
+                    state["notebook"]["cells"][0]["source"],
+                    crate::files::digest(b"private cell source")
+                );
+            } else {
+                assert!(state["notebook"].is_null());
+            }
+            assert_eq!(book.serialize().unwrap(), original);
+        }
     }
 
     #[test]

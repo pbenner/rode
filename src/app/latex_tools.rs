@@ -353,11 +353,22 @@ impl EditorApp {
                     ui.colored_label(self.themes.active().palette.error, &self.latex.error);
                 }
                 if let Some(reply) = &self.latex.result {
-                    ui.add(
-                        egui::Label::new(format!("{} · exit {}", reply.source, reply.output.code))
+                    let result = ui
+                        .add(
+                            egui::Label::new(format!(
+                                "{} · exit {}",
+                                reply.source, reply.output.code
+                            ))
                             .truncate(),
-                    )
-                    .on_hover_text(&reply.source);
+                        )
+                        .on_hover_text(&reply.source);
+                    if !self.latex.busy {
+                        ui_probe::button(
+                            ui,
+                            &format!("latex-result:{}", reply.output.code),
+                            &result,
+                        );
+                    }
                     let row_height = ui.text_style_height(&egui::TextStyle::Body) + 6.;
                     egui::ScrollArea::vertical().max_height(180.).show_rows(
                         ui,

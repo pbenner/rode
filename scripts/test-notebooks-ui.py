@@ -1,66 +1,232 @@
 #!/usr/bin/env python3
-"""Native notebooks, stateful kernels, protected saves and local/SSH sandbox scope."""
+"""Native notebook execution, protected saves and cell editing, locally and over SSH."""
 
 import json
 import os
-import re
 import shutil
-import subprocess
-import time
 from pathlib import Path
 
-os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/notebook-ui")
+ROOT = Path(__file__).resolve().parent.parent
+os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/notebook-ui")
+from ui_fixture import native_session, project_args
 from ui_harness import (
     ARTIFACTS,
-    BINARY,
-    click,
-    close_window,
-    display,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     screenshot,
     text,
-    x11,
-    xtest,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
 PYTHON = Path(
     os.environ.get("RODE_TEST_JUPYTER", ROOT / "target/notebook-env/bin/python")
 ).absolute()
 
 
-def wait_for(check, message):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.1)
-    raise AssertionError(message)
+def notebook(ui):
+    return ui.layout(lambda state: state.get("notebook") is not None, "Notebook did not load")[
+        "notebook"
+    ]
 
 
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
+def completed(ui, before, indices=None):
+    """Observe completion; never press Save again while waiting for kernel results."""
+    cells = before["cells"]
+    indices = (
+        indices
+        if indices is not None
+        else [i for i, cell in enumerate(cells) if cell["kind"] == "code"]
+    )
+    ui.layout(
+        lambda state: (
+            (current := state.get("notebook")) is not None
+            and not current["busy"]
+            and len(current["cells"]) == len(cells)
+            and all(
+                current["cells"][i]["execution_count"] is not None
+                and current["cells"][i]["execution_count"] != cells[i]["execution_count"]
+                for i in indices
+            )
+        ),
+        "Notebook execution did not finish",
+        timeout=45,
+    )
+
+
+def run_all(ui):
+    before = notebook(ui)
+    ui.command("Notebook: Run all cells")
+    completed(ui, before)
+
+
+def save(ui, path, check, message):
+    key("s", ("Control_L",))
+    ui.layout(
+        lambda state: (state.get("notebook") or {}).get("saved") is True,
+        "Notebook save was not acknowledged",
+    )
+
+    def saved():
+        book = json.loads(path.read_text())
+        return book if check(book) else None
+
+    return ui.wait(saved, message)
+
+
+def save_as(ui, name):
+    key("s", ("Control_L", "Shift_L"))
+    ui.fill_path(name)
     key("Return")
-    time.sleep(0.35)
+    ui.absent("file-dialog-path")
+    ui.value("active-document", ui.project_root / name)
+    ui.layout(
+        lambda state: (state.get("notebook") or {}).get("saved") is True,
+        "Notebook Save As was not acknowledged",
+    )
+    ui.wait((ui.project_root / name).exists, "Notebook Save As failed")
 
 
-def open_file(name):
-    command("Open file by path")
-    text(name)
+def execution(ui, source, original, label):
+    ui.open_file("demo.ipynb")
+    notebook(ui)
+    screenshot(ui.window, label + "-opened.png")
+    ui.click("notebook-settings")
+    screenshot(ui.window, label + "-settings.png")
+    ui.click("notebook-settings")
+    assert json.loads(source.read_text()) == original, "Opening a notebook changed its source"
+    run_all(ui)
+    book = save(
+        ui,
+        source,
+        lambda book: (
+            [c.get("execution_count") for c in book["cells"] if c["cell_type"] == "code"]
+            == [1, 2, 3]
+        ),
+        "Notebook output was not saved",
+    )
+    assert any("image/png" in o.get("data", {}) for o in book["cells"][3]["outputs"])
+    assert book["cells"][2]["outputs"][0]["text"] == "42\n", "Cells did not share kernel state"
+    assert book["metadata"]["custom"] == original["metadata"]["custom"]
+    assert book["cells"][0]["attachments"] == original["cells"][0]["attachments"]
+    screenshot(ui.window, label + "-executed.png")
+
+    # Find selects the matching source in the actual cell editor, including after scrolling.
+    key("f", ("Control_L",))
+    ui.fill("notebook-find", "plt.show()")
     key("Return")
-    time.sleep(0.6)
+    plot = notebook(ui)["cells"][3]
+    ui.control(f"notebook-cell:{plot['uid']}", focused=True)
+    key("Escape")
+    ui.control("notebook-output-image")
+    screenshot(ui.window, label + "-plot.png")
+    key("f", ("Control_L",))
+    ui.fill("notebook-find", "counter = 40")
+    key("Return")
+    first = notebook(ui)["cells"][1]
+    ui.control(f"notebook-cell:{first['uid']}", focused=True)
+    key("Escape")
+    text("counter = 41")
+    expected = "".join(original["cells"][1]["source"]).replace("counter = 40", "counter = 41")
+    ui.value(f"notebook-cell:{first['uid']}-value", expected, focused=True)
+    before = notebook(ui)
+    key("Return", ("Shift_L",))
+    completed(ui, before, [1])
+    save(
+        ui,
+        source,
+        lambda book: "counter = 41" in book["cells"][1]["source"],
+        "Cell edit / Shift+Enter was not saved",
+    )
+    run_all(ui)
+    save(
+        ui,
+        source,
+        lambda book: book["cells"][2]["outputs"][0]["text"] == "43\n",
+        "Rerun did not use edited source",
+    )
 
 
-def wheel(ticks):
-    xtest.XTestFakeMotionEvent(display, -1, 1180, 580, 0)
-    for _ in range(ticks):
-        xtest.XTestFakeButtonEvent(display, 5, 1, 0)
-        xtest.XTestFakeButtonEvent(display, 5, 0, 0)
-        x11.XFlush(display)
-        time.sleep(0.06)
+def protected_saves(ui, source, label):
+    external = json.loads(source.read_text())
+    external["metadata"]["external"] = True
+    source.write_text(json.dumps(external))
+    run_all(ui)
+    key("s", ("Control_L",))
+    ui.notice(
+        "Save conflict: this file changed on disk. Your edits are still open; "
+        "use Save As to keep a separate copy, or close and reopen to load the disk version."
+    )
+    assert json.loads(source.read_text()) == external, (
+        "Notebook save conflict overwrote external data"
+    )
+    screenshot(ui.window, label + "-conflict.png")
+    ui.dismiss_notice()
+    save_as(ui, "copy.ipynb")
+    copy = json.loads((ui.project_root / "copy.ipynb").read_text())
+    assert "external" not in copy["metadata"], "Save As discarded the retained notebook buffer"
+    assert copy["cells"][2]["outputs"][0]["text"] == "43\n"
+    for source_mode, suffix in [(True, "json-source"), (False, "cells-restored")]:
+        ui.command("Notebook: Toggle JSON source view")
+        ui.layout(
+            lambda state: (state.get("notebook") or {}).get("source_mode") is source_mode,
+            "Notebook view did not switch",
+        )
+        screenshot(ui.window, label + "-" + suffix + ".png")
+
+
+def insertion(ui, label):
+    ui.open_file("notes.txt")
+    ui.control("source-editor", focused=True)
+    key("End", ("Control_L",))
+    text("dirty_text")
+    ui.source("preserve text\ndirty_text")
+    ui.command("Notebook: New Jupyter notebook")
+    notebook(ui)
+    screenshot(ui.window, label + "-new.png")
+    key("w", ("Control_L",))
+    ui.control("guard-keep-editing")
+    screenshot(ui.window, label + "-dirty-guard.png")
+    ui.click("guard-keep-editing")
+    save_as(ui, "new.ipynb")
+    for button, index, value in [
+        ("notebook-add-code", 1, "inserted_code = 7"),
+        ("notebook-add-markdown", 2, "Inserted markdown"),
+    ]:
+        ui.click(button)
+        current = ui.layout(
+            lambda state: len((state.get("notebook") or {}).get("cells", [])) == index + 1,
+            "Cell was not inserted",
+        )["notebook"]
+        name = f"notebook-cell:{current['cells'][index]['uid']}"
+        ui.control(name, focused=True)
+        text(value)
+        ui.value(name + "-value", value, focused=True)
+    target = ui.project_root / "new.ipynb"
+    book = save(ui, target, lambda book: len(book["cells"]) == 3, "Cell insertion was not saved")
+    assert [c["cell_type"] for c in book["cells"]] == ["code", "code", "markdown"]
+    assert "inserted_code = 7" in "".join(book["cells"][1]["source"])
+    assert "Inserted markdown" in "".join(book["cells"][2]["source"])
+    screenshot(ui.window, label + "-inserted-cells.png")
+    # The inline insertion control is distinct from the toolbar's append-after-selection action.
+    ui.click("notebook-insert-markdown:0")
+    current = ui.layout(
+        lambda state: len((state.get("notebook") or {}).get("cells", [])) == 4,
+        "Inline cell was not inserted",
+    )["notebook"]
+    name = f"notebook-cell:{current['cells'][1]['uid']}"
+    ui.control(name, focused=True)
+    text("Between cells")
+    ui.value(name + "-value", "Between cells", focused=True)
+    book = save(ui, target, lambda book: len(book["cells"]) == 4, "Inline insertion was not saved")
+    assert [c["cell_type"] for c in book["cells"]] == ["code", "markdown", "code", "markdown"]
+    assert "Between cells" in "".join(book["cells"][1]["source"])
+    assert "inserted_code = 7" in "".join(book["cells"][2]["source"])
+    screenshot(ui.window, label + "-between-cells.png")
+    ui.open_file("notes.txt")
+    ui.source("preserve text\ndirty_text")
+    key("s", ("Control_L",))
+    ui.control("source-editor-saved")
+    assert (ui.project_root / "notes.txt").read_text() == "preserve text\ndirty_text"
 
 
 def run(remote=False):
@@ -76,230 +242,38 @@ def run(remote=False):
         shutil.copyfile(ROOT / "tests/fixtures/notebook.ipynb", source)
         original = json.loads(source.read_text())
         (project / "notes.txt").write_text("preserve text\n")
-        env = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
-        )
+        environment = fixture_environment(base)
         if remote:
-            tools = base / "tools"
-            tools.mkdir()
-            wrapper = tools / "ssh"
-            wrapper.write_text(
-                "#!/usr/bin/python3\nimport os,sys\nbinary="
-                + repr(shutil.which("ssh"))
-                + "\nos.execv(binary,[binary]+['-T' if a=='-tt' else a for a in sys.argv[1:]])\n"
-            )
-            wrapper.chmod(0o755)
-            env["PATH"] = str(tools) + os.pathsep + os.environ["PATH"]
-            # The fixture has a private HOME. A uv/mise venv may link to a
-            # separate Python installation, which also needs a read-only grant.
-            # Grants apply to the selected remote interpreter; no package upload.
+            policy = {
+                "enabled": True,
+                "share_network": False,
+                "read_only": sorted(
+                    {str(PYTHON.parent.parent), str(PYTHON.resolve().parent.parent)}
+                ),
+            }
+            host = ["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""]
+            context = json.dumps([host, str(project)], separators=(",", ":"))
             config = base / "data/rode"
-            config.mkdir(parents=True)
-            policy = json.dumps(
-                {
-                    "enabled": True,
-                    "share_network": False,
-                    "read_only": sorted(
-                        {str(PYTHON.parent.parent), str(PYTHON.resolve().parent.parent)}
-                    ),
-                }
-            )
-            host_key = json.dumps(
-                [["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""], str(project)],
-                separators=(",", ":"),
-            )
-            project_preferences = json.dumps({host_key: {"sandbox": json.loads(policy)}})
+            config.mkdir()
             (config / "app.ron").write_text(
-                json.dumps({"sandbox_defaults": policy, "project_preferences": project_preferences})
+                json.dumps(
+                    {
+                        "sandbox_defaults": json.dumps(policy),
+                        "project_preferences": json.dumps({context: {"sandbox": policy}}),
+                    }
+                )
             )
-            args = [
-                str(BINARY),
-                "--ssh",
-                "rode-test",
-                "--ssh-config",
-                os.environ["RODE_TEST_SSH_CONFIG"],
-                "--remote-path",
-                str(project),
-                "--sandbox",
-                "--theme",
-                "carbon",
-            ]
-        else:
-            args = [str(BINARY), str(project), "--theme", "carbon"]
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
-            process = subprocess.Popen(args, env=env, stdout=log, stderr=log)
-            window = None
-            try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No notebook window")
-                time.sleep(1)
-                focus_window(window)
-                if remote:
-                    # The coordinate-based cell checks below use the same
-                    # expanded explorer layout as the local notebook fixture.
-                    command("Toggle explorer")
-                open_file("demo.ipynb")
-                title = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                host_offset = (44 if "[Sandbox]" in title else 74) if remote else 0
-
-                def document_click(x, y):
-                    # Remote projects add the host banner and, on fallback,
-                    # the sandbox-unavailable reason above notebook controls.
-                    click(x, y + host_offset)
-
-                # Select Code explicitly: opening the notebook may already have
-                # hidden the SSH terminal, so toggling it can cover the notebook.
-                key("space", ("Control_L",))
-                key("e")
-                screenshot(window, label + "-opened.png")
-                document_click(390, 208)
-                screenshot(window, label + "-settings.png")
-                document_click(390, 208)
-                assert json.loads(source.read_text()) == original, (
-                    "Opening a notebook changed its source"
-                )
-                command("Notebook: Run all cells")
-                # Runtime outputs become dirty; a save records them through normal file protection.
-                time.sleep(5)
-                key("s", ("Control_L",))
-
-                def executed():
-                    key("s", ("Control_L",))
-                    book = json.loads(source.read_text())
-                    return [
-                        c.get("execution_count") for c in book["cells"] if c["cell_type"] == "code"
-                    ] == [1, 2, 3] and any(
-                        "image/png" in o.get("data", {}) for o in book["cells"][3]["outputs"]
-                    )
-
-                wait_for(executed, "Notebook run/PNG output was not saved")
-                book = json.loads(source.read_text())
-                assert book["cells"][2]["outputs"][0]["text"] == "42\n", (
-                    "Cells did not share kernel state"
-                )
-                assert book["metadata"]["custom"] == original["metadata"]["custom"]
-                assert book["cells"][0]["attachments"] == original["cells"][0]["attachments"]
-                screenshot(window, label + "-executed.png")
-                wheel(8)
-                screenshot(window, label + "-plot.png")
-                # Ctrl+F finds a cell source and selects its matching text.
-                key("f", ("Control_L",))
-                text("counter = 40")
-                key("Return")
-                key("Escape")
-                text("counter = 41")
-                key("Return", ("Shift_L",))
-                time.sleep(0.8)
-                key("s", ("Control_L",))
-                wait_for(
-                    lambda: "counter = 41" in json.loads(source.read_text())["cells"][1]["source"],
-                    "Cell edit / Shift+Enter was not saved",
-                )
-                command("Notebook: Run all cells")
-                time.sleep(1.5)
-                key("s", ("Control_L",))
-                wait_for(
-                    lambda: (
-                        json.loads(source.read_text())["cells"][2]["outputs"][0]["text"] == "43\n"
-                    ),
-                    "Rerun did not use edited source",
-                )
-                # A source modification outside RODE must win over an outdated notebook revision.
-                external = json.loads(source.read_text())
-                external["metadata"]["external"] = True
-                source.write_text(json.dumps(external))
-                command("Notebook: Run all cells")
-                time.sleep(1.2)
-                key("s", ("Control_L",))
-                time.sleep(0.4)
-                assert json.loads(source.read_text())["metadata"]["external"] is True, (
-                    "Notebook save conflict overwrote external data"
-                )
-                screenshot(window, label + "-conflict.png")
-                key("s", ("Control_L", "Shift_L"))
-                key("a", ("Control_L",))
-                text("copy.ipynb")
-                key("Return")
-                wait_for(lambda: (project / "copy.ipynb").exists(), "Notebook Save As failed")
-                command("Notebook: Toggle JSON source view")
-                screenshot(window, label + "-json-source.png")
-                command("Notebook: Toggle JSON source view")
-                screenshot(window, label + "-cells-restored.png")
-                open_file("notes.txt")
-                key("End", ("Control_L",))
-                text("dirty_text")
-                command("Notebook: New Jupyter notebook")
-                screenshot(window, label + "-new.png")
-                key("w", ("Control_L",))
-                time.sleep(0.2)
-                screenshot(window, label + "-dirty-guard.png")
-                key("Escape")
-                key("s", ("Control_L",))
-                key("a", ("Control_L",))
-                text("new.ipynb")
-                key("Return")
-                wait_for(lambda: (project / "new.ipynb").exists(), "New notebook save failed")
-                document_click(610, 149)
-                text("inserted_code = 7")
-                document_click(710, 149)
-                text("Inserted markdown")
-                key("s", ("Control_L",))
-
-                def inserted():
-                    cells = json.loads((project / "new.ipynb").read_text())["cells"]
-                    return (
-                        len(cells) == 3
-                        and [c["cell_type"] for c in cells] == ["code", "code", "markdown"]
-                        and "inserted_code = 7" in "".join(cells[1]["source"])
-                        and "Inserted markdown" in "".join(cells[2]["source"])
-                    )
-
-                wait_for(inserted, "Toolbar cell insertion or editor focus failed")
-                screenshot(window, label + "-inserted-cells.png")
-                # Insert between existing cells, rather than appending to the notebook.
-                document_click(465, 359)
-                text("Between cells")
-                key("s", ("Control_L",))
-
-                def between():
-                    cells = json.loads((project / "new.ipynb").read_text())["cells"]
-                    return (
-                        len(cells) == 4
-                        and [c["cell_type"] for c in cells]
-                        == ["code", "markdown", "code", "markdown"]
-                        and "Between cells" in "".join(cells[1]["source"])
-                        and "inserted_code = 7" in "".join(cells[2]["source"])
-                    )
-
-                wait_for(between, "Inline cell insertion changed the wrong position")
-                screenshot(window, label + "-between-cells.png")
-                open_file("notes.txt")
-                key("s", ("Control_L",))
-                time.sleep(0.3)
-                close_window(window, process)
-            except Exception:
-                if source.exists():
-                    shutil.copyfile(source, ARTIFACTS / (label + "-failure.ipynb"))
-                if window and process.poll() is None:
-                    screenshot(window, label + "-failure.png")
-                raise
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=5)
-    print(
-        label
-        + " notebook cells, stateful kernels, PNGs, metadata, edits, protected saves and source view passed"
-    )
+        try:
+            with native_session(
+                project_args(project, remote=remote, sandbox=remote), environment, project, label
+            ) as ui:
+                execution(ui, source, original, label)
+                protected_saves(ui, source, label)
+                insertion(ui, label)
+        except BaseException:
+            shutil.copyfile(source, ARTIFACTS / (label + "-failure.ipynb"))
+            raise
+    print(label + ": notebook execution, protected saves and cell editing passed")
 
 
 if __name__ == "__main__":

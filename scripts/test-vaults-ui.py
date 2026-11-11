@@ -5,11 +5,11 @@ import ctypes
 import hashlib
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,31 +21,20 @@ from ui_harness import (
     close_window,
     display,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     request_close,
     screenshot,
     text,
+    wait_for_effect,
     x11,
 )
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
+from ui_fixture import project_ui
 
-def wait_for(check, message):
-    until = time.monotonic() + 15
-    while time.monotonic() < until:
-        if check():
-            return
-        time.sleep(0.05)
-    raise AssertionError(message)
-
-
-def command(value):
-    key("p", ("Control_L", "Shift_L"))
-    text(value)
-    key("Return")
-    time.sleep(0.3)
+wait_for = partial(wait_for_effect, timeout=15)
 
 
 def cleanup_result(cipher, remote, environment):
@@ -102,8 +91,8 @@ def run(remote=False):
         (cipher / "gocryptfs.conf").write_text("fixture")
         source = project / "main.txt"
         source.write_text("keep the existing project\n" + "\n" * 8)
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             RODE_SESSION_DIR=str(base / "sessions"),
@@ -136,24 +125,10 @@ def run(remote=False):
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
-
-                def ready():
-                    nonlocal window
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE.*plain-project[^\n]*', tree)
-                    if match and "[Opening project]" not in match[0]:
-                        window = int(match[1], 16)
-                        return True
-                    assert process.poll() is None
-                    return False
-
-                wait_for(ready, "The fixture project did not open")
-                time.sleep(1)
-                focus_window(window)
-                command("Open file by path")
-                text("main.txt")
-                key("Return")
-                time.sleep(0.8)
+                ui = project_ui(process, environment, project, log.name)
+                window = ui.window
+                command = ui.command
+                ui.open_file("main.txt")
                 click(600, 250)
                 key("End", ("Control_L",))
                 text("\nunsaved-vault-marker")

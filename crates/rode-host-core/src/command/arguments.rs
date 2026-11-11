@@ -206,6 +206,15 @@ mod tests {
         let pair = portable_pty::native_pty_system()
             .openpty(portable_pty::PtySize::default())
             .unwrap();
+        // Echo can interleave input with the child's NUL-delimited policy, or
+        // satisfy the reader before the child consumes stdin. Disable only
+        // terminal echo before spawning; retain ordinary canonical PTY input.
+        let fd = pair.master.as_raw_fd().unwrap();
+        let mut settings = std::mem::MaybeUninit::<libc::termios>::uninit();
+        assert_eq!(unsafe { libc::tcgetattr(fd, settings.as_mut_ptr()) }, 0);
+        let mut settings = unsafe { settings.assume_init() };
+        settings.c_lflag &= !(libc::ECHO | libc::ECHONL);
+        assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &settings) }, 0);
         let mut child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().unwrap();
@@ -233,8 +242,7 @@ mod tests {
         let output = String::from_utf8(result.unwrap())
             .unwrap()
             .replace("\r\n", "\n");
-        assert!(output.contains(&argv[2..].join("\0")), "{output:?}");
-        assert!(output.ends_with("pty input\n"));
+        assert_eq!(output, format!("{}\0pty input\n", argv[2..].join("\0")));
         let visible = std::fs::read_to_string(log).unwrap();
         assert!(visible.contains("--args\0"));
         assert!(!visible.contains("/private"), "{visible}");

@@ -4,10 +4,10 @@
 import ctypes
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/slurm-ui")
@@ -19,46 +19,38 @@ from ui_harness import (
     close_window,
     display,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     screenshot,
     text,
     theme,
+    wait_for_effect,
     x11,
     xtest,
 )
 
 x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
+from ui_fixture import project_ui
 
-def wait_for(check, message):
-    end = time.monotonic() + 18
-    while time.monotonic() < end:
-        if check():
-            return
-        time.sleep(0.1)
-    raise AssertionError(message)
-
-
-def command(value):
-    key("p", ("Control_L", "Shift_L"))
-    text(value)
-    key("Return")
-    time.sleep(0.4)
+wait_for = partial(wait_for_effect, timeout=18)
 
 
 def filled(window, name, expected, width=1380, height=900, accent=(220, 163, 37)):
-    xtest.XTestFakeMotionEvent(display, -1, 600, 200, 0)
-    x11.XFlush(display)
-    screenshot(window, name)
-    raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
-    # Allocation is immediately left of the rightmost Persist toggle.
-    count = sum(
-        raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(accent)
-        for y in (range(98, 122) if width >= 1000 else range(124, 148))
-        for x in range(width - 215, width - 108)
-    )
-    assert (count > 500) if expected else (count < 100), (name, count)
+    def matches():
+        xtest.XTestFakeMotionEvent(display, -1, 600, 200, 0)
+        x11.XFlush(display)
+        screenshot(window, name)
+        raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
+        # Allocation is immediately left of the rightmost Persist toggle.
+        count = sum(
+            raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(accent)
+            for y in (range(98, 122) if width >= 1000 else range(124, 148))
+            for x in range(width - 215, width - 108)
+        )
+        return (count > 500) if expected else (count < 100)
+
+    wait_for(matches, f"Allocation indicator did not reach expected state: {name}")
 
 
 with fixture_directory(prefix="rode-slurm-ui-") as base:
@@ -71,8 +63,8 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
     shell = tools / "shell"
     shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
     shell.chmod(0o755)
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         PATH=str(tools) + os.pathsep + os.environ["PATH"],
         SHELL=str(shell),
         SALLOC_NO_SHELL="1",
@@ -99,33 +91,17 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
     with (ARTIFACTS / "native.log").open("w") as log:
 
         def launch():
-            global process, window
+            global process, window, ui, command
             process = subprocess.Popen(
                 [str(BINARY), "--theme", "carbon", str(root)],
                 env=environment,
                 stdout=log,
                 stderr=log,
             )
-            found = []
-
-            def mapped():
-                match = re.search(
-                    r'(0x[0-9a-f]+) "RODE',
-                    subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                )
-                if match:
-                    found.append(int(match[1], 16))
-                    return True
-                assert process.poll() is None
-                return False
-
-            wait_for(mapped, "No native RODE window")
-            window = found[-1]
-            time.sleep(0.7)
-            focus_window(window)
-            x11.XResizeWindow(display, window, 1380, 900)
-            x11.XFlush(display)
-            time.sleep(0.4)
+            ui = project_ui(process, environment, root, log.name)
+            window = ui.window
+            command = ui.command
+            ui.resize(1380, 900)
 
         try:
             launch()
@@ -161,16 +137,13 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
                 lambda: json.loads((state / "job.json").read_text())["state"] == "RUNNING",
                 "Allocation did not start",
             )
-            time.sleep(5.5)
             filled(window, "active.png", True)
             theme("phosphor")
             filled(window, "active-phosphor.png", True, accent=(125, 235, 164))
             theme("carbon")
             (state / "queue-error").touch()
-            time.sleep(6)
             filled(window, "query-error.png", False)
             (state / "queue-error").unlink()
-            time.sleep(6)
             filled(window, "query-recovered.png", True)
             click(600, 755)
             text(
@@ -185,7 +158,6 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
             )
             x11.XResizeWindow(display, window, 850, 560)
             x11.XFlush(display)
-            time.sleep(0.4)
             filled(window, "compact-active.png", True, 850, 560)
             close_window(window, process)
             assert any(i["id"] == info["id"] for i in rpc("list"))
@@ -213,7 +185,6 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
                 lambda: (state / "cancelled").exists(), "Confirmed allocation release did not run"
             )
             key("Escape")
-            time.sleep(0.5)
             filled(window, "released.png", False)
             close_window(window, process)
             print(

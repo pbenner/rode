@@ -299,6 +299,22 @@ def wait_for_ui_state(process, log_path, state_path, check, description, timeout
     raise AssertionError(f"{description} within {timeout}s. Last layout: {last}. Log: {log_path}")
 
 
+def wait_for_effect(check, message, *, timeout=20, process=None, log_path=None):
+    """Observe an effect without resending input; allow expected post-exit cleanup checks."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process is not None:
+            assert_running(process, log_path)
+        try:
+            value = check()
+        except FileNotFoundError:
+            value = None
+        if value:
+            return value
+        time.sleep(0.05)
+    raise AssertionError(message)
+
+
 class NativeUI:
     """Drive native controls using focus, complete input and document acknowledgements.
 
@@ -342,8 +358,10 @@ class NativeUI:
             name + " did not close",
         )
 
-    def command(self, value):
-        palette_command(self.window, self.process, self.log_path, self.state_path, value)
+    def command(self, value, *, keyboard=False):
+        palette_command(
+            self.window, self.process, self.log_path, self.state_path, value, keyboard=keyboard
+        )
 
     def notice(self, value):
         digest = hashlib.sha256(value.encode()).hexdigest()
@@ -416,17 +434,13 @@ class NativeUI:
 
     def wait(self, check, message, *, timeout=20):
         """Poll an effect; missing files are transient, other fixture errors remain failures."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            assert_running(self.process, self.log_path)
-            try:
-                value = check()
-            except FileNotFoundError:
-                value = None
-            if value:
-                return value
-            time.sleep(0.05)
-        raise AssertionError(f"{message}. Log: {self.log_path}; layout: {self.state_path}")
+        return wait_for_effect(
+            check,
+            f"{message}. Log: {self.log_path}; layout: {self.state_path}",
+            timeout=timeout,
+            process=self.process,
+            log_path=self.log_path,
+        )
 
     def edit(self, name, value):
         self.click(name)
@@ -513,7 +527,7 @@ def delayed_input(process):
         os.close(descriptor)
 
 
-def palette_command(window, process, log_path, state_path, value, timeout=12):
+def palette_command(window, process, log_path, state_path, value, timeout=12, *, keyboard=False):
     """Submit once, after focus and the complete query reach the native palette.
 
     The exact-match control is registered only after all query characters were
@@ -527,7 +541,14 @@ def palette_command(window, process, log_path, state_path, value, timeout=12):
     )
     with delayed_input(process):
         text(value)
-    click_button(window, process, log_path, state_path, "command-match:" + value, timeout)
+    if keyboard:
+        wait_for_button(window, process, log_path, state_path, "command-match:" + value, timeout)
+        wait_for_button(
+            window, process, log_path, state_path, "command-palette-input", timeout, focused=True
+        )
+        key("Return")
+    else:
+        click_button(window, process, log_path, state_path, "command-match:" + value, timeout)
     wait_for_ui_state(
         process,
         log_path,

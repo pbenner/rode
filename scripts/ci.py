@@ -119,6 +119,7 @@ SUITES = {
     "workspace": [
         ([sys.executable, "scripts/test-ui-display.py"], {}, 30),
         ([sys.executable, "scripts/test-ui-harness.py"], {}, 30),
+        ([sys.executable, "scripts/test-ui-fixture.py"], {}, 30),
         ([sys.executable, "scripts/test-readiness-ui.py"], {}, 90),
         ui("project", RODE_PROJECT_UI_CASE="failure"),
         ([sys.executable, "scripts/test-ui.py"], {}, 180),

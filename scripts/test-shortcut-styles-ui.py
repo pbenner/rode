@@ -2,10 +2,10 @@
 """Native Standard/Emacs/Vim editing, safe saves, shell keys, and preset persistence."""
 
 import os
-import re
 import shutil
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 remote_config = os.environ.get("RODE_TEST_SSH_CONFIG")
@@ -13,32 +13,20 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent
     / ("target/shortcut-styles-ssh-ui" if remote_config else "target/shortcut-styles-ui")
 )
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
     close_window,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     screenshot,
     text,
+    wait_for_effect,
 )
 
-
-def wait_for(check, message):
-    deadline = time.monotonic() + 12
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.05)
-    raise AssertionError(message)
-
-
-def command(value):
-    key("p", ("Control_L", "Shift_L"))
-    text(value)
-    key("Return")
-    time.sleep(0.25)
+wait_for = partial(wait_for_effect, timeout=12)
 
 
 def prefix(name, ctrl=False, leader="x"):
@@ -57,8 +45,8 @@ def run():
         other.write_text("second\n")
         comments = root / "settings.toml"
         comments.write_text("first = 1\nsecond = 2\n")
-        env = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+        env = fixture_environment(
+            base, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
         )
         shell = base / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
@@ -94,22 +82,10 @@ def run():
             with (ARTIFACTS / "native.log").open("w") as log:
                 process = subprocess.Popen(args, env=env, stdout=log, stderr=log)
 
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-                    match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No native window")
-                time.sleep(1.0)
-                focus_window(window)
-                command("Open file by path")
-                text("main.txt")
-                key("Return")
-                time.sleep(0.4)
+                ui = project_ui(process, env, root, log.name)
+                window = ui.window
+                command = partial(ui.command, keyboard=True)
+                ui.open_file("main.txt")
 
                 def saved(expected, message):
                     key("s", ("Control_L",))
@@ -147,10 +123,7 @@ def run():
                 saved(original, "Deleting an inserted line changed other source")
                 screenshot(window, "standard-source.png")
 
-                command("Open file by path")
-                text("settings.toml")
-                key("Return")
-                time.sleep(0.3)
+                ui.open_file("settings.toml")
                 key("a", ("Control_L",))
                 key("slash", ("Control_L",))
                 key("s", ("Control_L",))

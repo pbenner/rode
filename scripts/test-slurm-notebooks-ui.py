@@ -3,15 +3,15 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
-import time
+from functools import partial
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/slurm-notebook-ui"
 )
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
@@ -19,27 +19,30 @@ from ui_harness import (
     click,
     close_window,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     screenshot,
-    text,
+    wait_for_effect,
 )
 
-
-def wait_for(check, message):
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.1)
-    raise AssertionError(message)
+wait_for = partial(wait_for_effect, timeout=30)
 
 
-def command(name):
-    key("p", ("Control_L", "Shift_L"))
-    text(name)
-    key("Return")
-    time.sleep(0.4)
+def save_completed(ui, source):
+    state = ui.layout(
+        lambda state: state.get("notebook") is not None and not state["notebook"]["busy"],
+        "Kernel run did not finish",
+    )
+    expected = state["notebook"]["cells"][0]["execution_count"]
+    key("s", ("Control_L",))
+    ui.layout(
+        lambda state: (state.get("notebook") or {}).get("saved") is True,
+        "Notebook save was not acknowledged",
+    )
+    ui.wait(
+        lambda: json.loads(source.read_text())["cells"][0]["execution_count"] == expected,
+        "Completed notebook output did not save",
+    )
 
 
 with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
@@ -68,8 +71,8 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
         )
     ]
     (root / "demo.ipynb").write_text(json.dumps(book))
-    env = dict(
-        os.environ,
+    env = fixture_environment(
+        base,
         PATH=str(tools) + os.pathsep + os.environ["PATH"],
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
@@ -95,20 +98,9 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
                 [str(BINARY), str(root), "--theme", "carbon"], env=env, stdout=log, stderr=log
             )
 
-            def mapped():
-                global window
-                assert process.poll() is None
-                match = re.search(
-                    r'(0x[0-9a-f]+) "RODE',
-                    subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                )
-                if match:
-                    window = int(match[1], 16)
-                return window
-
-            wait_for(mapped, "No RODE window")
-            time.sleep(0.8)
-            focus_window(window)
+            ui = project_ui(process, env, root, log.name)
+            window = ui.window
+            command = ui.command
             command("Terminal: Allocate Slurm resources")
             screenshot(window, "reserve-form.png")
             click(660, 662)  # Reserve for notebooks below the Resources card.
@@ -120,18 +112,15 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             owner = next(info for info in rpc("list") if info.get("allocation"))
             assert owner["persistent"]
             screenshot(window, "reserved.png")
-            command("Open file by path")
-            text("demo.ipynb")
-            key("Return")
-            time.sleep(0.6)
+            ui.open_file("demo.ipynb")
             screenshot(window, "notebook.png")
-            click(390, 208)  # Expand kernel settings.
-            time.sleep(0.3)
-            click(630, 277)  # Refresh the target list.
-            time.sleep(0.7)
-            click(499, 277)
+            ui.click("notebook-settings")
+            ui.click("notebook-refresh-targets")
+            ui.control("notebook-targets-ready")
+            ui.click("notebook-target")
             screenshot(window, "targets.png")
-            click(509, 345)
+            ui.click("notebook-target:4242")
+            ui.value("notebook-target-value", "4242")
             command("Notebook: Run all cells")
             marker = root / "executed.json"
             wait_for(marker.exists, "Notebook did not execute on selected target")
@@ -139,14 +128,13 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             assert result == dict(job="4242", gpu="0,1", counter=1), result
             screenshot(window, "compute-kernel.png")
             # Toggle persistence on the existing kernel, then destroy the entire desktop.
-            click(400, 242)
+            ui.click("notebook-persistence")
             wait_for(
                 lambda: any(i["persistent"] for i in rpc("runtimes")),
                 "Kernel persistence was not acknowledged",
             )
             kernel = next(i for i in rpc("runtimes") if i["persistent"])
-            key("s", ("Control_L",))
-            time.sleep(0.3)
+            save_completed(ui, root / "demo.ipynb")
             close_window(window, process)
             wait_for(
                 lambda: any(i["id"] == kernel["id"] and not i["attached"] for i in rpc("runtimes")),
@@ -166,21 +154,21 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
                 [str(BINARY), str(root), "--theme", "carbon"], env=env, stdout=log, stderr=log
             )
             window = None
-            wait_for(mapped, "No replacement RODE window")
-            time.sleep(0.8)
-            focus_window(window)
-            command("Open file by path")
-            text("demo.ipynb")
-            key("Return")
-            time.sleep(0.6)
+            ui = project_ui(process, env, root, log.name)
+            window = ui.window
+            command = ui.command
+            ui.open_file("demo.ipynb")
             screenshot(window, "before-reattach.png")
             # The expanded settings state survives the desktop restart.
-            click(650, 242)
+            ui.click("notebook-reattach")
             wait_for(
                 lambda: any(i["id"] == kernel["id"] and i["attached"] for i in rpc("runtimes")),
                 "Kernel did not reattach",
             )
-            time.sleep(0.5)
+            ui.layout(
+                lambda state: state.get("notebook") is not None and not state["notebook"]["busy"],
+                "Reattached kernel did not become ready",
+            )
             marker.unlink()
             command("Notebook: Run all cells")
             wait_for(marker.exists, "Reattached kernel did not execute")
@@ -189,8 +177,9 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             screenshot(window, "reattached-kernel.png")
             # Changing to the host stops the old kernel and resets its live variables.
             marker.unlink()
-            click(499, 277)
-            click(499, 306)
+            ui.click("notebook-target")
+            ui.click("notebook-target:host")
+            ui.value("notebook-target-value", "host")
             command("Notebook: Run all cells")
             wait_for(marker.exists, "Host kernel did not start after changing target")
             result = json.loads(marker.read_text())
@@ -200,7 +189,7 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             assert (state / "job.json").exists(), "Changing kernels released the reservation"
             assert any(info["id"] == owner["id"] for info in rpc("list"))
             screenshot(window, "host-kernel.png")
-            key("s", ("Control_L",))
+            save_completed(ui, root / "demo.ipynb")
             close_window(window, process)
         except Exception:
             if process and process.poll() is None and window:

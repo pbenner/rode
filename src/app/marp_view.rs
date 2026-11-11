@@ -296,10 +296,15 @@ impl EditorApp {
             input.request_focus();
             self.dialog_focus = false;
         }
-        ui.checkbox(&mut self.marp_overwrite, "Replace existing export");
+        ui_probe::button(ui, "marp-export-path", &input);
+        ui_probe::value(ui, "marp-export-path-value", &input, &self.dialog_input);
+        let overwrite = ui.checkbox(&mut self.marp_overwrite, "Replace existing export");
+        ui_probe::button(ui, "marp-export-overwrite", &overwrite);
         ui.small("Existing exports are checked before conversion and replaced atomically; a concurrent change prevents replacement.");
         ui.horizontal(|ui| {
-            if ui.button("Export snapshot").clicked()
+            let export = ui.button("Export snapshot");
+            ui_probe::button(ui, "marp-export-submit", &export);
+            if export.clicked()
                 || ((input.has_focus() || input.lost_focus())
                     && ui.input(|i| i.key_pressed(Key::Enter)))
             {

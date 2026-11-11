@@ -545,6 +545,34 @@ network sharing disabled.
 
 The document, binary, language, debugger, layout, queued-prompt and attachment UI fixtures use `NativeUI` in `scripts/ui_harness.py` for complete command/path input, focused controls, document identity and resize acknowledgements. Opt-in snapshots expose value fingerprints instead of input text; they only observe state. Queue edits wait for the acknowledged row contents, and attachment snapshots must finish reading before tests mutate their source files. Fixture protocol logs are read as completed newline-terminated records, including when the last UTF-8 character arrives in pieces. Activating input is sent once through XTest, never retried. Window discovery checks the owning PID, and focus retries mapping races without letting Xlib terminate the test process. Polling intervals and deliberate gesture/idle measurement intervals remain; arbitrary startup and dialog sleeps do not establish readiness.
 
+Use `scripts/ui_fixture.py` for shared project-window readiness and owned native
+sessions. Notebook, LaTeX, Marp and DPI fixtures share this lifecycle, including
+normal shutdown checks and failure snapshots. Keep feature setup and assertions
+in named scenario functions: execution, protected saves, editing, preview/export
+and shutdown should be readable independently. `project_ui` also serves fixtures
+that deliberately restart their process or retain host sessions. Keyboard-only
+navigation uses the palette's keyboard activation option; it waits for the full
+query and focus before pressing Enter, without substituting a mouse click.
+Prompt-recall checks wait for the composer value and cursor-at-start
+acknowledgement before sending the next history key; polling never resends
+selection or clipboard commands.
+
+Notebook tests observe the kernel's busy state and changed execution counts
+before saving once. Cell source fingerprints and visible controls acknowledge
+edits, insertion, target selection and persistence. The probe records no source
+or output text and clears notebook state when the view closes. LaTeX and Marp
+checks wait for formatted buffers, notices, rendered previews and export results;
+the DPI test retains its deliberate held-pointer interval. Slurm indicator checks
+poll the rendered result across the scheduler's normal refresh interval instead
+of sleeping for an assumed refresh time. Legacy gesture tests still contain
+timed steps; those are not evidence that all UI workflows are timing-independent.
+
+The SSH integration entry point delegates to modules under
+`tests/ssh_roundtrip/`: transport, policy, agents, documents and runtimes, alongside
+the existing focused tunnel, X11 and transfer fixtures. Test names gain their
+module prefix; leaf names and assertions are retained. Run them through
+`scripts/test-ssh.sh` so all modules use the same isolated sshd and credentials.
+
 Failed UI fixtures terminate and reap their owned process without attempting another UI interaction, so cleanup cannot replace the original assertion with a close-window timeout. Queue and attachment fixtures also end their own project's agents in a private service directory; other projects' agents are left alone. Natural terminal exit drains queued output before publishing exit; the reader owns the quiet interval, with byte and time limits for descendants that continue writing. Regressions cover a slow reader with an open descendant and a continuously writing descendant.
 
 The workspace lane also runs `scripts/test-readiness-ui.py`: it pauses only its own GUI process through a pidfd while entering multiline source and opening successive file dialogs. The test requires complete source fingerprints before opening the next modal, so a queued Enter cannot choose a command from the new palette. Small source acknowledgements are limited to 64 KiB; larger files keep their existing streaming/size-specific checks. The private SSH shell has a fixed readiness prompt, bypasses host login files and lives under the fixture home’s read-only `.local` grant. PTY checks wait for that prompt before sending commands.

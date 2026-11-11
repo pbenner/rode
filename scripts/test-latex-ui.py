@@ -1,55 +1,100 @@
 #!/usr/bin/env python3
 """Native LaTeX build/preview, diagnostics and generic settings, locally/SSH."""
 
-import ctypes
 import json
 import os
-import re
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/latex-ui")
-from ui_harness import (
-    ARTIFACTS,
-    BINARY,
-    close_window,
-    display,
-    fixture_directory,
-    fixture_environment,
-    focus_window,
-    key,
-    screenshot,
-    text,
-    x11,
-)
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
+from ui_fixture import native_session, project_args
+from ui_harness import ARTIFACTS, fixture_directory, fixture_environment, key, screenshot, text
 
 
-def wait_for(check, message):
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        if check():
-            return
-        time.sleep(0.1)
-    raise AssertionError(message)
+def guarded_tools(ui, source, original, label):
+    ui.open_file("main.tex")
+    ui.control("source-editor", focused=True)
+    key("End", ("Control_L",))
+    text("\n% UNSAVED\n")
+    ui.source(original + "\n% UNSAVED\n")
+    ui.command("LaTeX: Build and preview PDF")
+    ui.notice("Save modified files before building LaTeX. Builds use the saved project files.")
+    assert not (ui.project_root / "build/latex/main.pdf").exists(), "Build accepted a dirty source"
+    assert source.read_text() == original
+    ui.dismiss_notice()
+    key("s", ("Control_L",))
+    ui.wait(lambda: "UNSAVED" in source.read_text(), "Source did not save after the build guard")
+    ui.control("source-editor-saved")
+    ui.command("Code: Format document")
+    ui.source((original + "\n% UNSAVED\n").replace("UNFORMATTED", "formatted"))
+    assert "UNFORMATTED" in source.read_text(), "Formatting wrote source behind the save guard"
+    key("s", ("Control_L",))
+    ui.wait(
+        lambda: "formatted" in source.read_text(),
+        "Configured formatter did not update/save the buffer",
+    )
+    ui.control("source-editor-saved")
+    ui.command("Code: Check document")
+    ui.command("Code: Problems")
+    ui.control("workbench-panel:PROBLEMS")
+    screenshot(ui.window, label + "-problems.png")
+    ui.command("Code: Problems")
 
 
-def command(value):
-    key("p", ("Control_L", "Shift_L"))
-    text(value)
-    key("Return")
-    time.sleep(0.3)
+def build_preview(ui, source, label):
+    def rendered(color, name):
+        screenshot(ui.window, name)
+        raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
+        choices = [(255, 0, 0), (229, 38, 38)] if color == "red" else [(0, 0, 255), (38, 38, 229)]
+        return sum(raw.count(bytes(rgb)) for rgb in choices) > 8000
+
+    ui.command("LaTeX: Build and preview PDF")
+    pdf = ui.project_root / "build/latex/main.pdf"
+    ui.wait(
+        lambda: pdf.exists() and rendered("red", label + "-preview.png"),
+        "Compiled PDF did not render",
+        timeout=120,
+    )
+    ui.open_file("main.tex")
+    updated = source.read_text().replace("\\color{red}", "\\color{blue}") + "\n% BLUE_BUILD\n"
+    ui.fill("source-editor", updated)
+    key("s", ("Control_L",))
+    ui.wait(lambda: source.read_text() == updated, "Second source version did not save")
+    ui.control("source-editor-saved")
+    ui.command("LaTeX: Build and preview PDF")
+    ui.wait(
+        lambda: rendered("blue", label + "-reloaded-pdf.png"),
+        "Existing PDF tab did not reload",
+        timeout=120,
+    )
+    ui.resize(850, 560)
+    screenshot(ui.window, label + "-compact.png")
+    ui.resize(1380, 900)
 
 
-def open_file(name):
-    command("Open file by path")
-    text(name)
-    key("Return")
-    time.sleep(0.4)
+def compiler_errors(ui, source, label):
+    ui.open_file("main.tex")
+    invalid = "\\documentclass{article}\n\\begin{document}\n\\undefinedRODEcommand\n\\end{document}\n% ERROR\n"
+    ui.fill("source-editor", invalid)
+    key("s", ("Control_L",))
+    ui.wait(lambda: source.read_text() == invalid, "Invalid source did not save")
+    ui.control("source-editor-saved")
+    ui.command("LaTeX: Build PDF")
+    build_log = ui.project_root / "build/latex/main.log"
+    ui.wait(
+        lambda: "Undefined control sequence" in build_log.read_text(errors="replace"),
+        "Compiler error was not captured",
+    )
+    ui.layout(
+        lambda state: any(
+            button["name"].startswith("latex-result:") and button["name"] != "latex-result:0"
+            for button in state["buttons"]
+        ),
+        "Compiler failure did not reach the UI",
+    )
+    screenshot(ui.window, label + "-compiler-errors.png")
 
 
 def run(remote=False, isolated=False):
@@ -110,158 +155,15 @@ def run(remote=False, isolated=False):
         (config / "app.ron").write_text(
             json.dumps({"project_preferences": json.dumps(preferences)})
         )
-        args = [str(BINARY), "--theme", "carbon"]
-        if remote:
-            tools = base / "tools"
-            tools.mkdir()
-            wrapper = tools / "ssh"
-            wrapper.write_text(
-                "#!/usr/bin/python3\nimport os,sys\nbinary="
-                + repr(shutil.which("ssh"))
-                + "\nos.execv(binary,[binary]+['-T' if a=='-tt' else a for a in sys.argv[1:]])\n"
-            )
-            wrapper.chmod(0o755)
-            environment["PATH"] = str(tools) + os.pathsep + os.environ["PATH"]
-            args += [
-                "--ssh",
-                "rode-test",
-                "--ssh-config",
-                os.environ["RODE_TEST_SSH_CONFIG"],
-                "--remote-path",
-                str(project),
-                "--sandbox",
-            ]
-        else:
-            args += [str(project)]
-            if isolated:
-                args += ["--sandbox"]
-        with (ARTIFACTS / (label + ".log")).open("w") as log:
-            process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
-            window = None
-            try:
-
-                def mapped():
-                    nonlocal window
-                    assert process.poll() is None
-                    match = re.search(
-                        r'(0x[0-9a-f]+) "RODE',
-                        subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                    )
-                    if match:
-                        window = int(match[1], 16)
-                    return match
-
-                wait_for(mapped, "No LaTeX window")
-                time.sleep(1)
-                focus_window(window)
-                if remote:
-                    wait_for(
-                        lambda: (
-                            "[SSH"
-                            in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-                            and "Opening project"
-                            not in subprocess.check_output(
-                                ["xwininfo", "-id", hex(window)], text=True
-                            )
-                        ),
-                        "SSH project did not become ready",
-                    )
-                    time.sleep(0.8)
-                open_file("main.tex")
-                key("End", ("Control_L",))
-                text("\n% UNSAVED\n")
-                command("LaTeX: Build and preview PDF")
-                pdf = project / "build/latex/main.pdf"
-                assert not pdf.exists(), "Build accepted a dirty source"
-                assert source.read_text() == original
-                key("s", ("Control_L",))
-                wait_for(
-                    lambda: "UNSAVED" in source.read_text(),
-                    "Source did not save after the build guard",
-                )
-                command("Code: Format document")
-                time.sleep(0.5)
-                assert "UNFORMATTED" in source.read_text(), (
-                    "Formatting wrote source behind the save guard"
-                )
-                key("s", ("Control_L",))
-                wait_for(
-                    lambda: "formatted" in source.read_text(),
-                    "Configured formatter did not update/save the buffer",
-                )
-                command("Code: Check document")
-                command("Code: Problems")
-                screenshot(window, label + "-problems.png")
-                command("Code: Problems")
-                command("LaTeX: Build and preview PDF")
-
-                def rendered(color, name):
-                    screenshot(window, name)
-                    raw = subprocess.check_output(
-                        ["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"]
-                    )
-                    choices = (
-                        [(255, 0, 0), (229, 38, 38)]
-                        if color == "red"
-                        else [(0, 0, 255), (38, 38, 229)]
-                    )
-                    return sum(raw.count(bytes(rgb)) for rgb in choices) > 8000
-
-                wait_for(
-                    lambda: pdf.exists() and rendered("red", label + "-preview.png"),
-                    "Compiled PDF did not render",
-                )
-                open_file("main.tex")
-                key("a", ("Control_L",))
-                text(
-                    source.read_text().replace("\\color{red}", "\\color{blue}") + "\n% BLUE_BUILD\n"
-                )
-                key("s", ("Control_L",))
-                wait_for(
-                    lambda: "BLUE_BUILD" in source.read_text(), "Second source version did not save"
-                )
-                command("LaTeX: Build and preview PDF")
-                wait_for(
-                    lambda: rendered("blue", label + "-reloaded-pdf.png"),
-                    "Existing PDF tab did not reload",
-                )
-                x11.XResizeWindow(display, window, 850, 560)
-                x11.XFlush(display)
-                time.sleep(0.4)
-                screenshot(window, label + "-compact.png")
-                x11.XResizeWindow(display, window, 1380, 900)
-                x11.XFlush(display)
-                open_file("main.tex")
-                key("a", ("Control_L",))
-                text(
-                    "\\documentclass{article}\n\\begin{document}\n\\undefinedRODEcommand\n\\end{document}\n% ERROR\n"
-                )
-                key("s", ("Control_L",))
-                wait_for(lambda: "ERROR" in source.read_text(), "Invalid source did not save")
-                command("LaTeX: Build PDF")
-                build_log = project / "build/latex/main.log"
-                wait_for(
-                    lambda: (
-                        build_log.exists()
-                        and "Undefined control sequence" in build_log.read_text(errors="replace")
-                    ),
-                    "Compiler error was not captured",
-                )
-                time.sleep(0.4)
-                screenshot(window, label + "-compiler-errors.png")
-                close_window(window, process)
-                print(
-                    label
-                    + ": LaTeX dirty guard, custom tools, diagnostics, build/preview, PDF reload, compact layout and compiler errors passed."
-                )
-            except Exception:
-                if window and process.poll() is None:
-                    screenshot(window, label + "-failure.png")
-                raise
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    process.wait(timeout=5)
+        args = project_args(project, remote=remote, sandbox=isolated or remote)
+        with native_session(args, environment, project, label) as ui:
+            guarded_tools(ui, source, original, label)
+            build_preview(ui, source, label)
+            compiler_errors(ui, source, label)
+        print(
+            label
+            + ": LaTeX protected sources, custom tools, build/preview, PDF reload and diagnostics passed."
+        )
 
 
 if os.environ.get("RODE_LATEX_UI_REMOTE_ONLY") != "1":

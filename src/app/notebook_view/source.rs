@@ -98,6 +98,17 @@ impl Editor<'_> {
                 edit.changed = true;
             }
         }
+        ui_probe::button(
+            ui,
+            &format!("notebook-cell:{}", cell.uid),
+            &response.response,
+        );
+        ui_probe::value(
+            ui,
+            &format!("notebook-cell:{}-value", cell.uid),
+            &response.response,
+            &cell.source,
+        );
         edit
     }
 }

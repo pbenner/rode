@@ -16,6 +16,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    NativeUI,
     assert_running,
     click,
     click_button,
@@ -163,6 +164,7 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             )
             processes.append(process)
             window = show_chat(process, log_path)
+            ui = NativeUI(window, process, log_path, base / "ui-state.json", root)
             key("p", ("Control_L", "Shift_L"))
             text("Agent: Running sessions")
             key("Return")
@@ -196,50 +198,41 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             # snapshot; Up must page them without claiming/restarting the chat.
             click(1280, 785)
             text("unsent after restart")
-            key("Home", ("Control_L",))
+            ui.value("agent-composer-value", "unsent after restart", focused=True)
 
-            def expect_draft(expected):
-                wait_for_button(
-                    window, process, log_path, base / "ui-state.json", "agent-prompt-recall-ready"
-                )
-
-                def copied():
-                    key("a", ("Control_L",))
-                    key("c", ("Control_L",))
-                    return (
-                        subprocess.check_output(
-                            ["xclip", "-selection", "clipboard", "-o"], timeout=3
-                        ).decode()
-                        == expected
-                    )
-
-                wait(copied, "Wrong recalled prompt: " + expected)
-                wait_for_button(
-                    window, process, log_path, base / "ui-state.json", "agent-prompt-recall-ready"
-                )
+            def start_of_draft():
+                before = ui.layout()["pass"]
                 key("Home", ("Control_L",))
+                ui.control("agent-composer-at-start", focused=True, after_pass=before)
+
+            def recall(direction, expected):
+                before = ui.layout()["pass"]
+                key(direction)
+                ui.control("agent-prompt-recall-ready", after_pass=before)
+                ui.value("agent-composer-value", expected, focused=True, after_pass=before)
+                # Recall runs before the text editor processes cursor keys. If
+                # Home and Up share a frame, Up can still see the old selection.
+                start_of_draft()
+
+            start_of_draft()
 
             # Cancel a deliberately stalled initial lookup. Send must become
             # usable while that metadata peer is still unable to initialize.
             for expected in ["queued across restart", "work"]:
-                key("Up")
-                expect_draft(expected)
+                recall("Up", expected)
             stalled = root / "delay-prompt-bootstrap"
             stalled.touch()
             key("Up")
             wait_for_button(
                 window, process, log_path, base / "ui-state.json", "agent-prompt-recall-loading"
             )
-            key("Down")
-            expect_draft("queued across restart")
-            key("Down")
-            expect_draft("unsent after restart")
+            recall("Down", "queued across restart")
+            recall("Down", "unsent after restart")
             wait_for_button(window, process, log_path, base / "ui-state.json", "agent-send")
             stalled.unlink()
             recalled = ["queued across restart", "work", *reversed(saved_prompts)]
             for expected in recalled:
-                key("Up")
-                expect_draft(expected)
+                recall("Up", expected)
             for expected in [
                 "same earlier prompt",
                 "same earlier prompt",
@@ -247,8 +240,7 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
                 "queued across restart",
                 "unsent after restart",
             ]:
-                key("Down")
-                expect_draft(expected)
+                recall("Down", expected)
             key("a", ("Control_L",))
             key("BackSpace")
             assert (root / "agent.pid").read_text() == pid, "Recall restarted the live backend"
