@@ -425,6 +425,14 @@ regression uploads and echoes 8 MiB without deploying a helper, so another test
 warming the remote helper cache cannot hide a cold-upload deadlock. Run it with
 `RODE_SSH_TEST_FILTER=native_proxyjump_uploads bash scripts/test-ssh.sh`.
 
+The SSH lifetime regressions cancel a master during stalled authentication and
+after connection, while requiring an independent master's channel to remain
+usable. Their owner subprocess starts the master on a short-lived worker thread
+so thread exit cannot masquerade as process exit. Linux pidfds pin only fixture
+processes for failure cleanup; unsupported hosts record a `pidfd` capability skip.
+Run the connected case with
+`RODE_SSH_TEST_FILTER=owner_exit_closes_only_its_authenticated_master bash scripts/test-ssh.sh`.
+
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
 
 The workspace fixture resolves tab, detach, dock and reattach controls by name,

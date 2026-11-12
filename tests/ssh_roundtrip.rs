@@ -9,6 +9,9 @@ mod fixture_process;
 mod installed_helpers;
 #[path = "ssh_roundtrip/large_files.rs"]
 mod large_files;
+#[cfg(target_os = "linux")]
+#[path = "ssh_roundtrip/lifetime.rs"]
+mod lifetime;
 #[path = "support/terminal.rs"]
 mod terminal_ui;
 #[path = "ssh_roundtrip/tunnels.rs"]

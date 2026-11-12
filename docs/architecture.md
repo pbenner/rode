@@ -482,6 +482,12 @@ The private cache is `~/.rode-host/host-<digest>`. A unique temporary directory 
 
 The gateway lasts for one SSH connection and owns transient work only. The session service owns persistent jobs and retains their original policy/environment. Session control from the gateway runs through a short-lived administration process with its captured runtime directory; it does not mutate the gateway's shared environment. Generic supervisors remain alive for their child lifetime, including bubblewrap's parent-death relationship.
 
+The desktop SSH master follows its creating process even when no login PTY is
+present. A parent-process check covers authentication, active channels and
+shutdown; loss of that owner cancels the master and releases its private runtime.
+It follows the process rather than the spawning worker thread. Persistent host
+jobs retain their separately configured service lifetimes.
+
 Codex cache deployment streams explicitly supplied pinned bytes, verifies private paths, sizes, digests, licenses and executable artifacts, then publishes under a stable lock. It performs no download or authentication. Vault coordination exposes the existing narrow mount/lease protocol, with passwords on stdin and unchanged project-lock guards.
 
 ### Slurm boundary

@@ -47,7 +47,11 @@ enum Request {
 
 /// Run the private native SSH master/channel entry point and return its exit code.
 /// Bound runtime shutdown so a blocked terminal stdin reader cannot retain a completed channel.
+/// Masters also follow their creating process when a non-PTY caller disappears.
 pub(super) fn cli(args: &[String]) -> Result<i32> {
+    // Capture the process owner before starting worker threads. A worker exiting
+    // must not end a connection while its process still owns the workspace.
+    let owner = unsafe { libc::getppid() };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -55,9 +59,20 @@ pub(super) fn cli(args: &[String]) -> Result<i32> {
     let result = runtime.block_on(async {
         match args {
             [mode, socket, digest] if mode == "--ssh-client-master" => {
-                let profile = read_profile(Path::new(socket), digest)?;
+                let socket = Path::new(socket);
+                let profile = read_profile(socket, digest)?;
+                let _directory = RuntimeDirectory(
+                    socket
+                        .parent()
+                        .context("Missing SSH runtime directory")?
+                        .into(),
+                );
                 profile.validate()?;
-                master(Path::new(socket), profile).await?;
+                tokio::select! {
+                    biased;
+                    _ = owner_exited(owner) => {},
+                    result = master(socket, profile) => result?,
+                }
                 Ok(0)
             }
             [mode, socket, pty, x11, command] if mode == "--ssh-client-channel" => {
@@ -74,6 +89,18 @@ pub(super) fn cli(args: &[String]) -> Result<i32> {
     // completed channel process alive after remote EOF or disconnect.
     runtime.shutdown_timeout(Duration::from_millis(100));
     result
+}
+
+/// Cancel authentication, active channels and shutdown when the creating process exits.
+/// Reparenting identifies owner loss without signalling a possibly reused numeric PID.
+async fn owner_exited(owner: libc::pid_t) {
+    let mut checks = tokio::time::interval(Duration::from_millis(250));
+    loop {
+        checks.tick().await;
+        if unsafe { libc::getppid() } != owner {
+            return;
+        }
+    }
 }
 
 fn read_profile(socket: &Path, digest: &str) -> Result<super::Profile> {
@@ -215,7 +242,6 @@ async fn master(socket: &Path, profile: super::Profile) -> Result<()> {
             && metadata.mode() & 0o077 == 0,
         "SSH runtime directory must be private"
     );
-    let _directory = RuntimeDirectory(directory.into());
     let config = config::Config::resolve(&profile, &profile.host, true)?;
     let x11 = if profile.x11_forwarding {
         forwarding::X11::prepare(&config)?
