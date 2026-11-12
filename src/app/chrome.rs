@@ -202,7 +202,7 @@ impl EditorApp {
                     self.toggle_terminal_persistence(ctx);
                 }
                 self.slurm_terminal_button(ui, ctx);
-                self.terminal_execution_control(ui, ctx);
+                self.terminal_new_menu(ui, ctx);
                 if ui.add(icons::IconButton::icon(Icon::Close, "Hide terminal; keep session running")
                     .icon_size(14.).min_size(egui::vec2(26., height))).clicked() {
                     self.show_terminal = false;
@@ -224,18 +224,8 @@ impl EditorApp {
                 {
                     self.open_sessions(ctx);
                 }
-                if wide && ui
-                    .add_enabled(!self.session_busy(), egui::Button::new("New").small().min_size(egui::vec2(0., height)))
-                    .on_hover_text("New terminal; use Persist to keep it running after exit")
-                    .clicked()
-                {
-                    self.new_terminal(ctx);
-                }
                 if !wide {
                     egui::containers::menu::MenuButton::from_button(egui::Button::new("More").small().min_size(egui::vec2(0., height))).ui(ui, |ui| {
-                        if ui.add_enabled(!self.session_busy(), egui::Button::new("New terminal")).clicked() {
-                            self.new_terminal(ctx); ui.close();
-                        }
                         if ui.button("Sessions and Slurm allocations").clicked() {
                             self.open_sessions(ctx); ui.close();
                         }

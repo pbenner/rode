@@ -136,13 +136,13 @@ def private_directory(path):
     return path
 
 
-def fixture_environment(base, **overrides):
+def fixture_environment(base, *, environment=None, **overrides):
     """Isolate each native fixture while preserving explicit tools and SSH settings."""
     base = Path(base).resolve()
     for name in ("home", "config", "data", "cache", "run"):
         private_directory(base / name)
     environment = dict(
-        os.environ,
+        os.environ if environment is None else environment,
         HOME=str(base / "home"),
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),

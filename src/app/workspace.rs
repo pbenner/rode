@@ -23,6 +23,7 @@ impl EditorApp {
         }
         self.extensions.reset_project();
         self.workbench.reset_project();
+        self.git_gutter.reset();
         self.terminal = None;
         self.session_context_reset();
         for client in [

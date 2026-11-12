@@ -519,7 +519,7 @@ For the ordinary Rust build job, run `RODE_TEST_RUFF="$PWD/target/test-tools/bin
 
 Check ordinary-suite CI parity with `env -u RODE_SESSION_HELPER -u RODE_TEST_SESSION_HELPER -u RODE_HOST_HELPER mise run test` to exclude developer helper overrides. Service-backed integration fixtures must select Cargo's matching `CARGO_BIN_EXE_rode-sessiond` in their child environment: a Rust test harness cannot serve the editor's `--session-service` entry point. An inherited helper override can hide missing fixture setup. Check successful agent completion before reading expected output files so startup failures retain their actual diagnostics.
 
-The Rust runner creates its private homes below `/tmp`, independently of the checkout path, to leave room for nested Unix-domain sockets. Set `RODE_TEST_TMPDIR` to another short, executable temporary directory when needed; a deep checkout must not lengthen socket names. `scripts/test-rust-tests.py` checks this with a real nested socket, and `scripts/test-ssh-fixture.py` checks host-helper isolation without changing tool precedence.
+The Rust runner creates its private homes below the configured temporary root, independently of the checkout path, to leave room for nested Unix-domain sockets. Set `RODE_TEST_TMPDIR` to a short, executable temporary directory when needed; the default follows Python's platform temporary-directory selection. `scripts/test-rust-tests.py` checks this with a real nested socket, and `scripts/test-ssh-fixture.py` checks host-helper isolation without changing tool precedence.
 
 For a complete development validation, use:
 
@@ -532,7 +532,13 @@ python3 scripts/validate.py
 The full command runs formatting/lint and harness regressions, builds the current
 checkout, publishes integration binaries from Cargo's reported paths, runs the
 ordinary Rust suite and doctests, then runs every fast and extended CI suite.
-Each UI suite gets its own display through `scripts/ui_display.py`. It installs
+Each UI suite gets its own display through `scripts/ui_display.py`. Every CI case
+also gets a fresh private HOME, XDG directories, session/vault roots and temporary
+directory, including older fixtures which replace only some environment fields.
+Explicit tool paths, Cargo/Rust toolchain locations and the enclosing SSH fixture
+remain available. Nested groups retain the same short `RODE_TEST_TMPDIR` parent
+while owning separate directories, so nesting does not grow Unix socket paths.
+Case homes are cleaned after execution. It installs
 nothing; provide the system prerequisites from `scripts/ci-deps.sh` and the
 explicit installed-tool overrides documented below. `--preflight` reports
 availability, not proof of exercised coverage. `--phases ui --suite documents`
@@ -550,12 +556,43 @@ interruptions stop further launches. A failed build prevents UI checks against
 stale binaries. Release packaging, opt-in upstream downloads and manual
 benchmarks remain separate workflows, not part of this development command.
 
+Schema version 2 adds `provenance` and `repeat_results`. Provenance records the
+Git revision, a digest of tracked and non-ignored untracked source (including
+dirty contents and executable bits), hashes of supplied application/test/tool
+binaries, and bounded tool-version probes. It stores no source diff or arbitrary
+environment. The source, artifacts and tool versions must remain unchanged
+during validation; a detected change fails the run and suppresses comparison
+rates. Existing/prebuilt binaries are identified by hash; omitting `build` does
+not establish that they were built from the recorded source.
+
+Use `mise run test-repeat`, or
+`python3 scripts/validate.py --phases build ui --suite reliability --repeat 3`,
+for three baseline repetitions. Each case/condition records all attempts, status
+counts, executed-command count and command failure rate. A mixture of pass and
+failure is an intermittent-failure candidate for investigation, not proof of a
+false positive. Failed attempts continue to fail the aggregate run. Blocked
+preflight and unexecuted cases have explicit records and never count as passes
+or enter the failure-rate denominator. Successful commands with optional skips
+remain labelled `passed-with-skips`; their success does not prove the omitted
+feature's reliability. A rate is absent if source/artifact/tool comparability
+could not be established. A few successful repetitions do not establish a
+long-term flake rate.
+Unreadable or missing case records are retained as unexecuted evidence and fail
+validation even if the enclosing command exited successfully. The parent suite's
+plan must match the expected cases; child reports cannot substitute for a missing
+parent. Malformed capability-skip records also fail validation, with their paths
+and diagnostics retained. Truncated metadata from an interrupted child cannot
+erase the other attempts or prevent independent later commands from running.
+
 Use `python3 scripts/validate.py --phases build ui --suite reliability --repeat 3 --stress`
 (`mise run test-stress`) to exercise delayed GUI input, paths containing spaces
 and quotes, and child umasks `0002`, `0077`, `0022`. Each repetition has distinct
 logs and fresh fixtures; any failed repetition fails the run. This is stress
-coverage, not a retry policy. Scheduled CI and manually requested full CI run
-the same reliability suite. It retains one complete workbench journey alongside
+coverage, not a retry policy. Different umasks are reported as separate
+conditions, so the three default stress repetitions provide one sample per
+condition. Scheduled CI and manually requested full CI run both baseline and
+stress repetitions; failure of either remains a failed job. The suite retains
+one complete workbench journey alongside
 independent picker cases; the document lanes run separate tools, Git and settings
 cases so an early failure cannot suppress the others.
 The tools suite also runs the 1x/2x DPI regression on its own larger private

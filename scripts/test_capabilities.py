@@ -8,6 +8,21 @@ import tempfile
 from pathlib import Path
 
 
+def read_skip_records(paths):
+    """Retain malformed/incomplete coverage evidence without aborting later commands."""
+    for path in sorted(paths):
+        try:
+            record = json.loads(path.read_text())
+            if not isinstance(record, dict) or not all(
+                isinstance(record.get(key), str) for key in ("capability", "reason", "test")
+            ):
+                raise ValueError("Expected capability, reason and test strings")
+        except (OSError, ValueError) as error:
+            yield path, None, str(error)
+        else:
+            yield path, record, None
+
+
 def skip(capability, reason, *, test=None, environment=None):
     """Record omitted coverage even when the test framework captures successful stdout."""
     env = os.environ if environment is None else environment

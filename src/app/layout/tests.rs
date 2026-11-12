@@ -409,9 +409,9 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                             );
                             if scene == "terminal" {
                                 let persist = button_frame(&output, "Persist: off").0;
-                                let mut labels = vec!["Slurm…", "Sandbox: —"];
+                                let mut labels = vec!["Slurm…", "New terminal"];
                                 if button_frames(&output, "More").is_empty() {
-                                    labels.extend(["Copy", "Sessions", "New", "Detach session"]);
+                                    labels.extend(["Copy", "Sessions", "Detach session"]);
                                 } else {
                                     labels.push("More");
                                 }

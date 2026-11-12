@@ -199,6 +199,15 @@ class FixtureSupportTests(unittest.TestCase):
             output = subprocess.check_output([launcher, *expected], text=True, timeout=10)
             self.assertEqual(json.loads(output), expected)
 
+    def test_explicit_environment_does_not_reintroduce_ambient_host_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, RODE_TEST_SSH_CONFIG="ambient-config"):
+                selected = {"PATH": os.environ["PATH"], "RODE_TEST_RUFF": "chosen-tool"}
+                environment = fixture_environment(directory, environment=selected)
+            self.assertNotIn("RODE_TEST_SSH_CONFIG", environment)
+            self.assertEqual(environment["RODE_TEST_RUFF"], "chosen-tool")
+            self.assertNotIn("HOME", selected)
+
 
 if __name__ == "__main__":
     unittest.main()

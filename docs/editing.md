@@ -1,5 +1,26 @@
 # Editing and shortcuts
 
+## Git line changes
+
+When the Git extension is enabled and Git is available on the project host, the
+source editor shows changes beside the line numbers: green bars for added lines,
+blue bars for modified lines, and red triangles where lines were deleted. Hover
+a marker for its meaning. Breakpoints and diagnostics keep their own gutter space.
+
+Markers compare the current buffer with the file in `HEAD`, including staged and
+unsaved edits. New, non-ignored files show added lines; ignored files and files
+outside a repository have no markers. Committing changes updates the baseline
+within a few seconds. Staging or saving alone does not clear the markers.
+CRLF and LF line endings compare equally, so Git-normalized checkouts do not
+produce whole-file markers.
+
+Reads run asynchronously on the local or SSH project host under the project's
+current access policy, independently of the Git panel's execution mode. Missing
+Git, disconnected hosts, denied reads and binary/non-regular Git entries omit
+markers. Source or baseline text above 1 MiB or 50,000 lines, and comparisons that
+exceed the background diff time budget, also omit markers to keep editing responsive.
+No Git hooks, external diff drivers or temporary index files are used.
+
 ## Explorer context menu
 
 Right-click a file, folder, or the project name in the explorer to open its menu. Press Escape to close the menu. Mutations run on supported Linux project hosts.

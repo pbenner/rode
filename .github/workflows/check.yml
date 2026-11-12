@@ -222,7 +222,7 @@ jobs:
     needs: build
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -237,7 +237,11 @@ jobs:
           install_args: python uv rust
       - run: tar -xzf target/ci-bundle.tar.gz
       - run: python3 scripts/ci.py time dependencies -- bash scripts/ci-deps.sh documents
-      - run: python3 scripts/validate.py --phases ui --suite reliability --repeat 3 --stress
+      - name: Measure unchanged-revision baseline repetitions
+        run: python3 scripts/validate.py --phases ui --suite reliability --repeat 3
+      - name: Exercise varied fixture conditions
+        if: ${{ !cancelled() }}
+        run: python3 scripts/validate.py --phases ui --suite reliability --repeat 3 --stress
       - uses: actions/upload-artifact@v7
         if: always()
         with:

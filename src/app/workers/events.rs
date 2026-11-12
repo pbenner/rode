@@ -73,6 +73,7 @@ pub(in crate::app) enum Job {
 
 /// Domain payloads cannot bypass the envelope generation check.
 pub(in crate::app) enum WorkspaceEvent {
+    GitGutter(super::super::git_gutter::Completed),
     Latex {
         token: u64,
         preview: bool,

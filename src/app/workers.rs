@@ -444,6 +444,7 @@ impl EditorApp {
 
     fn workspace_event(&mut self, event: WorkspaceEvent, ctx: &egui::Context) {
         match event {
+            WorkspaceEvent::GitGutter(result) => self.git_gutter.complete(result),
             WorkspaceEvent::NotebookParsed {
                 id,
                 version,

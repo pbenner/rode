@@ -15,7 +15,7 @@ from ssh_fixture import shell_probe
 remote = os.environ.get("RODE_EXECUTION_UI_REMOTE") == "1"
 expect_fallback = remote and os.environ.get("RODE_SSH_TEST_NO_BWRAP") == "1"
 label = "ssh-fallback" if expect_fallback else "ssh" if remote else "local"
-backend = os.environ.get("RODE_TEST_SANDBOX_BACKEND", "landlock")
+backend = "bwrap" if expect_fallback else os.environ.get("RODE_TEST_SANDBOX_BACKEND", "landlock")
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/execution-modes-ui" / label
 )
@@ -78,8 +78,21 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
     )
     config = Path(environment["XDG_DATA_HOME"]) / "rode"
     config.mkdir()
+    # CLI SSH profiles have their own defaults. Seed the exact host/project
+    # policy so the requested backend is exercised on local and remote hosts.
+    host = ["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""] if remote else None
+    project_key = json.dumps([host, str(root)], separators=(",", ":"), ensure_ascii=False)
+    sandbox = {"enabled": True, "backend": backend}
     (config / "app.ron").write_text(
-        json.dumps({"sandbox_defaults": json.dumps({"enabled": True, "backend": backend})})
+        json.dumps(
+            {
+                "sandbox_defaults": json.dumps(sandbox),
+                "project_preferences": json.dumps(
+                    {project_key: {"sandbox": sandbox}}, ensure_ascii=False
+                ),
+            },
+            ensure_ascii=False,
+        )
     )
 
     def git(*args, check=True):
@@ -198,6 +211,9 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
                 command("Toggle explorer")
             first = created(set())
             active = first["mode"].startswith("SANDBOX")
+            if active:
+                expected_backend = {"landlock": "Landlock", "bwrap": "bwrap"}[backend]
+                assert first["mode"] == "SANDBOX · " + expected_backend, first
             if expect_fallback:
                 assert first["mode"] == "NORMAL MODE · sandbox unavailable", first
             if not active:
@@ -208,7 +224,29 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
                     flush=True,
                 )
             first_pid = shell_check(first, "first", "blocked" if active else "host")
-            click("terminal-execution-mode")
+
+            def open_terminal_menu():
+                previous = {info["id"] for info in infos()}
+                click("terminal-new-menu")
+                state = wait_for_ui_state(
+                    process,
+                    log_path,
+                    state_path,
+                    lambda state: any(
+                        button["name"] == "terminal-new-sandbox" for button in state["buttons"]
+                    ),
+                    "New terminal did not offer explicit execution modes",
+                )
+                choices = {button["name"]: button for button in state["buttons"]}
+                assert choices["terminal-new-host"]["enabled"]
+                assert choices["terminal-new-sandbox"]["enabled"] == active
+                assert "terminal-execution-mode" not in choices
+                assert {info["id"] for info in infos()} == previous, (
+                    "Opening New terminal created a shell"
+                )
+
+            open_terminal_menu()
+            screenshot(window, "terminal-creation-menu.png")
             click("terminal-new-host")
             host = created({first["id"]})
             assert host["mode"] == "NORMAL MODE", host
@@ -229,12 +267,12 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
                 runner = created({first["id"], host["id"]})
                 assert runner["policy"] == first["policy"] != host["policy"]
                 assert len([i for i in infos() if i["alive"]]) == 3
-                click("terminal-execution-mode")
+                open_terminal_menu()
                 click("terminal-new-sandbox")
                 sandboxed = created({i["id"] for i in [first, host, runner]})
                 shell_check(sandboxed, "chosen-sandbox", "blocked")
                 # Leave the remembered new-terminal mode outside the sandbox.
-                click("terminal-execution-mode")
+                open_terminal_menu()
                 click("terminal-new-host")
                 host2 = created({i["id"] for i in [first, host, runner, sandboxed]})
                 shell_check(host2, "chosen-host", "host")

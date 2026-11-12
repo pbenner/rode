@@ -75,3 +75,7 @@ run = "python3 scripts/validate.py"
 [tasks."test-stress"]
 description = "Repeat native UI reliability checks with private homes, varied umasks and delayed frames"
 run = "python3 scripts/validate.py --phases build ui --suite reliability --repeat 3 --stress"
+
+[tasks."test-repeat"]
+description = "Measure repeated native cases under identical settings, retaining every failure"
+run = "python3 scripts/validate.py --phases build ui --suite reliability --repeat 3"

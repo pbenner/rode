@@ -15,7 +15,13 @@ import tempfile
 import time
 from pathlib import Path
 
-from test_capabilities import inventory
+from fixture_support import (
+    fixture_directory,
+    fixture_environment,
+    private_directory,
+    temporary_root,
+)
+from test_capabilities import inventory, read_skip_records
 
 ROOT = Path(__file__).resolve().parent.parent
 FAST = ["workspace", "agents", "terminals", "ssh"]
@@ -127,6 +133,7 @@ SUITES = {
         ui("navigation"),
         ui("explorer"),
         ui("git-identity"),
+        ui("git-gutter"),
         ui("git-auth"),
         ui("shortcut-styles"),
         ui("terminal-keys"),
@@ -182,6 +189,7 @@ SUITES = {
     "remote-smoke": [
         ui("execution-modes", RODE_EXECUTION_UI_REMOTE="1"),
         ui("git-identity", RODE_GIT_IDENTITY_UI_REMOTE="1"),
+        ui("git-gutter", RODE_GIT_GUTTER_UI_REMOTE="1"),
         ui("project", RODE_PROJECT_UI_CASE="ssh"),
         ui("explorer", RODE_EXPLORER_UI_REMOTE="1"),
         ui("git-auth", RODE_GIT_AUTH_UI_REMOTE="1"),
@@ -271,6 +279,7 @@ SUITES = {
         ui("notebooks", RODE_NOTEBOOK_UI_REMOTE_ONLY="1"),
     ],
     "sandbox": [
+        ui("git-gutter", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         ui("execution-modes", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("files", RODE_TEST_REQUIRE_SANDBOX="1"),
@@ -438,7 +447,18 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
         # heading on Actions. Preserve the raw artifact, flatten console output.
         console = (start_output + rest).decode(errors="replace")
         print(console.replace("::group::", "").replace("::endgroup::", ""), flush=True)
-    skipped = [json.loads(path.read_text()) for path in sorted(skip_directory.glob("*.json"))]
+    skipped, metadata_errors = [], []
+    for path, record, error in read_skip_records(skip_directory.glob("*.json")):
+        if error:
+            metadata_errors.append(dict(report=str(path), error=error))
+            message = f"Invalid coverage metadata in {path}: {error}\n"
+            print(message, end="", flush=True)
+            with logfile.open("a") as output:
+                output.write(message)
+        else:
+            skipped.append(record)
+    if metadata_errors and not code:
+        code, state = 1, "failed"
     if not code and skipped:
         state = "passed-with-skips"
         for omitted in skipped:
@@ -463,6 +483,7 @@ def measure(label, command, env=None, timeout=300, group="commands", *, umask=No
         platform=platform.platform(),
         environment={key: environment[key] for key in CONTEXT_ENV if key in environment},
         skipped=skipped,
+        metadata_errors=metadata_errors,
         umask=umask,
     )
     (directory / f"{label}.json").write_text(json.dumps(record, indent=2) + "\n")
@@ -536,11 +557,43 @@ def suite_environment(name):
     return env
 
 
+def suite_cases(name):
+    """Keep case identities shared by execution and repeat reporting."""
+    for index, (command, overrides, timeout) in enumerate(SUITES[name], 1):
+        entry = command[1] if command[0] in (sys.executable, "bash") else command[0]
+        if command[1:2] == ["scripts/ui_display.py"]:
+            entry = command[command.index("--") + 2]
+        if command[1:3] == ["scripts/rust_tests.py", "--runner"]:
+            entry = command[3]
+        yield f"{index:02d}-{Path(entry).stem}", command, overrides, timeout
+
+
 def run_suite(name):
-    """Run independent cases after failures, retaining a failed aggregate result."""
-    env = suite_environment(name)
+    """Isolate case homes, retain blocked preflights and run independent cases after failures."""
     directory = results_root() / name
     directory.mkdir(parents=True, exist_ok=True)
+    cases = list(suite_cases(name))
+    report = dict(
+        suite=name,
+        status="running",
+        planned=[label for label, *_ in cases],
+        completed=[],
+        failed=[],
+    )
+
+    def write_report():
+        (directory / "suite.json").write_text(json.dumps(report, indent=2) + "\n")
+
+    def blocked(reason):
+        report.update(status="blocked", reason=str(reason))
+        write_report()
+        raise SystemExit(reason)
+
+    write_report()
+    try:
+        env = suite_environment(name)
+    except SystemExit as error:
+        blocked(error.code)
     if name in FAST + EXTENDED + ["reliability"]:
         capabilities = inventory(env)
         (directory / "capabilities.json").write_text(json.dumps(capabilities, indent=2) + "\n")
@@ -549,29 +602,37 @@ def run_suite(name):
             key for key in required if key in capabilities and not capabilities[key]["available"]
         ]
         if missing:
-            raise SystemExit("Missing required suite capabilities: " + ", ".join(missing))
-    failed = []
-    for index, (command, overrides, timeout) in enumerate(SUITES[name], 1):
-        # Name Python/shell fixtures in logs and job summaries, rather than
-        # reporting every UI failure as another indistinguishable "python3".
-        entry = command[1] if command[0] in (sys.executable, "bash") else command[0]
-        if command[1:2] == ["scripts/ui_display.py"]:
-            entry = command[command.index("--") + 2]
-        if command[1:3] == ["scripts/rust_tests.py", "--runner"]:
-            entry = command[3]
-        label = f"{index:02d}-{Path(entry).stem}"
+            blocked("Missing required suite capabilities: " + ", ".join(missing))
+    for label, command, overrides, timeout in cases:
         try:
-            measure(label, command, env | overrides, timeout, name)
+            # Legacy fixtures which override only part of HOME/XDG still cannot
+            # touch the developer's preferences or reuse another case's service.
+            with fixture_directory(prefix="ct-", awkward=False) as home:
+                environment = fixture_environment(home, environment=env | overrides)
+                for key, fallback in (
+                    ("CARGO_HOME", Path.home() / ".cargo"),
+                    ("RUSTUP_HOME", Path.home() / ".rustup"),
+                ):
+                    environment.setdefault(key, str(fallback))
+                environment["TMPDIR"] = str(private_directory(home / "t"))
+                # Nested SSH groups use the same short parent for their own
+                # private fixtures, rather than nesting Unix socket paths.
+                environment.setdefault("RODE_TEST_TMPDIR", str(temporary_root()))
+                measure(label, command, environment, timeout, name)
         except SystemExit as error:
             # Deadlines fail one case after cleanup; interruptions stop launches.
             if error.code in (130, 143):
+                report["completed"].append(label)
+                report.update(status="interrupted", reason="Interrupted during " + label)
+                write_report()
                 raise
-            failed.append(label)
-    (directory / "suite.json").write_text(
-        json.dumps(dict(suite=name, failed=failed), indent=2) + "\n"
-    )
-    if failed:
-        raise SystemExit(f"{name}: failed cases: {', '.join(failed)}")
+            report["failed"].append(label)
+        report["completed"].append(label)
+        write_report()
+    report["status"] = "failed" if report["failed"] else "passed"
+    write_report()
+    if report["failed"]:
+        raise SystemExit(f"{name}: failed cases: {', '.join(report['failed'])}")
 
 
 def publish_executable(source, destination):

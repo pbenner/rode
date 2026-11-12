@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 
 import ci
-from test_capabilities import inventory
+import validation_report
+from test_capabilities import inventory, read_skip_records
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,6 +71,12 @@ def main(arguments=None):
     if args.preflight:
         print(json.dumps(capabilities, indent=2))
         return 0
+    source_before = validation_report.source_identity(ROOT)
+    source_after = None
+    artifacts_before = None
+    artifacts_after = None
+    tools = validation_report.toolchain(env)
+    tools_after = None
     output = (
         ROOT / "target/ci-results" / (time.strftime("validation-%Y%m%d-%H%M%S-") + str(os.getpid()))
     )
@@ -78,6 +85,7 @@ def main(arguments=None):
     env["RODE_CI_RESULTS_DIR"] = str(output)
     (output / "capabilities.json").write_text(json.dumps(capabilities, indent=2) + "\n")
     results = []
+    ui_runs = []
 
     def run(label, command, *, overrides=None, timeout=900, mask=None):
         try:
@@ -92,16 +100,38 @@ def main(arguments=None):
         return code == 0
 
     def write_report(*, finished=False):
-        skipped = []
-        for path in output.rglob("*-skips/*.json"):
-            skipped.append(json.loads(path.read_text()) | {"report": str(path.relative_to(output))})
+        skipped, metadata_errors = [], []
+        for path, record, error in read_skip_records(output.rglob("*-skips/*.json")):
+            location = str(path.relative_to(output))
+            if error:
+                metadata_errors.append(dict(report=location, error=error))
+            else:
+                skipped.append(record | {"report": location})
+        source_unchanged = (
+            source_before == source_after
+            if source_before.get("available") and source_after is not None
+            else None
+        )
+        artifacts_unchanged = (
+            artifacts_before == artifacts_after if artifacts_after is not None else None
+        )
+        toolchain_unchanged = tools == tools_after if tools_after is not None else None
+        comparable = (
+            source_unchanged is True and artifacts_unchanged is True and toolchain_unchanged is True
+        )
+        repeated = validation_report.repeats(output, ui_runs, comparable=comparable)
+        records_complete = not metadata_errors and not any(
+            row["counts"].get("not-run", 0) for row in repeated
+        )
         report = dict(
-            schema_version=1,
+            schema_version=2,
             finished=finished,
             results=results,
             capabilities=capabilities,
             skipped=skipped,
-            commands_passed=all(item["exit_code"] == 0 for item in results),
+            metadata_errors=metadata_errors,
+            commands_passed=all(item["exit_code"] == 0 for item in results) and records_complete,
+            records_complete=records_complete,
             unavailable_capabilities=[
                 name for name, item in capabilities.items() if not item["available"]
             ],
@@ -109,9 +139,23 @@ def main(arguments=None):
             suites=args.suite or ci.FAST + ci.EXTENDED,
             repeat=args.repeat,
             stress=args.stress,
+            provenance=dict(
+                source_before=source_before,
+                source_after=source_after,
+                source_unchanged=source_unchanged,
+                artifacts_before=artifacts_before,
+                artifacts_after=artifacts_after,
+                artifacts_unchanged=artifacts_unchanged,
+                toolchain=tools,
+                toolchain_after=tools_after,
+                toolchain_unchanged=toolchain_unchanged,
+            ),
+            repeat_results=repeated,
+            ui_runs=ui_runs,
             exclusions=["Release packaging", "Opt-in upstream downloads", "Manual benchmarks"],
         )
         (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
+        return report
 
     if "lint" in args.phases:
         commands = [
@@ -227,9 +271,20 @@ def main(arguments=None):
             ],
         )
     if "ui" in args.phases and built:
+        artifacts_before = validation_report.artifact_identity(ROOT, env, ci.TEST_BINARIES)
         for iteration in range(1, args.repeat + 1):
             for suite in args.suite or ci.FAST + ci.EXTENDED:
                 label = f"{iteration:02d}-{suite}"
+                mask = (0o002, 0o077, 0o022)[(iteration - 1) % 3] if args.stress else None
+                ui_runs.append(
+                    dict(
+                        name=label,
+                        suite=suite,
+                        iteration=iteration,
+                        condition=f"stress-umask-{mask:03o}" if args.stress else "baseline",
+                        planned=[label for label, *_ in ci.suite_cases(suite)],
+                    )
+                )
                 overrides = {"RODE_CI_RESULTS_DIR": str(output / label)}
                 if args.stress:
                     overrides.update(RODE_TEST_AWKWARD_PATHS="1", RODE_TEST_SLOW_UI="1")
@@ -246,11 +301,46 @@ def main(arguments=None):
                     ],
                     overrides=overrides,
                     timeout=3600,
-                    mask=(0o002, 0o077, 0o022)[(iteration - 1) % 3] if args.stress else None,
+                    mask=mask,
                 )
-    write_report(finished=True)
+        artifacts_after = validation_report.artifact_identity(ROOT, env, ci.TEST_BINARIES)
+    source_after = validation_report.source_identity(ROOT)
+    tools_after = validation_report.toolchain(env)
+    if source_before.get("available") and source_after != source_before:
+        results.append(
+            dict(
+                name="source-changed",
+                exit_code=1,
+                error="Checkout changed during validation; repeat results are not comparable.",
+            )
+        )
+    if artifacts_after is not None and artifacts_after != artifacts_before:
+        results.append(
+            dict(
+                name="artifacts-changed",
+                exit_code=1,
+                error="Test binaries changed during validation; repeat results are not comparable.",
+            )
+        )
+    if tools_after != tools:
+        results.append(
+            dict(
+                name="toolchain-changed",
+                exit_code=1,
+                error="Tool versions changed during validation; repeat results are not comparable.",
+            )
+        )
+    report = write_report(finished=True)
+    if ui_runs:
+        summary = validation_report.repeat_summary(report["repeat_results"])
+        (output / "repeats.md").write_text(summary)
+        if path := os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(path, "a") as destination:
+                destination.write("\n" + summary)
     print(f"Validation report: {output / 'summary.json'}", flush=True)
-    return int(any(result["exit_code"] != 0 for result in results))
+    if not report["records_complete"]:
+        print("Incomplete case records; unexecuted or unreadable evidence cannot pass validation.")
+    return int(not report["commands_passed"])
 
 
 if __name__ == "__main__":

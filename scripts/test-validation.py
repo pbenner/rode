@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,10 +12,17 @@ from unittest.mock import patch
 
 import ci
 import validate
+import validation_report
+from fixture_support import temporary_root
 from test_capabilities import skip
 
 
 class ValidationTests(unittest.TestCase):
+    def setUp(self):
+        versions = patch.object(validation_report, "toolchain", return_value={})
+        versions.start()
+        self.addCleanup(versions.stop)
+
     def test_interruption_records_the_failed_command_without_launching_later_cases(self):
         with tempfile.TemporaryDirectory() as directory:
             with (
@@ -67,6 +75,41 @@ class ValidationTests(unittest.TestCase):
                 self.assertEqual(second["status"], "passed")
                 self.assertEqual(second["skipped"], [])
 
+    def test_truncated_skip_record_fails_its_command_and_keeps_the_next_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = "import os,pathlib; pathlib.Path(os.environ['RODE_TEST_SKIP_DIR'],'partial.json').write_text('{')"
+            with patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory):
+                with self.assertRaises(SystemExit) as failed:
+                    ci.measure("partial-skip", [sys.executable, "-c", source])
+                self.assertEqual(failed.exception.code, 1)
+                following = ci.measure("following", [sys.executable, "-c", "pass"])
+            record = json.loads((Path(directory) / "commands/partial-skip.json").read_text())
+            self.assertEqual(record["status"], "failed")
+            self.assertTrue(record["metadata_errors"])
+            self.assertEqual(following["status"], "passed")
+
+    def test_validation_retains_truncated_skip_diagnostics_without_aborting(self):
+        with tempfile.TemporaryDirectory() as directory:
+
+            def measure(label, command, environment, *_args, **_kwargs):
+                if label == "rust-format":
+                    skips = Path(environment["RODE_CI_RESULTS_DIR"]) / "commands/fixture-skips"
+                    skips.mkdir(parents=True)
+                    (skips / "partial.json").write_text("{")
+
+            with (
+                patch.object(validate, "ROOT", Path(directory)),
+                patch.object(validate, "inventory", return_value={}),
+                patch.object(ci, "measure", side_effect=measure),
+                patch.dict(os.environ),
+            ):
+                self.assertEqual(validate.main(["--phases", "lint"]), 1)
+            report = json.loads(next(Path(directory).rglob("summary.json")).read_text())
+            self.assertTrue(report["finished"])
+            self.assertFalse(report["records_complete"])
+            self.assertTrue(report["metadata_errors"])
+            self.assertGreater(len(report["results"]), 1)
+
     def test_runtime_lane_rejects_missing_capabilities_before_launching_tests(self):
         with tempfile.TemporaryDirectory() as directory:
             with (
@@ -89,6 +132,76 @@ class ValidationTests(unittest.TestCase):
                     ci.run_suite("runtimes")
                 run.assert_not_called()
             self.assertTrue((Path(directory) / "runtimes/capabilities.json").is_file())
+            report = json.loads((Path(directory) / "runtimes/suite.json").read_text())
+            self.assertEqual(report["status"], "blocked")
+            self.assertIn("jupyter", report["reason"])
+            self.assertEqual(report["completed"], [])
+            self.assertTrue(report["planned"])
+
+    def test_missing_bundle_records_blocked_suite_and_replaces_an_older_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "workspace"
+            output.mkdir()
+            (output / "suite.json").write_text('{"suite":"workspace","status":"passed"}')
+            with (
+                patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory),
+                patch.object(ci, "suite_environment", side_effect=SystemExit("Missing binary")),
+                patch.object(ci, "measure") as run,
+            ):
+                with self.assertRaisesRegex(SystemExit, "Missing binary"):
+                    ci.run_suite("workspace")
+            report = json.loads((output / "suite.json").read_text())
+            self.assertEqual(report["status"], "blocked")
+            self.assertEqual(report["completed"], [])
+            run.assert_not_called()
+
+    def test_each_case_has_private_state_without_changing_the_parent_or_toolchain_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            code = (
+                "import os,pathlib,stat; "
+                "h=pathlib.Path.home(); assert not (h/'previous-case').exists(); "
+                "(h/'previous-case').write_text('owned'); "
+                "assert stat.S_IMODE(h.stat().st_mode)==0o700; "
+                "assert os.environ['CARGO_HOME']=='/explicit/toolchain'; "
+                "assert 'CODEX_HOME' not in os.environ; print(str(h))"
+            )
+            with (
+                patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory),
+                patch.dict(ci.SUITES, fixture=[([sys.executable, "-c", code], {}, 5)] * 2),
+                patch.object(
+                    ci,
+                    "suite_environment",
+                    return_value=dict(
+                        os.environ, CARGO_HOME="/explicit/toolchain", CODEX_HOME="/caller/codex"
+                    ),
+                ),
+                patch.object(ci, "ROOT", root),
+            ):
+                before = dict(os.environ)
+                ci.run_suite("fixture")
+                self.assertEqual(before, dict(os.environ))
+            homes = [Path(p.read_text().strip()) for p in sorted((root / "fixture").glob("*.log"))]
+            self.assertEqual(len(set(homes)), 2)
+            self.assertTrue(all(not home.exists() for home in homes))
+
+    def test_nested_suites_keep_the_short_shared_fixture_parent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.dict(os.environ, RODE_CI_RESULTS_DIR=directory),
+                patch.dict(ci.SUITES, fixture=[([sys.executable, "-c", "pass"], {}, 5)]),
+                patch.object(ci, "suite_environment", return_value=dict(os.environ)),
+                patch.object(ci, "measure") as run,
+            ):
+                # Exercise platform default selection instead of an explicit override.
+                os.environ.pop("RODE_TEST_TMPDIR", None)
+                parent = temporary_root()
+                selected = dict(os.environ)
+                with patch.object(ci, "suite_environment", return_value=selected):
+                    ci.run_suite("fixture")
+                environment = run.call_args.args[2]
+            self.assertEqual(environment["RODE_TEST_TMPDIR"], str(parent))
+            self.assertNotEqual(environment["TMPDIR"], str(parent))
 
     def test_optional_coverage_survives_captured_output_and_required_coverage_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -211,6 +324,223 @@ class ValidationTests(unittest.TestCase):
             self.assertEqual(snapshot.read_bytes(), source.read_bytes())
             self.assertEqual(snapshot.stat().st_mode & 0o777, 0o755)
             self.assertEqual(source.stat().st_mode & 0o777, 0o775)
+
+
+class ProvenanceTests(unittest.TestCase):
+    def test_identity_includes_dirty_untracked_and_executable_source_but_not_ignored_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git_environment = dict(
+                os.environ,
+                GIT_CONFIG_GLOBAL=os.devnull,
+                GIT_CONFIG_NOSYSTEM="1",
+                GIT_CONFIG_COUNT="0",
+            )
+            subprocess.run(["git", "init", "-q", str(root)], check=True, env=git_environment)
+            (root / ".gitignore").write_text("target/\n")
+            source = root / "source.py"
+            source.write_text("original source")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True, env=git_environment)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-qm",
+                    "fixture",
+                ],
+                check=True,
+                env=git_environment,
+            )
+            initial = validation_report.source_identity(root)
+            self.assertTrue(initial["available"])
+            self.assertFalse(initial["dirty"])
+            (root / "target").mkdir()
+            (root / "target/results.json").write_text("ignored")
+            self.assertEqual(validation_report.source_identity(root), initial)
+            source.write_text("changed source")
+            changed = validation_report.source_identity(root)
+            self.assertEqual(changed["head"], initial["head"])
+            self.assertNotEqual(changed["sha256"], initial["sha256"])
+            self.assertTrue(changed["dirty"])
+            source.chmod(0o755)
+            executable = validation_report.source_identity(root)
+            self.assertNotEqual(executable["sha256"], changed["sha256"])
+            (root / "untracked.py").write_text("new source")
+            untracked = validation_report.source_identity(root)
+            self.assertNotEqual(untracked["sha256"], executable["sha256"])
+            self.assertNotIn("new source", json.dumps(untracked))
+
+    def test_changing_checkout_or_artifacts_fails_validation_even_when_commands_pass(self):
+        for source_changed in (False, True):
+            with (
+                self.subTest(source_changed=source_changed),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                identity = dict(available=True, sha256="before")
+                after = dict(available=True, sha256="after") if source_changed else identity
+                with (
+                    patch.object(validate, "ROOT", Path(directory)),
+                    patch.object(validate, "inventory", return_value={}),
+                    patch.object(validate, "publish_helper"),
+                    patch.object(ci, "measure"),
+                    patch.object(validation_report, "toolchain", return_value={}),
+                    patch.object(
+                        validation_report, "source_identity", side_effect=[identity, after]
+                    ),
+                    patch.object(
+                        validation_report,
+                        "artifact_identity",
+                        side_effect=[
+                            {"binary": "before"},
+                            {"binary": "before" if source_changed else "after"},
+                        ],
+                    ),
+                    patch.dict(os.environ),
+                ):
+                    self.assertEqual(validate.main(["--phases", "ui", "--suite", "reliability"]), 1)
+                report = json.loads(next(Path(directory).rglob("summary.json")).read_text())
+                self.assertFalse(report["commands_passed"])
+                self.assertEqual(
+                    report["results"][-1]["name"],
+                    "source-changed" if source_changed else "artifacts-changed",
+                )
+                self.assertTrue(
+                    all(row["command_failure_rate"] is None for row in report["repeat_results"])
+                )
+
+
+class RepeatReportTests(unittest.TestCase):
+    def run_record(self, root, iteration, status, *, condition="baseline"):
+        label = f"{iteration:02d}-fixture"
+        directory = root / label / "fixture"
+        directory.mkdir(parents=True)
+        completed = [] if status == "blocked" else ["01-case"]
+        suite_status = (
+            "blocked"
+            if status == "blocked"
+            else "passed"
+            if status.startswith("passed")
+            else "failed"
+        )
+        (directory / "suite.json").write_text(
+            json.dumps(
+                dict(suite="fixture", status=suite_status, planned=["01-case"], completed=completed)
+            )
+        )
+        # A stale successful case must not count when this invocation was blocked.
+        (directory / "01-case.json").write_text(
+            json.dumps(dict(status="passed" if status == "blocked" else status))
+        )
+        return dict(
+            name=label,
+            suite="fixture",
+            iteration=iteration,
+            condition=condition,
+            planned=["01-case"],
+        )
+
+    def test_mixed_results_preserve_failure_and_exclude_blocked_coverage_from_rate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = [
+                self.run_record(root, i, status)
+                for i, status in enumerate(
+                    ["failed", "passed", "timeout", "blocked", "passed-with-skips"], 1
+                )
+            ]
+            (result,) = validation_report.repeats(root, runs, comparable=True)
+            self.assertEqual(result["executed"], 4)
+            self.assertEqual(result["command_failure_rate"], 0.5)
+            self.assertEqual(result["counts"]["blocked"], 1)
+            self.assertTrue(result["intermittent_failure_candidate"])
+            (unknown,) = validation_report.repeats(root, runs, comparable=False)
+            self.assertIsNone(unknown["command_failure_rate"])
+            self.assertFalse(unknown["intermittent_failure_candidate"])
+
+    def test_stress_conditions_are_separate_and_missing_launcher_is_not_a_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = [
+                self.run_record(root, 1, "failed", condition="stress-umask-002"),
+                self.run_record(root, 2, "passed", condition="stress-umask-077"),
+                dict(
+                    name="03-fixture",
+                    suite="fixture",
+                    iteration=3,
+                    condition="baseline",
+                    planned=["01-case"],
+                ),
+            ]
+            rows = validation_report.repeats(root, runs, comparable=True)
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(not row["intermittent_failure_candidate"] for row in rows))
+            missing = next(row for row in rows if row["condition"] == "baseline")
+            self.assertEqual(missing["counts"], {"not-run": 1})
+            self.assertIsNone(missing["command_failure_rate"])
+
+    def test_truncated_records_do_not_erase_other_attempts_or_count_as_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = [self.run_record(root, i, "passed") for i in range(1, 5)]
+            (root / runs[1]["name"] / "fixture/01-case.json").write_text('{"status":')
+            (root / runs[2]["name"] / "fixture/suite.json").write_text('{"suite":')
+            (root / runs[3]["name"] / "fixture/suite.json").write_text("{}")
+            (result,) = validation_report.repeats(root, runs, comparable=True)
+            self.assertEqual(result["counts"], {"passed": 1, "not-run": 3})
+            self.assertEqual(result["executed"], 1)
+            self.assertTrue(all("error" in attempt for attempt in result["attempts"][1:]))
+
+    def test_suite_plan_cannot_hide_expected_cases_or_replace_the_parent_report(self):
+        for mutation in ("empty-plan", "missing-parent", "wrong-types"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run = self.run_record(root, 1, "passed")
+                path = root / run["name"] / "fixture/suite.json"
+                suite = json.loads(path.read_text())
+                if mutation == "missing-parent":
+                    child = path.parent.parent / "child"
+                    child.mkdir()
+                    (child / "suite.json").write_text(json.dumps(suite | {"suite": "child"}))
+                    path.unlink()
+                else:
+                    suite.update(planned=[], completed=[])
+                    if mutation == "wrong-types":
+                        suite.update(planned=[None], completed=[{}])
+                    path.write_text(json.dumps(suite))
+                rows = validation_report.repeats(root, [run], comparable=True)
+                parent = next(row for row in rows if row["case"] == "fixture/01-case")
+                self.assertEqual(parent["counts"], {"not-run": 1})
+                self.assertIsNone(parent["command_failure_rate"])
+
+    def test_successful_parent_without_case_records_cannot_pass_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.object(validate, "ROOT", Path(directory)),
+                patch.object(validate, "inventory", return_value={}),
+                patch.object(validate, "publish_helper"),
+                patch.object(ci, "measure"),
+                patch.object(validation_report, "toolchain", return_value={}),
+                patch.object(
+                    validation_report,
+                    "source_identity",
+                    return_value=dict(available=True, sha256="same"),
+                ),
+                patch.object(validation_report, "artifact_identity", return_value={}),
+                patch.dict(os.environ),
+            ):
+                self.assertEqual(validate.main(["--phases", "ui", "--suite", "reliability"]), 1)
+            report = json.loads(next(Path(directory).rglob("summary.json")).read_text())
+            self.assertFalse(report["commands_passed"])
+            self.assertFalse(report["records_complete"])
+            self.assertTrue(all(result["exit_code"] == 0 for result in report["results"]))
 
 
 if __name__ == "__main__":

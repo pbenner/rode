@@ -41,6 +41,7 @@ mod explorer;
 mod extensions;
 mod file_browser;
 mod frame;
+mod git_gutter;
 mod icons;
 mod image_view;
 mod latex_tools;
@@ -191,6 +192,7 @@ pub struct EditorApp {
     extensions: extensions::Extensions,
     workspace: Option<Workspace>,
     documents: documents::Documents,
+    git_gutter: git_gutter::State,
     /// Cleanup ownership survives notebook view replacement and tab removal.
     notebook_shutdowns: notebook_view::Shutdowns,
     /// Captured host/project generation; old workers may finish but cannot update this context.
@@ -316,6 +318,7 @@ impl EditorApp {
             extensions: extensions::Extensions::load(storage),
             workspace: None,
             documents: Default::default(),
+            git_gutter: Default::default(),
             notebook_shutdowns: Default::default(),
             generation: 0,
             explorer_state: Default::default(),
@@ -1236,6 +1239,7 @@ impl eframe::App for EditorApp {
         self.poll_notebooks(ctx);
         self.marp_tick();
         self.workbench_tick(ctx);
+        self.git_gutter_tick(ctx);
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
         self.handle_close_request(ctx);

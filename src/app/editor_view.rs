@@ -112,6 +112,7 @@ impl EditorApp {
                 let debug_verified=self.documents[self.documents.active_index()].path.as_ref().and_then(|p|self.debugger.client.as_ref().and_then(|c|c.breakpoints.get(p))).map_or(&[][..],Vec::as_slice);
                 let themes = &self.themes;
                 let diagnostics = self.document_issues(self.documents.active().unwrap());
+                let git_gutter = &self.git_gutter;
                 let editing=&mut self.navigation.editing;
                 let doc = self.documents.active_mut().unwrap();
                 editing.bind(doc.id,shortcut_style);
@@ -257,6 +258,7 @@ impl EditorApp {
                                 Stroke::new(1.0_f32, palette.border),
                             );
                             if !output.response.changed() {
+                                git_gutter.paint(ui, doc, gutter, line_height, palette);
                                 for (issue_index, issue) in diagnostics
                                     .iter()
                                     .enumerate()

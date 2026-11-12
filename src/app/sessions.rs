@@ -1233,31 +1233,29 @@ impl EditorApp {
         }
     }
 
-    /// Show the selected shell's actual policy; choosing another mode opens a new
-    /// shell and leaves the old session, jobs and persistence setting intact.
-    pub(in crate::app) fn terminal_execution_control(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-    ) {
+    /// One creation menu always requires an explicit execution mode. The current
+    /// shell's policy stays read-only in its title and in the menu's details.
+    pub(in crate::app) fn terminal_new_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mode = self.sessions.active.as_ref().map(|meta| meta.mode.as_str());
-        let label = match mode {
-            Some(mode) if mode.starts_with("SANDBOX") && mode.contains("Landlock") => {
-                "Sandbox: Landlock"
-            }
-            Some(mode) if mode.starts_with("SANDBOX") => "Sandbox: bwrap",
-            Some(mode) if mode.starts_with("NORMAL") => "Sandbox: off",
-            _ if self.ssh_master.is_some() && self.terminal.is_none() => "SSH login",
-            _ => "Sandbox: —",
-        };
         let detail = mode.unwrap_or("No project terminal attached").to_owned();
         let project = self.session_plan();
-        let ready = !self.session_busy() && self.project_ready();
+        let ready = !self.session_busy()
+            && !self.preparing
+            && !self.vaults.locking
+            && self
+                .workspace
+                .as_ref()
+                .is_none_or(|w| w.ready && w.connected);
         let height = layout::compact_control_height(ui);
         let palette = self.themes.active().palette;
         ui.add_enabled_ui(ready, |ui| {
+            let arrow_size = 12.;
+            let arrow = egui::Atom::custom(
+                ui.next_auto_id().with("terminal-new-arrow"),
+                egui::Vec2::splat(arrow_size),
+            );
             let menu = egui::containers::menu::MenuButton::from_button(
-                egui::Button::new(label).small().min_size(egui::vec2(0., height))
+                egui::Button::new(("New terminal", arrow)).small().min_size(egui::vec2(0., height))
             ).ui(ui, |ui| {
                 ui.set_width(240.);
                 ui.label(RichText::new("Current terminal").small().color(palette.muted));
@@ -1267,7 +1265,7 @@ impl EditorApp {
                 let unavailable = if project.requested {
                     project.reason.as_str()
                 } else {
-                    "Enable a project sandbox in Settings to open sandboxed terminals."
+                    "Open a project and enable its sandbox in Settings to open sandboxed terminals."
                 };
                 for (sandboxed, title) in [(true, "Sandboxed"), (false, "Outside sandbox")] {
                     let response = ui.add_enabled(
@@ -1294,8 +1292,19 @@ impl EditorApp {
                         .on_hover_text(unavailable);
                 }
             });
-            super::ui_probe::button(ui, "terminal-execution-mode", &menu.0);
-            menu.0.on_hover_text("Actual mode of this shell. Switching opens a new terminal on the same project host.");
+            Icon::ChevronDown.paint(
+                ui.painter(),
+                egui::Rect::from_center_size(
+                    egui::pos2(
+                        menu.0.rect.right() - ui.spacing().button_padding.x - arrow_size / 2.,
+                        menu.0.rect.center().y,
+                    ),
+                    egui::Vec2::splat(arrow_size),
+                ),
+                ui.style().interact(&menu.0).text_color(),
+            );
+            super::ui_probe::button(ui, "terminal-new-menu", &menu.0);
+            menu.0.on_hover_text("Create a terminal on this host. Choose sandboxed or outside the sandbox; existing terminals keep running.");
         });
     }
     fn final_quit(&mut self, ctx: &egui::Context) {

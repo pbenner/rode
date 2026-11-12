@@ -178,3 +178,111 @@ fn disconnect_waits_for_terminal_startup_and_persistence_changes() {
         assert!(!app.connection_cancel.load(Ordering::Acquire));
     }
 }
+
+#[test]
+fn one_terminal_creation_menu_requires_a_mode_without_changing_the_current_shell() {
+    for width in [430., 1100.] {
+        for sandboxed in [None, Some(false), Some(true)] {
+            for busy in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let state = directory.path().join("terminal-ui.json");
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(&cc, Startup::default());
+                if let Some(active) = sandboxed {
+                    let mut workspace = crate::app::tests::remote_workspace();
+                    workspace.remote = None;
+                    workspace.plan.active = active;
+                    workspace.plan.requested = true;
+                    app.workspace = Some(workspace);
+                }
+                let (terminal, _stream) =
+                    Terminal::stream(&ctx, "Existing shell / NORMAL MODE".into(), |_| {});
+                app.adopt_terminal(
+                    terminal,
+                    Meta {
+                        key: "existing".into(),
+                        order: 0,
+                        name: "Existing shell".into(),
+                        native: None,
+                        policy: "existing-policy".into(),
+                        mode: "NORMAL MODE".into(),
+                    },
+                );
+                app.sessions.starting = busy;
+                let preferred_mode = app.workbench.terminal_sandbox();
+                ui_probe::install_at(&ctx, state.clone());
+                let frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 500.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default()
+                                .show(ctx, |ui| app.terminal_header(ui, ctx));
+                        },
+                    )
+                };
+                frame(&mut app, vec![]);
+                let output = frame(&mut app, vec![]);
+                let buttons = layout::tests::button_frames(&output, "New terminal");
+                assert_eq!(buttons.len(), 1);
+                assert!(layout::tests::button_frames(&output, "New").is_empty());
+                let snapshot: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+                let controls = snapshot["buttons"].as_array().unwrap();
+                let create = controls
+                    .iter()
+                    .find(|b| b["name"] == "terminal-new-menu")
+                    .unwrap();
+                assert_eq!(create["enabled"], !busy);
+                assert!(
+                    !controls
+                        .iter()
+                        .any(|b| b["name"] == "terminal-execution-mode")
+                );
+                if busy {
+                    continue;
+                }
+                let point = buttons[0].0.center();
+                for pressed in [true, false] {
+                    frame(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::PointerButton {
+                                pos: point,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                }
+                frame(&mut app, vec![]);
+                let output = frame(&mut app, vec![]);
+                let snapshot: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
+                let controls = snapshot["buttons"].as_array().unwrap();
+                for (name, enabled) in [
+                    ("terminal-new-host", true),
+                    ("terminal-new-sandbox", sandboxed == Some(true)),
+                ] {
+                    let choice = controls.iter().find(|b| b["name"] == name).unwrap();
+                    assert_eq!(choice["enabled"], enabled, "{width}, {sandboxed:?}: {name}");
+                }
+                layout::tests::text_bounds(&output, "NORMAL MODE");
+                assert!(app.terminal.as_ref().unwrap().is_alive());
+                assert_eq!(app.sessions.active.as_ref().unwrap().key, "existing");
+                assert_eq!(app.sessions.view_count(), 1);
+                assert!(!app.session_busy());
+                assert_eq!(app.workbench.terminal_sandbox(), preferred_mode);
+            }
+        }
+    }
+}
