@@ -483,6 +483,10 @@ impl EditorApp {
             pane.id().with(ctx.viewport_id())
         };
         let host = ui.interact(rect, host_id, Sense::focusable_noninteractive());
+        ui_probe::button(ui, &format!("pane-{pane:?}"), &host);
+        if self.navigation.zoom == Some(pane) {
+            ui_probe::button(ui, &format!("pane-maximized-{pane:?}"), &host);
+        }
         let blocked = self.dialog != Dialog::None
             || self.pending.is_some()
             || self.workbench_modal()
@@ -580,12 +584,13 @@ impl EditorApp {
                         .stroke(Stroke::new(1.0_f32, palette.accent))
                         .inner_margin(10)
                         .show(ui, |ui| {
-                            ui.label(format!(
+                            let hint = ui.label(format!(
                                 "{} · navigation · Escape cancels",
                                 self.navigation
                                     .bindings
                                     .prefix_label(Terminal::focused(ctx))
                             ));
+                            ui_probe::button(ui, "navigation-leader", &hint);
                             ui.set_max_width(680.);
                             for (action, label, keys) in self.navigation.bindings.commands() {
                                 if matches!(

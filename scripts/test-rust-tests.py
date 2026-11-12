@@ -14,12 +14,40 @@ import rust_tests
 
 
 class RustFixtureTests(unittest.TestCase):
+    def test_tmpdir_and_explicit_override_apply_to_real_child_homes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            normal, explicit = root / "normal", root / "chosen ' root"
+            normal.mkdir()
+            explicit.mkdir()
+            probe = "import os; from pathlib import Path; Path(os.environ['RODE_FIXTURE_RESULT']).write_text(os.environ['HOME'])"
+            for override, expected in (("", normal), (str(explicit), explicit)):
+                output = root / "home.txt"
+                with (
+                    patch.dict(
+                        os.environ,
+                        TMPDIR=str(normal),
+                        RODE_TEST_TMPDIR=override,
+                        RODE_FIXTURE_RESULT=str(output),
+                        RODE_TEST_AWKWARD_PATHS="1",
+                    ),
+                    patch("fixture_support.tempfile.tempdir", None),
+                ):
+                    self.assertEqual(rust_tests.isolated([sys.executable, "-c", probe]), 0)
+                home = Path(output.read_text())
+                self.assertEqual(home.parent, expected.resolve())
+                self.assertTrue(home.name.startswith("rt-"))
+                self.assertNotIn("space", home.name)
+                self.assertFalse(home.exists())
+
     def test_long_checkouts_do_not_overflow_nested_unix_socket_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / ("long-checkout-" * 10)
             root.mkdir()
+            # Detect checkout-path leakage without consuming an arbitrary extra
+            # socket-name budget from the caller's chosen temporary parent.
             code = """import os, socket
-path = os.path.join(os.environ['TMPDIR'], 'nested-ssh-control-' + 'x' * 48)
+path = os.path.join(os.environ['TMPDIR'], 'nested-ssh-control')
 with socket.socket(socket.AF_UNIX) as control:
     control.bind(path)
 """

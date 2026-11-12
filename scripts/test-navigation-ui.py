@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Keyboard-only pane workflow on an isolated X display; no pointer actions."""
 
-import ctypes
 import os
 import shutil
 import subprocess
-import time
 from functools import partial
 from pathlib import Path
 
@@ -17,38 +15,32 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
         else "target/navigation-ui"
     )
 )
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
     close_window,
-    display,
     fixture_directory,
     fixture_environment,
     key,
     screenshot,
     text,
     wait_for_effect,
-    x11,
 )
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
-
-from ui_fixture import project_ui
 
 wait_for = partial(wait_for_effect, timeout=10)
 
 
-def nav(name, modifiers=(), leader="space", leader_modifiers=("Control_L",)):
-    key(leader, leader_modifiers)
-    key(name, modifiers)
-    time.sleep(0.15)
-
-
-def append(path, value):
+def append(ui, path, value):
+    ui.document(path)
+    expected = path.read_text() + value
+    before = ui.layout()["pass"]
     key("End", ("Control_L",))
     text(value)
+    ui.source(expected, changed_after=before)
     key("s", ("Control_L",))
-    wait_for(lambda: value in path.read_text(), f"Editor focus failed: {value}")
+    ui.wait(lambda: path.read_text() == expected, f"Editor save failed: {value}")
+    ui.control("source-editor-saved")
 
 
 def run():
@@ -114,39 +106,45 @@ def run():
                 ui = project_ui(process, env, root, log.name)
                 window = ui.window
                 command = partial(ui.command, keyboard=True)
+                nav = ui.navigate
                 # Enter a directory and open its child entirely with arrows.
                 nav("f")
+                ui.control("pane-Explorer", focused=True)
                 key("Home")
+                ui.control("explorer-selected:" + str(folder))
                 key("Right")
-                time.sleep(0.3)
+                ui.control("explorer-row:" + str(nested))
                 key("Right")
+                ui.control("explorer-selected:" + str(nested))
                 key("Return")
-                time.sleep(0.35)
-                append(nested, "nested-edit\n")
+                append(ui, nested, "nested-edit\n")
                 # Left from the editor selects the explorer; collapse to parent
                 # then move to the next root file.
                 nav("h")
+                ui.control("pane-Explorer", focused=True)
                 key("Left")
                 key("Left")
                 key("Down")
+                ui.control("explorer-selected:" + str(first))
                 key("Return")
-                time.sleep(0.3)
-                append(first, "first-edit\n")
+                append(ui, first, "first-edit\n")
                 # File suggestion selection, not just the first matching entry.
                 nav("o")
-                text(".txt")
+                ui.control("file-dialog-path", focused=True)
+                ui.fill("file-dialog-path", ".txt")
                 key("Down")
+                ui.value("file-picker-selected", str(first))
                 key("Return")
-                time.sleep(0.3)
-                append(first, "suggestion-edit\n")
+                append(ui, first, "suggestion-edit\n")
                 # A pane command must never insert its printable key in source.
                 nav("f")
+                ui.control("pane-Explorer", focused=True)
                 key("c")
+                ui.control("explorer-selected:" + str(second))
                 key("Return")
-                time.sleep(0.3)
-                append(second, "second-edit\n")
+                append(ui, second, "second-edit\n")
                 nav("t")
-                time.sleep(0.8)
+                ui.terminal_input()
                 text("cat completion-")
                 key("Tab")
                 text(" > completed.out\n")
@@ -160,63 +158,75 @@ def run():
                 # Persistence reveals a hidden terminal and retains input focus.
                 nav("q")
                 nav("s")
-                time.sleep(0.7)
+                ui.terminal_input()
                 text("echo persistence > persistence.out\n")
                 wait_for(
                     lambda: (root / "persistence.out").exists(),
                     "Persistence command left focus on a hidden pane",
                 )
                 nav("s")
-                time.sleep(0.7)
                 nav("n")
-                time.sleep(0.7)
+                ui.terminal_input()
                 text("echo shell-two > two.out\n")
                 wait_for(lambda: (root / "two.out").exists(), "New terminal focus failed")
                 nav("bracketleft")
+                ui.terminal_input()
                 text("echo previous > previous.out\n")
                 wait_for(lambda: (root / "previous.out").exists(), "Previous terminal failed")
                 nav("bracketright")
+                ui.terminal_input()
                 text("echo next > next.out\n")
                 wait_for(lambda: (root / "next.out").exists(), "Next terminal failed")
                 nav("k", ("Shift_L",))
                 screenshot(window, "taller-terminal.png")
                 nav("m")
+                ui.control("pane-maximized-Terminal")
                 screenshot(window, "maximized-terminal.png")
                 nav("m")
+                ui.absent("pane-maximized-Terminal")
                 # Closing a palette restores shell focus without a mouse click.
                 command("Theme: Code Dark")
+                ui.terminal_input()
                 text("echo restored > restored.out\n")
                 wait_for(
                     lambda: (root / "restored.out").exists(), "Palette did not restore shell focus"
                 )
                 # Select the second palette result with Down (UI theme list order).
                 key("p", ("Control_L", "Shift_L"))
-                text("Navigation: Focus")
+                ui.control("command-palette-input", focused=True)
+                ui.fill("command-palette-input", "Navigation: Focus")
                 key("Down")
+                ui.control("command-selected:Navigation: Focus pane below")
                 screenshot(window, "palette-selection.png")
                 key("Escape")
+                ui.absent("command-palette-input")
+                ui.terminal_input()
                 text("echo after-escape > escaped.out\n")
                 wait_for(
                     lambda: (root / "escaped.out").exists(), "Escape did not restore shell focus"
                 )
                 nav("e")
-                append(second, "back-to-editor\n")
+                append(ui, second, "back-to-editor\n")
                 # Select Explorer, the second explicit focus result. Spatial
                 # "below" has no target when Code replaces the terminal surface.
                 key("p", ("Control_L", "Shift_L"))
-                text("Navigation: Focus e")
+                ui.control("command-palette-input", focused=True)
+                ui.fill("command-palette-input", "Navigation: Focus e")
                 key("Down")
+                ui.control("command-selected:Navigation: Focus explorer")
                 key("Return")
-                time.sleep(0.2)
+                ui.control("pane-Explorer", focused=True)
                 key("b")
+                ui.control("explorer-selected:" + str(first))
                 key("Return")
-                time.sleep(0.3)
-                append(first, "palette-selection\n")
+                append(ui, first, "palette-selection\n")
                 nav("f")
+                ui.control("pane-Explorer", focused=True)
                 key("c")
+                ui.control("explorer-selected:" + str(second))
                 key("Return")
-                time.sleep(0.3)
                 nav("t")
+                ui.terminal_input()
                 text("echo selected > selected.out\n")
                 wait_for(
                     lambda: (root / "selected.out").exists(),
@@ -226,19 +236,23 @@ def run():
                 nav("h", ("Shift_L",))
                 nav("l", ("Shift_L",))
                 nav("m")
+                ui.control("pane-maximized-Tools")
                 screenshot(window, "maximized-tools.png")
                 nav("m")
+                ui.absent("pane-maximized-Tools")
                 nav("q")
-                append(second, "tools-return\n")
+                append(ui, second, "tools-return\n")
                 nav("u")
                 key("Return")
                 screenshot(window, "keyboard-menu.png")
                 key("Escape")
                 nav("e")
                 nav("slash")
+                ui.control("navigation-leader-input", focused=True)
                 # The leader field receives focus when bindings open.
                 key("a", ("Control_L",))
                 text("Ctrl+Shift+F12")
+                ui.value("navigation-leader-value", "Ctrl+Shift+F12", focused=True)
                 key("Return", ("Control_L",))
                 preferences = base / "data/rode/app.ron"
                 wait_for(
@@ -249,15 +263,16 @@ def run():
                     "Bindings were not saved immediately",
                 )
                 screenshot(window, "bindings.png")
-                x11.XResizeWindow(display, window, 850, 560)
-                x11.XFlush(display)
+                ui.resize(850, 560)
                 screenshot(window, "bindings-compact.png")
                 key("Escape")
+                ui.absent("navigation-leader-input")
                 nav("t", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
+                ui.terminal_input()
                 text("echo remapped > remapped.out\n")
                 wait_for(lambda: (root / "remapped.out").exists(), "Remapped leader failed")
                 nav("e", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
-                append(second, "remapped-editor\n")
+                append(ui, second, "remapped-editor\n")
                 assert nested.read_text() == "nested\nnested-edit\n"
                 assert (
                     first.read_text() == "first\nfirst-edit\nsuggestion-edit\npalette-selection\n"

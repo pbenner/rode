@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import subprocess
-import time
 from functools import partial
 from pathlib import Path
 
@@ -138,9 +137,9 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
                 "Allocation did not start",
             )
             filled(window, "active.png", True)
-            theme("phosphor")
+            theme("phosphor", ui=ui)
             filled(window, "active-phosphor.png", True, accent=(125, 235, 164))
-            theme("carbon")
+            theme("carbon", ui=ui)
             (state / "queue-error").touch()
             filled(window, "query-error.png", False)
             (state / "queue-error").unlink()
@@ -166,7 +165,7 @@ with fixture_directory(prefix="rode-slurm-ui-") as base:
             screenshot(window, "reattach-list.png")
             # The original nonpersistent shell ended on exit, leaving this one row.
             click(647, 294)  # Attach the retained Slurm session.
-            time.sleep(1)
+            ui.terminal_input()
             screenshot(window, "reattached.png")
             click(600, 755)
             text("printf '%s' \"$SLURM_JOB_ID\" > reattached.env\n")

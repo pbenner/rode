@@ -12,10 +12,9 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from fixture_support import private_directory
+from fixture_support import fixture_directory, private_directory
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT = ["--locked", "--profile", "ci", "--workspace", "--all-targets", "--no-fail-fast"]
@@ -26,9 +25,7 @@ def isolated(command):
     # Checkout paths can exceed the Unix-domain socket limit before a test has
     # even created its nested SSH agent/control socket. Keep the fixture short
     # independently of the checkout; callers can select an executable tmpfs.
-    parent = os.environ.get("RODE_TEST_TMPDIR", "/tmp")
-    with tempfile.TemporaryDirectory(prefix="rt-", dir=parent) as directory:
-        fixture_home = Path(directory)
+    with fixture_directory(prefix="rt-", awkward=False) as fixture_home:
         environment = dict(os.environ)
         original_home = Path.home()
         virtualenv = environment.pop("VIRTUAL_ENV", None)

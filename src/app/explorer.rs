@@ -769,6 +769,9 @@ impl EditorApp {
                     color,
                 );
                 ui_probe::button(ui, &format!("explorer-row:{}", entry.path), &response);
+                if self.navigation.tree.path.as_deref() == Some(&entry.path) {
+                    ui_probe::button(ui, &format!("explorer-selected:{}", entry.path), &response);
+                }
                 if response.secondary_clicked() {
                     self.navigation.tree.path = Some(entry.path.clone());
                     ctx.memory_mut(|memory| memory.request_focus(navigation::Pane::Explorer.id()));

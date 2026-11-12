@@ -99,7 +99,10 @@ impl EditorApp {
             });
         }
         ui.add_space(12.);
-        ui.label(RichText::new("Python: Ruff. Go: gofmt. JS/TS/web: Prettier. C/C++/Java/C#: clang-format. Shell: shfmt. Rust: rustfmt. Tools must be installed on the project host; configure automatic checks in Settings.").small().color(palette.muted));
+        let status = ui.label(RichText::new("Python: Ruff. Go: gofmt. JS/TS/web: Prettier. C/C++/Java/C#: clang-format. Shell: shfmt. Rust: rustfmt. Tools must be installed on the project host; configure automatic checks in Settings.").small().color(palette.muted));
+        if self.workbench.code_tools.checking.is_empty() {
+            ui_probe::button(ui, "problems-check-complete", &status);
+        }
     }
     /// Send a task to the prepared project terminal, creating it asynchronously if needed.
     /// Apply literal environment exports in a subshell so task overrides do not mutate the shell.

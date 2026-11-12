@@ -17,6 +17,7 @@ from ui_harness import (
     NativeUI,
     close_window,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -57,8 +58,8 @@ def run():
         shell = base / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         shell.chmod(0o755)
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             SHELL=str(shell),
@@ -133,7 +134,7 @@ def run():
                 ui.source("const value = ;")
                 ui.command("Code: Check document")
                 ui.command("Code: Problems")
-                time.sleep(0.6)
+                ui.control("problems-check-complete")
                 screenshot(window, "typescript-problems.png")
                 assert ts.read_text() == 'const value: string = "hello";\n', "Checking changed disk"
                 # Saving invalid syntax must still complete without changing the buffer.

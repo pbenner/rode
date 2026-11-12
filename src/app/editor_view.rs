@@ -396,6 +396,8 @@ impl EditorApp {
                         response.request_focus();
                         self.find_focus = false;
                     }
+                    ui_probe::button(ui, "source-find", &response);
+                    ui_probe::value(ui, "source-find-value", &response, &self.find);
                     next = ui.button("Next ↓").clicked()
                         || ((response.has_focus() || response.lost_focus())
                             && ui.input(|i| i.key_pressed(Key::Enter)));

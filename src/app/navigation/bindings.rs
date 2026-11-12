@@ -579,6 +579,13 @@ impl Profile {
             if focus {
                 response.request_focus();
             }
+            crate::app::ui_probe::button(ui, "navigation-leader-input", &response);
+            crate::app::ui_probe::value(
+                ui,
+                "navigation-leader-value",
+                &response,
+                &self.leader_draft,
+            );
         });
         egui::ScrollArea::vertical()
             .id_salt("navigation-bindings")

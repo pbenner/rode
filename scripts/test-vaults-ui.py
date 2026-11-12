@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """Encrypted-project UI fails closed and preserves dirty local/SSH buffers."""
 
-import ctypes
 import hashlib
 import json
 import os
 import shlex
 import shutil
 import subprocess
-import time
 from functools import partial
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/vaults-ui")
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
     click,
     close_window,
-    display,
     fixture_directory,
     fixture_environment,
     key,
@@ -27,12 +25,7 @@ from ui_harness import (
     screenshot,
     text,
     wait_for_effect,
-    x11,
 )
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
-
-from ui_fixture import project_ui
 
 wait_for = partial(wait_for_effect, timeout=15)
 
@@ -133,7 +126,8 @@ def run(remote=False):
                 key("End", ("Control_L",))
                 text("\nunsaved-vault-marker")
                 command("Project: Open encrypted project")
-                text(str(cipher))
+                ui.control("vault-folder", focused=True)
+                ui.fill("vault-folder", str(cipher))
                 key("Tab")
                 key("a", ("Control_L",))
                 text("/usr/bin/true")
@@ -144,21 +138,18 @@ def run(remote=False):
                 key("Tab")  # Sandbox checkbox
                 key("Tab")  # Unlock button
                 key("Return")
-                time.sleep(1.3)
+                ui.control("vault-operation-complete")
                 screenshot(window, label + "-refused-plaintext.png")
                 assert "unsaved-vault-marker" not in source.read_text()
                 assert "plain-project" in subprocess.check_output(
                     ["xwininfo", "-id", hex(window)], text=True
                 )
-                x11.XResizeWindow(display, window, 850, 560)
-                x11.XFlush(display)
-                time.sleep(0.4)
+                ui.resize(850, 560)
                 screenshot(window, label + "-compact.png")
                 key("Escape")
-                x11.XResizeWindow(display, window, 1380, 900)
-                x11.XFlush(display)
-                time.sleep(0.3)
-                click(600, 250)
+                ui.resize(1380, 900)
+                ui.click("source-editor")
+                ui.document(source)
                 key("s", ("Control_L",))
                 wait_for(
                     lambda: "unsaved-vault-marker" in source.read_text(),

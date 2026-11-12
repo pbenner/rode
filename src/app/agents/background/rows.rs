@@ -138,7 +138,7 @@ fn row(
                 Layout::right_to_left(Align::Center),
                 |ui| {
                     if !narrow {
-                        action = buttons(ui, &attachment, palette, action_height);
+                        action = buttons(ui, &info.id, &attachment, palette, action_height);
                     }
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), action_height),
@@ -203,7 +203,8 @@ fn row(
                     egui::vec2(ui.available_width(), action_height),
                     Layout::right_to_left(Align::Center),
                     |ui| {
-                        action = buttons(ui, &attachment, palette, action_height).or(action);
+                        action =
+                            buttons(ui, &info.id, &attachment, palette, action_height).or(action);
                     },
                 );
             }
@@ -215,6 +216,7 @@ fn row(
 /// Right-to-left ordering keeps End at the outer edge and the primary action aligned.
 fn buttons(
     ui: &mut egui::Ui,
+    id: &str,
     attachment: &Attachment,
     palette: Palette,
     height: f32,
@@ -230,7 +232,7 @@ fn buttons(
     {
         action = Some(Action::End);
     }
-    if ui
+    let attach = ui
         .add_enabled_ui(attachment.enabled, |ui| {
             ui.add_sized(
                 [104., height],
@@ -242,9 +244,9 @@ fn buttons(
             )
         })
         .inner
-        .on_disabled_hover_text(&attachment.explanation)
-        .clicked()
-    {
+        .on_disabled_hover_text(&attachment.explanation);
+    crate::app::ui_probe::button(ui, &format!("agent-running-attach:{id}"), &attach);
+    if attach.clicked() {
         action = Some(if attachment.current {
             Action::Show
         } else {

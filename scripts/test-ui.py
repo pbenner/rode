@@ -2,32 +2,34 @@
 """Native editor and theme regression checks on an isolated X display."""
 
 import json
-import os
 import re
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     assert_running,
     background,
-    click,
     click_button,
     close_window,
     decode_ron_string,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     saved_theme,
     screenshot,
     text,
     theme,
+    wait_for_project,
     wait_for_window,
 )
 
-with tempfile.TemporaryDirectory(prefix="rode-ui-") as directory:
+with fixture_directory(prefix="rode-ui-") as base:
+    directory = str(base)
     path = Path(directory) / "main.rs"
     path.write_text("""use std::{thread, time::Duration};
 
@@ -55,11 +57,11 @@ fn run_step(step: usize) {
     (Path(directory) / "Cargo.toml").write_text(
         '[package]\nname = "remote-job"\nversion = "0.1.0"\n'
     )
-    (Path(directory) / "data").mkdir()
+    (Path(directory) / "data").mkdir(mode=0o700)
     (Path(directory) / "scripts").mkdir()
     log = (ARTIFACTS / "app.log").open("w")
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=directory + "/config",
         XDG_DATA_HOME=directory + "/data-home",
         RODE_UI_TEST_STATE=directory + "/ui-state.json",
@@ -81,64 +83,54 @@ fn run_step(step: usize) {
     try:
         window = wait_for_window(process, ARTIFACTS / "app.log")
         focus_window(window)
-        deadline = time.monotonic() + 20
-        while True:
-            assert_running(process, ARTIFACTS / "app.log")
-            attributes = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-            if Path(directory).name in attributes and "[Opening project]" not in attributes:
-                break
-            if time.monotonic() >= deadline:
-                screenshot(window, "startup-failure.png")
-                raise AssertionError("File startup did not prepare its containing directory")
-            time.sleep(0.05)
-        time.sleep(0.4)
-        screenshot(window, "startup-file.png")
-        time.sleep(0.5)
-        screenshot(window, "opened.png")
-        click(600, 180)
-        key("End", ("Control_L",))
-        text("\n// native-smoke-saved")
-        key("s", ("Control_L",))
-        # Formatting and the protected write run asynchronously. A cold
-        # formatter on a CI runner need not finish within one frame delay.
-        deadline = time.monotonic() + 15
-        while "native-smoke-saved" not in path.read_text():
-            assert_running(process, ARTIFACTS / "app.log")
-            if time.monotonic() >= deadline:
-                screenshot(window, "save-failure.png")
-                raise AssertionError("Editing + Ctrl+S failed; inspect save-failure.png")
-            time.sleep(0.05)
-        screenshot(window, "editor.png")
-        key("f", ("Control_L",))
-        text("run_step")
-        key("Return")
-        time.sleep(0.2)
-        key("Escape")
-        saved = path.read_text()
-        key("s", ("Control_L",))
-        time.sleep(0.3)
-        assert path.read_text() == saved, (
-            "Find / Enter must select a match without modifying the document"
+        wait_for_project(window, process, ARTIFACTS / "app.log", base)
+        ui = NativeUI(
+            window, process, ARTIFACTS / "app.log", Path(environment["RODE_UI_TEST_STATE"]), base
         )
-        key("t", ("Control_L", "Shift_L"))
-        time.sleep(0.4)
-        text("echo RODE_NATIVE_TERMINAL_OK > terminal.ok\n")
-        time.sleep(0.4)
-        assert (Path(directory) / "terminal.ok").exists(), "Terminal did not execute input"
-        screenshot(window, "terminal.png")
-        key("p", ("Control_L", "Shift_L"))
-        text("remote: connect")
+        ui.click("source-editor")
+        ui.document(path)
+        screenshot(window, "startup-file.png")
+        screenshot(window, "opened.png")
+        before = ui.layout()["pass"]
+        key("End", ("Control_L",))
+        original = path.read_text()
+        text("\n// native-smoke-saved")
+        ui.source(original + "\n// native-smoke-saved", changed_after=before)
+        key("s", ("Control_L",))
+        ui.wait(lambda: "native-smoke-saved" in path.read_text(), "Editing + Ctrl+S failed")
+        ui.control("source-editor-saved")
+        screenshot(window, "editor.png")
+        saved = path.read_text()
+        key("f", ("Control_L",))
+        ui.control("source-find", focused=True)
+        ui.fill("source-find", "run_step")
+        before = ui.layout()["pass"]
         key("Return")
-        time.sleep(0.3)
+        ui.control("source-find", after_pass=before)
+        key("Escape")
+        ui.absent("source-find")
+        ui.control("source-editor", focused=True)
+        before = ui.layout()["pass"]
+        key("s", ("Control_L",))
+        ui.control("source-editor-saved", after_pass=before)
+        assert path.read_text() == saved, "Find / Enter changed the document"
+        key("t", ("Control_L", "Shift_L"))
+        ui.terminal_input()
+        text("echo RODE_NATIVE_TERMINAL_OK > terminal.ok\n")
+        ui.wait(lambda: (base / "terminal.ok").exists(), "Terminal did not execute input")
+        assert (base / "terminal.ok").read_text() == "RODE_NATIVE_TERMINAL_OK\n"
+        screenshot(window, "terminal.png")
+        ui.command("Remote: Connect via SSH")
+        ui.control("ssh-field-Host / alias")
         screenshot(window, "connection.png")
         key("Escape")
-        time.sleep(0.3)
-        click(600, 740)
+        ui.absent("ssh-field-Host / alias")
+        ui.terminal_input()
         text("RODE_THEME_SESSION=kept\n")
-        theme("carbon")
+        theme("carbon", ui=ui)
         saved_theme(directory, "carbon")
-        key("space", ("Control_L",))
-        key("e")  # Theme samples use the editor while the shell keeps running.
+        ui.navigate("e")
+        ui.document(path)
         background(window, "carbon.png", (16, 16, 16))
         # The status-bar menu contains built-ins plus the custom fixture.
         # Exercise the visible UI control as well as command-palette selection.
@@ -173,13 +165,13 @@ fn run_step(step: usize) {
             ("studio-neutral", (26, 27, 30)),
             ("studio-hacker", (16, 21, 18)),
         ]:
-            theme(preset.replace("-", " "))
+            theme(preset.replace("-", " "), ui=ui)
             saved_theme(directory, preset)
             background(window, preset + ".png", color)
-        theme("Code Dark")
+        theme("Code Dark", ui=ui)
         saved_theme(directory, "code-dark")
         background(window, "code-dark.png", (30, 30, 30))
-        theme("smoke custom")
+        theme("smoke custom", ui=ui)
         saved_theme(directory, "custom:smoke")
         background(window, "custom.png", (21, 18, 26))
         click_button(
@@ -197,17 +189,20 @@ fn run_step(step: usize) {
             "interface-theme:code-dark",
         )
         saved_theme(directory, "code-dark")
-        theme("Studio Neutral")
+        theme("Studio Neutral", ui=ui)
         saved_theme(directory, "studio-neutral")
+        ui.source(saved)
+        before = ui.layout()["pass"]
         key("s", ("Control_L",))
-        time.sleep(0.3)
+        ui.control("source-editor-saved", after_pass=before)
         assert path.read_text() == saved, "Changing themes must preserve document contents"
-        key("space", ("Control_L",))
-        key("t")
-        click(600, 740)
+        ui.navigate("t")
+        ui.terminal_input()
         text("echo $RODE_THEME_SESSION > session.ok\n")
-        time.sleep(0.3)
-        assert (Path(directory) / "session.ok").read_text().strip() == "kept", (
+        ui.wait(
+            lambda: (base / "session.ok").exists(), "Terminal did not finish after theme changes"
+        )
+        assert (base / "session.ok").read_text().strip() == "kept", (
             "Theme switch restarted the terminal"
         )
 
@@ -230,17 +225,13 @@ fn run_step(step: usize) {
         process = subprocess.Popen(
             [str(BINARY), directory], env=environment, stdout=log, stderr=log
         )
-        window = None
-        for _ in range(100):
-            tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-            match = re.search(r'(0x[0-9a-f]+) "RODE', tree)
-            if match:
-                window = int(match[1], 16)
-                break
-            assert process.poll() is None
-            time.sleep(0.05)
-        assert window
-        time.sleep(0.7)
+        window = wait_for_window(process, ARTIFACTS / "app.log")
+        wait_for_project(window, process, ARTIFACTS / "app.log", base)
+        focus_window(window)
+        ui = NativeUI(
+            window, process, ARTIFACTS / "app.log", Path(environment["RODE_UI_TEST_STATE"]), base
+        )
+        ui.control("appearance-menu")
         background(window, "theme-restored.png", (26, 27, 30))
         close_window(window, process)
         print(
@@ -257,16 +248,17 @@ fn run_step(step: usize) {
         log.close()
 
 # A file directly in HOME must not be mistaken for a whole-home sandbox project.
-with tempfile.TemporaryDirectory(prefix="rode-file-ui-") as directory:
-    home = Path(directory)
+with fixture_directory(prefix="rode-file-ui-") as home:
+    directory = str(home)
     path = home / "individual file.txt"
     path.write_text("standalone contents\n")
     preferences = home / "data-home/rode/app.ron"
-    preferences.parent.mkdir(parents=True)
+    preferences.parent.parent.mkdir(mode=0o700)
+    preferences.parent.mkdir(parents=True, mode=0o700)
     defaults = {"enabled": True}
     preferences.write_text(json.dumps({"sandbox_defaults": json.dumps(defaults)}))
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        home,
         HOME=directory,
         XDG_CONFIG_HOME=directory + "/config",
         XDG_DATA_HOME=directory + "/data-home",
@@ -289,15 +281,23 @@ with tempfile.TemporaryDirectory(prefix="rode-file-ui-") as directory:
                     raise AssertionError("HOME file did not open without a project")
                 time.sleep(0.05)
             screenshot(window, "standalone-file.png")
+            ui = NativeUI(
+                window,
+                process,
+                ARTIFACTS / "standalone-file.log",
+                Path(environment["RODE_UI_TEST_STATE"]),
+            )
+            ui.click("source-editor")
+            ui.document(path)
             key("End", ("Control_L",))
             text("saved without a project")
+            ui.source("standalone contents\nsaved without a project")
             key("s", ("Control_L",))
-            while path.read_text() != "standalone contents\nsaved without a project":
-                assert_running(process, ARTIFACTS / "standalone-file.log")
-                if time.monotonic() >= deadline:
-                    screenshot(window, "standalone-save-failure.png")
-                    raise AssertionError("Standalone Ctrl+S did not save to the original file")
-                time.sleep(0.05)
+            ui.wait(
+                lambda: path.read_text() == "standalone contents\nsaved without a project",
+                "Standalone Ctrl+S did not save to the original file",
+            )
+            ui.control("source-editor-saved")
             close_window(window, process)
             saved = re.search(
                 r'"sandbox_defaults"\s*:\s*("(?:\\.|[^"\\])*")', preferences.read_text()

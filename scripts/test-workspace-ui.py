@@ -17,12 +17,14 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    NativeUI,
     assert_running,
     click,
     click_button,
     close_window,
     display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
@@ -44,7 +46,6 @@ window_titles = {}
 def focus(window):
     x11.XRaiseWindow(display, window)
     focus_window(window)
-    time.sleep(0.15)
 
 
 def tool_window(title):
@@ -75,6 +76,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
     shell = base / "shell"
     shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
     shell.chmod(0o755)
+    (base / "data").mkdir(mode=0o700)
     config = base / "data/rode"
     config.mkdir(parents=True)
     profile = json.dumps(["LOCAL", str(project), ""], separators=(",", ":"))
@@ -82,8 +84,8 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
         json.dumps({"agent_preferences": json.dumps({profile: {"codex": "./agent.py"}})})
     )
     state_path = base / "ui-state.json"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         SHELL=str(shell),
@@ -117,6 +119,10 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
                     else viewport_state_path(process, log_path, state_path, window_titles[target])
                 )
 
+            def driver(target=None):
+                target = window if target is None else target
+                return NativeUI(target, process, log_path, state_for(target), project)
+
             def control(name, target=None, **guards):
                 target = window if target is None else target
                 return wait_for_button(target, process, log_path, state_for(target), name, **guards)
@@ -139,6 +145,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             def send(message, target, *, idle=True):
                 composer(target)
                 text(message)
+                driver(target).value("agent-composer-value", message, focused=True)
                 key("Return")
                 wait(
                     lambda: any(
@@ -154,15 +161,15 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             window = wait_for_window(process, log_path)
             wait_for_project(window, process, log_path, project)
             focus(window)
-            key("p", ("Control_L",))
-            text("main.txt")
-            key("Return")
-            time.sleep(0.4)
+            ui = driver()
+            ui.open_file("main.txt")
+            ui.document(source)
             key("End", ("Control_L",))
             text("\nunsaved workspace edit")
+            ui.source("original source\n\nunsaved workspace edit")
             screenshot(window, "code.png")
             key("a", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            control("agent-composer")
             send("before detach", window)
             screenshot(window, "chat-full-workspace.png")
             composer(window)
@@ -203,7 +210,9 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
                 state_for(child),
                 "Terminal: Sessions and Slurm allocations",
             )
-            time.sleep(0.3)
+            driver(child).layout(
+                lambda state: state.get("session_ids") is not None, "Session dialog did not load"
+            )
             screenshot(child, "tools-dialog.png")
             key("Escape")
             request_close(child)
@@ -219,9 +228,11 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             # recall must still include the second accepted queued prompt.
             for message in ["history-burst", "detached queue second"]:
                 composer(child)
+                before = driver(child).layout()["pass"]
                 text(message)
+                driver(child).value("agent-composer-value", message, focused=True)
                 key("Return")
-                time.sleep(0.3)
+                control("agent-composer-empty", child, after_pass=before)
             focus(window)
             (project / "queue-continue").touch()
             wait(
@@ -261,7 +272,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             wait(lambda: "unsaved workspace edit" in source.read_text(), "Code edits were lost")
             screenshot(window, "code-restored.png")
             key("t", ("Control_L", "Shift_L"))
-            time.sleep(0.8)
+            ui.terminal_input()
             text("echo $$ > before.pid\n")
             wait(
                 lambda: (project / "before.pid").exists(),
@@ -270,7 +281,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             screenshot(window, "terminal-full-workspace.png")
             key("grave", ("Control_L",))
             key("grave", ("Control_L", "Shift_L"))
-            time.sleep(0.3)
+            ui.terminal_input()
             text("echo $$ > sidebar.pid\n")
             wait(
                 lambda: (project / "sidebar.pid").exists(), "Sidebar did not restore terminal input"
@@ -307,10 +318,12 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
                 state_for(terminal_window),
                 "Terminal: Sessions and Slurm allocations",
             )
-            time.sleep(0.3)
+            driver(terminal_window).layout(
+                lambda state: state.get("session_ids") is not None, "Session dialog did not load"
+            )
             screenshot(terminal_window, "individual-terminal-dialog.png")
             key("Escape")
-            time.sleep(0.3)
+            driver(terminal_window).terminal_input()
             text("echo $$ > tab-modal.pid\n")
             wait(
                 lambda: (project / "tab-modal.pid").exists(),
@@ -347,7 +360,9 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
                 state_for(chat_window),
                 "Terminal: Sessions and Slurm allocations",
             )
-            time.sleep(0.3)
+            driver(chat_window).layout(
+                lambda state: state.get("session_ids") is not None, "Session dialog did not load"
+            )
             screenshot(chat_window, "individual-tab-dialog.png")
             key("Escape")
             activate("workspace-reattach:Chat", chat_window)

@@ -245,6 +245,9 @@ pub(super) fn rows(
                 .inner
                 .on_hover_text(&entry.path);
             ui_probe::value(ui, "file-picker-row", &response, &entry.path);
+            if list.navigated && index == list.index {
+                ui_probe::value(ui, "file-picker-selected", &response, &entry.path);
+            }
             if response.clicked() {
                 list.index = index;
                 list.navigated = true;

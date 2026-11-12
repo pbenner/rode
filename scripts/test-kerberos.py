@@ -10,9 +10,10 @@ import pwd
 import shutil
 import socket
 import subprocess
-import tempfile
 import time
 from pathlib import Path
+
+from fixture_support import fixture_directory
 
 
 def tool(name):
@@ -51,7 +52,7 @@ def main():
     user = pwd.getpwuid(os.getuid()).pw_name
     children = []
     logs = []
-    with tempfile.TemporaryDirectory(prefix="rode-kerberos-") as directory:
+    with fixture_directory(prefix="rode-kerberos-") as directory:
         root = Path(directory)
         env = os.environ.copy()
         # No caller cache, keytab, trace file or client keytab is consulted.

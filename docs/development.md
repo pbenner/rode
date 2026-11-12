@@ -403,6 +403,25 @@ constructing path-based control names; the host canonicalizes the same paths.
 These data helpers live in `scripts/fixture_support.py` and are re-exported by
 the UI harness. `python3 scripts/test-fixture-support.py` runs their filesystem,
 launcher and RON regressions without a display in `lint:ci`.
+
+Native UI, Rust-runner and SSH fixtures share temporary-root selection:
+`RODE_TEST_TMPDIR` takes precedence, followed by Python's standard temporary
+directory selection (`TMPDIR`, `TEMP`, `TMP`, then platform defaults). The
+chosen parent must exist and be writable; an invalid explicit override fails
+without silently moving fixture state elsewhere. Paths are canonicalized before
+host requests and control names are constructed. Keep a configured parent short
+enough for nested Unix sockets. The Rust runner retains its compact `rt-` prefix;
+stress tests add awkward names to individual project fixtures instead.
+
+Smoke, keyboard navigation, workspace, attachment/reattachment and environment
+flows acknowledge active documents, complete queries, focused input, finished
+file operations and resized layouts before dependent actions. The shared theme
+helper waits for the complete matching command; theme, prompt-color and tab-marker
+checks poll the painted result. Screenshot capture supplies no readiness delay.
+Physical key, drag and held-button pacing and explicit idle measurement intervals remain;
+they must not substitute for a readiness acknowledgement. Keyboard-only tests
+observe focus without clicking a control to repair it.
+
 `write_python_launcher` quotes both interpreter and script paths, including
 spaces and apostrophes. Preference checks decode the outer RON string with
 `decode_ron_string` before parsing the embedded JSON; RON's apostrophe and Unicode

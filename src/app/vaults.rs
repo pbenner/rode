@@ -497,7 +497,13 @@ impl EditorApp {
             self.themes.active().palette,
         );
         if !self.vaults.message.is_empty() {
-            ui.label(&self.vaults.message);
+            let message = ui.label(&self.vaults.message);
+            if self.vaults.pending.is_none()
+                && self.vaults.staged.is_none()
+                && self.vaults.closing.is_empty()
+            {
+                super::ui_probe::button(ui, "vault-operation-complete", &message);
+            }
         }
         if self.vaults.locking {
             ui.spinner();
@@ -559,6 +565,15 @@ impl EditorApp {
                             .desired_width(f32::INFINITY)
                             .hint_text(hint),
                     );
+                    let name = if label == "Encrypted storage folder" {
+                        "vault-folder"
+                    } else if label == "gocryptfs executable" {
+                        "vault-program"
+                    } else {
+                        "vault-unmount"
+                    };
+                    super::ui_probe::button(ui, name, &response);
+                    super::ui_probe::value(ui, &format!("{name}-value"), &response, value);
                     if self.dialog_focus && label == "Encrypted storage folder" {
                         response.request_focus();
                         self.dialog_focus = false;

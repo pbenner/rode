@@ -4,11 +4,9 @@
 import ctypes
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
-import tempfile
 import time
 from collections import Counter
 from pathlib import Path
@@ -16,6 +14,7 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/terminal-colors-ui"
 )
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
@@ -23,11 +22,14 @@ from ui_harness import (
     click,
     close_window,
     display,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
     text,
     theme,
+    wait_for_window,
     x11,
     xtest,
 )
@@ -50,24 +52,13 @@ def preferences(path):
 
 
 def window_for(process, title="RODE"):
-    for _ in range(150):
-        tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-        match = re.search(rf'(0x[0-9a-f]+) "{re.escape(title)}', tree)
-        if match:
-            window = int(match[1], 16)
-            time.sleep(0.8)
-            focus_window(window)
-            return window
-        assert process.poll() is None, "RODE exited before opening a window"
-        time.sleep(0.05)
-    raise AssertionError("No RODE window")
+    window = wait_for_window(process, ARTIFACTS / "bash-prompt.log")
+    focus_window(window)
+    return window
 
 
 def colors():
-    key("p", ("Control_L", "Shift_L"))
-    text("Terminal: Colors and contrast")
-    key("Return")
-    time.sleep(0.2)
+    ui.command("Terminal: Colors and contrast")
 
 
 def number(x, y, value):
@@ -96,32 +87,40 @@ def bright_pixels(filename):
 
 def prompt_colors(window, filename, palette, crop=None, failed=False):
     """Check prompt ink including antialiasing against its terminal background."""
-    screenshot(window, filename)
-    command = ["convert", str(ARTIFACTS / filename)]
-    if crop:
-        command += ["-crop", crop]
-    rgb = subprocess.check_output(command + ["-depth", "8", "rgb:-"])
-    colors = Counter(tuple(rgb[i : i + 3]) for i in range(0, len(rgb), 3))
-    background = tuple(bytes.fromhex(palette["colors"]["terminal_background"].removeprefix("#")))
-    # PS1 changes blue to magenta without clearing bold, so Git is bright too.
-    for index in [8, 12, 13, 9 if failed else 10]:
-        value = palette["ansi"][index].removeprefix("#")
-        expected = tuple(bytes.fromhex(value))
-        channel = max(range(3), key=lambda c: abs(expected[c] - background[c]))
-        pixels = 0
-        for color, count in colors.items():
-            alpha = (color[channel] - background[channel]) / (
-                expected[channel] - background[channel]
-            )
-            if 0.6 <= alpha <= 1.02 and all(
-                abs(color[c] - (background[c] + alpha * (expected[c] - background[c]))) <= 2
-                for c in range(3)
-            ):
-                pixels += count
-        assert pixels > 3, f"{filename}: missing prompt ANSI {index} ({value})"
+
+    def painted():
+        screenshot(window, filename)
+        command = ["convert", str(ARTIFACTS / filename)]
+        if crop:
+            command += ["-crop", crop]
+        rgb = subprocess.check_output(command + ["-depth", "8", "rgb:-"])
+        colors = Counter(tuple(rgb[i : i + 3]) for i in range(0, len(rgb), 3))
+        background = tuple(
+            bytes.fromhex(palette["colors"]["terminal_background"].removeprefix("#"))
+        )
+        # PS1 changes blue to magenta without clearing bold, so Git is bright too.
+        for index in [8, 12, 13, 9 if failed else 10]:
+            value = palette["ansi"][index].removeprefix("#")
+            expected = tuple(bytes.fromhex(value))
+            channel = max(range(3), key=lambda c: abs(expected[c] - background[c]))
+            pixels = 0
+            for color, count in colors.items():
+                alpha = (color[channel] - background[channel]) / (
+                    expected[channel] - background[channel]
+                )
+                if 0.6 <= alpha <= 1.02 and all(
+                    abs(color[c] - (background[c] + alpha * (expected[c] - background[c]))) <= 2
+                    for c in range(3)
+                ):
+                    pixels += count
+            if pixels <= 3:
+                return False
+        return True
+
+    wait_for(painted, f"{filename}: missing prompt ANSI colors")
 
 
-with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
+with fixture_directory(prefix="rode-terminal-colors-") as directory:
     root = Path(directory)
     shell = root / "fixture-shell"
     shell.write_text(
@@ -132,8 +131,8 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
         "exec /bin/sh -i\n"
     )
     shell.chmod(0o700)
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        root,
         XDG_CONFIG_HOME=str(root / "config"),
         XDG_DATA_HOME=str(root / "data"),
         WINIT_X11_SCALE_FACTOR="1",
@@ -149,9 +148,10 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
             )
             window = None
             try:
-                window = window_for(process)
+                ui = project_ui(process, environment, root, log.name)
+                window = ui.window
                 key("t", ("Control_L", "Shift_L"))
-                time.sleep(1)
+                ui.terminal_input()
                 if run == "initial":
                     screenshot(window, "contrast-default.png")
                     assert bright_pixels("contrast-default.png") < 10
@@ -207,7 +207,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                     )
                     screenshot(window, "ansi-edited.png")
                     click(731, 137)
-                    theme("Carbon")
+                    theme("Carbon", ui=ui)
                     colors()
                     number(470, 309, "7")
                     wait_for(
@@ -217,7 +217,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                         "Second theme did not save independently",
                     )
                     click(731, 137)
-                    theme("Phosphor")
+                    theme("Phosphor", ui=ui)
                     assert preferences(saved)["terminal_color.phosphor.minimum_contrast"] == "1"
                     click(600, 755)
                     text("printf still-alive > color-proof\n")
@@ -252,9 +252,7 @@ with tempfile.TemporaryDirectory(prefix="rode-terminal-colors-") as directory:
                         ctypes.c_uint,
                         ctypes.c_uint,
                     ]
-                    x11.XResizeWindow(display, window, 850, 560)
-                    x11.XFlush(display)
-                    time.sleep(0.4)
+                    ui.resize(850, 560)
                     click(375, 450)
                     screenshot(window, "minimum-window.png")
                     xtest.XTestFakeMotionEvent(display, -1, 700, 430, 0)
@@ -301,15 +299,16 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
         )
         reference = None
         try:
-            window = window_for(process)
+            ui = project_ui(process, prompt_environment, root, log.name)
+            window = ui.window
             key("t", ("Control_L", "Shift_L"))
-            time.sleep(1)
+            ui.terminal_input()
             text("echo $$ > palette-before.pid\n")
             wait_for(
                 lambda: (root / "palette-before.pid").exists(), "No shell before theme switches"
             )
             for name in ["carbon", "amber", "matrix", "ice", "neon", "code-dark"]:
-                theme(name.replace("-", " "))
+                theme(name.replace("-", " "), ui=ui)
                 current = json.loads((ROOT / f"themes/{name}.json").read_text())
                 text("true\n")
                 prompt_colors(window, name + "-prompt.png", current, "1050x240+315+140")
@@ -324,7 +323,7 @@ PS1='`if [ $? = 0 ]; then echo "\[\033[01;32m\]âœ”"; else echo "\[\033[01;31m\]â
             assert (root / "palette-before.pid").read_text() == (
                 root / "palette-after.pid"
             ).read_text()
-            theme("carbon")
+            theme("carbon", ui=ui)
             # Compare with xterm when installed; it is a test reference, never
             # an editor dependency. Pin its palette to compare ANSI semantics.
             if shutil.which("xterm"):

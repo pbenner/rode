@@ -14,10 +14,12 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     assert_running,
     click_button,
     close_window,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
@@ -62,8 +64,8 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
     )
     runtime.chmod(0o755)
     state_path = base / "ui-state.json"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_UI_TEST_STATE=str(state_path),
@@ -102,6 +104,7 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
                 )
 
             def shell_record(filename):
+                ui.terminal_input()
                 # Existence is the readiness signal, so publish only complete records.
                 text(
                     f"printf '%s' \"$PROJECT_MODE\" > {filename}.tmp "
@@ -122,10 +125,8 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
             window = wait_for_window(process, log_path)
             wait_for_project(window, process, log_path, project)
             focus_window(window)
-            command("Open file by path")
-            text("main.js")
-            key("Return")
-            time.sleep(0.4)
+            ui = NativeUI(window, process, log_path, state_path, project)
+            ui.open_file("main.js")
             command("Environment: Runtimes and project variables")
             screenshot(window, "environment.png")
             replace_control("environment-runtime-node", str(runtime))
@@ -156,8 +157,7 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
                 "Updated project variables were not saved",
             )
             applied_status(True)
-            key("space", ("Control_L",))
-            key("t")
+            ui.navigate("t")
             assert shell_record("existing.txt") == "first", (
                 "Applying settings changed a running shell"
             )
@@ -167,9 +167,7 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
             wait(lambda: (project / "task.json").exists(), "Updated task environment was not used")
             assert json.loads((project / "task.json").read_text())["mode"] == "second"
             assert shell_record("after-task.txt") == "first", "Task exports escaped their subshell"
-            key("space", ("Control_L",))
-            key("n")
-            time.sleep(0.5)
+            ui.navigate("n")
             assert shell_record("second.txt") == "second"
             screenshot(window, "new-terminal.png")
             close_window(window, process)
@@ -179,9 +177,8 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
             window = wait_for_window(process, log_path)
             wait_for_project(window, process, log_path, project)
             focus_window(window)
-            time.sleep(0.5)
+            ui = NativeUI(window, process, log_path, state_path, project)
             key("t", ("Control_L", "Shift_L"))
-            time.sleep(0.6)
             assert shell_record("restored.txt") == "second", "Restart lost the project environment"
             close_window(window, process)
             print(

@@ -3,7 +3,6 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -12,21 +11,19 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/agent-persistence-ui"
 )
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
     NativeUI,
-    assert_running,
-    click,
     click_button,
     close_window,
     fixture_directory,
-    focus_window,
+    fixture_environment,
     key,
     read_json_lines,
     screenshot,
-    text,
     wait_for_button,
 )
 
@@ -41,24 +38,13 @@ def wait(check, message):
     raise AssertionError(message)
 
 
-def mapped(process, log):
-    assert_running(process, log)
-    tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-    match = re.search(r'(0x[0-9a-f]+) "RODE.*project', tree)
-    if not match or "[Opening project]" in match[0]:
-        return None
-    return int(match[1], 16)
-
-
 def show_chat(process, log):
-    window = wait(lambda: mapped(process, log), "No prepared project window")
-    time.sleep(0.8)
-    focus_window(window)
-    if "[Sandbox]" not in subprocess.check_output(["xwininfo", "-id", hex(window)], text=True):
-        click(1331, 820)  # The fallback notification would otherwise cover Persist.
+    global ui
+    ui = project_ui(process, environment, root, log)
+    ui.dismiss_notice()
     key("a", ("Control_L", "Shift_L"))
-    time.sleep(0.4)
-    return window
+    ui.control("agent-composer")
+    return ui.window
 
 
 with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
@@ -71,8 +57,8 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
     attachment = base / "queued-document.txt"
     attachment.write_text("Attachment retained across restart")
     (root / "agent.py").chmod(0o755)
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
@@ -98,13 +84,10 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             )
             processes.append(process)
             window = show_chat(process, log_path)
-            info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
-            header = 157 if "[Sandbox]" in info else 187
-            click(1213, header)  # Settings, existing executable: no installation or inference.
-            click(1110, header + 94)
-            key("a", ("Control_L",))
-            text("./agent.py")
-            click(1213, header)
+            ui.click("agent-settings")
+            ui.edit("agent-codex-executable", "./agent.py")
+            ui.click("agent-settings")
+            ui.absent("agent-codex-executable")
             screenshot(window, "ready.png")
             assert not (root / "agent.pid").exists()
             assert not infos(), "Opening chat started a native agent"
@@ -118,9 +101,8 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             persistence("on")
             assert not infos(), "Choosing persistence before Send started an agent"
             persistence("auto")
-            click(1280, 785)
-            text("work")
-            key("Return")
+            ui.edit("agent-composer", "work")
+            ui.press("agent-composer", "Return")
             wait(lambda: (root / "work-started").exists(), "Agent did not start")
             first = wait(lambda: infos(), "Native agent missing")[0]
             assert first["persistent"] == "auto", "New chats must default to Auto"
@@ -132,15 +114,16 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
                 "Persist On was not acknowledged",
             )
             screenshot(window, "on.png")
-            click(460, 850)  # Attach a desktop file to a waiting prompt.
-            time.sleep(0.3)
-            key("a", ("Control_L",))
-            text(str(attachment))
+            ui.click("agent-attach")
+            ui.control("file-dialog-path", focused=True)
+            ui.fill_path(attachment)
             key("Return")
-            time.sleep(0.8)
-            click(700, 790)
-            text("queued across restart")
-            key("Return")
+            ui.absent("file-dialog-path")
+            ui.value("agent-attachment", attachment.name)
+            ui.edit("agent-composer", "queued across restart")
+            before = ui.layout()["pass"]
+            ui.press("agent-composer", "Return")
+            ui.control("agent-composer-empty", after_pass=before)
             # Close immediately: clean exit must wait for host acknowledgement.
             close_window(window, process)
             wait(lambda: infos() and not infos()[0]["attached"], "View did not detach")
@@ -151,7 +134,6 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
                 "Queued work did not continue after RODE closed",
             )
             assert (root / "agent.pid").read_text() == pid
-            time.sleep(0.4)
             assert (root / "work-done").read_text() == "2"
             # Another window may have changed this project's saved executable.
             # Attaching must restore the live backend's settings before follow-up.
@@ -165,14 +147,11 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             processes.append(process)
             window = show_chat(process, log_path)
             ui = NativeUI(window, process, log_path, base / "ui-state.json", root)
-            key("p", ("Control_L", "Shift_L"))
-            text("Agent: Running sessions")
-            key("Return")
-            time.sleep(0.8)
+            ui.command("Agent: Running sessions")
+            ui.control("agent-running-attach:" + first["id"])
             screenshot(window, "running.png")
-            # The only card is our project; its Attach action is in the right column.
-            click(898, 421)
-            time.sleep(0.8)
+            ui.click("agent-running-attach:" + first["id"])
+            ui.control("agent-idle")
             screenshot(window, "reattached.png")
             wait(lambda: infos() and infos()[0]["attached"], "Running did not reattach")
             wait(
@@ -196,8 +175,7 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             # Older controllers can expose only the final transcript messages.
             # These earlier backend-owned prompts are absent from its recall
             # snapshot; Up must page them without claiming/restarting the chat.
-            click(1280, 785)
-            text("unsent after restart")
+            ui.edit("agent-composer", "unsent after restart")
             ui.value("agent-composer-value", "unsent after restart", focused=True)
 
             def start_of_draft():
@@ -245,9 +223,8 @@ with fixture_directory(prefix="rode-agent-persistence-ui-") as base:
             key("BackSpace")
             assert (root / "agent.pid").read_text() == pid, "Recall restarted the live backend"
             assert (root / "work-done").read_text() == "2", "Recall started inference"
-            click(1280, 785)
-            text("work again")
-            key("Return")
+            ui.edit("agent-composer", "work again")
+            ui.press("agent-composer", "Return")
             wait(
                 lambda: (root / "work-done").read_text() == "3", "Reattached chat did not continue"
             )

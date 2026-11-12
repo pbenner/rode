@@ -15,7 +15,6 @@ import os
 import platform
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -30,6 +29,8 @@ from ui_harness import (
     click_button,
     close_window,
     display,
+    fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -77,7 +78,7 @@ def idle(base):
         return False
 
 
-with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
+with fixture_directory(prefix="rode-codex-install-ui-") as directory:
     version = json.loads((ROOT / "packaging/codex.json").read_text())["version"]
     root = Path(directory)
     # A developer checkout may have a prepared runtime beside target/debug.
@@ -98,8 +99,8 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     proxy = f"http://127.0.0.1:{server.server_port}"
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        root,
         XDG_CONFIG_HOME=str(root / "config"),
         XDG_DATA_HOME=str(root / "data"),
         CODEX_HOME=str(auth),
@@ -118,11 +119,12 @@ with tempfile.TemporaryDirectory(prefix="rode-codex-install-ui-") as directory:
     environment["PATH"] = os.pathsep.join(
         path for path in os.get_exec_path(environment) if not (Path(path) / "codex").is_file()
     )
-    environment.pop("HOME", None)
+    # The private HOME has no ~/.local/bin fallback; removing HOME would make
+    # platform directory discovery consult the invoking account again.
     base = root / "data/rode/codex"
     # Only the application's preference directory is repairable; the user's
     # data-directory ancestor must already be protected under any caller umask.
-    (root / "data").mkdir(mode=0o700)
+    (root / "data").mkdir(mode=0o700, exist_ok=True)
     base.parent.mkdir(parents=True)
     base.parent.chmod(0o775)  # An older preferences directory with a shared umask.
     preferences_marker = base.parent / "unrelated-settings"

@@ -4,7 +4,6 @@
 import os
 import signal
 import subprocess
-import tempfile
 import threading
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from ui_harness import (
     BINARY,
     NativeUI,
     close_window,
+    fixture_directory,
     fixture_environment,
     focus_window,
     key,
@@ -28,7 +28,7 @@ from ui_harness import (
 
 
 def run():
-    with tempfile.TemporaryDirectory(prefix="rode-readiness-ui-") as directory:
+    with fixture_directory(prefix="rode-readiness-ui-") as directory:
         base = Path(directory)
         project = base / "project"
         project.mkdir()

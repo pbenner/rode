@@ -16,6 +16,7 @@ from ui_harness import (
     close_window,
     display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -42,7 +43,6 @@ def button(x, y, number=1):
     xtest.XTestFakeButtonEvent(display, number, 1, 0)
     xtest.XTestFakeButtonEvent(display, number, 0, 0)
     x11.XFlush(display)
-    time.sleep(0.25)
 
 
 def drag(start, end):
@@ -58,7 +58,6 @@ def drag(start, end):
         time.sleep(0.035)
     xtest.XTestFakeButtonEvent(display, 1, 0, 0)
     x11.XFlush(display)
-    time.sleep(0.4)
 
 
 def append_save(ui, path, marker, *, unsaved=""):
@@ -87,16 +86,21 @@ def terminal_focus(ui):
     )
 
 
-def active_line(filename, width, height, accent, left=302, right=None, minimum=80):
-    data = subprocess.check_output(["convert", str(ARTIFACTS / filename), "-depth", "8", "rgb:-"])
-    assert len(data) == width * height * 3
-    pixels = [
-        tuple(data[(48 * width + x) * 3 : (48 * width + x) * 3 + 3])
-        for x in range(left, right or width - 90)
-    ]
-    assert pixels.count(accent) >= minimum, (
-        "Active tab is off-screen or its selection marker is missing"
-    )
+def active_line(window, filename, width, height, accent, left=302, right=None, minimum=80):
+    def painted():
+        screenshot(window, filename)
+        data = subprocess.check_output(
+            ["convert", str(ARTIFACTS / filename), "-depth", "8", "rgb:-"]
+        )
+        if len(data) != width * height * 3:
+            return False
+        pixels = [
+            tuple(data[(48 * width + x) * 3 : (48 * width + x) * 3 + 3])
+            for x in range(left, right or width - 90)
+        ]
+        return pixels.count(accent) >= minimum
+
+    wait_for(painted, "Active tab is off-screen or its selection marker is missing")
 
 
 with fixture_directory(prefix="rode-layout-ui-") as base:
@@ -114,8 +118,8 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("// main\nfn main() {}\n" if path.suffix == ".rs" else "# " + name + "\n")
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         GIT_CONFIG_NOSYSTEM="1",
@@ -155,12 +159,15 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             key("Return")
             wait_for(renamed.exists, "Save As did not finish")
             screenshot(window, "tabs-carbon.png")
-            active_line("tabs-carbon.png", 1380, 900, (220, 163, 37), minimum=240)
+            active_line(window, "tabs-carbon.png", 1380, 900, (220, 163, 37), minimum=240)
             click(1356, 66)  # All open editors
             screenshot(window, "open-editors.png")
             click(1130, 101)  # README, first item
             append_save(ui, root / "README.md", "selected_from_editors_list")
             button(505, 66, 2)  # Close inactive main.rs with the middle button.
+            ui.absent(
+                "editor-tab:" + hashlib.sha256(str(root / "src/main.rs").encode()).hexdigest()
+            )
             key("Next", ("Control_L",))
             append_save(ui, root / "api/config.toml", "api_tab")
             key("Next", ("Control_L",))
@@ -169,6 +176,19 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             click(1304, 66)  # Scroll to the first tab without changing selection.
             click(1304, 66)
             drag((355, 66), (610, 66))  # README after api/config.toml.
+            before_tab = (
+                "editor-tab:" + hashlib.sha256(str(root / "api/config.toml").encode()).hexdigest()
+            )
+            moved_tab = "editor-tab:" + hashlib.sha256(str(root / "README.md").encode()).hexdigest()
+            ui.layout(
+                lambda state: (
+                    any(b["name"] == before_tab for b in state["buttons"])
+                    and any(b["name"] == moved_tab for b in state["buttons"])
+                    and next(i for i, b in enumerate(state["buttons"]) if b["name"] == before_tab)
+                    < next(i for i, b in enumerate(state["buttons"]) if b["name"] == moved_tab)
+                ),
+                "Dragged tab did not move after api/config.toml",
+            )
             key("Prior", ("Control_L",))
             append_save(ui, root / "README.md", "selection_survives_reorder")
             key("End", ("Control_L",))
@@ -197,19 +217,26 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             text("layout")
             screenshot(window, "minimum-window.png")
             active_line(
-                "minimum-window.png", 850, 560, (220, 163, 37), left=250, right=750, minimum=140
+                window,
+                "minimum-window.png",
+                850,
+                560,
+                (220, 163, 37),
+                left=250,
+                right=750,
+                minimum=140,
             )
             key("Escape")
             append_save(ui, root / "README.md", "focus_after_find")
             append_save(ui, root / "README.md", "focus_after_terminal")
             ui.command("Git: Source control")
-            time.sleep(0.5)
+            ui.control("git-tab-changes")
             screenshot(window, "minimum-git.png")
             ui.command("Git: Source control")  # Hide panel.
             ui.resize(1380, 900)
             ui.command("Theme: Phosphor")
             screenshot(window, "tabs-phosphor.png")
-            active_line("tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
+            active_line(window, "tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
             key("t", ("Control_L", "Shift_L"))
             terminal_focus(ui)
             screenshot(window, "terminal-full-height.png")

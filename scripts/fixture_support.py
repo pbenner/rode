@@ -71,14 +71,25 @@ def decode_ron_string(literal):
     return "".join(result)
 
 
+def temporary_root():
+    """Use the explicit fixture root, then Python's TMPDIR/TEMP/TMP-aware default.
+
+    Resolve aliases before constructing host paths or Unix socket names. An
+    invalid explicit override is an error, never a reason to use another disk.
+    """
+    configured = os.environ.get("RODE_TEST_TMPDIR")
+    root = Path(configured if configured else tempfile.gettempdir()).resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"Fixture temporary root is not a directory: {root}")
+    return root
+
+
 @contextlib.contextmanager
-def fixture_directory(*, prefix):
+def fixture_directory(*, prefix, awkward=True):
     """Own a private fixture directory using the same canonical paths as the host."""
-    if os.environ.get("RODE_TEST_AWKWARD_PATHS") == "1":
+    if awkward and os.environ.get("RODE_TEST_AWKWARD_PATHS") == "1":
         prefix += "space ' -"
-    with tempfile.TemporaryDirectory(
-        prefix=prefix, dir=os.environ.get("RODE_TEST_TMPDIR")
-    ) as directory:
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=temporary_root()) as directory:
         yield Path(directory).resolve()
 
 

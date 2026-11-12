@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Select file-only access through native controls; exercise its host-owned tools."""
 
-import ctypes
 import json
 import os
 import re
@@ -17,12 +16,13 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
+    NativeUI,
     click,
     click_button,
     close_window,
     decode_ron_string,
-    display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     read_json_lines,
@@ -30,10 +30,7 @@ from ui_harness import (
     text,
     wait_for_project,
     wait_for_window,
-    x11,
 )
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
 def wait(check, message):
@@ -77,8 +74,8 @@ with fixture_directory(prefix="rode-agent-files-ui-") as base:
             ]
         )
     )
-    environment = dict(
-        os.environ,
+    environment = fixture_environment(
+        base,
         XDG_CONFIG_HOME=str(base / "config"),
         XDG_DATA_HOME=str(base / "data"),
         RODE_SESSION_DIR=str(base / "runtime"),
@@ -145,9 +142,7 @@ with fixture_directory(prefix="rode-agent-files-ui-") as base:
             assert not (root / "forbidden").exists()
             assert (root / "ui-created.txt").read_text() == "Native file-only edit.\n"
             screenshot(window, "file-only-complete.png")
-            x11.XResizeWindow(display, window, 760, 900)
-            x11.XFlush(display)
-            time.sleep(0.4)
+            NativeUI(window, process, log_path, base / "ui-state.json", root).resize(760, 900)
             screenshot(window, "file-only-compact.png")
             close_window(window, process)
         except Exception:

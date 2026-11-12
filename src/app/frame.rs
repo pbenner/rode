@@ -338,6 +338,9 @@ impl EditorApp {
         }
         if let Some(terminal) = self.terminal.as_mut().or(self.ssh_master.as_mut()) {
             let (response, error) = terminal.ui_with_response(ui, self.font_size - 1.0, palette);
+            if response.context_menu_opened() {
+                super::ui_probe::button(ui, "terminal-context-menu", &response);
+            }
             if !terminal.is_alive() {
                 super::ui_probe::button(ui, "terminal-output-ended", &response);
             }

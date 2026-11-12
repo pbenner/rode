@@ -34,6 +34,12 @@ impl EditorApp {
                 .hint_text("Type a command…"),
         );
         super::ui_probe::button(ui, "command-palette-input", &input);
+        super::ui_probe::value(
+            ui,
+            "command-palette-input-value",
+            &input,
+            &self.dialog_input,
+        );
         let mut commands: Vec<_> = Command::PALETTE
             .iter()
             .copied()
@@ -118,6 +124,9 @@ impl EditorApp {
                     // reached this frame, not merely its first matching prefix.
                     if query == name.to_lowercase() {
                         super::ui_probe::button(ui, &format!("command-match:{name}"), &response);
+                    }
+                    if row == self.navigation.list.index {
+                        super::ui_probe::button(ui, &format!("command-selected:{name}"), &response);
                     }
                     if row == self.navigation.list.index && reveal {
                         response.scroll_to_me(Some(Align::Center));

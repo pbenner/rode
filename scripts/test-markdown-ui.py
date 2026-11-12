@@ -1,33 +1,28 @@
 #!/usr/bin/env python3
 """Native Markdown previews, undo/save protection, and sandboxed local/SSH images."""
 
-import ctypes
 import json
 import os
-import re
 import shutil
 import struct
 import subprocess
-import tempfile
 import time
 import zlib
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/markdown-ui")
+from ui_fixture import project_ui
 from ui_harness import (
     ARTIFACTS,
     BINARY,
     close_window,
-    display,
-    focus_window,
+    fixture_directory,
+    fixture_environment,
     key,
     screenshot,
     text,
     theme,
-    x11,
 )
-
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
 def png(path, color):
@@ -68,7 +63,7 @@ def colors(window, name):
 
 def run(remote=False):
     label = "ssh" if remote else "local"
-    with tempfile.TemporaryDirectory(prefix="rode-markdown-ui-") as temporary:
+    with fixture_directory(prefix="rode-markdown-ui-") as temporary:
         base = Path(temporary)
         root = base / "project"
         root.mkdir()
@@ -100,17 +95,17 @@ fn main() { println!("ready"); }
 ![External image](https://example.invalid/no-download.png)
 """
         source.write_text(original)
-        environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
-        )
+        environment = fixture_environment(base)
         # Probe the same default policy with the actual executable, not the test process.
         probe = subprocess.run(
             [str(BINARY), "--file-helper"],
             input=json.dumps({"op": "prepare", "path": str(root), "sandbox": {"enabled": True}}),
             text=True,
             capture_output=True,
-            check=True,
+            env=environment,
+            timeout=15,
         )
+        assert probe.returncode == 0, f"Sandbox probe failed: {probe.stderr or probe.stdout}"
         isolated = json.loads(probe.stdout)["project"]["active"]
         args = [str(BINARY), "--sandbox"]
         if remote:
@@ -140,29 +135,14 @@ fn main() { println!("ready"); }
             process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
             window = None
             try:
-                for _ in range(150):
-                    found = re.search(
-                        r'(0x[0-9a-f]+) "RODE',
-                        subprocess.check_output(["xwininfo", "-root", "-tree"], text=True),
-                    )
-                    if found:
-                        window = int(found[1], 16)
-                        break
-                    assert process.poll() is None
-                    time.sleep(0.05)
-                assert window
-                time.sleep(1)
-                focus_window(window)
-                key("p", ("Control_L", "Shift_L"))
-                text("Open file by path")
-                key("Return")
-                text("README.md")
-                key("Return")
-                time.sleep(0.7)
+                ui = project_ui(process, environment, root, log.name)
+                window = ui.window
+                ui.open_file("README.md")
+                ui.document(source)
                 key("End", ("Control_L",))
                 text("\n## Unsaved section\n")
-                key("space", ("Control_L",))
-                key("e")  # Keep the Code surface visible before switching to preview.
+                ui.source(original + "\n## Unsaved section\n")
+                ui.navigate("e")
                 key("r", ("Control_L", "Shift_L"))
                 wait_for(
                     lambda: (
@@ -198,10 +178,9 @@ fn main() { println!("ready"); }
                 expected += "cursor-kept\n"
                 wait_for(lambda: source.read_text() == expected, "Preview reset the source cursor")
                 key("r", ("Control_L", "Shift_L"))
-                theme("carbon")
+                theme("carbon", ui=ui)
                 colors(window, label + "-carbon.png")
-                x11.XResizeWindow(display, window, 850, 560)
-                x11.XFlush(display)
+                ui.resize(850, 560)
                 screenshot(window, label + "-compact.png")
                 key("f", ("Control_L",))
                 text("Mission")

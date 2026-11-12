@@ -453,6 +453,9 @@ impl EditorApp {
                                     ui.id().with(("tab", doc.id)),
                                     Sense::click_and_drag(),
                                 );
+                                if let Some(path) = &doc.path {
+                                    ui_probe::value(ui, "editor-tab", &response, path);
+                                }
                                 let hovered = rect.contains(
                                     ui.input(|i| i.pointer.hover_pos().unwrap_or_default()),
                                 );

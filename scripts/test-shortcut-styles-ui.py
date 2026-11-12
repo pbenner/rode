@@ -4,7 +4,6 @@
 import os
 import shutil
 import subprocess
-import time
 from functools import partial
 from pathlib import Path
 
@@ -27,12 +26,6 @@ from ui_harness import (
 )
 
 wait_for = partial(wait_for_effect, timeout=12)
-
-
-def prefix(name, ctrl=False, leader="x"):
-    key(leader, ("Control_L",))
-    key(name, ("Control_L",) if ctrl else ())
-    time.sleep(0.12)
 
 
 def run():
@@ -85,6 +78,10 @@ def run():
                 ui = project_ui(process, env, root, log.name)
                 window = ui.window
                 command = partial(ui.command, keyboard=True)
+
+                def prefix(name, ctrl=False, leader="x"):
+                    ui.navigate(name, ("Control_L",) if ctrl else (), leader=leader)
+
                 ui.open_file("main.txt")
 
                 def saved(expected, message):
@@ -160,15 +157,16 @@ def run():
                 )
                 screenshot(window, "emacs-source.png")
                 prefix("f", ctrl=True)
-                text("other.txt")
+                ui.control("file-dialog-path", focused=True)
+                ui.fill("file-dialog-path", "other.txt")
                 key("Return")
-                time.sleep(0.3)
+                ui.document(other)
                 key("e", ("Control_L",))
                 text("X")
                 prefix("s", ctrl=True)
                 wait_for(lambda: other.read_text() == "secondX\n", "Emacs file-open prefix failed")
                 prefix("t")
-                time.sleep(0.7)
+                ui.terminal_input()
                 text("echo discard")
                 key("w", ("Control_L",))
                 text("emacs > emacs-shell.out\n")
@@ -179,9 +177,10 @@ def run():
                 prefix("e", leader="space")
                 command("Keyboard style: Vim")
                 prefix("f", ctrl=True, leader="w")
-                text("main.txt")
+                ui.control("file-dialog-path", focused=True)
+                ui.fill("file-dialog-path", "main.txt")
                 key("Return")
-                time.sleep(0.3)
+                ui.document(source)
                 text("gg0wde")
                 text("aBETA")
                 key("Escape")

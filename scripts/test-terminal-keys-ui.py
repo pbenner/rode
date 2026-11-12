@@ -13,11 +13,13 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click,
     click_button,
     close_window,
     display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
@@ -58,7 +60,7 @@ def clipboard():
     return result.stdout if result.returncode == 0 else ""
 
 
-def check_selection(window, root, click_control, command, focus_terminal):
+def check_selection(window, root, click_control, command, focus_terminal, ui):
     """Exercise actual mouse selection and the native system clipboard."""
     text("python3 selection-input.py\n")
     wait_for(lambda: (root / "selection-ready").exists(), "Selection fixture not ready")
@@ -96,7 +98,10 @@ def check_selection(window, root, click_control, command, focus_terminal):
     def context_copy():
         mouse_button(420, 150, 3, True)
         mouse_button(420, 150, 3, False)
-        time.sleep(0.2)
+        ui.layout(
+            lambda state: any(b["name"] == "terminal-context-menu" for b in state["buttons"]),
+            "Terminal context menu did not open",
+        )
         key("x")  # Menu typing must not leak into the raw terminal fixture.
         click(470, 162)
 
@@ -139,8 +144,8 @@ def run():
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         shell.chmod(0o755)
         state_path = ARTIFACTS / "ui-state.json"
-        environment = dict(
-            os.environ,
+        environment = fixture_environment(
+            base,
             XDG_CONFIG_HOME=str(base / "config"),
             XDG_DATA_HOME=str(base / "data"),
             SHELL=str(shell),
@@ -244,7 +249,14 @@ def run():
                 key("c", ("Control_L",))
                 wait_for(lambda: (root / "control-result").exists(), "Control keys were swallowed")
                 assert (root / "control-result").read_text() == "1803"
-                check_selection(window, root, click_control, command, focus_terminal)
+                check_selection(
+                    window,
+                    root,
+                    click_control,
+                    command,
+                    focus_terminal,
+                    NativeUI(window, process, log_path, state_path, root),
+                )
                 # The editor escape route must still work with terminal focus.
                 command("Terminal: Sessions and Slurm allocations")
                 wait_for_ui_state(

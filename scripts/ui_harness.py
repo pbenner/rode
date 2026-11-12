@@ -72,7 +72,7 @@ def event(name, pressed):
 
 
 def key(name, modifiers=()):
-    """Press/release modifiers and a key, flush X events and allow a native frame to process them."""
+    """Pace physical key transitions; callers must acknowledge focus and effects separately."""
     for modifier in modifiers:
         event(modifier, 1)
     event(name, 1)
@@ -363,6 +363,28 @@ class NativeUI:
             self.window, self.process, self.log_path, self.state_path, value, keyboard=keyboard
         )
 
+    def navigate(self, name, modifiers=(), *, leader="space", leader_modifiers=("Control_L",)):
+        """Send a leader chord once; wait until each half is processed, without clicking."""
+        before = self.layout()["pass"]
+        with delayed_input(self.process):
+            key(leader, leader_modifiers)
+        self.control("navigation-leader", after_pass=before)
+        before = self.layout()["pass"]
+        with delayed_input(self.process):
+            key(name, modifiers)
+        self.absent("navigation-leader", after_pass=before)
+
+    def document(self, path, *, focused=True):
+        """Observe the active path and editor focus without changing either."""
+        document = Path(path)
+        if not document.is_absolute():
+            if self.project_root is None:
+                raise ValueError("Relative documents require a project path")
+            document = self.project_root / document
+        self.value("active-document", str(document))
+        if focused:
+            self.control("source-editor", focused=True)
+
     def notice(self, value):
         digest = hashlib.sha256(value.encode()).hexdigest()
         self.control("notice-value:" + digest)
@@ -408,13 +430,7 @@ class NativeUI:
         if expect_error:
             self.control("notice-dismiss")
         else:
-            document = Path(path)
-            if not document.is_absolute():
-                if self.project_root is None:
-                    raise ValueError("Relative file opens require a project path")
-                document = self.project_root / document
-            digest = hashlib.sha256(str(document).encode()).hexdigest()
-            self.control("active-document:" + digest)
+            self.document(path, focused=False)
 
     def resize(self, width, height):
         x11.XResizeWindow.argtypes = [c.c_void_p, c.c_ulong, c.c_uint, c.c_uint]
@@ -487,12 +503,13 @@ class NativeUI:
         self.control(name, focused=True)
         key(key_name, modifiers)
 
-    def terminal(self):
-        """Select the terminal surface and acknowledge its attached, focused input."""
-        self.click("workspace-tab:Terminal")
+    def terminal_input(self, *, focused=True):
+        """Observe an attached terminal; keyboard-only tests must retain their focus evidence."""
         state = self.layout(
             lambda state: any(
-                button["name"].startswith("terminal-input:") and button["enabled"]
+                button["name"].startswith("terminal-input:")
+                and button["enabled"]
+                and (not focused or button["focused"])
                 for button in state["buttons"]
             ),
             "Project terminal did not become ready",
@@ -500,8 +517,16 @@ class NativeUI:
         name = next(
             button["name"]
             for button in state["buttons"]
-            if button["name"].startswith("terminal-input:") and button["enabled"]
+            if button["name"].startswith("terminal-input:")
+            and button["enabled"]
+            and (not focused or button["focused"])
         )
+        return name
+
+    def terminal(self):
+        """Select the terminal surface and acknowledge its attached, focused input."""
+        self.click("workspace-tab:Terminal")
+        name = self.terminal_input(focused=False)
         self.click(name)
         self.control(name, focused=True)
         return name
@@ -719,8 +744,7 @@ def focus_window(window, timeout=20):
 
 
 def screenshot(window, name):
-    """Capture this test window after a render opportunity into its artifact directory."""
-    time.sleep(0.25)
+    """Capture the owning window; scenario readiness must be established by its caller."""
     subprocess.run(
         [
             "import",
@@ -734,12 +758,27 @@ def screenshot(window, name):
     )
 
 
-def theme(name):
-    """Select an interface theme through the real command palette."""
+def theme(name, *, ui):
+    """Select an exact theme after the complete query is rendered; spelling is case-insensitive."""
+    query = "Theme: " + name
     key("p", ("Control_L", "Shift_L"))
-    text("theme: " + name)
-    key("Return")
-    time.sleep(0.3)
+    ui.control("command-palette-input", focused=True)
+    ui.fill("command-palette-input", query)
+    target = "command-match:" + query
+    state = ui.layout(
+        lambda state: any(
+            button["name"].casefold() == target.casefold() and button["enabled"]
+            for button in state["buttons"]
+        ),
+        "Theme did not match the complete query: " + name,
+    )
+    actual = next(
+        button["name"]
+        for button in state["buttons"]
+        if button["name"].casefold() == target.casefold()
+    )
+    ui.click(actual)
+    ui.absent("command-palette-input")
 
 
 def saved_theme(directory, expected):
@@ -758,14 +797,23 @@ def saved_theme(directory, expected):
 
 
 def background(window, filename, expected):
-    """Capture a frame and assert the known editor-background sample pixel."""
-    screenshot(window, filename)
-    pixel = subprocess.check_output(
-        ["convert", str(ARTIFACTS / filename), "-format", "%[pixel:p{1300,400}]", "info:"],
-        text=True,
-    )
-    actual = tuple(map(int, re.findall(r"\d+", pixel)[:3]))
-    assert actual == expected, (filename, pixel, expected)
+    """Require the theme's painted pixel, rather than sleeping before one screenshot."""
+    actual = None
+
+    def matches():
+        nonlocal actual
+        screenshot(window, filename)
+        pixel = subprocess.check_output(
+            ["convert", str(ARTIFACTS / filename), "-format", "%[pixel:p{1300,400}]", "info:"],
+            text=True,
+        )
+        actual = tuple(map(int, re.findall(r"\d+", pixel)[:3]))
+        return actual == expected
+
+    try:
+        wait_for_effect(matches, f"Theme background did not become {expected}", timeout=10)
+    except AssertionError as error:
+        raise AssertionError(f"{filename}: background {actual}, expected {expected}") from error
 
 
 class ClientData(c.Union):

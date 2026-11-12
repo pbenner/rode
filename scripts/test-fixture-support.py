@@ -16,11 +16,41 @@ from fixture_support import (
     fixture_directory,
     fixture_environment,
     private_directory,
+    temporary_root,
     write_python_launcher,
 )
 
 
 class FixtureSupportTests(unittest.TestCase):
+    def test_explicit_root_takes_precedence_and_resolves_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chosen, ordinary = root / "chosen ' root", root / "ordinary"
+            chosen.mkdir()
+            ordinary.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(chosen, target_is_directory=True)
+            with patch.dict(os.environ, RODE_TEST_TMPDIR=str(alias), TMPDIR=str(ordinary)):
+                with fixture_directory(prefix="fixture-") as base:
+                    self.assertEqual(base.parent, chosen.resolve())
+                    self.assertEqual(base.stat().st_mode & 0o777, 0o700)
+            self.assertFalse(base.exists())
+
+    def test_standard_temp_root_is_honored_and_invalid_overrides_do_not_fall_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict(os.environ, RODE_TEST_TMPDIR="", TMPDIR=str(root)):
+                with patch("fixture_support.tempfile.tempdir", None):
+                    self.assertEqual(temporary_root(), root.resolve())
+            with patch.dict(os.environ, RODE_TEST_TMPDIR=str(root / "missing")):
+                with self.assertRaises(FileNotFoundError):
+                    temporary_root()
+            file = root / "file"
+            file.touch()
+            with patch.dict(os.environ, RODE_TEST_TMPDIR=str(file)):
+                with self.assertRaises(NotADirectoryError):
+                    temporary_root()
+
     def test_nested_and_external_artifact_paths_do_not_overwrite_other_failures(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -87,7 +117,10 @@ class FixtureSupportTests(unittest.TestCase):
             actual.mkdir()
             alias = root / "alias"
             alias.symlink_to(actual, target_is_directory=True)
-            with patch("fixture_support.tempfile.tempdir", str(alias)):
+            with (
+                patch.dict(os.environ, RODE_TEST_TMPDIR=""),
+                patch("fixture_support.tempfile.tempdir", str(alias)),
+            ):
                 with fixture_directory(prefix="project-") as base:
                     self.assertEqual(base.parent, actual.resolve())
                     self.assertEqual(base, base.resolve())

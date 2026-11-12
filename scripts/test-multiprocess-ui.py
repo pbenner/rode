@@ -5,7 +5,6 @@ import ctypes
 import fcntl
 import json
 import os
-import re
 import subprocess
 import threading
 import time
@@ -17,16 +16,20 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click,
     click_button,
     close_window,
     display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
     text,
     theme,
+    wait_for_project,
+    wait_for_window,
     x11,
 )
 
@@ -45,30 +48,13 @@ def wait_for(check, message):
 def focus(window):
     x11.XRaiseWindow(display, window)
     focus_window(window)
-    time.sleep(0.25)
 
 
-def window_for(process, previous):
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-        for match in re.finditer(r'(0x[0-9a-f]+) "RODE', tree):
-            window = int(match[1], 16)
-            if window not in previous:
-                state = subprocess.run(
-                    ["xwininfo", "-id", hex(window)], capture_output=True, text=True
-                )
-                if (
-                    state.returncode
-                    or "Map State: IsViewable" not in state.stdout
-                    or "[Opening project]" in state.stdout
-                ):
-                    continue
-                focus(window)
-                return window
-        assert process.poll() is None
-        time.sleep(0.05)
-    raise AssertionError("No native window")
+def window_for(process, project):
+    window = wait_for_window(process, log_path)
+    wait_for_project(window, process, log_path, project)
+    focus(window)
+    return window
 
 
 def preferences(path):
@@ -118,8 +104,8 @@ with fixture_directory(prefix="rode-multiprocess-ui-") as base:
     for root in roots:
         root.mkdir()
         (root / "main.txt").write_text("original file\n")
-    environment = dict(
-        os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
+    environment = fixture_environment(
+        base, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
     )
     saved = base / "data/rode/app.ron"
     connections = base / "config/rode/connections.json"
@@ -136,10 +122,10 @@ with fixture_directory(prefix="rode-multiprocess-ui-") as base:
                     stderr=log,
                 )
                 processes.append(process)
-                windows.append(window_for(process, windows))
+                windows.append(window_for(process, root))
             # Both windows have already loaded the old preference snapshot.
             focus(windows[0])
-            theme("carbon")
+            theme("carbon", ui=NativeUI(windows[0], processes[0], log_path, states[0], roots[0]))
             focus(windows[1])
             click(195, 25)
             screenshot(windows[1], "font-menu.png")
@@ -199,12 +185,15 @@ with fixture_directory(prefix="rode-multiprocess-ui-") as base:
             focus(windows[0])
             key("Escape")
             key("p", ("Control_L", "Shift_L"))
-            text("Open file by path")
+            ui = NativeUI(windows[0], processes[0], log_path, states[0], roots[0])
+            ui.control("command-palette-input", focused=True)
+            ui.fill("command-palette-input", "Open file by path")
+            ui.control("command-match:Open file by path")
             key("Return")
-            time.sleep(0.2)
-            text("main.txt")
+            ui.control("file-dialog-path", focused=True)
+            ui.fill("file-dialog-path", "main.txt")
             key("Return")
-            time.sleep(0.3)
+            ui.document(roots[0] / "main.txt")
             key("End", ("Control_L",))
             text("saved after the other window closed\n")
             key("s", ("Control_L",))

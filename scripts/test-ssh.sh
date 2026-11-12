@@ -13,7 +13,8 @@ if [[ -n "${RODE_TEST_SESSION_HELPER:-}" && -z "${RODE_HOST_HELPER+x}" && -z "${
     fi
     export RODE_SESSION_HELPER="$RODE_TEST_SESSION_HELPER"
 fi
-test_dir=$(mktemp -d "${TMPDIR:-/tmp}/rode-ssh-test.XXXXXX")
+test_root=$(python3 -c 'from scripts.fixture_support import temporary_root; print(temporary_root())')
+test_dir=$(mktemp -d "$test_root/rode-ssh-test.XXXXXX")
 test_dir=$(cd "$test_dir" && pwd -P)
 mkdir -m 700 "$test_dir/codex-home" "$test_dir/home"
 sshd_pid=

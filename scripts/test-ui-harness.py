@@ -9,11 +9,13 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from ui_harness import (
     NativeUI,
+    background,
     click_button,
     delayed_input,
     focus_request,
@@ -542,6 +544,10 @@ class NativeInteractionTests(unittest.TestCase):
 
 class PaletteReadinessTests(unittest.TestCase):
     def setUp(self):
+        # Simulated PIDs must never reach the real process-pause helper.
+        delay = patch("ui_harness.delayed_input", side_effect=lambda _: nullcontext())
+        delay.start()
+        self.addCleanup(delay.stop)
         self.process = Mock(pid=42)
         self.process.poll.return_value = None
         self.read = patch("ui_harness.Path.read_text").start()
@@ -642,9 +648,55 @@ class PaletteReadinessTests(unittest.TestCase):
 
 class NativeUIReadinessTests(unittest.TestCase):
     def setUp(self):
+        delay = patch("ui_harness.delayed_input", side_effect=lambda _: nullcontext())
+        delay.start()
+        self.addCleanup(delay.stop)
         self.process = Mock(pid=42)
         self.process.poll.return_value = None
         self.ui = NativeUI(0x123, self.process, "log", "state", "/project")
+
+    def test_navigation_never_sends_the_second_chord_before_leader_acknowledgement(self):
+        with (
+            patch.object(self.ui, "layout", return_value={"pass": 10}),
+            patch.object(self.ui, "control", side_effect=AssertionError("Leader never appeared")),
+            patch("ui_harness.key") as key,
+        ):
+            with self.assertRaisesRegex(AssertionError, "Leader never appeared"):
+                self.ui.navigate("t")
+            key.assert_called_once_with("space", ("Control_L",))
+
+    def test_terminal_readiness_requires_enabled_focused_input_without_clicking(self):
+        def snapshot(*, ready=False, focused=False):
+            return json.dumps(
+                dict(
+                    pid=42,
+                    **{"pass": 1},
+                    buttons=[dict(name="terminal-input:owned", enabled=ready, focused=focused)],
+                )
+            )
+
+        with (
+            patch(
+                "ui_harness.Path.read_text",
+                side_effect=[snapshot(), snapshot(ready=True), snapshot(ready=True, focused=True)],
+            ) as read,
+            patch("ui_harness.time.sleep"),
+            patch("ui_harness.click") as click,
+        ):
+            self.assertEqual(self.ui.terminal_input(), "terminal-input:owned")
+            self.assertEqual(read.call_count, 3)
+            click.assert_not_called()
+
+    def test_visual_background_waits_for_painted_pixels_without_a_fixed_render_delay(self):
+        with (
+            patch("ui_harness.screenshot") as capture,
+            patch(
+                "ui_harness.subprocess.check_output", side_effect=["srgb(0,0,0)", "srgb(16,16,16)"]
+            ),
+            patch("ui_harness.time.sleep"),
+        ):
+            background(0x123, "theme.png", (16, 16, 16))
+            self.assertEqual(capture.call_count, 2)
 
     def test_complete_path_not_just_the_first_edit_is_required_before_submission(self):
         path = "folder/file with spaces.txt"
