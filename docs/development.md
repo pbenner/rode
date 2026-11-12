@@ -19,7 +19,9 @@ vault coordination directory for each test binary. They preserve explicit Cargo
 and Rust toolchain locations and remove the development virtual environment
 from fixture command lookup. Tests therefore exercise sandbox enforcement
 without writing into the developer's home or relying on its Python activation.
-Explicit project interpreters and `RODE_TEST_*` tool paths remain available.
+Explicit project interpreters and `RODE_TEST_*` tool paths remain available. Inherited
+native UI probe destinations are removed: Rust layout tests install their own
+per-context outputs, so parallel tests cannot replace each other's snapshots.
 The runner cleans up each private home after the test executable exits and keeps
 its exit status; it does not filter failing tests. Extra command-line arguments
 replace the default Cargo test arguments, for example
@@ -37,6 +39,11 @@ Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_
 The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; the remaining interpreter/Jupyter adapter docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
 
 Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, `src/app/sessions/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
+
+Collection invariants live in `src/app/documents/tests.rs`; bounded polling and
+cross-generation routing regressions live in `src/app/workers/tests.rs`. Run the
+root library tests after changing these owners, then exercise native tab/dirty-save
+workflows and SSH disconnect/reconnect with rebuilt editor/helper artifacts.
 
 The **2026-11-10 structure/documentation review** consolidated desktop/helper
 runtime pin contracts in `runtime_cache::pins`, shared nonreaping child-exit
@@ -423,9 +430,17 @@ they must not substitute for a readiness acknowledgement. Keyboard-only tests
 observe focus without clicking a control to repair it.
 
 `write_python_launcher` quotes both interpreter and script paths, including
-spaces and apostrophes. Preference checks decode the outer RON string with
-`decode_ron_string` before parsing the embedded JSON; RON's apostrophe and Unicode
-escapes are not JSON string escapes.
+spaces and apostrophes. Whole preference-map checks use `read_preferences`;
+single-field checks decode the outer RON string with `decode_ron_string` before
+parsing embedded JSON. RON's apostrophe and Unicode escapes are not JSON string
+escapes. Missing preference storage is pending; malformed storage fails explicitly.
+Project readiness checks reject both pending preparation and offline SSH candidate
+titles before sending dependent input.
+
+The owned headless launcher and CI display use Xvfb's `-noreset`: transient
+readiness probes and gaps between cases must not reset authentication/display
+state when the final client disconnects. The launcher still stops its owned
+display process group at the end of the invocation.
 
 `scripts/ssh_fixture.py` owns shell and OpenSSH configuration quoting. The SSH
 fixture retains a directory descriptor and passes its `/proc` alias to OpenSSH,

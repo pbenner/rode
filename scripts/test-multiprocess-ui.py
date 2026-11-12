@@ -32,6 +32,9 @@ from ui_harness import (
     wait_for_window,
     x11,
 )
+from ui_harness import (
+    read_preferences as preferences,
+)
 
 x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
 
@@ -55,14 +58,6 @@ def window_for(process, project):
     wait_for_project(window, process, log_path, project)
     focus(window)
     return window
-
-
-def preferences(path):
-    if not path.exists():
-        return {}
-    # Native RON map of string keys/values differs from JSON by its final comma.
-    contents = path.read_text().rstrip()
-    return json.loads(contents[:-1].rstrip().removesuffix(",") + "}")
 
 
 def agent(window, executable):

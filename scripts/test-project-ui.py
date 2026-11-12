@@ -211,8 +211,9 @@ class ProjectUI(NativeUI):
         self.wait(lambda: '"RODE"' in self.title(), "Disconnect did not clear the host")
 
     def failure(self, label):
-        if self.state_path.exists():
-            shutil.copy2(self.state_path, ARTIFACTS / (label + "-ui-state.json"))
+        state_path = Path(self.state_path)
+        if state_path.exists():
+            shutil.copy2(state_path, ARTIFACTS / (label + "-ui-state.json"))
         if self.process.poll() is None:
             screenshot(self.window, label + "-failure.png")
 
@@ -466,10 +467,11 @@ def failed_connection(backend):
             config = base / "ssh_config"
             known_hosts = base / "known_hosts"
             known_hosts.touch()
+            quoted_known_hosts = json.dumps(str(known_hosts), ensure_ascii=False)
             config.write_text(
                 f"Host rode-failure\n HostName 127.0.0.1\n Port {port}\n"
                 " BatchMode yes\n ConnectTimeout 2\n ConnectionAttempts 1\n"
-                f" UserKnownHostsFile {known_hosts}\n GlobalKnownHostsFile {known_hosts}\n"
+                f" UserKnownHostsFile {quoted_known_hosts}\n GlobalKnownHostsFile {quoted_known_hosts}\n"
             )
             environment = fixture_environment(
                 base,

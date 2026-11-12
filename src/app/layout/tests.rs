@@ -149,10 +149,10 @@ fn ssh_form_labels_align_beside_fields_and_stack_above_them_in_narrow_windows() 
                     ..Default::default()
                 },
             );
-            app.profiles.clear();
-            app.aliases.clear();
-            app.profile.identity = "entered-identity".into();
-            app.profile.config = "entered-config".into();
+            app.connection_profiles.profiles.clear();
+            app.connection_profiles.aliases.clear();
+            app.connection_profiles.draft.identity = "entered-identity".into();
+            app.connection_profiles.draft.config = "entered-config".into();
             let mut output = None;
             for _ in 0..4 {
                 output = Some(ctx.run(
@@ -189,7 +189,7 @@ fn ssh_form_labels_align_beside_fields_and_stack_above_them_in_narrow_windows() 
                     );
                 }
             }
-            assert_eq!(app.profile.identity, "entered-identity");
+            assert_eq!(app.connection_profiles.draft.identity, "entered-identity");
         }
     }
 }
@@ -300,7 +300,7 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                     },
                 );
                 ctx.set_zoom_factor(scale);
-                app.folder_needs_load = false;
+                app.project_picker.needs_load = false;
                 app.file_browser.needs_load = false;
                 app.new_notebook();
                 let mut image = crate::app::image_view::ImageView::new(crate::images::Decoded {
@@ -323,14 +323,14 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                 ] {
                     if scene == "binary" {
                         app.new_file();
-                        app.documents[app.active].hex =
+                        app.documents.active_mut().unwrap().hex =
                             Some(crate::app::binary_view::HexView::new(
                                 crate::binary::Loaded::decode("AAECAwQF", &app.image_budget)
                                     .unwrap(),
                             ));
                     } else if scene == "markdown" {
                         app.new_file();
-                        let doc = &mut app.documents[app.active];
+                        let doc = app.documents.active_mut().unwrap();
                         doc.path = Some("preview.md".into());
                         doc.text = "# Preview".into();
                         let mut preview =

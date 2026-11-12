@@ -16,8 +16,10 @@ from ui_harness import (
     NativeUI,
     close_window,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
+    read_preferences,
     screenshot,
     stop_process,
     text,
@@ -53,14 +55,14 @@ def first_byte(ui):
 def preferences(path):
     if not path.exists():
         return {}
-    content = path.read_text().rstrip()
-    values = json.loads(content[:-1].rstrip().removesuffix(",") + "}")
+    values = read_preferences(path)
     return json.loads(values.get("extension_preferences", "{}"))
 
 
 def run(remote=False):
     label = "ssh" if remote else "local"
     with fixture_directory(prefix="rode-binary-ui-") as base:
+        env = fixture_environment(base)
         root = base / "project"
         root.mkdir()
         source = root / "sample.bin"
@@ -92,9 +94,6 @@ def run(remote=False):
                     },
                 }
             )
-        )
-        env = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
         )
         args = [str(BINARY), "--theme", "carbon"]
         if remote:

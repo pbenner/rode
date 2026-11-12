@@ -108,7 +108,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     app.documents[0].text = "keep these edits".into();
     app.documents[0].modified = true;
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.preparing || !app.opening.is_empty() {
+    while app.preparing || app.documents.has_pending_opens() {
         app.poll(&ctx);
         assert!(
             Instant::now() < deadline,
@@ -121,17 +121,17 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     assert_eq!(app.documents[0].text, "keep these edits");
     assert!(app.documents[0].dirty());
     assert!(app.workspace.is_none() && !app.project_ready());
-    assert!(app.terminal.is_none() && app.directories.is_empty());
+    assert!(app.terminal.is_none() && app.explorer_state.directories.is_empty());
     assert_eq!(app.sandbox_defaults, defaults);
     assert!(app.sandbox_policies_for_host(false).is_empty());
-    let doc = &mut app.documents[app.active];
+    let doc = app.documents.active_mut().unwrap();
     assert_eq!(doc.path.as_deref(), path.to_str());
     assert_eq!(doc.text, "standalone contents\n");
     doc.text.push_str("edited\n");
     doc.modified = true;
     doc.edit_version += 1;
     app.save_active(&ctx, false);
-    while app.documents[app.active].saving {
+    while app.documents[app.documents.active_index()].saving {
         app.poll(&ctx);
         assert!(Instant::now() < deadline, "Save stalled: {:?}", app.notice);
         std::thread::sleep(Duration::from_millis(5));
@@ -140,20 +140,24 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
         std::fs::read_to_string(&path).unwrap(),
         "standalone contents\nedited\n"
     );
-    assert!(!app.documents[app.active].dirty());
+    assert!(!app.documents[app.documents.active_index()].dirty());
     // Standalone writes still enforce revision checks against external edits.
     std::fs::write(&path, "external change\n").unwrap();
-    app.documents[app.active].text.push_str("unsaved edit\n");
-    app.documents[app.active].modified = true;
-    app.documents[app.active].edit_version += 1;
+    app.documents
+        .active_mut()
+        .unwrap()
+        .text
+        .push_str("unsaved edit\n");
+    app.documents.active_mut().unwrap().modified = true;
+    app.documents.active_mut().unwrap().edit_version += 1;
     app.save_active(&ctx, false);
-    while app.documents[app.active].saving {
+    while app.documents[app.documents.active_index()].saving {
         app.poll(&ctx);
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change\n");
-    assert!(app.documents[app.active].dirty());
+    assert!(app.documents[app.documents.active_index()].dirty());
     let _ = ctx.run(Default::default(), |ctx| app.workspace_banner(ctx));
     assert!(app.last_window_title.ends_with("[File mode]"));
 }
@@ -248,7 +252,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             },
         );
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.preparing || !app.opening.is_empty() {
+        while app.preparing || app.documents.has_pending_opens() {
             app.poll(&ctx);
             assert!(
                 Instant::now() < deadline,
@@ -264,7 +268,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
         assert!(workspace.ready && workspace.connected);
         assert_eq!(app.documents.len(), usize::from(is_file));
         if is_file {
-            let doc = &mut app.documents[app.active];
+            let doc = app.documents.active_mut().unwrap();
             assert_eq!(doc.path.as_deref(), absolute_file.to_str());
             assert_eq!(doc.text, "startup contents\n");
             assert!(!doc.dirty());
@@ -273,7 +277,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             doc.modified = true;
             doc.edit_version += 1;
             app.save_active(&ctx, false);
-            while app.documents[app.active].saving {
+            while app.documents[app.documents.active_index()].saving {
                 app.poll(&ctx);
                 assert!(Instant::now() < deadline, "Save did not finish: {path:?}");
                 std::thread::sleep(Duration::from_millis(5));
@@ -282,7 +286,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
                 std::fs::read_to_string(&file).unwrap(),
                 "startup contents\nedited\n"
             );
-            assert!(!app.documents[app.active].dirty());
+            assert!(!app.documents[app.documents.active_index()].dirty());
         }
     }
 }
@@ -468,19 +472,21 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
     })
     .unwrap();
     app.tx
-        .send(Event::Done {
-            generation: app.generation,
-            job: Job::Prepare {
-                remote: false,
-                options: Default::default(),
-                keep_buffers: false,
-                token: 1,
-                documents_at_start: vec![],
-                restore_saved: None,
-                open_file: Some(file.to_string_lossy().into_owned()),
+        .send(Event::workspace(
+            app.generation,
+            WorkspaceEvent::Done {
+                job: Job::Prepare {
+                    remote: false,
+                    options: Default::default(),
+                    keep_buffers: false,
+                    token: 1,
+                    documents_at_start: vec![],
+                    restore_saved: None,
+                    open_file: Some(file.to_string_lossy().into_owned()),
+                },
+                result: Box::new(Ok(response)),
             },
-            result: Box::new(Ok(response)),
-        })
+        ))
         .unwrap();
     app.poll(&ctx);
     assert!(matches!(
@@ -512,7 +518,7 @@ fn file_operations_wait_until_the_requested_project_environment_is_ready() {
             .is_some_and(|(text, _, _)| text.contains("environment to be ready"))
     );
     app.open_file("/not-read.rs".into(), &ctx);
-    assert!(app.opening.is_empty());
+    assert!(!app.documents.has_pending_opens());
     assert_eq!(app.documents.len(), 1);
 }
 
@@ -551,7 +557,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     doc.selection = Some((2, 5));
     let generation = app.generation;
     let project_token = app.project_token;
-    let folder_token = app.folder_token;
+    let folder_token = app.project_picker.token;
     let cancel = app.connection_cancel.clone();
     app.preparing = true;
     app.disconnect_ssh(&ctx);
@@ -562,7 +568,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     assert!(!remote.socket.exists());
     assert!(app.generation > generation);
     assert!(app.project_token > project_token);
-    assert!(app.folder_token > folder_token);
+    assert!(app.project_picker.token > folder_token);
     assert_eq!(app.documents[0].text, "unsaved remote edits");
     assert!(app.documents[0].dirty());
     assert_eq!(app.documents[0].edit_version, 3);
@@ -578,17 +584,17 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     assert!(app.ssh_master.is_none());
     assert!(app.terminal.is_none());
     app.tx
-        .send(Event::Connected {
+        .send(Event::workspace(
             generation,
-            result: Ok(()),
-        })
+            WorkspaceEvent::Connected { result: Ok(()) },
+        ))
         .unwrap();
     app.poll(&ctx);
     assert!(app.workspace.is_none());
     app.set_dialog(Dialog::Folder);
-    assert!(!app.folder_remote);
+    assert!(!app.project_picker.remote);
     assert_eq!(
-        app.dialog_input,
+        app.project_picker.path,
         std::env::current_dir().unwrap().to_string_lossy()
     );
     app.workspace_banner(&ctx);
@@ -613,10 +619,10 @@ fn open_folder_defaults_to_the_remote_host_and_local_open_is_explicit() {
         .socket
         .clone();
     app.set_dialog(Dialog::Folder);
-    assert!(app.folder_remote);
-    assert_eq!(app.dialog_input, "/scratch/researcher/project");
+    assert!(app.project_picker.remote);
+    assert_eq!(app.project_picker.path, "/scratch/researcher/project");
     app.open_local_folder_dialog();
-    assert!(!app.folder_remote);
+    assert!(!app.project_picker.remote);
     assert_eq!(
         app.workspace
             .as_ref()
@@ -660,8 +666,8 @@ fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.set_dialog(Dialog::Folder);
-    let old = app.dialog_input.clone();
-    let token = app.folder_token;
+    let old = app.project_picker.path.clone();
+    let token = app.project_picker.token;
     app.set_dialog(Dialog::Open);
     app.dialog_input = "keep-this.rs".into();
     let response = files::Response {
@@ -680,37 +686,41 @@ fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
         tool: None,
     };
     app.tx
-        .send(Event::Done {
-            generation: app.generation,
-            job: Job::Browse {
-                remote: false,
-                token,
-                path: old,
-                options: app.folder_sandbox.clone(),
+        .send(Event::workspace(
+            app.generation,
+            WorkspaceEvent::Done {
+                job: Job::Browse {
+                    remote: false,
+                    token,
+                    path: old,
+                    options: app.project_picker.sandbox.clone(),
+                },
+                result: Box::new(Ok(response.clone())),
             },
-            result: Box::new(Ok(response.clone())),
-        })
+        ))
         .unwrap();
     app.poll(&ctx);
     assert_eq!(app.dialog_input, "keep-this.rs");
     app.set_dialog(Dialog::Folder);
-    let old = app.dialog_input.clone();
-    let token = app.folder_token;
-    app.dialog_input = "/newly/typed/path".into();
+    let old = app.project_picker.path.clone();
+    let token = app.project_picker.token;
+    app.project_picker.path = "/newly/typed/path".into();
     app.tx
-        .send(Event::Done {
-            generation: app.generation,
-            job: Job::Browse {
-                remote: false,
-                token,
-                path: old,
-                options: app.folder_sandbox.clone(),
+        .send(Event::workspace(
+            app.generation,
+            WorkspaceEvent::Done {
+                job: Job::Browse {
+                    remote: false,
+                    token,
+                    path: old,
+                    options: app.project_picker.sandbox.clone(),
+                },
+                result: Box::new(Ok(response)),
             },
-            result: Box::new(Ok(response)),
-        })
+        ))
         .unwrap();
     app.poll(&ctx);
-    assert_eq!(app.dialog_input, "/newly/typed/path");
+    assert_eq!(app.project_picker.path, "/newly/typed/path");
 }
 
 #[derive(Default)]
@@ -937,38 +947,4 @@ fn save_acknowledgement_keeps_edits_typed_during_save() {
     assert!(!document.saving);
     assert_eq!(document.text, "newer edits");
     assert_eq!(document.revision.as_deref(), Some("new revision"));
-}
-
-#[test]
-fn explorer_flattens_only_expanded_visible_folders() {
-    let entries = |path: &str, dir| Entry {
-        path: path.into(),
-        name: ssh::display_name(path).into(),
-        dir,
-    };
-    let directories = HashMap::from([
-        (
-            "/root".into(),
-            vec![
-                entries("/root/src", true),
-                entries("/root/.git", true),
-                entries("/root/main.rs", false),
-            ],
-        ),
-        ("/root/src".into(), vec![entries("/root/src/lib.rs", false)]),
-    ]);
-    let mut rows = vec![];
-    flatten_tree(&directories, &HashSet::new(), "/root", 0, false, &mut rows);
-    assert_eq!(rows.len(), 2);
-    rows.clear();
-    flatten_tree(
-        &directories,
-        &HashSet::from(["/root/src".into()]),
-        "/root",
-        0,
-        true,
-        &mut rows,
-    );
-    assert_eq!(rows.len(), 4);
-    assert_eq!(rows[1].depth, 1);
 }

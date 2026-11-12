@@ -342,7 +342,7 @@ impl EditorApp {
                     .map(|w| w.root.clone())
                     .or_else(|| {
                         self.documents
-                            .get(self.active)
+                            .active()
                             .filter(|_| {
                                 self.dialog != Dialog::AgentAttachLocal
                                     || self.workspace.as_ref().is_none_or(|w| w.remote.is_none())
@@ -358,7 +358,7 @@ impl EditorApp {
                     })
             };
             self.file_browser.directory = directory.clone();
-            if let Some(entries) = self.directories.get(&directory).filter(|_| {
+            if let Some(entries) = self.explorer_state.directories.get(&directory).filter(|_| {
                 self.dialog != Dialog::AgentAttachLocal
                     || self.workspace.as_ref().is_none_or(|w| w.remote.is_none())
             }) {
@@ -484,7 +484,7 @@ impl EditorApp {
                 browse = Some(self.picker_path(&self.file_browser.location));
             }
             if ui.checkbox(&mut self.show_hidden, "Hidden").changed() {
-                self.tree_dirty = true;
+                self.explorer_state.tree_dirty = true;
             }
         });
         if self.file_browser.loading {
@@ -501,7 +501,8 @@ impl EditorApp {
         {
             self.file_browser.rows(&HashMap::new(), &[]);
         } else {
-            self.file_browser.rows(&self.directories, &self.documents);
+            self.file_browser
+                .rows(&self.explorer_state.directories, &self.documents);
         }
         let query = format!(
             "{}:{}:{}",
@@ -658,18 +659,20 @@ mod tests {
         app.set_dialog(Dialog::HexOpen);
         app.dialog_input = "keep.bin".into();
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::BrowseFiles {
-                    token,
-                    local: false,
-                    path: "/first".into(),
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::BrowseFiles {
+                        token,
+                        local: false,
+                        path: "/first".into(),
+                    },
+                    result: Box::new(Ok(files::Response {
+                        path: "/stale".into(),
+                        ..Default::default()
+                    })),
                 },
-                result: Box::new(Ok(files::Response {
-                    path: "/stale".into(),
-                    ..Default::default()
-                })),
-            })
+            ))
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.dialog_input, "keep.bin");
@@ -678,18 +681,20 @@ mod tests {
         app.file_browser.requested = "/old".into();
         app.file_browser.location = "/new".into();
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::BrowseFiles {
-                    token,
-                    local: false,
-                    path: "/old".into(),
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::BrowseFiles {
+                        token,
+                        local: false,
+                        path: "/old".into(),
+                    },
+                    result: Box::new(Ok(files::Response {
+                        path: "/stale".into(),
+                        ..Default::default()
+                    })),
                 },
-                result: Box::new(Ok(files::Response {
-                    path: "/stale".into(),
-                    ..Default::default()
-                })),
-            })
+            ))
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.file_browser.location, "/new");
@@ -699,33 +704,35 @@ mod tests {
         let (mut app, ctx) = app();
         app.set_dialog(Dialog::Save(42));
         app.dialog_input = "new-name.txt".into();
-        app.folder_sandbox.enabled = true;
+        app.project_picker.sandbox.enabled = true;
         app.file_browser.requested = "/project".into();
         app.file_browser.location = "/project".into();
         let token = app.file_browser.token;
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::BrowseFiles {
-                    token,
-                    local: false,
-                    path: "/project".into(),
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::BrowseFiles {
+                        token,
+                        local: false,
+                        path: "/project".into(),
+                    },
+                    result: Box::new(Ok(files::Response {
+                        path: "/canonical/project".into(),
+                        entries: vec![Entry {
+                            path: "/canonical/project/file.txt".into(),
+                            name: "file.txt".into(),
+                            dir: false,
+                        }],
+                        ..Default::default()
+                    })),
                 },
-                result: Box::new(Ok(files::Response {
-                    path: "/canonical/project".into(),
-                    entries: vec![Entry {
-                        path: "/canonical/project/file.txt".into(),
-                        name: "file.txt".into(),
-                        dir: false,
-                    }],
-                    ..Default::default()
-                })),
-            })
+            ))
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.dialog_input, "new-name.txt");
         assert_eq!(app.file_browser.directory, "/canonical/project");
-        assert!(app.folder_sandbox.enabled);
+        assert!(app.project_picker.sandbox.enabled);
     }
     #[test]
     fn file_listing_waits_for_the_project_policy_instead_of_using_raw_host_access() {

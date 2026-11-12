@@ -33,6 +33,9 @@ from ui_harness import (
     x11,
     xtest,
 )
+from ui_harness import (
+    read_preferences as preferences,
+)
 
 
 def wait_for(check, message):
@@ -42,13 +45,6 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def preferences(path):
-    if not path.exists():
-        return {}
-    contents = path.read_text().rstrip()
-    return json.loads(contents[:-1].rstrip().removesuffix(",") + "}")
 
 
 def window_for(process, title="RODE"):

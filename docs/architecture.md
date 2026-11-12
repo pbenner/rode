@@ -17,13 +17,19 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | Source | Responsibility |
 | --- | --- |
 | `src/main.rs`, `src/lib.rs` | CLI/helper dispatch, native startup, library entry points |
-| `src/app.rs`, `src/app/lifecycle.rs` | Documents, selected workspace, guarded actions and native window lifecycle |
+| `src/app.rs`, `src/app/lifecycle.rs` | Selected workspace, guarded actions and native window lifecycle |
+| `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
+| `src/app/workspace.rs`, `src/app/connections.rs` | Ordered project teardown, window-owned transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
 | `src/app/frame.rs` | Application menus, connection banners, activity controls and pane entry views; routes through the existing lifecycle guards |
-| `src/app/workers.rs`, `src/app/dialogs.rs`, `src/app/appearance.rs` | Captured file/decode jobs and result routing, guarded dialogs/notices, interface scale and theme preferences |
+| `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed result lifetimes, bounded polling and file-domain admission/completion |
+| `src/app/dialogs.rs`, `src/app/appearance.rs` | Guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
-| `src/app/navigation/` | Pane focus, validated shortcut presets, explorer keys and native source-editing modes |
+| `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
+| `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
+| `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
+| `src/app/explorer/` | Project-scoped directory cache, flattened rows, keyboard selection and acknowledged mutation effects |
 | `src/app/explorer.rs`, `crates/rode-host-core/src/files/mutations.rs` | Explorer menus/forms, acknowledged path updates and bounded native filesystem mutations on the captured project host |
 | `src/app/workbench.rs`, `src/app/workbench/` | Captured project preferences and domain tool panels; `jobs.rs` owns dispatch, scheduling and version-checked result routing, while `tests.rs` holds coordinator regressions |
 | `crates/rode-host-protocol/src/files.rs`, `crates/rode-host-core/src/files.rs`, `src/files.rs` | Wire-only file results, shared revision-checked saves and desktop decode attachments |
@@ -213,6 +219,39 @@ Sandbox options express requested access; `Plan::active` records whether the com
 
 ## Worker results and version checks
 
+The main file/decode/profile result poll consumes at most 64 events per frame,
+including obsolete replies. Reaching the budget requests another repaint without
+consuming a look-ahead reply. Native input and close guards run between batches;
+the budget limits UI dispatch work, not the total channel backlog or the cost of
+one result. Domain-specific agent/runtime polls retain their own limits.
+
+Connection profile writes belong to the window rather than a workspace
+generation. The profile controller discards pending catalogue reloads before
+writing, serializes writes and joins its writer at shutdown. A save reply refreshes
+the catalogue after a workspace change, but changes the rename baseline only if
+the same submitted form is still selected.
+
+Project discovery owns its path and keyboard selection separately from document
+pickers and mutation forms. Its replies require the visible project dialog,
+matching request token and unchanged path. Canonical paths restore saved sandbox
+options only when the user has not edited the submitted options. Discovery uses
+the selected raw host; ordinary file pickers keep the active project policy.
+
+The explorer model owns cache projection, expansion, selection and mutation
+epochs. It returns refresh/open intents and acknowledged rename effects. The
+coordinator updates document bindings only after host success. Failed recursive
+deletions invalidate affected caches so partial changes are rediscovered; stale
+listing replies cannot clear a newer loading marker.
+
+Every queued desktop result has an explicit lifetime envelope:
+`Event::Workspace` carries a generation and a domain payload, while
+`Event::Profiles` carries a shared-preference completion. The bounded poll checks
+the live generation for each workspace event before routing it. If an earlier
+event disconnects or replaces the workspace, later old-host replies in the same
+batch are rejected. File-domain admission then checks tokens, mutation epochs and
+buffer versions **before** clearing pending markers. Profile completions continue
+to reach their window-owned controller.
+
 Different identities protect different lifetimes:
 
 | Identity | What it protects |
@@ -225,6 +264,30 @@ Different identities protect different lifetimes:
 | Debugger inspection epoch | Prevents paused variable/frame/watch handles from surviving resume or selection changes |
 
 Capture these identifiers and the source snapshot before dispatch. Check them before publishing results. A canceled worker may still deliver a result, so cancellation does not replace validation. Failed/stale preview reloads retain the previous usable view, and closing/replacing a view releases its texture and memory leases.
+
+## Document collection and workspace teardown
+
+`Documents` owns the buffer vector, active index, monotonic ID allocator and
+pending open paths. Views borrow document slices to edit buffers; insertion,
+closing, reordering and selection go through the collection. Closing an inactive
+tab preserves the selected ID, closing the selected tab chooses its neighbor,
+and clearing a workspace never resets the ID allocator. Canonical read replies
+select an existing bound buffer rather than replacing its unsaved edits.
+
+The untitled and loaded factories share cursor/save defaults. Loading and
+reloading use one view/source replacement path, with an explicit unchanged-
+notebook guard to retain live kernel attachments and view state. Source-save
+acknowledgements still record the submitted snapshot, independently of newer
+edits. Recovery paths remain non-authorizing metadata.
+
+Project teardown lives in `app/workspace.rs`. Domain controllers stop or detach
+owned work before the coordinator releases the transport. Explicit buffer
+retention keeps same-host policy replacements distinct from discarding a project.
+Disconnect first unbinds remote paths into exact-connection recovery records;
+reconnect preserves those records until successful host preparation authorizes
+restoration. Pending notebook/debugger cleanup owners survive view replacement,
+and encrypted lease recovery retains its explicit lock/unlock guards. Window-wide
+profile writes are outside this teardown lifetime.
 
 ## File saves and shared preferences
 

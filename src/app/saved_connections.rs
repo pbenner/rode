@@ -3,6 +3,31 @@
 use super::*;
 use ssh::ProfileListEdit;
 
+mod state;
+pub(super) use state::State;
+mod form;
+
+/// Form rendering cannot directly replace a connection or start a storage write.
+pub(super) enum FormIntent {
+    Connect(Box<Profile>),
+    Save,
+    Cancel,
+    Error(String),
+}
+
+/// Shared preference results are independent of the current host/project generation.
+pub(super) enum Completion {
+    Saved {
+        result: Result<Vec<Profile>, String>,
+        submitted: Box<Profile>,
+        form: u64,
+    },
+    Changed {
+        result: Result<Vec<Profile>, String>,
+        removed: Option<String>,
+    },
+}
+
 struct DraggedConnection(String);
 
 enum Intent {
@@ -12,16 +37,40 @@ enum Intent {
 }
 
 impl EditorApp {
+    /// Window-wide writes survive project changes; only the form identity can reject a baseline update.
+    pub(super) fn profile_completed(&mut self, completion: Completion) {
+        let result = match completion {
+            Completion::Saved {
+                result,
+                submitted,
+                form,
+            } => self
+                .connection_profiles
+                .finish_save(result, *submitted, form),
+            Completion::Changed { result, removed } => {
+                self.connection_profiles.finish_edit(result, removed)
+            }
+        };
+        self.profile_notice(result);
+    }
+
+    pub(super) fn profile_notice(&mut self, result: Result<&'static str, String>) {
+        match result {
+            Ok(message) => self.notify(message, false),
+            Err(error) => self.notify(error, true),
+        }
+    }
+
     /// Render saved connection intents and route connects through the shared dirty-buffer guard.
     /// Disable row edits while a preference write is awaiting acknowledgement.
     pub(super) fn saved_connections_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let intent = ui
-            .add_enabled_ui(!self.profile_saving, |ui| {
-                connection_rows(ui, &self.profiles, palette)
+            .add_enabled_ui(!self.connection_profiles.saving(), |ui| {
+                connection_rows(ui, &self.connection_profiles.profiles, palette)
             })
             .inner;
-        if self.profile_saving {
+        if self.connection_profiles.saving() {
             ui.label(
                 RichText::new("Saving connections…")
                     .small()
@@ -30,48 +79,20 @@ impl EditorApp {
         }
         match intent {
             Some(Intent::Connect(profile)) => {
-                self.profile_baseline = Some(profile.clone());
-                self.profile = profile;
-                self.profile_form += 1;
-                self.guarded(Action::Remote(self.profile.clone()), ctx);
+                self.connection_profiles.select(profile.clone(), true);
+                self.guarded(Action::Remote(profile), ctx);
             }
             Some(Intent::Edit {
                 profile,
                 focus_name,
             }) => {
-                self.profile_baseline = Some(profile.clone());
-                self.profile = profile;
-                self.profile_form += 1;
+                self.connection_profiles.select(profile, true);
                 self.set_dialog(Dialog::Connect);
-                self.profile_name_focus = focus_name;
+                self.connection_profiles.name_focus = focus_name;
             }
-            Some(Intent::Change(edit)) => self.edit_saved_connections(edit, ctx),
+            Some(Intent::Change(edit)) => self.connection_profiles.edit(edit, &self.tx, ctx),
             None => {}
         }
-    }
-
-    fn edit_saved_connections(&mut self, edit: ProfileListEdit, ctx: &egui::Context) {
-        if self.profile_saving {
-            return;
-        }
-        // An older picker reload must not restore rows removed or reordered by
-        // this write. Opening the picker also defers reloads while a write runs.
-        self.profiles_loading = None;
-        self.profile_saving = true;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
-        self.profile_writer = Some(std::thread::spawn(move || {
-            let removed = match &edit {
-                ProfileListEdit::Remove(profile) => Some(profile.label()),
-                ProfileListEdit::Move { .. } => None,
-            };
-            let result = ssh::edit_profiles(&edit).map_err(|e| format!("{e:#}"));
-            if let Err(error) = &result {
-                eprintln!("Saved connections were not updated: {error}");
-            }
-            let _ = tx.send(Event::ProfilesChanged { result, removed });
-            ctx.request_repaint();
-        }));
     }
 }
 

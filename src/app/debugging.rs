@@ -37,6 +37,22 @@ pub(super) struct State {
     was_live: bool,
 }
 impl State {
+    /// Reset project UI without discarding retained asynchronous cleanup guards.
+    fn reset_project(&mut self) {
+        self.client = None;
+        self.versions.clear();
+        self.draft_generation = None;
+        self.config = Default::default();
+        self.watch.clear();
+        self.expression.clear();
+        self.was_live = false;
+        self.target = None;
+        self.persistent = false;
+        self.reattaching = false;
+        self.source_digests.clear();
+        self.verify_sources = false;
+    }
+
     /// Capture only a buffer whose current content matches the launched source.
     /// Saves change the baseline without advancing edit_version, so saved_text
     /// cannot establish which buffer version the debuggee actually uses.
@@ -58,18 +74,7 @@ impl EditorApp {
     /// Leave the current controller according to persistence and clear project-specific UI/configuration state.
     pub(super) fn reset_debugger(&mut self) {
         self.leave_debugger();
-        self.debugger.client = None;
-        self.debugger.versions.clear();
-        self.debugger.draft_generation = None;
-        self.debugger.config = Default::default();
-        self.debugger.watch.clear();
-        self.debugger.expression.clear();
-        self.debugger.was_live = false;
-        self.debugger.target = None;
-        self.debugger.persistent = false;
-        self.debugger.reattaching = false;
-        self.debugger.source_digests.clear();
-        self.debugger.verify_sources = false;
+        self.debugger.reset_project();
     }
     /// Detach a persistent controller or request foreground termination, then release
     /// its terminal views and pending source jump without changing unrelated shells.
@@ -198,7 +203,7 @@ impl EditorApp {
         let settings = self.workbench.debugger_settings().clone();
         let file = self
             .documents
-            .get(self.active)
+            .get(self.documents.active_index())
             .filter(|d| !d.is_preview())
             .and_then(|d| d.path.clone())
             .unwrap_or_default();
@@ -290,7 +295,7 @@ impl EditorApp {
     }
     /// Toggle the active saved source cursor line; unsaved/preview documents cannot bind a breakpoint path.
     pub(super) fn toggle_cursor_breakpoint(&mut self) {
-        if let Some(doc) = self.documents.get(self.active).filter(|d| !d.is_preview())
+        if let Some(doc) = self.documents.active().filter(|d| !d.is_preview())
             && let Some(path) = doc.path.clone()
         {
             self.toggle_breakpoint(path, doc.cursor.0);

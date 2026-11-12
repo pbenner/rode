@@ -9,6 +9,15 @@ use crate::sandbox::PlanExt as _;
 use anyhow::Context;
 use std::collections::BTreeMap;
 
+/// Includes obsolete replies: a stale-result flood must also yield to native input.
+const MAX_EVENTS_PER_FRAME: usize = 64;
+
+mod completions;
+mod events;
+#[cfg(test)]
+mod tests;
+pub(super) use events::{Event, Job, WorkspaceEvent};
+
 /// Resolve a local startup file to its parent before restoring that folder's
 /// saved policy. Run on the dispatch worker; project pickers and SSH requests
 /// keep directory-only semantics. A file whose inferred project would expose
@@ -113,11 +122,11 @@ impl EditorApp {
                     );
                 }
                 Job::List(path, _) => {
-                    self.loading.remove(path);
+                    self.explorer_state.loading.remove(path);
                 }
                 Job::Explorer(_) => self.explorer_state.busy = false,
                 Job::Open(path) => {
-                    self.opening.remove(path);
+                    self.documents.finish_open(path);
                 }
                 Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
                     if let Some(doc) = self.documents.iter_mut().find(|d| d.id == *id) {
@@ -354,21 +363,23 @@ impl EditorApp {
             {
                 std::mem::swap(text, snapshot);
             }
-            let _ = tx.send(Event::Done {
+            let _ = tx.send(Event::workspace(
                 generation,
-                job,
-                result: Box::new(result),
-            });
+                WorkspaceEvent::Done {
+                    job,
+                    result: Box::new(result),
+                },
+            ));
             ctx.request_repaint();
         });
     }
 
     /// Queue a project-scoped directory refresh for the explorer cache.
     pub(super) fn list(&mut self, path: String, ctx: &egui::Context) {
-        if !self.explorer_state.busy && self.loading.insert(path.clone()) {
+        if let Some(epoch) = self.explorer_state.begin_list(&path) {
             self.dispatch(
                 Request::List { path: path.clone() },
-                Job::List(path, self.explorer_state.epoch),
+                Job::List(path, epoch),
                 ctx,
             );
         }
@@ -385,12 +396,12 @@ impl EditorApp {
             .iter()
             .position(|d| d.path.as_deref() == Some(&path))
         {
-            self.active = index;
+            self.documents.select_index(index);
             self.reveal_tab(self.documents[index].id);
             self.focus_editor(ctx);
             return;
         }
-        if self.opening.insert(path.clone()) {
+        if self.documents.begin_open(path.clone()) {
             let request = if crate::pdf::is_path(&path) {
                 self.status = "Opening PDF preview…".into();
                 Request::ReadBinary { path: path.clone() }
@@ -408,471 +419,77 @@ impl EditorApp {
     /// Drain a bounded batch of worker results. Reject obsolete generations/tokens first,
     /// then apply domain-specific buffer/version checks before mutating visible state.
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
-        if let Some(receiver) = self.profiles_loading.take() {
-            match receiver.try_recv() {
-                Ok(Ok(profiles)) => self.profiles = profiles,
-                Ok(Err(error)) => self.notify(error, true),
-                Err(mpsc::TryRecvError::Empty) => self.profiles_loading = Some(receiver),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.notify("Connection profile reload failed.", true)
-                }
-            }
+        if let Some(error) = self.connection_profiles.poll_reload() {
+            self.notify(error, true);
         }
-        while let Ok(event) = self.rx.try_recv() {
+        for index in 0..MAX_EVENTS_PER_FRAME {
+            let Ok(event) = self.rx.try_recv() else {
+                break;
+            };
+            if index + 1 == MAX_EVENTS_PER_FRAME {
+                // Do not consume a look-ahead event merely to check for more
+                // work. One extra idle repaint is cheaper than dropping a reply.
+                ctx.request_repaint();
+            }
             match event {
-                Event::NotebookParsed {
-                    generation,
-                    id,
-                    version,
-                    result,
-                } if generation == self.generation => {
-                    self.notebook_parsed(id, version, result, ctx)
+                Event::Profiles(completion) => self.profile_completed(completion),
+                Event::Workspace { generation, event } if generation == self.generation => {
+                    self.workspace_event(*event, ctx);
                 }
-                Event::Session {
-                    generation,
-                    job,
-                    result,
-                } if generation == self.generation => self.handle_session(job, result, ctx),
-                Event::PdfPage {
-                    generation,
-                    id,
-                    version,
-                    token,
-                    page,
-                    result,
-                } if generation == self.generation => {
-                    self.pdf_page(id, version, token, page, result)
-                }
-                Event::ProfileSaved {
-                    result,
-                    submitted,
-                    form,
-                } => {
-                    if let Some(worker) = self.profile_writer.take() {
-                        let _ = worker.join();
-                    }
-                    self.profile_saving = false;
-                    match result {
-                        Ok(profiles) => {
-                            if form == self.profile_form {
-                                self.profile_baseline = Some(*submitted);
-                            }
-                            self.profiles = profiles;
-                            self.notify(
-                                "Connection profile saved. Passwords are never stored.",
-                                false,
-                            );
-                        }
-                        Err(error) => self.notify(error, true),
-                    }
-                }
-                Event::ProfilesChanged { result, removed } => {
-                    if let Some(worker) = self.profile_writer.take() {
-                        let _ = worker.join();
-                    }
-                    self.profile_saving = false;
-                    match result {
-                        Ok(profiles) => {
-                            self.profiles = profiles;
-                            if removed.as_ref().is_some_and(|label| {
-                                self.profile_baseline
-                                    .as_ref()
-                                    .is_some_and(|p| p.label() == *label)
-                            }) {
-                                self.profile_baseline = None;
-                            }
-                            self.notify(
-                                if removed.is_some() {
-                                    "Saved connection removed."
-                                } else {
-                                    "Saved connection order updated."
-                                },
-                                false,
-                            );
-                        }
-                        Err(error) => self.notify(error, true),
-                    }
-                }
-                Event::Latex {
-                    generation,
-                    token,
-                    preview,
-                    versions,
-                    result,
-                } => {
-                    if generation == self.generation {
-                        self.complete_latex(token, preview, versions, *result, ctx);
-                    }
-                }
-                Event::Marp {
-                    generation,
-                    id,
-                    version,
-                    token,
-                    exporting,
-                    result,
-                } => {
-                    if generation == self.generation {
-                        self.marp_complete(id, version, token, exporting, *result, ctx);
-                    }
-                }
-                Event::MarpPage {
-                    generation,
-                    id,
-                    version,
-                    token,
-                    page,
-                    result,
-                } => {
-                    if generation == self.generation {
-                        self.marp_page(id, version, token, page, result);
-                    }
-                }
-                Event::MarkdownImage {
-                    generation,
-                    id,
-                    token,
-                    uri,
-                    result,
-                } if generation == self.generation => {
-                    self.markdown_image(id, token, uri, result, ctx);
-                }
-                Event::Tool {
-                    generation,
-                    job,
-                    result,
-                } if generation == self.generation => self.handle_tool(*job, *result, ctx),
-                Event::Connected { generation, result } if generation == self.generation => {
-                    match result {
-                        Ok(()) => {
-                            if let Some(workspace) = &mut self.workspace {
-                                workspace.connected = true;
-                                let root = workspace.root.clone();
-                                self.status = "SSH connected".into();
-                                let options = workspace.sandbox_options.clone();
-                                let restore = self.startup_restore.take();
-                                if self.vaults.lost && self.vaults.active.is_some() {
-                                    self.encrypted_dialog();
-                                    self.vaults.message = "SSH reconnected. Unlock the encrypted project to restore file access; unsaved buffers are preserved.".into();
-                                } else {
-                                    self.prepare_project(root, options, true, true, restore, ctx);
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            self.ssh_failed(error, ctx);
-                        }
-                    }
-                }
-                Event::Done {
-                    generation,
-                    job,
-                    result,
-                } if generation == self.generation => {
-                    match &job {
-                        Job::List(_, epoch) if *epoch != self.explorer_state.epoch => continue,
-                        Job::Prepare { token, .. } | Job::StandaloneFile { token, .. }
-                            if *token != self.project_token =>
-                        {
-                            continue;
-                        }
-                        Job::Reload { id, version }
-                            if !self
-                                .documents
-                                .iter()
-                                .any(|doc| doc.id == *id && doc.edit_version == *version) =>
-                        {
-                            continue;
-                        }
-                        Job::Browse { token, path, .. }
-                            if *token != self.folder_token
-                                || self.dialog != Dialog::Folder
-                                || *path != self.dialog_input =>
-                        {
-                            continue;
-                        }
-                        Job::BrowseFiles { token, path, .. }
-                            if !file_browser::is_file_dialog(&self.dialog)
-                                || !self.file_browser.matches(*token, path) =>
-                        {
-                            continue;
-                        }
-                        Job::BrowseFiles { .. } => self.file_browser.loading = false,
-                        Job::AgentAttachment { .. } => {}
-                        Job::Prepare { .. } | Job::StandaloneFile { .. } => self.preparing = false,
-                        Job::Browse { .. } => self.folder_loading = false,
-                        Job::List(path, _) => {
-                            self.loading.remove(path);
-                        }
-                        Job::Explorer(_) => self.explorer_state.busy = false,
-                        Job::Open(path) => {
-                            self.opening.remove(path);
-                        }
-                        Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
-                            if let Some(doc) = self.documents.iter_mut().find(|d| d.id == *id) {
-                                doc.saving = false;
-                            }
-                        }
-                        Job::Reload { id, version } => {
-                            if let Some(doc) = self
-                                .documents
-                                .iter_mut()
-                                .find(|doc| doc.id == *id && doc.edit_version == *version)
-                            {
-                                if let Some(image) = &mut doc.image {
-                                    image.loading = false;
-                                }
-                                if let Some(pdf) = &mut doc.pdf {
-                                    pdf.image.loading = false;
-                                }
-                            }
-                        }
-                    }
-                    if matches!(
-                        &job,
-                        Job::List(..)
-                            | Job::Explorer(_)
-                            | Job::Open(_)
-                            | Job::Save { .. }
-                            | Job::SaveBinary { .. }
-                    ) {
-                        self.file_browser.invalidate_rows();
-                    }
-                    if let Ok(response) = result.as_ref()
-                        && let Some(Err(error)) = &response.notebook
-                    {
-                        self.notify(format!("Notebook: {error} JSON source is available."), true);
-                    }
-                    if let Job::Explorer(change) = job {
-                        self.finish_explorer(change, *result, ctx);
-                        continue;
-                    }
-                    match *result {
-                        Err(error) => {
-                            if let Job::AgentAttachment { token, .. } = job {
-                                self.agents.files.finish(token, Err(error));
-                            } else if matches!(job, Job::Browse { .. }) {
-                                self.folder_error = Some(error);
-                            } else if matches!(job, Job::BrowseFiles { .. }) {
-                                self.file_browser.error = Some(error);
-                                self.file_browser
-                                    .location
-                                    .clone_from(&self.file_browser.directory);
-                            } else {
-                                self.notify(error, true);
-                            }
-                        }
-                        Ok(response) => match job {
-                            Job::AgentAttachment { token, .. } => {
-                                self.agents.files.finish(
-                                    token,
-                                    response
-                                        .attachment
-                                        .ok_or_else(|| "Missing attachment contents".into()),
-                                );
-                                self.agents.focus = true;
-                            }
-                            Job::Reload { id, version } => {
-                                if let Some(doc) = self
-                                    .documents
-                                    .iter_mut()
-                                    .find(|d| d.id == id && d.edit_version == version && !d.dirty())
-                                {
-                                    // Read-only refreshes must not dispose a live kernel merely
-                                    // because Git or an agent finished touching other files.
-                                    if response.notebook.is_some()
-                                        && doc.notebook.is_some()
-                                        && doc.text == response.text
-                                        && doc.revision.as_deref() == Some(&response.revision)
-                                    {
-                                        continue;
-                                    }
-                                    if let Some(result) = response.notebook {
-                                        doc.notebook = result.ok().map(|book| {
-                                            notebook_view::View::new(
-                                                book,
-                                                self.markdown_images.clone(),
-                                                self.notebook_shutdowns.clone(),
-                                            )
-                                        });
-                                    }
-                                    if let Some(loaded) = response.hex {
-                                        doc.notebook = None;
-                                        doc.hex = Some(binary_view::HexView::new(loaded));
-                                        doc.pdf = None;
-                                        doc.image = None;
-                                        doc.markdown = None;
-                                    }
-                                    if let Some(loaded) = response.pdf {
-                                        if let Some(pdf) = &mut doc.pdf {
-                                            pdf.replace(loaded);
-                                        } else {
-                                            doc.pdf = Some(pdf_view::PdfView::new(loaded));
-                                        }
-                                    }
-                                    if let Some(preview) = response.preview {
-                                        if let Some(image) = &mut doc.image {
-                                            image.replace(preview);
-                                        } else {
-                                            doc.image = Some(image_view::ImageView::new(preview));
-                                        }
-                                    }
-                                    doc.text.clone_from(&response.text);
-                                    doc.saved_text = response.text;
-                                    doc.revision = Some(response.revision);
-                                    doc.lines =
-                                        doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
-                                    doc.edit_version = doc.edit_version.wrapping_add(1);
-                                }
-                            }
-                            Job::StandaloneFile { path, .. } => self.open_file(path, ctx),
-                            Job::Prepare {
-                                remote,
-                                options,
-                                keep_buffers,
-                                documents_at_start,
-                                open_file,
-                                ..
-                            } => {
-                                let new_edits =
-                                    self.documents.iter().filter(|d| d.dirty()).any(|d| {
-                                        !documents_at_start.contains(&(d.id, d.edit_version))
-                                    });
-                                if !keep_buffers && new_edits {
-                                    self.pending = Some(Action::PreparedProject {
-                                        response: Box::new(response),
-                                        remote,
-                                        options,
-                                        open_file,
-                                    });
-                                } else {
-                                    self.commit_project(
-                                        response,
-                                        remote,
-                                        options,
-                                        keep_buffers,
-                                        open_file,
-                                        ctx,
-                                    );
-                                }
-                            }
-                            Job::BrowseFiles { .. } => self.file_browser.loaded(response),
-                            Job::Browse { options, .. } => {
-                                if self.folder_policy_path != response.path {
-                                    // Canonicalizing a symlink can change the path
-                                    // while this reply is in flight. Preserve edits
-                                    // made since the listing was requested.
-                                    if self.folder_sandbox == options
-                                        && let Some(saved) = self
-                                            .saved_sandbox_for(&response.path, self.folder_remote)
-                                    {
-                                        self.folder_sandbox = saved;
-                                    }
-                                    self.folder_policy_path.clone_from(&response.path);
-                                }
-                                self.dialog_input = response.path;
-                                self.folder_entries =
-                                    response.entries.into_iter().filter(|e| e.dir).collect();
-                                self.folder_error = None;
-                            }
-                            Job::Explorer(_) => unreachable!("Explorer results are handled above"),
-                            Job::List(path, _) => {
-                                if let Some(workspace) = &mut self.workspace
-                                    && workspace.root == path
-                                {
-                                    workspace.root.clone_from(&response.path);
-                                    self.expanded.insert(response.path.clone());
-                                }
-                                self.directories.insert(path, response.entries.clone());
-                                self.directories.insert(response.path, response.entries);
-                                self.tree_dirty = true;
-                            }
-                            Job::Open(_) => {
-                                if let Some(index) = self
-                                    .documents
-                                    .iter()
-                                    .position(|d| d.path.as_deref() == Some(&response.path))
-                                {
-                                    self.active = index;
-                                } else {
-                                    let id = self.next_id;
-                                    self.next_id += 1;
-                                    let lines =
-                                        response.text.bytes().filter(|b| *b == b'\n').count() + 1;
-                                    self.documents.push(Document {
-                                        recovery: None,
-                                        notebook: response.notebook.and_then(Result::ok).map(
-                                            |book| {
-                                                notebook_view::View::new(
-                                                    book,
-                                                    self.markdown_images.clone(),
-                                                    self.notebook_shutdowns.clone(),
-                                                )
-                                            },
-                                        ),
-                                        hex: response.hex.map(binary_view::HexView::new),
-                                        markdown: None,
-                                        marp: None,
-                                        image: response.preview.map(image_view::ImageView::new),
-                                        pdf: response.pdf.map(pdf_view::PdfView::new),
-                                        id,
-                                        path: Some(response.path),
-                                        saved_text: response.text.clone(),
-                                        text: response.text,
-                                        revision: Some(response.revision),
-                                        saving: false,
-                                        modified: false,
-                                        edit_version: 0,
-                                        last_cursor: usize::MAX,
-                                        cursor: (1, 1),
-                                        selection: None,
-                                        lines,
-                                    });
-                                    self.active = self.documents.len() - 1;
-                                }
-                                if self.documents.get(self.active).is_some_and(|d| {
-                                    crate::languages::detect(d.path.as_deref())
-                                        .is_some_and(|l| l.id == "python")
-                                }) {
-                                    self.refresh_environment(false, ctx);
-                                }
-                                self.status = "File loaded".into();
-                                if self.navigation.accepts_editor_focus() {
-                                    self.focus_editor(ctx);
-                                }
-                            }
-                            Job::SaveBinary { id, bytes, .. } => {
-                                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                                    if let Some(hex) = &mut doc.hex {
-                                        hex.buffer.acknowledge(bytes);
-                                        doc.modified = hex.buffer.dirty();
-                                    }
-                                    doc.path = Some(response.path);
-                                    doc.recovery = None;
-                                    doc.revision = Some(response.revision);
-                                    doc.saving = false;
-                                    self.status = format!("Saved {}", doc.name());
-                                }
-                            }
-                            Job::Save { id, text } => {
-                                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                                    doc.acknowledge_save(response.path, text, response.revision);
-                                    self.status = format!("Saved {}", doc.name());
-                                }
-                                if self.documents.get(self.active).is_some_and(|d| d.id == id) {
-                                    self.reveal_tab(id);
-                                }
-                                if let Some(root) = self.workspace.as_ref().map(|w| w.root.clone())
-                                {
-                                    self.list(root, ctx);
-                                }
-                            }
-                        },
-                    }
-                }
-                _ => {}
+                Event::Workspace { .. } => {}
             }
         }
+        self.poll_connection_health(ctx);
+    }
+
+    fn workspace_event(&mut self, event: WorkspaceEvent, ctx: &egui::Context) {
+        match event {
+            WorkspaceEvent::NotebookParsed {
+                id,
+                version,
+                result,
+            } => self.notebook_parsed(id, version, result, ctx),
+            WorkspaceEvent::Session { job, result } => self.handle_session(job, result, ctx),
+            WorkspaceEvent::PdfPage {
+                id,
+                version,
+                token,
+                page,
+                result,
+            } => self.pdf_page(id, version, token, page, result),
+            WorkspaceEvent::Latex {
+                token,
+                preview,
+                versions,
+                result,
+            } => self.complete_latex(token, preview, versions, *result, ctx),
+            WorkspaceEvent::Marp {
+                id,
+                version,
+                token,
+                exporting,
+                result,
+            } => self.marp_complete(id, version, token, exporting, *result, ctx),
+            WorkspaceEvent::MarpPage {
+                id,
+                version,
+                token,
+                page,
+                result,
+            } => self.marp_page(id, version, token, page, result),
+            WorkspaceEvent::MarkdownImage {
+                id,
+                token,
+                uri,
+                result,
+            } => self.markdown_image(id, token, uri, result, ctx),
+            WorkspaceEvent::Tool { job, result } => self.handle_tool(*job, *result, ctx),
+            WorkspaceEvent::Connected { result } => self.connection_completed(result, ctx),
+            WorkspaceEvent::Done { job, result } => self.file_completed(job, *result, ctx),
+        }
+    }
+
+    fn poll_connection_health(&mut self, ctx: &egui::Context) {
         if self.ssh_master.as_ref().is_some_and(|t| !t.is_alive())
             && self
                 .workspace

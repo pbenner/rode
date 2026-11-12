@@ -34,6 +34,7 @@ mod commands;
 mod connections;
 mod debugging;
 mod dialogs;
+mod documents;
 mod editor_view;
 mod execution;
 mod explorer;
@@ -61,9 +62,11 @@ mod ui_probe;
 mod vaults;
 mod workbench;
 mod workers;
+mod workspace;
 use commands::Command;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
 use icons::{Icon, IconButton};
+use saved_connections::Completion as ProfileEvent;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -75,6 +78,7 @@ use std::{
     time::{Duration, Instant},
 };
 use workbench::{Panel, ToolJob, Workbench};
+use workers::{Event, Job, WorkspaceEvent};
 
 /// Validate the serialized map before shared preference merging accepts project settings.
 pub(crate) fn validate_project_preferences(text: &str) -> Result<(), serde_json::Error> {
@@ -105,13 +109,6 @@ pub struct Startup {
     pub sandbox: bool,
 }
 
-#[derive(Clone)]
-/// One flattened explorer entry with its visual indentation depth.
-struct TreeRow {
-    entry: Entry,
-    depth: usize,
-}
-
 /// Execution context selected by this window. A connected transport is not a ready project:
 /// file/tool operations wait for preparation to establish the actual plan.
 struct Workspace {
@@ -128,210 +125,8 @@ struct Workspace {
     sandbox_options: sandbox::Options,
 }
 
-/// One stable tab identity and editable source/save baseline, with optional specialized
-/// document state. Only bound paths authorize project-host file operations; recovery paths are
-/// display/reconnect metadata.
-pub struct Document {
-    markdown: Option<markdown::Preview>,
-    marp: Option<marp_view::View>,
-    image: Option<image_view::ImageView>,
-    pdf: Option<pdf_view::PdfView>,
-    hex: Option<binary_view::HexView>,
-    notebook: Option<notebook_view::View>,
-    /// Stable runtime tab identity, preserved when reordering tabs.
-    pub id: u64,
-    /// Writable/readable path bound to the active project host, or `None` for unsaved/recovery
-    /// buffers.
-    pub path: Option<String>,
-    recovery: Option<connections::Recovery>,
-    /// Current source text; structured/preview documents use their dedicated state where
-    /// applicable.
-    pub text: String,
-    /// Exact source snapshot acknowledged by the last successful text save.
-    pub saved_text: String,
-    /// Content digest read/saved on the bound host, used for conflict detection.
-    pub revision: Option<String>,
-    /// Whether a source/binary save request is in flight.
-    pub saving: bool,
-    /// Cached dirty state, including structured notebook or binary edits.
-    modified: bool,
-    /// Source identity for worker results; acknowledging a save does not advance it.
-    edit_version: u64,
-    /// Last native source cursor position in characters; `usize::MAX` forces initial recomputation.
-    last_cursor: usize,
-    /// Displayed one-based source line and character column.
-    pub cursor: (usize, usize),
-    /// Requested native selection as zero-based character offsets.
-    selection: Option<(usize, usize)>,
-    lines: usize,
-}
+pub use documents::Document;
 
-impl Document {
-    /// Identify specialized documents whose bytes/source use a dedicated editor or preview path.
-    fn is_preview(&self) -> bool {
-        self.image.is_some() || self.pdf.is_some() || self.hex.is_some() || self.notebook.is_some()
-    }
-    /// Report an in-flight image/PDF decode without treating source-only documents as previews.
-    fn preview_loading(&self) -> bool {
-        self.image.as_ref().is_some_and(|image| image.loading)
-            || self.pdf.as_ref().is_some_and(|pdf| pdf.image.loading)
-    }
-    /// Return the cached edit state maintained by ordinary source/structured editing paths.
-    pub fn dirty(&self) -> bool {
-        self.modified
-    }
-    /// Acknowledge the submitted text snapshot, updating path/revision while preserving newer
-    /// unsaved edits.
-    pub fn acknowledge_save(&mut self, path: String, text: String, revision: String) {
-        self.path = Some(path);
-        self.recovery = None;
-        self.saved_text = text;
-        self.revision = Some(revision);
-        self.saving = false;
-        self.modified = self.text != self.saved_text;
-    }
-    /// Recovery paths describe retained tabs; only `path` authorizes file I/O.
-    fn display_path(&self) -> Option<&str> {
-        self.path
-            .as_deref()
-            .or_else(|| self.recovery.as_ref().map(|r| r.path.as_str()))
-    }
-    /// Derive a tab label from its bound/recovery path, falling back to its stable untitled ID.
-    fn name(&self) -> String {
-        self.display_path()
-            .map(ssh::display_name)
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("Untitled-{}", self.id))
-    }
-}
-
-/// Captured completion intent for file workers. Prepare/project-folder discovery uses raw
-/// host scope; ordinary lists, file pickers and source operations use the active plan.
-enum Job {
-    Prepare {
-        remote: bool,
-        options: sandbox::Options,
-        keep_buffers: bool,
-        token: u64,
-        documents_at_start: Vec<(u64, u64)>,
-        /// Startup restores saved host/project grants, optionally forcing sandboxing on.
-        restore_saved: Option<bool>,
-        /// Local startup file to open only after its containing project is accepted.
-        open_file: Option<String>,
-    },
-    /// Local CLI file opened without inferring an unsafe whole-home project.
-    StandaloneFile {
-        path: String,
-        token: u64,
-    },
-    Browse {
-        remote: bool,
-        token: u64,
-        path: String,
-        options: sandbox::Options,
-    },
-    BrowseFiles {
-        token: u64,
-        path: String,
-        local: bool,
-    },
-    AgentAttachment {
-        token: u64,
-        local: bool,
-    },
-    List(String, u64),
-    Explorer(explorer::Change),
-    Open(String),
-    SaveBinary {
-        id: u64,
-        bytes: Arc<Vec<u8>>,
-        _lease: Arc<crate::images::Lease>,
-    },
-    Save {
-        id: u64,
-        text: String,
-    },
-    Reload {
-        id: u64,
-        version: u64,
-    },
-}
-/// Worker-to-UI results. Generation identifies the host/project; token identifies a
-/// supersedable request, and document/version identifies the submitted source snapshot.
-enum Event {
-    Latex {
-        generation: u64,
-        token: u64,
-        preview: bool,
-        versions: Vec<(u64, u64)>,
-        result: Box<Result<crate::latex::Reply, String>>,
-    },
-    Marp {
-        generation: u64,
-        id: u64,
-        version: u64,
-        token: u64,
-        exporting: bool,
-        result: Box<Result<marp_view::Completed, String>>,
-    },
-    MarpPage {
-        generation: u64,
-        id: u64,
-        version: u64,
-        token: u64,
-        page: usize,
-        result: Result<crate::images::Decoded, String>,
-    },
-    NotebookParsed {
-        generation: u64,
-        id: u64,
-        version: u64,
-        result: Result<crate::notebook::Notebook, String>,
-    },
-    PdfPage {
-        generation: u64,
-        id: u64,
-        version: u64,
-        token: u64,
-        page: usize,
-        result: Result<crate::images::Decoded, String>,
-    },
-    MarkdownImage {
-        generation: u64,
-        id: u64,
-        token: u64,
-        uri: String,
-        result: Result<crate::images::Decoded, String>,
-    },
-    ProfileSaved {
-        result: Result<Vec<Profile>, String>,
-        submitted: Box<Profile>,
-        form: u64,
-    },
-    ProfilesChanged {
-        result: Result<Vec<Profile>, String>,
-        removed: Option<String>,
-    },
-    Tool {
-        generation: u64,
-        job: Box<ToolJob>,
-        result: Box<Result<crate::project::Response, String>>,
-    },
-    Done {
-        generation: u64,
-        job: Job,
-        result: Box<Result<Response, String>>,
-    },
-    Session {
-        generation: u64,
-        job: sessions::Job,
-        result: Result<crate::project::Response, String>,
-    },
-    Connected {
-        generation: u64,
-        result: Result<(), String>,
-    },
-}
 #[derive(Clone)]
 /// Operations routed through common dirty-buffer/encrypted-project guards before changing
 /// ownership or discarding state.
@@ -395,20 +190,12 @@ pub struct EditorApp {
     debugger: debugging::State,
     extensions: extensions::Extensions,
     workspace: Option<Workspace>,
-    documents: Vec<Document>,
+    documents: documents::Documents,
     /// Cleanup ownership survives notebook view replacement and tab removal.
     notebook_shutdowns: notebook_view::Shutdowns,
-    active: usize,
-    next_id: u64,
     /// Captured host/project generation; old workers may finish but cannot update this context.
     generation: u64,
-    directories: HashMap<String, Vec<Entry>>,
-    tree_rows: Vec<TreeRow>,
-    tree_dirty: bool,
-    expanded: HashSet<String>,
     explorer_state: explorer::State,
-    loading: HashSet<String>,
-    opening: HashSet<String>,
     terminal: Option<Terminal>,
     sessions: sessions::Sessions,
     tunnels: tunnels::Tunnels,
@@ -416,17 +203,10 @@ pub struct EditorApp {
     preparing: bool,
     project_token: u64,
     file_browser: file_browser::State,
-    folder_remote: bool,
-    folder_entries: Vec<Entry>,
-    folder_loading: bool,
-    folder_needs_load: bool,
-    folder_token: u64,
-    folder_error: Option<String>,
-    folder_policy_path: String,
+    project_picker: project_dialog::State,
     sandbox_defaults: sandbox::Options,
     sandbox_presets: sandbox_presets::State,
     startup_restore: Option<bool>,
-    folder_sandbox: sandbox::Options,
     last_window_title: String,
     last_ssh: Option<Profile>,
     show_terminal: bool,
@@ -439,15 +219,7 @@ pub struct EditorApp {
     ui_viewport: egui::ViewportId,
     dialog_input: String,
     marp_overwrite: bool,
-    profile: Profile,
-    profiles: Vec<Profile>,
-    profiles_loading: Option<mpsc::Receiver<Result<Vec<Profile>, String>>>,
-    profile_baseline: Option<Profile>,
-    profile_form: u64,
-    profile_name_focus: bool,
-    profile_saving: bool,
-    profile_writer: Option<std::thread::JoinHandle<()>>,
-    aliases: Vec<String>,
+    connection_profiles: saved_connections::State,
     pending: Option<Action>,
     quitting: bool,
     connection_cancel: Arc<AtomicBool>,
@@ -543,18 +315,10 @@ impl EditorApp {
             debugger: Default::default(),
             extensions: extensions::Extensions::load(storage),
             workspace: None,
-            documents: vec![],
+            documents: Default::default(),
             notebook_shutdowns: Default::default(),
-            active: 0,
-            next_id: 1,
             generation: 0,
-            directories: HashMap::new(),
-            tree_rows: Vec::new(),
-            tree_dirty: true,
-            expanded: HashSet::new(),
             explorer_state: Default::default(),
-            loading: HashSet::new(),
-            opening: HashSet::new(),
             terminal: None,
             sessions: Default::default(),
             tunnels: tunnels::Tunnels::load(storage, &mut warnings),
@@ -562,19 +326,12 @@ impl EditorApp {
             preparing: false,
             project_token: 0,
             file_browser: Default::default(),
-            folder_remote: false,
-            folder_entries: vec![],
-            folder_loading: false,
-            folder_needs_load: false,
-            folder_token: 0,
-            folder_error: None,
-            folder_policy_path: String::new(),
+            project_picker: Default::default(),
             sandbox_defaults: storage
                 .and_then(|s| s.get_string("sandbox_defaults"))
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
             sandbox_presets: sandbox_presets::State::load(storage, &mut warnings),
-            folder_sandbox: Default::default(),
             startup_restore: None,
             last_window_title: String::new(),
             last_ssh: None,
@@ -588,15 +345,7 @@ impl EditorApp {
             ui_viewport: egui::ViewportId::ROOT,
             dialog_input: String::new(),
             marp_overwrite: false,
-            profile: Profile::default(),
-            profiles: ssh::load_profiles(),
-            profiles_loading: None,
-            profile_baseline: None,
-            profile_form: 0,
-            profile_name_focus: false,
-            profile_saving: false,
-            profile_writer: None,
-            aliases: ssh::aliases(),
+            connection_profiles: saved_connections::State::new(),
             pending: None,
             quitting: false,
             connection_cancel: Arc::new(AtomicBool::new(false)),
@@ -627,7 +376,7 @@ impl EditorApp {
         }
         if let Some(mut profile) = startup.remote {
             profile.sandbox.enabled |= startup.sandbox;
-            app.profile = profile.clone();
+            app.connection_profiles.select(profile.clone(), false);
             app.connect(profile, &cc.egui_ctx, false);
             app.startup_restore = Some(startup.sandbox);
         } else if let Some(path) = startup.local {
@@ -682,114 +431,6 @@ impl EditorApp {
             self.notify(error, true);
         }
         self.persistence = Some(storage);
-    }
-
-    /// Scale the whole interface relative to the monitor DPI, preserving text
-    /// sizes in points and document/terminal state. An explicit reset is an edit
-    /// even when this window already displays 100%: another window may differ.
-    /// Invalidate project work and release only window-owned services. When preserving
-    /// buffers, clear host bindings and retain recovery metadata rather than authorizing
-    /// local saves to old remote paths.
-    fn clear_project(&mut self, keep_buffers: bool) {
-        self.reset_debugger();
-        self.stop_latex();
-        self.latex = Default::default();
-        self.pdf_cancel.store(true, Ordering::Release);
-        self.pdf_cancel = Arc::new(AtomicBool::new(false));
-        self.leave_project_agent();
-        self.stop_notebook_kernels("Workspace changed");
-        if !keep_buffers {
-            self.tabs = Default::default();
-        }
-        self.cancel_extensions();
-        self.workbench.reset_project();
-        self.extensions.busy = false;
-        self.extensions.registry.revision = self.extensions.registry.revision.wrapping_add(1);
-        self.terminal = None;
-        self.session_context_reset();
-        for client in [
-            self.vaults.active.take(),
-            self.vaults.staged.take(),
-            self.vaults.pending.take(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            self.vaults.release(client);
-        }
-        if !keep_buffers {
-            self.documents.clear();
-            self.active = 0;
-        }
-        for doc in &mut self.documents {
-            doc.saving = false;
-            if let Some(pdf) = &mut doc.pdf {
-                pdf.invalidate();
-            }
-            if let Some(preview) = &mut doc.markdown {
-                preview.invalidate();
-            }
-            if let Some(view) = &mut doc.marp {
-                view.invalidate();
-            }
-        }
-        self.directories.clear();
-        self.explorer_state = Default::default();
-        self.navigation.tree = Default::default();
-        self.file_browser.reset();
-        self.navigation.editing = Default::default();
-        self.tree_rows.clear();
-        self.tree_dirty = true;
-        self.expanded.clear();
-        self.loading.clear();
-        self.opening.clear();
-        self.generation += 1;
-        self.show_find = false;
-    }
-
-    /// Cancel connection work, clear project ownership and release only this window's private SSH master.
-    fn reset_workspace(&mut self) {
-        self.connection_cancel.store(true, Ordering::Release);
-        self.clear_project(false);
-        self.ssh_master = None;
-        if let Some(remote) = self.workspace.as_ref().and_then(|w| w.remote.as_ref()) {
-            remote.cleanup();
-        }
-        self.workspace = None;
-        self.preparing = false;
-        self.project_token += 1;
-        self.folder_token += 1;
-    }
-
-    /// Refuse disconnect while encrypted leases or lifetime mutations require attention;
-    /// otherwise unbind remote buffers through the recovery path before returning to local mode.
-    fn disconnect_ssh(&mut self, ctx: &egui::Context) {
-        if self.explorer_state.busy {
-            self.notify(
-                "Wait for the file operation to finish before disconnecting SSH.",
-                false,
-            );
-            return;
-        }
-        if self.vaults.active.is_some()
-            || self.vaults.pending.is_some()
-            || self.vaults.staged.is_some()
-            || self.vaults.cleanup_pending()
-        {
-            self.notify("Lock the encrypted project before disconnecting SSH.", true);
-            return;
-        }
-        if self.workspace.as_ref().is_none_or(|w| w.remote.is_none()) {
-            return;
-        }
-        if self.sessions_need_exit_check() || self.agent_installation_pending() {
-            self.notify(
-                "Wait for terminal startup or persistence changes to finish before disconnecting SSH.",
-                false,
-            );
-            return;
-        }
-        self.detach_ssh(ctx);
     }
 
     /// Validate/probe a candidate asynchronously while retaining the current working project.
@@ -895,22 +536,14 @@ impl EditorApp {
             .vaults
             .take_project(&response.path, connection.as_ref());
         if remote || (keep_buffers && self.workspace.as_ref().is_some_and(|w| w.remote.is_none())) {
-            self.clear_project(keep_buffers);
+            self.clear_project(documents::Retention::from(keep_buffers));
         } else {
             self.reset_workspace();
         }
         let connection = connection.map(|mut r| {
             r.profile.root = response.path.clone();
             r.profile.sandbox = options.clone();
-            if self.profile.label() != r.profile.label() {
-                self.profile_baseline = self
-                    .profiles
-                    .iter()
-                    .find(|saved| saved.label() == r.profile.label())
-                    .cloned();
-                self.profile_form += 1;
-            }
-            self.profile = r.profile.clone();
+            self.connection_profiles.adopt(r.profile.clone());
             r
         });
         self.workspace = Some(Workspace {
@@ -927,9 +560,11 @@ impl EditorApp {
         if remote {
             self.restore_ssh_buffers();
         }
-        self.expanded.insert(response.path.clone());
-        self.directories.insert(response.path, response.entries);
-        self.tree_dirty = true;
+        self.explorer_state.expanded.insert(response.path.clone());
+        self.explorer_state
+            .directories
+            .insert(response.path, response.entries);
+        self.explorer_state.tree_dirty = true;
         self.preparing = false;
         self.load_project_tools(ctx);
         if let Some(draft) = settings_draft {
@@ -964,26 +599,35 @@ impl EditorApp {
     /// Queue selected-host project discovery with a superseding folder token; this raw-host
     /// picker is separate from ordinary sandboxed document/file browsing.
     fn browse_folder(&mut self, path: String, ctx: &egui::Context) {
-        if self.folder_remote
+        let browse = self.project_picker.begin(path);
+        self.dispatch_folder_browse(browse, ctx);
+    }
+
+    /// The picker owns request identity; only the coordinator can choose a host and do I/O.
+    fn dispatch_folder_browse(&mut self, browse: project_dialog::Browse, ctx: &egui::Context) {
+        if browse.remote
             && self
                 .workspace
                 .as_ref()
                 .is_none_or(|w| !w.connected || w.remote.is_none())
         {
-            self.folder_error = Some("SSH is offline. Reconnect to browse folders.".into());
+            self.project_picker.loading = false;
+            self.project_picker.error = Some("SSH is offline. Reconnect to browse folders.".into());
             return;
         }
-        self.dialog_input = path.clone();
-        self.folder_token += 1;
-        self.folder_loading = true;
-        self.folder_error = None;
+        let project_dialog::Browse {
+            path,
+            remote,
+            token,
+            options,
+        } = browse;
         self.dispatch(
             Request::List { path: path.clone() },
             Job::Browse {
-                remote: self.folder_remote,
-                token: self.folder_token,
                 path,
-                options: self.folder_sandbox.clone(),
+                remote,
+                token,
+                options,
             },
             ctx,
         );
@@ -994,22 +638,22 @@ impl EditorApp {
     /// not replace sandbox choices edited while the listing was loading.
     fn open_folder_dialog_at(&mut self, path: String) {
         self.set_dialog(Dialog::Folder);
-        if let Some(options) = self.saved_sandbox_for(&path, self.folder_remote) {
-            self.folder_sandbox = options;
+        if let Some(options) = self.saved_sandbox_for(&path, self.project_picker.remote) {
+            self.project_picker.sandbox = options;
         }
-        self.folder_policy_path.clone_from(&path);
-        self.dialog_input = path;
+        self.project_picker.policy_path.clone_from(&path);
+        self.project_picker.path = path;
     }
 
     /// Initialize the project picker explicitly on the desktop host, even during an SSH workspace.
     fn open_local_folder_dialog(&mut self) {
         self.set_dialog(Dialog::Folder);
-        self.folder_remote = false;
-        self.dialog_input = std::env::current_dir()
+        self.project_picker.remote = false;
+        self.project_picker.path = std::env::current_dir()
             .unwrap_or_default()
             .to_string_lossy()
             .into();
-        self.folder_needs_load = true;
+        self.project_picker.needs_load = true;
     }
 
     /// Start authenticated SSH preparation for a captured profile after ownership guards;
@@ -1037,23 +681,11 @@ impl EditorApp {
             self.stop_latex();
             self.connection_cancel.store(true, Ordering::Release);
             self.terminal = None;
-            self.ssh_master = None;
-            if let Some(old) = self.workspace.as_ref().and_then(|w| w.remote.as_ref()) {
-                old.cleanup();
-            }
+            self.release_workspace_transport();
             self.generation += 1;
             self.workbench.reset_monitor();
-            self.loading.clear();
-            self.opening.clear();
-            for doc in &mut self.documents {
-                doc.saving = false;
-                if let Some(preview) = &mut doc.markdown {
-                    preview.invalidate();
-                }
-                if let Some(view) = &mut doc.marp {
-                    view.invalidate();
-                }
-            }
+            self.explorer_state.loading.clear();
+            self.documents.reconnecting();
         } else {
             self.reset_workspace();
         }
@@ -1102,7 +734,10 @@ impl EditorApp {
                         }
                         std::thread::sleep(Duration::from_millis(200));
                     };
-                    let _ = tx.send(Event::Connected { generation, result });
+                    let _ = tx.send(Event::workspace(
+                        generation,
+                        WorkspaceEvent::Connected { result },
+                    ));
                     thread_ctx.request_repaint();
                 });
                 Terminal::focus(ctx);
@@ -1223,18 +858,14 @@ impl EditorApp {
                     self.notify("Wait for kernel startup or submitted work to be acknowledged before closing this notebook.",false);
                     return;
                 }
-                if let Some(index) = self.documents.iter().position(|d| d.id == id) {
-                    self.documents.remove(index);
-                    if self.active > index {
-                        self.active -= 1;
-                    }
-                    self.active = self.active.min(self.documents.len().saturating_sub(1));
+                if self.documents.close(id).is_some() {
                     self.focus_editor(ctx);
                 }
             }
+
             Action::Quit => {
                 if self.vaults.active.is_some() && self.vaults.lost && self.vaults.released {
-                    self.clear_project(false);
+                    self.clear_project(documents::Retention::Discard);
                     self.quit_terminals(ctx);
                 } else if self.vaults.active.is_some() {
                     self.lock_encrypted(true, ctx);
@@ -1260,14 +891,8 @@ impl EditorApp {
         if self.dialog == Dialog::Encrypted && dialog != Dialog::Encrypted && !self.vaults.locking {
             self.cancel_encrypted_dialog();
         }
-        if dialog == Dialog::Connect && self.profiles_loading.is_none() && !self.profile_saving {
-            let (tx, rx) = mpsc::channel();
-            self.profiles_loading = Some(rx);
-            let vault_work = self.vaults.work();
-            std::thread::spawn(move || {
-                let _vault_work = vault_work;
-                let _ = tx.send(ssh::load_profiles_checked().map_err(|e| format!("{e:#}")));
-            });
+        if dialog == Dialog::Connect {
+            self.connection_profiles.open(self.vaults.work());
         }
         self.navigation.list = Default::default();
         if file_browser::is_file_dialog(&dialog) {
@@ -1277,25 +902,21 @@ impl EditorApp {
         self.dialog_events.clear();
         self.dialog_viewport = self.ui_viewport;
         self.dialog_focus = true;
-        self.profile_name_focus = false;
         self.dialog_input = match self.dialog {
             Dialog::Folder => {
-                self.folder_token += 1;
-                self.folder_remote = self.workspace.as_ref().is_some_and(|w| w.remote.is_some());
-                self.folder_entries.clear();
-                self.folder_needs_load = true;
-                self.folder_error = None;
-                self.folder_sandbox = self
+                let remote = self.workspace.as_ref().is_some_and(|w| w.remote.is_some());
+                let options = self
                     .workspace
                     .as_ref()
                     .map(|w| w.sandbox_options.clone())
                     .unwrap_or_else(|| self.sandbox_defaults.clone());
-                self.folder_policy_path = self
+                let policy_path = self
                     .workspace
                     .as_ref()
                     .map(|w| w.root.clone())
                     .unwrap_or_default();
-                self.workspace
+                let path = self
+                    .workspace
                     .as_ref()
                     .map(|w| w.root.clone())
                     .unwrap_or_else(|| {
@@ -1303,7 +924,9 @@ impl EditorApp {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .into()
-                    })
+                    });
+                self.project_picker.open(remote, path, policy_path, options);
+                String::new()
             }
             Dialog::Save(id) => self
                 .documents
@@ -1368,35 +991,12 @@ impl EditorApp {
     /// Create an unsaved source buffer with a new stable tab identity and request editor focus.
     fn new_file(&mut self) {
         self.editor_intent();
-        let id = self.next_id;
-        self.next_id += 1;
-        self.documents.push(Document {
-            recovery: None,
-            markdown: None,
-            marp: None,
-            image: None,
-            pdf: None,
-            hex: None,
-            notebook: None,
-            id,
-            path: None,
-            text: String::new(),
-            saved_text: String::new(),
-            revision: None,
-            saving: false,
-            modified: true,
-            edit_version: 0,
-            last_cursor: usize::MAX,
-            cursor: (1, 1),
-            selection: None,
-            lines: 1,
-        });
-        self.active = self.documents.len() - 1;
+        self.documents.new_file();
     }
 
     /// Route the active editable document to its current destination or shared Save As picker.
     fn save_active(&mut self, ctx: &egui::Context, save_as: bool) {
-        if let Some(doc) = self.documents.get(self.active) {
+        if let Some(doc) = self.documents.active() {
             if doc.is_preview() && doc.hex.is_none() && doc.notebook.is_none() {
                 self.notify("Image and PDF previews are read-only.", false);
                 return;
@@ -1565,7 +1165,7 @@ impl EditorApp {
             self.consume_command(Command::Open, ctx);
             self.consume_command(Command::New, ctx);
             if consume(egui::Modifiers::COMMAND, Key::W)
-                && let Some(doc) = self.documents.get(self.active)
+                && let Some(doc) = self.documents.active()
             {
                 self.guarded(Action::CloseTab(doc.id), ctx);
             }
@@ -1672,7 +1272,7 @@ impl eframe::App for EditorApp {
         {
             ui_probe::ssh_master_socket(ctx, &remote.socket);
         }
-        if self.profiles_loading.is_some() {
+        if self.connection_profiles.reloading() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if self.persistence.is_some() {
@@ -1728,9 +1328,7 @@ impl eframe::App for EditorApp {
 
 impl Drop for EditorApp {
     fn drop(&mut self) {
-        if let Some(worker) = self.profile_writer.take() {
-            let _ = worker.join();
-        }
+        self.connection_profiles.join_writer();
         self.reset_workspace();
     }
 }
@@ -1790,34 +1388,6 @@ pub fn find_matches(text: &str, needle: &str, case_sensitive: bool) -> Vec<(usiz
         }
     }
     matches
-}
-
-/// Flatten expanded cached directories in display order while retaining each entry's indentation depth.
-fn flatten_tree(
-    directories: &HashMap<String, Vec<Entry>>,
-    expanded: &HashSet<String>,
-    root: &str,
-    depth: usize,
-    hidden: bool,
-    rows: &mut Vec<TreeRow>,
-) {
-    if depth > 24 {
-        return;
-    }
-    if let Some(entries) = directories.get(root) {
-        for entry in entries {
-            if !hidden && entry.name.starts_with('.') {
-                continue;
-            }
-            rows.push(TreeRow {
-                entry: entry.clone(),
-                depth,
-            });
-            if entry.dir && expanded.contains(&entry.path) {
-                flatten_tree(directories, expanded, &entry.path, depth + 1, hidden, rows);
-            }
-        }
-    }
 }
 
 /// Syntect accepts case-sensitive language names or filename extensions.

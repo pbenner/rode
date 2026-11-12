@@ -222,9 +222,9 @@ fn saved_connection_rename_selects_the_name_without_connecting_or_changing_the_h
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.profiles = profiles();
-        app.profiles[1].name = "β Work cluster".into();
-        let original = app.profiles[1].clone();
+        app.connection_profiles.profiles = profiles();
+        app.connection_profiles.profiles[1].name = "β Work cluster".into();
+        let original = app.connection_profiles.profiles[1].clone();
         app.new_file();
         app.documents[0].text = "unsaved source".into();
         let directory = tempfile::tempdir().unwrap();
@@ -300,16 +300,19 @@ fn saved_connection_rename_selects_the_name_without_connecting_or_changing_the_h
         };
         assert!(top("ssh-field-Connection name") < top("ssh-field-Host / alias"));
         frame(&mut app, vec![egui::Event::Text("Research cluster".into())]);
-        assert_eq!(app.profile.name, "Research cluster");
-        assert_eq!(app.profile.host, original.host);
-        assert_eq!(app.profile_baseline.as_ref().unwrap().name, original.name);
+        assert_eq!(app.connection_profiles.draft.name, "Research cluster");
+        assert_eq!(app.connection_profiles.draft.host, original.host);
         assert_eq!(
-            app.profiles[1].name, original.name,
+            app.connection_profiles.baseline.as_ref().unwrap().name,
+            original.name
+        );
+        assert_eq!(
+            app.connection_profiles.profiles[1].name, original.name,
             "Renaming waits for Save profile"
         );
         assert_eq!(app.documents[0].text, "unsaved source");
         assert!(app.pending.is_none() && app.ssh_master.is_none() && app.workspace.is_none());
-        assert!(!app.profile_saving && app.profile_writer.is_none());
+        assert!(!app.connection_profiles.saving && app.connection_profiles.writer.is_none());
         frame(
             &mut app,
             vec![egui::Event::Key {
@@ -337,41 +340,76 @@ fn saved_connection_results_preserve_drafts_and_prevent_stale_reload() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.profiles = profiles();
-    app.profile_baseline = Some(app.profiles[0].clone());
-    app.profile = app.profiles[0].clone();
-    app.profile.user = "unsaved-login".into();
-    app.profile_saving = true;
+    app.connection_profiles.profiles = profiles();
+    app.connection_profiles.baseline = Some(app.connection_profiles.profiles[0].clone());
+    app.connection_profiles.draft = app.connection_profiles.profiles[0].clone();
+    app.connection_profiles.draft.user = "unsaved-login".into();
+    app.connection_profiles.saving = true;
     app.set_dialog(Dialog::Connect);
     assert!(
-        app.profiles_loading.is_none(),
+        app.connection_profiles.reload.is_none(),
         "A reload must not race an in-flight edit"
     );
     app.new_file();
     app.documents[0].text = "unsaved source".into();
     app.tx
-        .send(Event::ProfilesChanged {
+        .send(Event::Profiles(ProfileEvent::Changed {
             result: Err("Read-only configuration".into()),
             removed: Some("Alpha".into()),
-        })
+        }))
         .unwrap();
     app.poll(&ctx);
-    assert_eq!(app.profiles.len(), 3);
-    assert!(!app.profile_saving);
+    assert_eq!(app.connection_profiles.profiles.len(), 3);
+    assert!(!app.connection_profiles.saving);
     assert!(app.notice.as_ref().unwrap().1);
     app.tx
-        .send(Event::ProfilesChanged {
+        .send(Event::Profiles(ProfileEvent::Changed {
             result: Ok(profiles().into_iter().skip(1).collect()),
             removed: Some("Alpha".into()),
-        })
+        }))
         .unwrap();
     app.poll(&ctx);
     assert_eq!(
-        app.profiles.iter().map(Profile::label).collect::<Vec<_>>(),
+        app.connection_profiles
+            .profiles
+            .iter()
+            .map(Profile::label)
+            .collect::<Vec<_>>(),
         ["Beta", "Gamma"]
     );
-    assert!(app.profile_baseline.is_none());
-    assert_eq!(app.profile.user, "unsaved-login");
+    assert!(app.connection_profiles.baseline.is_none());
+    assert_eq!(app.connection_profiles.draft.user, "unsaved-login");
     assert_eq!(app.documents[0].text, "unsaved source");
     assert!(app.workspace.is_none() && app.ssh_master.is_none());
+}
+
+#[test]
+fn profile_save_survives_workspace_reset_without_claiming_a_newer_forms_identity() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    let saved = profiles();
+    app.connection_profiles.select(saved[0].clone(), true);
+    let submitted_form = app.connection_profiles.form_id;
+    app.connection_profiles.saving = true;
+    app.connection_profiles.select(saved[1].clone(), true);
+    app.connection_profiles.draft.user = "unsaved-login".into();
+    app.reset_workspace();
+    app.tx
+        .send(Event::Profiles(ProfileEvent::Saved {
+            result: Ok(saved.clone()),
+            submitted: Box::new(saved[0].clone()),
+            form: submitted_form,
+        }))
+        .unwrap();
+    app.poll(&ctx);
+    assert_eq!(app.connection_profiles.profiles.len(), saved.len());
+    assert_eq!(
+        app.connection_profiles.baseline.as_ref().unwrap().label(),
+        saved[1].label()
+    );
+    assert_eq!(app.connection_profiles.draft.user, "unsaved-login");
+    assert!(!app.connection_profiles.saving());
+    assert!(app.workspace.is_none());
+    assert!(!app.notice.as_ref().unwrap().1);
 }

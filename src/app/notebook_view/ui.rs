@@ -9,7 +9,7 @@ impl EditorApp {
     /// Render cell controls, growing source editors and bounded outputs. Defer run/host
     /// actions until the document borrow ends so rendering never directly launches a process.
     pub(in crate::app) fn notebook_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        let index = self.active;
+        let index = self.documents.active_index();
         let Some(mut view) = self
             .documents
             .get_mut(index)

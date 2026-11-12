@@ -23,6 +23,7 @@ from ui_harness import (
     focus_window,
     key,
     palette_command,
+    read_preferences,
     screenshot,
     text,
     wait_for_button,
@@ -91,8 +92,7 @@ with fixture_directory(prefix="rode-environment-ui-") as base:
             def settings():
                 if not preferences.exists():
                     return {}
-                data = preferences.read_text().rstrip()
-                data = json.loads(data[:-1].rstrip().removesuffix(",") + "}")
+                data = read_preferences(preferences)
                 projects = json.loads(data.get("project_preferences", "{}"))
                 return next(
                     (

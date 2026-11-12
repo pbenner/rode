@@ -21,6 +21,7 @@ from ui_harness import (
     fixture_directory,
     fixture_environment,
     key,
+    read_preferences,
     screenshot,
     wait_for_effect,
 )
@@ -143,13 +144,12 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             # Reattach with a different UI interpreter selection. The retained
             # kernel must keep its captured interpreter and Python variables.
             preferences = base / "data/rode/app.ron"
-            content = preferences.read_text().rstrip()
-            storage = json.loads(content[:-1].rstrip().removesuffix(",") + "}")
+            storage = read_preferences(preferences)
             saved = json.loads(storage.get("project_preferences", "{}"))
             profile = json.dumps([None, str(root)], separators=(",", ":"))
             saved.setdefault(profile, {})["python"] = str(python)
             storage["project_preferences"] = json.dumps(saved)
-            preferences.write_text(json.dumps(storage))
+            preferences.write_text(json.dumps(storage, ensure_ascii=False))
             process = subprocess.Popen(
                 [str(BINARY), str(root), "--theme", "carbon"], env=env, stdout=log, stderr=log
             )

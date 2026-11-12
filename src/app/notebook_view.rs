@@ -320,7 +320,7 @@ impl EditorApp {
         view.execution_target = target;
         view.kernel = Some(kernel);
         view.error.clear();
-        self.active = index;
+        self.documents.select_index(index);
         self.focus_editor(ctx);
         Ok(())
     }
@@ -332,7 +332,7 @@ impl EditorApp {
         }
         self.new_file();
         let book = Notebook::default();
-        let doc = &mut self.documents[self.active];
+        let doc = self.documents.active_mut().unwrap();
         doc.text = book.serialize().expect("small new notebook");
         doc.lines = doc.text.lines().count();
         doc.notebook = Some(View::new(
@@ -362,7 +362,7 @@ impl EditorApp {
     /// Stop execution before raw-JSON editing, or parse a captured source snapshot
     /// on a worker when returning to the structured Cells view.
     pub(super) fn toggle_notebook_source(&mut self, ctx: &egui::Context) {
-        let Some(doc) = self.documents.get_mut(self.active) else {
+        let Some(doc) = self.documents.active_mut() else {
             return;
         };
         if let Some(view) = &mut doc.notebook
@@ -376,7 +376,7 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Notebooks) {
             return;
         }
-        let doc = &self.documents[self.active];
+        let doc = self.documents.active().unwrap();
         let id = doc.id;
         let version = doc.edit_version;
         let text = doc.text.clone();
@@ -387,12 +387,14 @@ impl EditorApp {
         std::thread::spawn(move || {
             let _vault_work = vault_work;
             let result = Notebook::parse(&text).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::NotebookParsed {
+            let _ = tx.send(Event::workspace(
                 generation,
-                id,
-                version,
-                result,
-            });
+                WorkspaceEvent::NotebookParsed {
+                    id,
+                    version,
+                    result,
+                },
+            ));
             ctx.request_repaint();
         });
     }
@@ -446,7 +448,7 @@ impl EditorApp {
             return;
         }
         let python = self.terminal_python_selection();
-        let Some(doc) = self.documents.get_mut(self.active) else {
+        let Some(doc) = self.documents.active_mut() else {
             return;
         };
         if doc.recovery.is_some() {
@@ -813,7 +815,9 @@ impl EditorApp {
         }
         let plan = self.workspace.as_ref().map(|w| w.plan.clone());
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
-        let disconnected = self.documents[self.active].recovery.is_some();
+        let disconnected = self.documents[self.documents.active_index()]
+            .recovery
+            .is_some();
         let budget = self.image_budget.clone();
         let tx = view.tx.clone();
         let ctx = ctx.clone();

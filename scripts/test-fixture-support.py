@@ -16,6 +16,7 @@ from fixture_support import (
     fixture_directory,
     fixture_environment,
     private_directory,
+    read_preferences,
     temporary_root,
     write_python_launcher,
 )
@@ -109,6 +110,43 @@ class FixtureSupportTests(unittest.TestCase):
         for literal in ("unquoted", r'"\q"', r'"\u{d800}"', r'"\u{110000}"', r'"\u{ff"'):
             with self.subTest(literal=literal), self.assertRaises(ValueError):
                 decode_ron_string(literal)
+
+    def test_preference_map_decodes_each_ron_layer_and_accepts_json_string_maps(self):
+        nested = json.dumps(
+            {"project ' λ": {"path": 'backslash\\ and "quote"'}}, ensure_ascii=False
+        )
+        values = {"font_size": "15", "project_preferences": nested}
+
+        def ron_string(value):
+            return json.dumps(value, ensure_ascii=False).replace("'", "\\'")
+
+        ron = (
+            "{\n"
+            + "\n".join(f"{ron_string(key)}: {ron_string(value)}," for key, value in values.items())
+            + "\n}"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.ron"
+            self.assertEqual(read_preferences(path), {})
+            for contents in (ron, json.dumps(values, ensure_ascii=False), "{}"):
+                with self.subTest(contents=contents):
+                    path.write_text(contents)
+                    self.assertEqual(read_preferences(path), {} if contents == "{}" else values)
+
+    def test_preference_map_rejects_malformed_entries_instead_of_waiting_forever(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "app.ron"
+            for contents in (
+                '{"key": 1}',
+                '{"key": "value" "other": "value"}',
+                '{"key": "one", "key": "two"}',
+                '{"key": "value",}junk',
+                r'{"key": "\q"}',
+                "",
+            ):
+                with self.subTest(contents=contents), self.assertRaises(ValueError):
+                    path.write_text(contents)
+                    read_preferences(path)
 
     def test_canonical_paths_match_host_rows_when_the_temporary_parent_is_a_symlink(self):
         with tempfile.TemporaryDirectory() as directory:

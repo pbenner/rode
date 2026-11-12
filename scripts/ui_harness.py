@@ -31,6 +31,9 @@ from fixture_support import (
     fixture_environment as fixture_environment,
 )
 from fixture_support import (
+    read_preferences as read_preferences,
+)
+from fixture_support import (
     write_python_launcher as write_python_launcher,
 )
 
@@ -667,10 +670,12 @@ def wait_for_project(window, process, log_path, project, timeout=20):
         )
         match = re.search(r'^xwininfo: Window id: \S+ "(.*)"$', attributes.stdout, re.MULTILINE)
         title = match[1] if match and attributes.returncode == 0 else ""
-        if (
-            title == expected or title.startswith(expected + " [")
-        ) and "[Opening project]" not in title:
-            return
+        if title == expected or title.startswith(expected + " ["):
+            # SSH names the candidate root before authentication/preparation.
+            # Mapping that window is not an acknowledgement of a usable host.
+            suffix = title[len(expected) :]
+            if "[Opening project]" not in suffix and " · offline]" not in suffix:
+                return
         time.sleep(0.05)
     raise AssertionError(
         f"Project {project} was not ready within {timeout}s. Title: {title!r}. Log: {log_path}"

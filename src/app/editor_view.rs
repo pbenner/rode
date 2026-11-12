@@ -40,8 +40,7 @@ impl EditorApp {
                 if self.documents.is_empty() {
                     return;
                 }
-                self.active = self.active.min(self.documents.len() - 1);
-                let path = self.documents[self.active]
+                let path = self.documents[self.documents.active_index()]
                     .display_path()
                     .unwrap_or("Untitled");
                 let relative = self
@@ -55,12 +54,12 @@ impl EditorApp {
                     .show(ui, |ui| {
                         let response = chrome::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
                             .on_hover_text(path);
-                        if !self.documents[self.active].preview_loading() {
+                        if !self.documents[self.documents.active_index()].preview_loading() {
                             ui_probe::value(ui, "active-document", &response, path);
                         }
                     });
-                if self.documents[self.active].recovery.is_some() {
-                    let doc = &self.documents[self.active];
+                if self.documents[self.documents.active_index()].recovery.is_some() {
+                    let doc = self.documents.active().unwrap();
                     let message = if doc.is_preview() && doc.notebook.is_none() {
                         "Disconnected SSH preview · Reconnect to reload its source."
                     } else {
@@ -77,9 +76,9 @@ impl EditorApp {
                 if self.pdf_ui(ui, ctx) {
                     return;
                 }
-                if self.documents[self.active].image.is_some() {
+                if self.documents[self.documents.active_index()].image.is_some() {
                     let focus = self.take_editor_focus(ui, ctx).is_some();
-                    let doc = &mut self.documents[self.active];
+                    let doc = self.documents.active_mut().unwrap();
                     let id = doc.id;
                     let reload = doc
                         .image
@@ -105,16 +104,16 @@ impl EditorApp {
                 let queued_focus = self.take_editor_focus(ui, ctx);
                 let shortcut_style=self.navigation.bindings.style();
                 if shortcut_style!=navigation::Style::Standard {ui.label(palette.tag(self.navigation.editing.label(shortcut_style)));}
-                let source_stale=self.debug_source_stale(&self.documents[self.active]);
+                let source_stale=self.debug_source_stale(self.documents.active().unwrap());
                 if source_stale {ui.colored_label(palette.accent,"Source changed since debugging started; execution locations may be stale. Restart debugging to use these changes.");}
-                let debug_line=self.debug_line().filter(|(p,_)|self.documents[self.active].path.as_deref()==Some(*p)).filter(|_|!source_stale).map(|(_,line)|line);
-                let debug_breakpoints=self.documents[self.active].path.as_ref().and_then(|p|self.workbench.debugger_settings().breakpoints.get(p)).map_or(&[][..],Vec::as_slice);
+                let debug_line=self.debug_line().filter(|(p,_)|self.documents[self.documents.active_index()].path.as_deref()==Some(*p)).filter(|_|!source_stale).map(|(_,line)|line);
+                let debug_breakpoints=self.documents[self.documents.active_index()].path.as_ref().and_then(|p|self.workbench.debugger_settings().breakpoints.get(p)).map_or(&[][..],Vec::as_slice);
                 let debug_enabled=self.feature(crate::extensions::Feature::Debugger);
-                let debug_verified=self.documents[self.active].path.as_ref().and_then(|p|self.debugger.client.as_ref().and_then(|c|c.breakpoints.get(p))).map_or(&[][..],Vec::as_slice);
+                let debug_verified=self.documents[self.documents.active_index()].path.as_ref().and_then(|p|self.debugger.client.as_ref().and_then(|c|c.breakpoints.get(p))).map_or(&[][..],Vec::as_slice);
                 let themes = &self.themes;
-                let diagnostics = self.document_issues(&self.documents[self.active]);
+                let diagnostics = self.document_issues(self.documents.active().unwrap());
                 let editing=&mut self.navigation.editing;
-                let doc = &mut self.documents[self.active];
+                let doc = self.documents.active_mut().unwrap();
                 editing.bind(doc.id,shortcut_style);
                 let id = egui::Id::new(("document", doc.id));
                 let jump_requested = doc.selection.is_some();
@@ -434,7 +433,7 @@ impl EditorApp {
         if self.find.is_empty() {
             return;
         }
-        if replace && let Some(doc) = self.documents.get_mut(self.active) {
+        if replace && let Some(doc) = self.documents.active_mut() {
             let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
             if !matches.is_empty() {
                 doc.edit_version = doc.edit_version.wrapping_add(1);
@@ -451,7 +450,7 @@ impl EditorApp {
                 i.consume_key(egui::Modifiers::NONE, Key::Enter);
             });
         }
-        if next && let Some(doc) = self.documents.get_mut(self.active) {
+        if next && let Some(doc) = self.documents.active_mut() {
             let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
             let cursor = egui::TextEdit::load_state(ui.ctx(), egui::Id::new(("document", doc.id)))
                 .and_then(|s| s.cursor.char_range())

@@ -78,7 +78,7 @@ impl EditorApp {
                     if roomy {
                         ui.label(palette.tag("RODE 0.1"));
                     }
-                    if let Some(doc) = self.documents.get(self.active) {
+                    if let Some(doc) = self.documents.active() {
                         if let Some(book)=&doc.notebook {ui.label(palette.tag(format!("Notebook · {} cells",book.book.cells.len())));}
                         else if let Some(hex)=&doc.hex {ui.label(palette.tag(format!("Binary · {} bytes",hex.buffer.bytes().len())));}
                         else if let Some(pdf)=&doc.pdf {ui.label(palette.tag(format!("PDF · page {} / {}",pdf.page,pdf.source.pages)));}
@@ -310,9 +310,8 @@ impl EditorApp {
         if self.documents.is_empty() {
             return;
         }
-        self.active =
-            (self.active as isize + direction).rem_euclid(self.documents.len() as isize) as usize;
-        self.tabs.reveal = Some(self.documents[self.active].id);
+        self.documents.cycle(direction);
+        self.tabs.reveal = self.documents.selected_id();
         self.focus_editor(ctx);
     }
     /// Request source-editor focus for the active document, including a later frame
@@ -331,7 +330,7 @@ impl EditorApp {
             .zoom
             .filter(|p| *p == navigation::Pane::Editor);
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("terminal-wants-focus"), false));
-        if let Some(doc) = self.documents.get(self.active) {
+        if let Some(doc) = self.documents.active() {
             self.tabs.focus = Some(doc.id);
             ctx.request_repaint();
         }
@@ -357,30 +356,16 @@ impl EditorApp {
 
     /// Move a stable document ID around another tab while preserving the selected document.
     pub(super) fn reorder_tab(&mut self, source: u64, target: u64, after: bool) {
-        if source == target {
-            return;
+        if self.documents.reorder(source, target, after) {
+            self.tabs.reveal = self.documents.selected_id();
         }
-        let active = self.documents.get(self.active).map(|d| d.id);
-        let Some(from) = self.documents.iter().position(|d| d.id == source) else {
-            return;
-        };
-        if !self.documents.iter().any(|d| d.id == target) {
-            return;
-        }
-        let document = self.documents.remove(from);
-        let target = self.documents.iter().position(|d| d.id == target).unwrap();
-        self.documents.insert(target + usize::from(after), document);
-        if let Some(id) = active {
-            self.active = self.documents.iter().position(|d| d.id == id).unwrap_or(0);
-        }
-        self.tabs.reveal = active;
     }
 
     /// Lay out bounded-width tabs with independent select/close/drag targets;
     /// keep the active or explicitly revealed tab reachable during overflow.
     pub(super) fn tab_strip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let active = self.documents.get(self.active).map(|d| d.id);
+        let active = self.documents.active().map(|d| d.id);
         if active != self.tabs.active {
             self.tabs.reveal = active;
             self.tabs.active = active;
@@ -435,7 +420,7 @@ impl EditorApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             for (index, doc) in self.documents.iter().enumerate() {
-                                let is_active = index == self.active;
+                                let is_active = index == self.documents.active_index();
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(widths[index], TAB_HEIGHT),
                                     Sense::hover(),
@@ -646,7 +631,7 @@ impl EditorApp {
                             for (index, doc) in self.documents.iter().enumerate() {
                                 if ui
                                     .selectable_label(
-                                        index == self.active,
+                                        index == self.documents.active_index(),
                                         format!(
                                             "{}{}",
                                             labels[index],
@@ -667,7 +652,7 @@ impl EditorApp {
             },
         );
         if let Some(index) = selected {
-            self.active = index;
+            self.documents.select_index(index);
             self.tabs.reveal = self.documents.get(index).map(|d| d.id);
             self.focus_editor(ctx);
         }
@@ -821,10 +806,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["two", "one", "three"]
         );
-        assert_eq!(app.documents[app.active].id, ids[2]);
+        assert_eq!(app.documents[app.documents.active_index()].id, ids[2]);
         app.reorder_tab(ids[2], ids[1], false);
-        assert_eq!(app.documents[app.active].id, ids[2]);
-        assert_eq!(app.active, 0);
+        assert_eq!(app.documents[app.documents.active_index()].id, ids[2]);
+        assert_eq!(app.documents.active_index(), 0);
         let before: Vec<_> = app.documents.iter().map(|d| d.id).collect();
         app.reorder_tab(ids[0], u64::MAX, false);
         assert_eq!(
@@ -910,7 +895,8 @@ mod tests {
             ],
         );
         assert_eq!(
-            app.documents[app.active].id, ids[2],
+            app.documents[app.documents.active_index()].id,
+            ids[2],
             "An ongoing press must not select the drag source"
         );
         frame(
@@ -925,9 +911,9 @@ mod tests {
             app.documents.iter().map(|doc| doc.id).collect::<Vec<_>>(),
             [ids[1], ids[0], ids[2]]
         );
-        assert_eq!(app.documents[app.active].id, ids[2]);
+        assert_eq!(app.documents[app.documents.active_index()].id, ids[2]);
         app.cycle_tab(-1, &ctx);
-        assert_eq!(app.documents[app.active].id, ids[0]);
+        assert_eq!(app.documents[app.documents.active_index()].id, ids[0]);
         // A completed click still selects the first tab in its new position.
         // Render the reordered geometry before starting an unrelated gesture.
         frame(&mut app, &ctx, 0.55, vec![]);
@@ -938,9 +924,9 @@ mod tests {
             0.6,
             vec![egui::Event::PointerMoved(first), button(first, true)],
         );
-        assert_eq!(app.documents[app.active].id, ids[0]);
+        assert_eq!(app.documents[app.documents.active_index()].id, ids[0]);
         frame(&mut app, &ctx, 0.7, vec![button(first, false)]);
-        assert_eq!(app.documents[app.active].id, ids[1]);
+        assert_eq!(app.documents[app.documents.active_index()].id, ids[1]);
     }
     #[test]
     fn tab_navigation_wraps_and_strip_height_stays_fixed_with_long_names() {
@@ -951,9 +937,9 @@ mod tests {
                 Some(format!("/project/a_very_long_file_name_{index}.txt"));
         }
         app.cycle_tab(1, &ctx);
-        assert_eq!(app.active, 0);
+        assert_eq!(app.documents.active_index(), 0);
         app.cycle_tab(-1, &ctx);
-        assert_eq!(app.active, 11);
+        assert_eq!(app.documents.active_index(), 11);
         for frame in 0..10 {
             let _ = ctx.run(
                 egui::RawInput {

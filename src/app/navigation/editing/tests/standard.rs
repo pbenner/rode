@@ -247,7 +247,7 @@ fn source_shortcuts_do_not_consume_terminal_form_or_modal_input() {
         );
     }
     app.dialog = Dialog::Commands;
-    let id = app.documents[app.active].id;
+    let id = app.documents[app.documents.active_index()].id;
     let _ = ctx.run(
         egui::RawInput {
             events: vec![key(Key::CloseBracket, CMD)],
@@ -259,5 +259,5 @@ fn source_shortcuts_do_not_consume_terminal_form_or_modal_input() {
             assert!(ctx.input(|i| i.key_pressed(Key::CloseBracket)));
         },
     );
-    assert!(app.documents[app.active].text.is_empty());
+    assert!(app.documents[app.documents.active_index()].text.is_empty());
 }

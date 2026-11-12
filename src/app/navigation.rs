@@ -9,7 +9,6 @@ pub(super) mod editing;
 pub(super) use bindings::Style;
 #[cfg(test)]
 mod tests;
-mod tree;
 pub(super) use bindings::Action as NavAction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +44,6 @@ pub(super) struct State {
     rects: [Option<egui::Rect>; 5],
     viewports: [Option<egui::ViewportId>; 5],
     remembered: std::collections::HashMap<egui::ViewportId, [Option<egui::Id>; 5]>,
-    pub tree: tree::Selection,
     pub list: List,
     modal: bool,
 }
@@ -64,7 +62,6 @@ impl State {
             rects: [None; 5],
             viewports: [None; 5],
             remembered: Default::default(),
-            tree: Default::default(),
             list: Default::default(),
             modal: false,
         }
@@ -388,7 +385,7 @@ impl EditorApp {
             Save => self.save_active(ctx, false),
             SaveAs => self.save_active(ctx, true),
             CloseFile => {
-                if let Some(doc) = self.documents.get(self.active) {
+                if let Some(doc) = self.documents.active() {
                     self.guarded(super::Action::CloseTab(doc.id), ctx);
                 }
             }

@@ -57,20 +57,22 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                     app.workspace = Some(crate::app::tests::remote_workspace());
                 }
                 app.set_dialog(Dialog::Folder);
-                app.folder_needs_load = false;
-                app.folder_loading = false;
-                app.folder_sandbox.enabled = true;
+                app.project_picker.needs_load = false;
+                app.project_picker.loading = false;
+                app.project_picker.sandbox.enabled = true;
                 app.notice = Some((
                     "An existing project notification must not cover the folder dialog's actions."
                         .repeat(3),
                     true,
                     Instant::now(),
                 ));
-                app.dialog_input = "/work/a-long-project-path/selected-project".into();
-                app.folder_policy_path.clone_from(&app.dialog_input);
-                app.folder_entries = (0..50)
+                app.project_picker.path = "/work/a-long-project-path/selected-project".into();
+                app.project_picker
+                    .policy_path
+                    .clone_from(&app.project_picker.path);
+                app.project_picker.entries = (0..50)
                     .map(|index| Entry {
-                        path: format!("{}/child-{index}", app.dialog_input),
+                        path: format!("{}/child-{index}", app.project_picker.path),
                         name: format!("child-{index}"),
                         dir: true,
                     })
@@ -103,7 +105,7 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                 );
                 let snapshot = frame(&mut app, &ctx, &state, initial_size, vec![]);
                 control(&snapshot, "project-dialog-options-open");
-                app.folder_sandbox.read_only = vec!["relative/path".into()];
+                app.project_picker.sandbox.read_only = vec!["relative/path".into()];
                 let point = control(&snapshot, "project-dialog-open").center();
                 frame(
                     &mut app,
@@ -119,7 +121,7 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                     initial_size,
                     vec![pointer(point, false)],
                 );
-                assert!(app.dialog == Dialog::Folder && app.folder_error.is_some());
+                assert!(app.dialog == Dialog::Folder && app.project_picker.error.is_some());
                 for size in [
                     egui::vec2(1380., 900.),
                     egui::vec2(850., 560.),
@@ -155,10 +157,10 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                         "A background notice covers Cancel"
                     );
                     assert_eq!(
-                        app.dialog_input,
+                        app.project_picker.path,
                         "/work/a-long-project-path/selected-project"
                     );
-                    assert_eq!(app.folder_remote, remote);
+                    assert_eq!(app.project_picker.remote, remote);
                     assert!(app.pending.is_none() && !app.preparing);
                 }
                 let size = egui::vec2(650., 480.);
@@ -240,4 +242,30 @@ fn themed_folder_lists_reveal_the_last_row_without_clipping_its_label() {
             "{theme}: {bounds:?} outside {clip:?}"
         );
     }
+}
+
+#[test]
+fn closing_discovery_invalidates_replies_and_retains_the_inherited_access_draft() {
+    let options = sandbox::Options {
+        enabled: true,
+        backend: sandbox::Backend::Landlock,
+        project_read_only: true,
+        ..Default::default()
+    };
+    let mut picker = State::default();
+    picker.open(
+        true,
+        "/candidate".into(),
+        "/candidate".into(),
+        options.clone(),
+    );
+    let request = picker.begin("/candidate".into());
+    assert!(picker.matches(request.token, &request.path));
+    picker.reset();
+    assert!(!picker.matches(request.token, &request.path));
+    assert!(!picker.loading && !picker.needs_load && !picker.remote);
+    assert_eq!(picker.sandbox, options);
+    picker.open(false, "/next".into(), "/next".into(), Default::default());
+    assert_eq!(picker.sandbox, sandbox::Options::default());
+    assert!(!picker.matches(request.token, &request.path));
 }

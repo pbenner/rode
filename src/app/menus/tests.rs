@@ -217,7 +217,7 @@ fn compact_menus_scroll_to_last_actions_and_keep_view_toggles_open() {
                 control(&state, "menu-item:Show hidden files"),
             );
             assert_ne!(app.show_hidden, original);
-            assert!(app.tree_dirty);
+            assert!(app.explorer_state.tree_dirty);
             assert!(egui::Popup::is_any_open(&ctx));
             escape(&mut app, &ctx, size);
         }

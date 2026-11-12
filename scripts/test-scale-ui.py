@@ -5,7 +5,6 @@ Run with scripts/ui_display.py --screen 3200x2200x24. The 2x case needs
 room for the doubled window; controls use acknowledged native geometry.
 """
 
-import json
 import os
 import subprocess
 import time
@@ -25,14 +24,9 @@ from ui_harness import (
     x11,
     xtest,
 )
-
-
-def preferences(path):
-    """Read the actual atomic RON string map without changing application state."""
-    if not path.exists():
-        return {}
-    contents = path.read_text().rstrip()
-    return json.loads(contents[:-1].rstrip().removesuffix(",") + "}")
+from ui_harness import (
+    read_preferences as preferences,
+)
 
 
 def scale_menu(ui, scale):

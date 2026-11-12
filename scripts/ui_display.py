@@ -66,7 +66,9 @@ def main(argv=None):
                 shutil.which("xvfb-run"),
                 "--auto-servernum",
                 "--server-args",
-                f"-screen 0 {args.screen} -nolisten tcp",
+                # Short-lived probes must not reset display/authentication state
+                # between cases. This invocation still owns server cleanup.
+                f"-screen 0 {args.screen} -nolisten tcp -noreset",
                 *command,
             ],
             env=environment,

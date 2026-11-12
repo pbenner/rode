@@ -661,7 +661,7 @@ impl EditorApp {
         if self.styled_source().is_none() || self.find.is_empty() {
             return;
         }
-        let Some(doc) = self.documents.get_mut(self.active) else {
+        let Some(doc) = self.documents.active_mut() else {
             return;
         };
         let range = egui::TextEdit::load_state(ctx, egui::Id::new(("document", doc.id)))
@@ -699,7 +699,7 @@ impl EditorApp {
         }
     }
     fn styled_source(&self) -> Option<(u64, &str)> {
-        let doc = self.documents.get(self.active)?;
+        let doc = self.documents.active()?;
         if doc.image.is_some()
             || doc.pdf.is_some()
             || doc.hex.is_some()
@@ -768,13 +768,13 @@ impl EditorApp {
         if !keyboard {
             return;
         }
-        let text = &self.documents[self.active].text;
+        let text = &self.documents.active().unwrap().text;
         for action in self.navigation.editing.route(
             ctx,
             id,
             text,
             style,
-            self.documents[self.active].display_path(),
+            self.documents[self.documents.active_index()].display_path(),
         ) {
             self.navigate(action, ctx);
         }

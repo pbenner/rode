@@ -55,6 +55,9 @@ def isolated(command):
             RODE_VAULT_DIR=str(fixture_home / "run/vaults"),
         )
         environment.pop("CODEX_HOME", None)
+        # Library tests install their own per-context probes. An inherited native
+        # window destination would replace those hooks and mix parallel snapshots.
+        environment.pop("RODE_UI_TEST_STATE", None)
         return subprocess.call(command, env=environment)
 
 

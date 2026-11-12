@@ -151,7 +151,7 @@ impl EditorApp {
     pub(in crate::app) fn run_active(&mut self, build: bool, ctx: &egui::Context) {
         if self
             .documents
-            .get(self.active)
+            .get(self.documents.active_index())
             .is_some_and(|doc| crate::latex::is_source(doc.path.as_deref()))
         {
             self.build_latex(!build, ctx);
@@ -159,7 +159,7 @@ impl EditorApp {
         }
         if self
             .documents
-            .get(self.active)
+            .get(self.documents.active_index())
             .is_some_and(|d| d.notebook.is_some())
         {
             if !build {
@@ -175,7 +175,7 @@ impl EditorApp {
             self.notify("Open a project folder to run code on its host.", false);
             return;
         }
-        let Some(doc) = self.documents.get(self.active) else {
+        let Some(doc) = self.documents.active() else {
             return;
         };
         if doc.is_preview() {
@@ -454,7 +454,7 @@ impl EditorApp {
     }
     /// Queue manual checking, formatting or safe fixes for the active editable source document.
     pub(in crate::app) fn format_active(&mut self, format: bool, fix: bool, ctx: &egui::Context) {
-        if let Some(doc) = self.documents.get(self.active) {
+        if let Some(doc) = self.documents.active() {
             if self.workbench.code_tools.checking.contains(&doc.id) || doc.saving {
                 return;
             }
@@ -471,7 +471,7 @@ impl EditorApp {
     /// Select a stable document and translate a one-based diagnostic row/column into a source selection.
     pub(in crate::app) fn jump_to_issue(&mut self, id: u64, row: usize, column: usize) {
         if let Some(index) = self.documents.iter().position(|d| d.id == id) {
-            self.active = index;
+            self.documents.select_index(index);
             let doc = &mut self.documents[index];
             let offset: usize = doc
                 .text

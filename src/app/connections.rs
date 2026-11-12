@@ -27,6 +27,59 @@ fn connection_key(profile: &Profile) -> String {
     .expect("SSH profile strings serialize")
 }
 impl EditorApp {
+    /// Refuse disconnect while encrypted leases or lifetime mutations require attention;
+    /// otherwise unbind remote buffers through the recovery path before returning to local mode.
+    pub(super) fn disconnect_ssh(&mut self, ctx: &egui::Context) {
+        if self.explorer_state.busy {
+            self.notify(
+                "Wait for the file operation to finish before disconnecting SSH.",
+                false,
+            );
+            return;
+        }
+        if self.vaults.active.is_some()
+            || self.vaults.pending.is_some()
+            || self.vaults.staged.is_some()
+            || self.vaults.cleanup_pending()
+        {
+            self.notify("Lock the encrypted project before disconnecting SSH.", true);
+            return;
+        }
+        if self.workspace.as_ref().is_none_or(|w| w.remote.is_none()) {
+            return;
+        }
+        if self.sessions_need_exit_check() || self.agent_installation_pending() {
+            self.notify(
+                "Wait for terminal startup or persistence changes to finish before disconnecting SSH.",
+                false,
+            );
+            return;
+        }
+        self.detach_ssh(ctx);
+    }
+
+    /// A successful transport still needs guarded host-policy preparation before file access.
+    pub(super) fn connection_completed(&mut self, result: Result<(), String>, ctx: &egui::Context) {
+        match result {
+            Ok(()) => {
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.connected = true;
+                    let root = workspace.root.clone();
+                    self.status = "SSH connected".into();
+                    let options = workspace.sandbox_options.clone();
+                    let restore = self.startup_restore.take();
+                    if self.vaults.lost && self.vaults.active.is_some() {
+                        self.encrypted_dialog();
+                        self.vaults.message = "SSH reconnected. Unlock the encrypted project to restore file access; unsaved buffers are preserved.".into();
+                    } else {
+                        self.prepare_project(root, options, true, true, restore, ctx);
+                    }
+                }
+            }
+            Err(error) => self.ssh_failed(error, ctx),
+        }
+    }
+
     /// Keep the login's parsed output while the normal detach path stops its
     /// process and clears remote bindings. This view owns no SSH resources and
     /// can accept final reader bytes after the child-exit notification arrives.
@@ -112,23 +165,13 @@ impl EditorApp {
         // Drop views before the master; persistent services retain their own jobs.
         // A lost encrypted lease still requires explicit unlock/lock recovery.
         let encrypted_lease = self.vaults.active.take();
-        self.clear_project(true);
+        self.clear_project(documents::Retention::Keep);
         if encrypted_lease.is_some() {
             self.vaults.active = encrypted_lease;
             self.vaults.lost = true;
         }
-        self.ssh_master = None;
-        remote.cleanup();
-        self.workspace = None;
-        self.preparing = false;
-        self.project_token = self.project_token.wrapping_add(1);
-        self.folder_token = self.folder_token.wrapping_add(1);
-        self.folder_remote = false;
-        self.folder_entries.clear();
-        self.folder_loading = false;
-        self.folder_needs_load = false;
-        self.folder_error = None;
-        self.folder_policy_path.clear();
+        self.release_workspace_transport();
+        self.invalidate_project_candidate(workspace::PickerReset::Close);
         self.dialog_input.clear();
         self.pending = None;
         self.dialog = Dialog::None;
@@ -187,10 +230,10 @@ mod tests {
             jump: "fixture-jump".into(),
             ..Default::default()
         };
-        app.profiles = vec![profile.clone()];
+        app.connection_profiles.profiles = vec![profile.clone()];
         // Replacing an unrelated edited form must also replace its save identity,
         // or a later Save could rename the wrong profile.
-        app.profile_baseline = Some(Profile {
+        app.connection_profiles.baseline = Some(Profile {
             name: "Other profile".into(),
             host: "other.invalid".into(),
             ..Default::default()
@@ -241,7 +284,7 @@ mod tests {
         assert_eq!(app.documents[0].text, "unsaved local edits");
         assert!(app.workspace.is_none());
         assert_eq!(
-            app.profile_baseline.as_ref().unwrap().label(),
+            app.connection_profiles.baseline.as_ref().unwrap().label(),
             profile.label()
         );
     }
@@ -278,7 +321,7 @@ mod tests {
 
     fn finish_files(app: &mut EditorApp, ctx: &egui::Context) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.documents.iter().any(|doc| doc.saving) || !app.opening.is_empty() {
+        while app.documents.iter().any(|doc| doc.saving) || app.documents.has_pending_opens() {
             assert!(Instant::now() < deadline, "file operation did not finish");
             app.poll(ctx);
             std::thread::sleep(Duration::from_millis(5));
@@ -385,7 +428,7 @@ mod tests {
         app.workspace_banner(&ctx);
         assert_eq!(app.last_window_title, "RODE");
         app.set_dialog(Dialog::Folder);
-        assert!(!app.folder_remote);
+        assert!(!app.project_picker.remote);
         app.set_dialog(Dialog::None);
 
         let temp = tempfile::tempdir().unwrap();
@@ -413,10 +456,12 @@ mod tests {
         app.ssh_master = Some(master);
         let generation = app.generation;
         app.tx
-            .send(Event::Connected {
+            .send(Event::workspace(
                 generation,
-                result: Err("fixture authentication failed".into()),
-            })
+                WorkspaceEvent::Connected {
+                    result: Err("fixture authentication failed".into()),
+                },
+            ))
             .unwrap();
         app.poll(&ctx);
         // Feed after cleanup, exercising the PTY-exit/read race explicitly.
@@ -457,10 +502,10 @@ mod tests {
                 .contains("authentication failed")
         );
         app.tx
-            .send(Event::Connected {
+            .send(Event::workspace(
                 generation,
-                result: Ok(()),
-            })
+                WorkspaceEvent::Connected { result: Ok(()) },
+            ))
             .unwrap();
         app.poll(&ctx);
         assert!(app.workspace.is_none());
@@ -512,7 +557,7 @@ mod tests {
         assert!(app.show_terminal);
         assert!(!app.terminal.as_ref().unwrap().is_alive());
         app.set_dialog(Dialog::Folder);
-        assert!(!app.folder_remote);
+        assert!(!app.project_picker.remote);
         app.set_dialog(Dialog::None);
         app.workspace_banner(&ctx);
         assert_eq!(app.last_window_title, "RODE");

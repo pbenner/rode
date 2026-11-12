@@ -439,11 +439,10 @@ impl EditorApp {
                 }
             })()
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::Session {
+            let _ = tx.send(Event::workspace(
                 generation,
-                job,
-                result,
-            });
+                WorkspaceEvent::Session { job, result },
+            ));
             ctx.request_repaint();
         });
     }
@@ -501,11 +500,10 @@ impl EditorApp {
             })
             .and_then(|response| response.tool.context("Missing Slurm response"))
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::Session {
+            let _ = tx.send(Event::workspace(
                 generation,
-                job,
-                result,
-            });
+                WorkspaceEvent::Session { job, result },
+            ));
             ctx.request_repaint();
         });
     }

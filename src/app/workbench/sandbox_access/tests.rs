@@ -190,8 +190,8 @@ fn folder_and_ssh_dialogs_do_not_share_rule_editing_state() {
         read_only: vec!["/data/shared".into()],
         ..Default::default()
     };
-    app.folder_sandbox = options.clone();
-    app.profile.sandbox = options;
+    app.project_picker.sandbox = options.clone();
+    app.connection_profiles.draft.sandbox = options;
     ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
     for dialog in [Dialog::Folder, Dialog::Connect] {
         app.dialog = dialog;

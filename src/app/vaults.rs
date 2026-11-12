@@ -133,7 +133,7 @@ impl EditorApp {
                     |client| client.remote.is_some(),
                 );
         }
-        self.vaults.options = self.folder_sandbox.clone();
+        self.vaults.options = self.project_picker.sandbox.clone();
         self.vaults.password.clear();
         self.vaults.confirmation.clear();
         self.set_dialog(Dialog::Encrypted);
@@ -430,7 +430,7 @@ impl EditorApp {
                 let quitting = self.vaults.quit_after_lock;
                 self.vaults.active = None;
                 self.vaults.needs_lock = false;
-                self.clear_project(false);
+                self.clear_project(documents::Retention::Discard);
                 if let Some(workspace) = &mut self.workspace {
                     if workspace.remote.is_some() {
                         workspace.root = "~".into();

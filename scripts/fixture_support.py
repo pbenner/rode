@@ -71,6 +71,35 @@ def decode_ron_string(literal):
     return "".join(result)
 
 
+def read_preferences(path):
+    """Read RODE's atomic string map, decoding RON before any nested JSON.
+
+    Accept the serializer's quoted string keys/values and optional final comma.
+    Missing storage is pending; malformed storage is a fixture failure. This is
+    deliberately not a general RON parser and never evaluates configuration.
+    """
+    try:
+        contents = Path(path).read_text().strip()
+    except FileNotFoundError:
+        return {}
+    if not (contents.startswith("{") and contents.endswith("}")):
+        raise ValueError("Expected a RON preference string map")
+    remaining = contents[1:-1].strip()
+    literal = r'"(?:\\.|[^"\\])*"'
+    entry = re.compile(rf"({literal})\s*:\s*({literal})\s*(,|$)", re.DOTALL)
+    values = {}
+    while remaining:
+        match = entry.match(remaining)
+        if not match:
+            raise ValueError("Invalid RON preference entry")
+        key, value = (decode_ron_string(match[index]) for index in (1, 2))
+        if key in values:
+            raise ValueError("Duplicate RON preference key: " + key)
+        values[key] = value
+        remaining = remaining[match.end() :].lstrip()
+    return values
+
+
 def temporary_root():
     """Use the explicit fixture root, then Python's TMPDIR/TEMP/TMP-aware default.
 

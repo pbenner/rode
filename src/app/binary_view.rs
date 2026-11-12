@@ -175,7 +175,7 @@ impl EditorApp {
             .iter()
             .position(|d| d.path.as_deref() == Some(&path))
         {
-            self.active = index;
+            self.documents.select_index(index);
             if self.documents[index].hex.is_some() {
                 self.focus_editor(ctx);
                 return;
@@ -196,7 +196,7 @@ impl EditorApp {
                 },
                 ctx,
             );
-        } else if self.opening.insert(path.clone()) {
+        } else if self.documents.begin_open(path.clone()) {
             self.dispatch(
                 Request::ReadHex { path: path.clone() },
                 Job::Open(path),
@@ -245,7 +245,7 @@ impl EditorApp {
     pub(super) fn hex_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         if self
             .documents
-            .get(self.active)
+            .get(self.documents.active_index())
             .is_none_or(|d| d.hex.is_none())
         {
             return false;
@@ -258,7 +258,7 @@ impl EditorApp {
     fn hex_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         if self
             .documents
-            .get(self.active)
+            .get(self.documents.active_index())
             .is_none_or(|d| d.hex.is_none())
         {
             return false;
@@ -269,7 +269,7 @@ impl EditorApp {
             && self.pending.is_none()
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
-        let doc = &mut self.documents[self.active];
+        let doc = self.documents.active_mut().unwrap();
         let id = doc.id;
         let mut focus_grid = focus;
         let view = doc.hex.as_mut().unwrap();
@@ -1079,19 +1079,21 @@ mod tests {
         hex.buffer.patch(2, vec![8]).unwrap();
         app.documents[0].modified = true;
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::SaveBinary {
-                    id,
-                    bytes: submitted,
-                    _lease: app.documents[0].hex.as_ref().unwrap()._lease.clone(),
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::SaveBinary {
+                        id,
+                        bytes: submitted,
+                        _lease: app.documents[0].hex.as_ref().unwrap()._lease.clone(),
+                    },
+                    result: Box::new(Ok(files::Response {
+                        path: "/example.bin".into(),
+                        revision: "saved".into(),
+                        ..Default::default()
+                    })),
                 },
-                result: Box::new(Ok(files::Response {
-                    path: "/example.bin".into(),
-                    revision: "saved".into(),
-                    ..Default::default()
-                })),
-            })
+            ))
             .unwrap();
         app.poll(&ctx);
         assert!(app.documents[0].dirty());

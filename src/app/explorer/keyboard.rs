@@ -5,6 +5,13 @@
 //! handling.
 
 use super::*;
+use navigation::Pane;
+enum TreeIntent {
+    List(String),
+    Open(String),
+    FocusEditor,
+}
+
 #[derive(Default)]
 /// Explorer keyboard selection, bounded type-ahead prefix and scroll-reveal state.
 pub(in crate::app) struct Selection {
@@ -21,7 +28,7 @@ impl EditorApp {
     pub(in crate::app) fn tree_keyboard(&mut self, ctx: &egui::Context) {
         let id = Pane::Explorer.id();
         if !ctx.memory(|m| m.has_focus(id))
-            || self.tree_rows.is_empty()
+            || self.explorer_state.tree_rows.is_empty()
             || egui::Popup::is_any_open(ctx)
             || self.dialog != Dialog::None
             || self.pending.is_some()
@@ -29,6 +36,21 @@ impl EditorApp {
         {
             return;
         }
+        for intent in self.explorer_state.keyboard(ctx) {
+            match intent {
+                TreeIntent::List(path) => self.list(path, ctx),
+                TreeIntent::Open(path) => self.open_file(path, ctx),
+                TreeIntent::FocusEditor => self.focus_pane(Pane::Editor, ctx),
+            }
+        }
+    }
+}
+
+impl State {
+    /// Consume keys only after the coordinator has established native pane focus.
+    fn keyboard(&mut self, ctx: &egui::Context) -> Vec<TreeIntent> {
+        let mut intents = Vec::new();
+        let id = Pane::Explorer.id();
         ctx.memory_mut(|m| {
             m.set_focus_lock_filter(
                 id,
@@ -41,8 +63,7 @@ impl EditorApp {
             )
         });
         let mut index = self
-            .navigation
-            .tree
+            .selection
             .path
             .as_ref()
             .and_then(|path| self.tree_rows.iter().position(|r| r.entry.path == *path))
@@ -81,16 +102,15 @@ impl EditorApp {
                     && !input.modifiers.command
                 {
                     if self
-                        .navigation
-                        .tree
+                        .selection
                         .typed
                         .is_none_or(|at| at.elapsed() > Duration::from_millis(800))
                     {
-                        self.navigation.tree.prefix.clear();
+                        self.selection.prefix.clear();
                     }
-                    self.navigation.tree.typed = Some(Instant::now());
-                    if self.navigation.tree.prefix.len() + text.len() <= 128 {
-                        self.navigation.tree.prefix.push_str(&text.to_lowercase());
+                    self.selection.typed = Some(Instant::now());
+                    if self.selection.prefix.len() + text.len() <= 128 {
+                        self.selection.prefix.push_str(&text.to_lowercase());
                     }
                     if let Some(found) = (0..self.tree_rows.len())
                         .map(|n| (index + n) % self.tree_rows.len())
@@ -99,7 +119,7 @@ impl EditorApp {
                                 .entry
                                 .name
                                 .to_lowercase()
-                                .starts_with(&self.navigation.tree.prefix)
+                                .starts_with(&self.selection.prefix)
                         })
                     {
                         index = found;
@@ -155,21 +175,21 @@ impl EditorApp {
                     self.expanded.insert(entry.path.clone());
                     self.tree_dirty = true;
                     if !self.directories.contains_key(&entry.path) {
-                        self.list(entry.path.clone(), ctx);
+                        intents.push(TreeIntent::List(entry.path.clone()));
                     }
                 }
             }
         } else if open {
-            self.editor_intent();
-            self.open_file(entry.path, ctx);
+            intents.push(TreeIntent::Open(entry.path));
         }
-        if self.navigation.tree.path.is_none() {
-            self.navigation.tree.reveal = true;
+        if self.selection.path.is_none() {
+            self.selection.reveal = true;
         }
-        self.navigation.tree.path = Some(self.tree_rows[index].entry.path.clone());
-        self.navigation.tree.reveal |= index != old || left || right;
+        self.selection.path = Some(self.tree_rows[index].entry.path.clone());
+        self.selection.reveal |= index != old || left || right;
         if escape {
-            self.focus_pane(Pane::Editor, ctx);
+            intents.push(TreeIntent::FocusEditor);
         }
+        intents
     }
 }

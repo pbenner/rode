@@ -1,4 +1,5 @@
 //! Pure path bookkeeping, async reply identity and modal focus regressions.
+use super::model::{flatten_tree, rename_directories};
 use super::*;
 use std::collections::BTreeMap;
 
@@ -17,7 +18,7 @@ fn folder_disclosure_uses_vector_icons_and_aligned_filename_labels() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.directories.insert(
+    app.explorer_state.directories.insert(
         "/project".into(),
         vec![
             entry("/project/open", true),
@@ -25,8 +26,10 @@ fn folder_disclosure_uses_vector_icons_and_aligned_filename_labels() {
             entry("/project/file.rs", false),
         ],
     );
-    app.directories.insert("/project/open".into(), vec![]);
-    app.expanded.insert("/project/open".into());
+    app.explorer_state
+        .directories
+        .insert("/project/open".into(), vec![]);
+    app.explorer_state.expanded.insert("/project/open".into());
     for width in [180., 450.] {
         let output = ctx.run(
             egui::RawInput {
@@ -131,12 +134,12 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
             let defaults = app.sandbox_defaults.clone();
             app.open_folder_dialog_at(path.into());
             assert!(app.dialog == Dialog::Folder);
-            assert_eq!(app.dialog_input, path);
-            assert_eq!(app.folder_policy_path, path);
-            assert_eq!(app.folder_remote, remote);
-            assert!(app.folder_needs_load);
+            assert_eq!(app.project_picker.path, path);
+            assert_eq!(app.project_picker.policy_path, path);
+            assert_eq!(app.project_picker.remote, remote);
+            assert!(app.project_picker.needs_load);
             assert_eq!(
-                app.folder_sandbox,
+                app.project_picker.sandbox,
                 if saved { saved_options } else { inherited }
             );
             assert_eq!(app.sandbox_defaults, defaults);
@@ -147,32 +150,34 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
 
             // Listing the prefilled folder must not replace choices made while
             // that asynchronous request was in flight, even with saved settings.
-            let options = app.folder_sandbox.clone();
-            app.folder_sandbox.enabled = true;
-            app.folder_sandbox.share_network = false;
-            app.folder_sandbox.project_read_only = true;
-            let chosen = app.folder_sandbox.clone();
-            app.folder_needs_load = false;
-            app.folder_loading = true;
+            let options = app.project_picker.sandbox.clone();
+            app.project_picker.sandbox.enabled = true;
+            app.project_picker.sandbox.share_network = false;
+            app.project_picker.sandbox.project_read_only = true;
+            let chosen = app.project_picker.sandbox.clone();
+            app.project_picker.needs_load = false;
+            app.project_picker.loading = true;
             app.tx
-                .send(Event::Done {
-                    generation: app.generation,
-                    job: Job::Browse {
-                        remote,
-                        token: app.folder_token,
-                        path: path.into(),
-                        options,
+                .send(Event::workspace(
+                    app.generation,
+                    WorkspaceEvent::Done {
+                        job: Job::Browse {
+                            remote,
+                            token: app.project_picker.token,
+                            path: path.into(),
+                            options,
+                        },
+                        result: Box::new(Ok(files::Response {
+                            path: path.into(),
+                            entries: vec![entry("/project/selected folder/child", true)],
+                            ..Default::default()
+                        })),
                     },
-                    result: Box::new(Ok(files::Response {
-                        path: path.into(),
-                        entries: vec![entry("/project/selected folder/child", true)],
-                        ..Default::default()
-                    })),
-                })
+                ))
                 .unwrap();
             app.poll(&ctx);
-            assert_eq!(app.folder_sandbox, chosen);
-            assert_eq!(app.folder_entries.len(), 1);
+            assert_eq!(app.project_picker.sandbox, chosen);
+            assert_eq!(app.project_picker.entries.len(), 1);
 
             let _ = ctx.run(
                 egui::RawInput {
@@ -227,34 +232,38 @@ fn canonical_folder_replies_restore_saved_policy_only_before_the_user_edits_it()
         );
         app.workbench = workbench::Workbench::load(Some(&storage));
         app.open_folder_dialog_at(alias.into());
-        let options = app.folder_sandbox.clone();
+        let browse = app.project_picker.begin(alias.into());
         if edited {
-            app.folder_sandbox.share_network = false;
-            app.folder_sandbox.project_read_only = true;
+            app.project_picker.sandbox.share_network = false;
+            app.project_picker.sandbox.project_read_only = true;
         }
-        let chosen = app.folder_sandbox.clone();
-        app.folder_needs_load = false;
-        app.folder_loading = true;
+        let chosen = app.project_picker.sandbox.clone();
+        app.project_picker.needs_load = false;
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::Browse {
-                    remote: false,
-                    token: app.folder_token,
-                    path: alias.into(),
-                    options,
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::Browse {
+                        remote: false,
+                        token: browse.token,
+                        path: browse.path,
+                        options: browse.options,
+                    },
+                    result: Box::new(Ok(files::Response {
+                        path: canonical.into(),
+                        ..Default::default()
+                    })),
                 },
-                result: Box::new(Ok(files::Response {
-                    path: canonical.into(),
-                    ..Default::default()
-                })),
-            })
+            ))
             .unwrap();
         app.poll(&ctx);
-        assert_eq!(app.dialog_input, canonical);
-        assert_eq!(app.folder_policy_path, canonical);
-        assert_eq!(app.folder_sandbox, if edited { chosen } else { saved });
-        assert!(!app.folder_loading);
+        assert_eq!(app.project_picker.path, canonical);
+        assert_eq!(app.project_picker.policy_path, canonical);
+        assert_eq!(
+            app.project_picker.sandbox,
+            if edited { chosen } else { saved }
+        );
+        assert!(!app.project_picker.loading);
     }
 }
 
@@ -376,9 +385,9 @@ fn mutation_controls_follow_actual_policy_connection_and_pending_io() {
     app.explorer_state.busy = true;
     assert!(!app.explorer_writable());
     app.explorer_state.busy = false;
-    app.opening.insert("/project/file".into());
+    app.documents.begin_open("/project/file".into());
     assert!(!app.explorer_writable());
-    app.opening.clear();
+    app.documents.cancel_opens();
     app.new_file();
     app.documents[0].saving = true;
     assert!(!app.explorer_writable());
@@ -436,7 +445,7 @@ fn a_prefilled_project_dialog_recovers_focus_after_its_context_menu_closes() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.open_folder_dialog_at("/selected/folder".into());
-    app.folder_needs_load = false;
+    app.project_picker.needs_load = false;
     app.dialog_focus = false;
     for _ in 0..2 {
         let _ = ctx.run(
@@ -451,7 +460,7 @@ fn a_prefilled_project_dialog_recovers_focus_after_its_context_menu_closes() {
         );
     }
     assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("project-dialog-path"))));
-    assert_eq!(app.dialog_input, "/selected/folder");
+    assert_eq!(app.project_picker.path, "/selected/folder");
     assert!(app.workspace.is_none() && app.pending.is_none());
 }
 
@@ -461,21 +470,23 @@ fn stale_directory_replies_cannot_restore_rows_or_clear_new_loading_state() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.explorer_state.epoch = 2;
-    app.loading.insert("/project".into());
+    app.explorer_state.loading.insert("/project".into());
     app.tx
-        .send(Event::Done {
-            generation: app.generation,
-            job: Job::List("/project".into(), 1),
-            result: Box::new(Ok(Response {
-                path: "/project".into(),
-                entries: vec![entry("/project/stale", false)],
-                ..Default::default()
-            })),
-        })
+        .send(Event::workspace(
+            app.generation,
+            WorkspaceEvent::Done {
+                job: Job::List("/project".into(), 1),
+                result: Box::new(Ok(Response {
+                    path: "/project".into(),
+                    entries: vec![entry("/project/stale", false)],
+                    ..Default::default()
+                })),
+            },
+        ))
         .unwrap();
     app.poll(&ctx);
-    assert!(app.directories.is_empty());
-    assert!(app.loading.contains("/project"));
+    assert!(app.explorer_state.directories.is_empty());
+    assert!(app.explorer_state.loading.contains("/project"));
 }
 
 #[test]
@@ -484,12 +495,12 @@ fn a_confirmation_dialog_keeps_its_enter_key_instead_of_toggling_a_tree_row() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     let folder = entry("/project/folder", true);
-    app.tree_rows.push(TreeRow {
+    app.explorer_state.tree_rows.push(TreeRow {
         entry: folder.clone(),
         depth: 0,
     });
-    app.expanded.insert(folder.path.clone());
-    app.navigation.tree.path = Some(folder.path.clone());
+    app.explorer_state.expanded.insert(folder.path.clone());
+    app.explorer_state.selection.path = Some(folder.path.clone());
     app.dialog = Dialog::Explorer;
     let _ = ctx.run(
         egui::RawInput {
@@ -515,7 +526,7 @@ fn a_confirmation_dialog_keeps_its_enter_key_instead_of_toggling_a_tree_row() {
             ))));
         },
     );
-    assert!(app.expanded.contains(&folder.path));
+    assert!(app.explorer_state.expanded.contains(&folder.path));
 }
 
 #[test]
@@ -606,7 +617,7 @@ fn a_deleted_files_retained_editor_blocks_reusing_its_path() {
     app.documents[0].text = "retained unsaved contents".into();
     app.documents[0].modified = true;
     app.explorer_form(Kind::File, entry(&root, true));
-    app.dialog_input = "retained.txt".into();
+    app.explorer_state.input = "retained.txt".into();
     let _ = ctx.run(
         egui::RawInput {
             events: vec![egui::Event::Key {
@@ -626,4 +637,38 @@ fn a_deleted_files_retained_editor_blocks_reusing_its_path() {
     assert!(app.dialog == Dialog::Explorer);
     assert!(!path.exists());
     assert_eq!(app.documents[0].text, "retained unsaved contents");
+}
+
+#[test]
+fn explorer_flattens_only_expanded_visible_folders() {
+    let entries = |path: &str, dir| Entry {
+        path: path.into(),
+        name: ssh::display_name(path).into(),
+        dir,
+    };
+    let directories = HashMap::from([
+        (
+            "/root".into(),
+            vec![
+                entries("/root/src", true),
+                entries("/root/.git", true),
+                entries("/root/main.rs", false),
+            ],
+        ),
+        ("/root/src".into(), vec![entries("/root/src/lib.rs", false)]),
+    ]);
+    let mut rows = vec![];
+    flatten_tree(&directories, &HashSet::new(), "/root", 0, false, &mut rows);
+    assert_eq!(rows.len(), 2);
+    rows.clear();
+    flatten_tree(
+        &directories,
+        &HashSet::from(["/root/src".into()]),
+        "/root",
+        0,
+        true,
+        &mut rows,
+    );
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[1].depth, 1);
 }

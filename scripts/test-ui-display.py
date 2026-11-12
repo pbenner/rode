@@ -58,7 +58,7 @@ class HeadlessDisplayTests(unittest.TestCase):
                 "/bin/xvfb-run",
                 "--auto-servernum",
                 "--server-args",
-                "-screen 0 3000x2000x24 -nolisten tcp",
+                "-screen 0 3000x2000x24 -nolisten tcp -noreset",
             ],
         )
         self.assertEqual(command[4:], ["python3", "fixture.py", "argument with spaces"])

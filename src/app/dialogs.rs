@@ -166,263 +166,27 @@ impl EditorApp {
         }
     }
 
-    /// Edit an SSH profile and start authentication only after the explicit guarded connection action.
+    /// Route form intents through the common connection and dirty-buffer guards.
     pub(super) fn connect_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
-        ui.label(palette.tag("REMOTE WORKSPACE"));
-        layout::heading(
+        let intent = self.connection_profiles.form(
             ui,
-            "Connect via SSH",
-            "Rust SSH is built in. OpenSSH is available for advanced configurations.",
-            palette,
+            ctx,
+            self.themes.active().palette,
+            &mut self.sandbox_presets,
+            &mut self.dialog_focus,
         );
-        if !self.profiles.is_empty() || !self.aliases.is_empty() {
-            egui::ComboBox::from_id_salt("profiles")
-                .selected_text("Load a saved connection or SSH alias")
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for profile in &self.profiles {
-                        if ui.selectable_label(false, profile.label()).clicked() {
-                            self.profile = profile.clone();
-                            self.profile_baseline = Some(profile.clone());
-                            self.profile_form += 1;
-                        }
-                    }
-                    if !self.aliases.is_empty() {
-                        ui.separator();
-                    }
-                    for alias in &self.aliases {
-                        if ui
-                            .selectable_label(false, format!("SSH config / {alias}"))
-                            .clicked()
-                        {
-                            self.profile = Profile {
-                                host: alias.clone(),
-                                ..Default::default()
-                            };
-                            self.profile_baseline = None;
-                            self.profile_form += 1;
-                        }
-                    }
-                });
-            ui.add_space(8.0);
-        }
-        let compact = ui.available_width() < 460.;
-        layout::card(ui, palette, |ui| {
-            let field_width =
-                (ui.available_width() - if compact { 8. } else { 154. }).clamp(1., 340.);
-            egui::Grid::new("connection-fields")
-                .num_columns(if compact { 1 } else { 2 })
-                .spacing([18.0, 10.0])
-                .show(ui, |ui| {
-                    for (label, field, hint) in [
-                        (
-                            "Connection name",
-                            &mut self.profile.name,
-                            "e.g. Work cluster or Home server (optional)",
-                        ),
-                        (
-                            "Host / alias",
-                            &mut self.profile.host,
-                            "e.g. workstation or user@host.example.org",
-                        ),
-                        (
-                            "Remote folder",
-                            &mut self.profile.root,
-                            "e.g. ~/projects/my-project",
-                        ),
-                        ("Username", &mut self.profile.user, "From SSH config"),
-                        (
-                            "Port",
-                            &mut self.profile.port,
-                            "From SSH config (usually 22)",
-                        ),
-                        (
-                            "Identity file",
-                            &mut self.profile.identity,
-                            "Optional; e.g. ~/.ssh/id_ed25519",
-                        ),
-                        (
-                            "Jump host(s)",
-                            &mut self.profile.jump,
-                            "Optional; e.g. user@login-host",
-                        ),
-                        (
-                            "SSH config file",
-                            &mut self.profile.config,
-                            "~/.ssh/config (default)",
-                        ),
-                        (
-                            "Remote helper",
-                            &mut self.profile.remote_helper,
-                            "Auto, or /path/to/rode-sessiond",
-                        ),
-                    ] {
-                        layout::field_label(ui, label, compact);
-                        let id = egui::Id::new(("connection-field", label));
-                        let initial_focus = if self.profile_name_focus {
-                            "Connection name"
-                        } else {
-                            "Host / alias"
-                        };
-                        if self.dialog_focus && label == initial_focus {
-                            ui.memory_mut(|memory| memory.request_focus(id));
-                            if self.profile_name_focus {
-                                let mut state =
-                                    egui::TextEdit::load_state(ctx, id).unwrap_or_default();
-                                state
-                                    .cursor
-                                    .set_char_range(Some(egui::text::CCursorRange::two(
-                                        egui::text::CCursor::new(0),
-                                        egui::text::CCursor::new(field.chars().count()),
-                                    )));
-                                state.store(ctx, id);
-                            }
-                            self.dialog_focus = false;
-                        }
-                        let response = ui.add(
-                            egui::TextEdit::singleline(field)
-                                // Loading saved profiles can insert a dropdown above
-                                // these fields while the user is already typing.
-                                .id(id)
-                                .hint_text(hint)
-                                .desired_width(field_width),
-                        );
-                        ui_probe::button(ui, &format!("ssh-field-{label}"), &response);
-                        ui.end_row();
-                    }
-                });
-        });
-        ui.small(
-            "The connection name labels your saved entry. Leave it blank to use the SSH address.",
-        );
-        ui.small(
-            "Muted text in empty fields shows examples or defaults; it is not an entered value.",
-        );
-        if let Some(route) = &self.profile.tunnel {
-            ui.label(format!(
-                "Tunnel route: relay loopback port {} · verified as {}",
-                route.port, route.host_key_alias
-            ));
-            ui.small("Host / alias and identity settings still describe the compute host. Jump host(s) reach the relay.");
-            if ui.button("Remove tunnel route").clicked() {
-                self.profile.tunnel = None;
-            }
-        }
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            ui.label("SSH client");
-            egui::ComboBox::from_id_salt("ssh-backend")
-                .selected_text(match self.profile.backend {
-                    ssh::Backend::Russh => "Rust (default)",
-                    ssh::Backend::OpenSsh => "OpenSSH",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.profile.backend,
-                        ssh::Backend::Russh,
-                        "Rust (default)",
-                    );
-                    ui.selectable_value(
-                        &mut self.profile.backend,
-                        ssh::Backend::OpenSsh,
-                        "OpenSSH",
-                    );
-                });
-        });
-        ui.checkbox(
-            &mut self.profile.x11_forwarding,
-            "Forward X11 when available",
-        )
-        .on_hover_text("Launch remote X applications on your desktop. Requires a local X server and remote SSH X11 support. Sandbox restrictions still apply. Reconnect and open a new terminal after changing this setting.");
-        if self.profile.x11_forwarding {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("X11 trust");
-                egui::ComboBox::from_id_salt("ssh-x11-trust")
-                    .selected_text(self.profile.x11_trust.label())
-                    .show_ui(ui, |ui| {
-                        for trust in [
-                            ssh::X11Trust::Config,
-                            ssh::X11Trust::Untrusted,
-                            ssh::X11Trust::Trusted,
-                        ] {
-                            ui.selectable_value(&mut self.profile.x11_trust, trust, trust.label());
-                        }
-                    });
-            });
-            ui.label(RichText::new(match self.profile.x11_trust {
-                ssh::X11Trust::Config => "Uses SSH configuration. Rust defaults to untrusted; OpenSSH defaults can differ by system.",
-                ssh::X11Trust::Untrusted => "Restricted desktop access. Requires the X server's SECURITY extension.",
-                ssh::X11Trust::Trusted => "Remote X applications can access other windows and desktop input.",
-            }).small().color(palette.muted));
-        }
-        ui.push_id("ssh-sandbox-presets", |ui| {
-            self.sandbox_presets
-                .ui(ui, &mut self.profile.sandbox, palette);
-        });
-        workbench::sandbox_backend_ui(ui, &mut self.profile.sandbox);
-        if self.profile.sandbox.enabled {
-            ui.collapsing("Sandbox access rules", |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(300.)
-                    .show(ui, |ui| {
-                        ui.push_id("ssh-sandbox-rules", |ui| {
-                            workbench::sandbox_rules_ui(ui, &mut self.profile.sandbox, palette)
-                        });
-                    });
-            });
-        }
-        ui.label(RichText::new("Authentication and host-key prompts open in the terminal. RODE uses a compatible installed helper or deploys a matching native helper.").small().color(palette.muted));
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if palette.primary(ui, "Connect").clicked() {
-                match self.profile.validate() {
-                    Ok(()) => {
-                        self.dialog = Dialog::None;
-                        self.guarded(Action::Remote(self.profile.clone()), ctx);
-                    }
-                    Err(error) => self.notify(error.to_string(), true),
-                }
-            }
-            let save = ui.add_enabled(
-                !self.profile_saving,
-                egui::Button::new(if self.profile_saving {
-                    "Saving…"
-                } else {
-                    "Save profile"
-                }),
-            );
-            ui_probe::button(ui, "ssh-save-profile", &save);
-            if save.clicked() {
-                if let Err(error) = self.profile.validate() {
-                    self.notify(error.to_string(), true);
-                } else {
-                    let profile = self.profile.clone();
-                    let previous = self.profile_baseline.clone();
-                    let form = self.profile_form;
-                    self.profiles_loading = None;
-                    let tx = self.tx.clone();
-                    let context = ctx.clone();
-                    self.profile_saving = true;
-                    self.profile_writer = Some(std::thread::spawn(move || {
-                        let result = ssh::save_profile(&profile, previous.as_ref())
-                            .map_err(|e| format!("{e:#}"));
-                        if let Err(error) = &result {
-                            eprintln!("Connection profile was not saved: {error}");
-                        }
-                        let _ = tx.send(Event::ProfileSaved {
-                            result,
-                            submitted: Box::new(profile),
-                            form,
-                        });
-                        context.request_repaint();
-                    }));
-                }
-            }
-            if ui.button("Cancel").clicked() {
+        match intent {
+            Some(saved_connections::FormIntent::Connect(profile)) => {
                 self.dialog = Dialog::None;
+                self.guarded(Action::Remote(*profile), ctx);
             }
-        });
+            Some(saved_connections::FormIntent::Save) => {
+                self.connection_profiles.save(&self.tx, ctx);
+            }
+            Some(saved_connections::FormIntent::Cancel) => self.dialog = Dialog::None,
+            Some(saved_connections::FormIntent::Error(error)) => self.notify(error, true),
+            None => {}
+        }
     }
 
     /// Delegate file/hex/save destinations to the shared host-aware file picker.

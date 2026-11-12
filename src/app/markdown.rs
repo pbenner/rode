@@ -496,7 +496,7 @@ impl EditorApp {
     pub(super) fn markdown_source(&mut self) {
         if let Some(view) = self
             .documents
-            .get_mut(self.active)
+            .active_mut()
             .and_then(|doc| doc.marp.as_mut())
         {
             view.showing = false;
@@ -504,7 +504,7 @@ impl EditorApp {
         }
         if let Some(preview) = self
             .documents
-            .get_mut(self.active)
+            .active_mut()
             .and_then(|doc| doc.markdown.as_mut())
         {
             preview.showing = false;
@@ -513,7 +513,7 @@ impl EditorApp {
     /// Switch source/preview mode using the unsaved buffer and preserve native source editor state.
     pub(super) fn toggle_markdown(&mut self, ctx: &egui::Context) {
         if self.feature(crate::extensions::Feature::Marp)
-            && self.documents.get(self.active).is_some_and(|doc| {
+            && self.documents.active().is_some_and(|doc| {
                 crate::marp::is_deck(doc.path.as_deref(), &doc.text)
                     || doc.marp.as_ref().is_some_and(|view| view.showing)
             })
@@ -527,7 +527,7 @@ impl EditorApp {
         }
         let Some(doc) = self
             .documents
-            .get_mut(self.active)
+            .active_mut()
             .filter(|doc| doc.path.as_deref().is_some_and(is_path) && !doc.is_preview())
         else {
             self.notify("Open a Markdown file to switch its preview.", false);
@@ -547,7 +547,10 @@ impl EditorApp {
     }
     /// Prepare and render the active source snapshot, dispatching bounded linked-image reads as needed.
     pub(super) fn markdown_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        if self.documents[self.active].recovery.is_some() {
+        if self.documents[self.documents.active_index()]
+            .recovery
+            .is_some()
+        {
             return false;
         }
         let markdown_enabled = self.feature(crate::extensions::Feature::Markdown);
@@ -556,7 +559,7 @@ impl EditorApp {
             return false;
         }
         let untitled_path = self.join_root("untitled.marp.md");
-        let doc = &mut self.documents[self.active];
+        let doc = self.documents.active_mut().unwrap();
         if !doc.path.as_deref().is_some_and(is_path) && doc.marp.is_none() {
             doc.markdown = None;
             return false;
@@ -641,7 +644,13 @@ impl EditorApp {
         if focus || response.clicked() {
             response.request_focus();
         }
-        let preview = self.documents[self.active].markdown.as_mut().unwrap();
+        let preview = self
+            .documents
+            .active_mut()
+            .unwrap()
+            .markdown
+            .as_mut()
+            .unwrap();
         let selected = egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(18, 8))
             .show(ui, |ui| {
@@ -720,13 +729,15 @@ impl EditorApp {
                 ))
                 .unwrap_or_else(|_| Err(anyhow::anyhow!("Image decoder failed")))
                 .map_err(|e| format!("{e:#}"));
-                let _ = tx.send(Event::MarkdownImage {
+                let _ = tx.send(Event::workspace(
                     generation,
-                    id,
-                    token,
-                    uri,
-                    result,
-                });
+                    WorkspaceEvent::MarkdownImage {
+                        id,
+                        token,
+                        uri,
+                        result,
+                    },
+                ));
                 ctx.request_repaint();
             }
         });
@@ -882,7 +893,7 @@ mod tests {
             Ok(TexturePoll::Ready { .. })
         ));
         assert_eq!(app.image_budget.used(), 16);
-        app.clear_project(true);
+        app.clear_project(documents::Retention::Keep);
         assert!(cancel.load(Ordering::Acquire));
         assert_eq!(app.image_budget.used(), 0);
         let decoded =

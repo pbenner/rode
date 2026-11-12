@@ -312,7 +312,7 @@ fn tunnel_route_result_respects_dismissal_and_setup_navigation() {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         let (tx, rx) = mpsc::channel();
-        app.profile.host = "current-compute".into();
+        app.connection_profiles.draft.host = "current-compute".into();
         app.tunnels.generation = Some(app.generation);
         app.tunnels.pending = Some(rx);
         app.dialog = dialog;
@@ -325,7 +325,7 @@ fn tunnel_route_result_respects_dismissal_and_setup_navigation() {
         }))))
         .unwrap();
         app.tunnel_tick(&ctx);
-        assert_eq!(app.profile.host, "current-compute");
+        assert_eq!(app.connection_profiles.draft.host, "current-compute");
         assert_eq!(std::mem::discriminant(&app.dialog), expected);
         assert_eq!(app.tunnels.page, page);
         assert_eq!(app.tunnels.spec.name, "Unfinished setup");
@@ -339,7 +339,7 @@ fn tunnel_results_from_an_old_workspace_cannot_replace_the_new_profile() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     let (tx, rx) = mpsc::channel();
-    app.profile.host = "current-compute".into();
+    app.connection_profiles.draft.host = "current-compute".into();
     app.tunnels.generation = Some(app.generation);
     app.tunnels.pending = Some(rx);
     tx.send(Ok(Outcome::Route(Box::new(Profile {
@@ -349,7 +349,7 @@ fn tunnel_results_from_an_old_workspace_cannot_replace_the_new_profile() {
     .unwrap();
     app.generation += 1;
     app.tunnel_tick(&ctx);
-    assert_eq!(app.profile.host, "current-compute");
+    assert_eq!(app.connection_profiles.draft.host, "current-compute");
     assert!(app.tunnels.pending.is_none());
     assert!(app.dialog == Dialog::None);
 }

@@ -135,7 +135,7 @@ fn delayed_source_navigation_waits_for_old_reads_and_cancels_on_resume() {
     app.documents[0].path = Some("/new.rs".into());
     let selected = app.documents[0].id;
     app.new_file();
-    let unchanged = app.active;
+    let unchanged = app.documents.active_index();
     let mut client = Client::default();
     client.phase = Phase::Paused;
     app.debugger.pending_jump = Some(navigation::Target::new(
@@ -145,13 +145,13 @@ fn delayed_source_navigation_waits_for_old_reads_and_cancels_on_resume() {
         client.inspection_epoch(),
     ));
     app.debugger.source_loading = Some("/old.rs".into());
-    app.opening.insert("/old.rs".into());
+    app.documents.begin_open("/old.rs".into());
     app.resolve_debug_source(&client, &ctx);
-    assert_eq!(app.active, unchanged);
-    app.opening.clear();
+    assert_eq!(app.documents.active_index(), unchanged);
+    app.documents.cancel_opens();
     app.resolve_debug_source(&client, &ctx);
-    assert_eq!(app.documents[app.active].id, selected);
-    app.active = unchanged;
+    assert_eq!(app.documents[app.documents.active_index()].id, selected);
+    app.documents.select_index(unchanged);
     app.debugger.pending_jump = Some(navigation::Target::new(
         "/new.rs".into(),
         1,
@@ -160,7 +160,7 @@ fn delayed_source_navigation_waits_for_old_reads_and_cancels_on_resume() {
     ));
     client.phase = Phase::Running;
     app.resolve_debug_source(&client, &ctx);
-    assert_eq!(app.active, unchanged);
+    assert_eq!(app.documents.active_index(), unchanged);
     assert!(app.debugger.pending_jump.is_none());
 }
 #[test]

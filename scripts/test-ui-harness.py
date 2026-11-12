@@ -252,12 +252,13 @@ class WindowReadinessTests(unittest.TestCase):
                     for title in (
                         "RODE",
                         "RODE · project-other",
+                        "RODE · project [SSH fixture · offline] ",
                         "RODE · project [Opening project]",
                         "RODE · project" + suffix,
                     )
                 ]
                 wait_for_project(0x123, self.process, "startup.log", "/tmp/project")
-                self.assertEqual(self.query_attributes.call_count, 4)
+                self.assertEqual(self.query_attributes.call_count, 5)
 
     def test_project_timeout_reports_pending_title(self):
         self.query_attributes.return_value = subprocess.CompletedProcess(

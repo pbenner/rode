@@ -70,7 +70,7 @@ impl EditorApp {
             );
             return;
         }
-        let Some(doc) = self.documents.get(self.active) else {
+        let Some(doc) = self.documents.active() else {
             return;
         };
         let path = if doc.is_preview() {
@@ -127,13 +127,15 @@ impl EditorApp {
                 }
             })()
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::Latex {
+            let _ = tx.send(Event::workspace(
                 generation,
-                token,
-                preview,
-                versions,
-                result: Box::new(result),
-            });
+                WorkspaceEvent::Latex {
+                    token,
+                    preview,
+                    versions,
+                    result: Box::new(result),
+                },
+            ));
             ctx.request_repaint();
         });
     }
@@ -227,7 +229,7 @@ impl EditorApp {
             .iter()
             .position(|doc| doc.path.as_deref() == Some(path.as_str()))
         {
-            self.active = index;
+            self.documents.select_index(index);
             self.reload_pdf(self.documents[index].id, ctx);
             self.reveal_tab(self.documents[index].id);
         } else {
@@ -251,7 +253,7 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Latex)
             || !self
                 .documents
-                .get(self.active)
+                .get(self.documents.active_index())
                 .is_some_and(|doc| crate::latex::is_source(doc.path.as_deref()))
         {
             return;
@@ -303,7 +305,7 @@ impl EditorApp {
                 self.latex.pending_jump = None;
                 self.jump_to_issue(id, row, column);
                 self.focus_editor(ctx);
-            } else if !self.opening.contains(&path) {
+            } else if !self.documents.is_opening(&path) {
                 self.latex.pending_jump = None;
             }
         }
@@ -499,7 +501,7 @@ mod tests {
         assert!(app.document_issues(&app.documents[0]).is_empty());
         app.latex.busy = true;
         let cancel = app.latex.cancel.clone();
-        app.clear_project(true);
+        app.clear_project(documents::Retention::Keep);
         assert!(cancel.load(Ordering::Acquire));
         app.complete_latex(1, true, vec![(id, 2)], Ok(Default::default()), &ctx);
         assert!(app.latex.result.is_none());

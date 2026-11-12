@@ -83,7 +83,7 @@ impl EditorApp {
             return;
         }
         self.new_file();
-        let doc = &mut self.documents[self.active];
+        let doc = self.documents.active_mut().unwrap();
         doc.text = marp::TEMPLATE.into();
         doc.modified = true;
         doc.edit_version = doc.edit_version.wrapping_add(1);
@@ -96,7 +96,7 @@ impl EditorApp {
             self.notify("Enable Marp presentations in Extensions.", false);
             return;
         }
-        let Some(doc) = self.documents.get(self.active).filter(|doc| {
+        let Some(doc) = self.documents.active().filter(|doc| {
             !doc.is_preview()
                 && (doc.marp.is_some() || doc.path.as_deref().is_some_and(markdown::is_path))
         }) else {
@@ -108,7 +108,10 @@ impl EditorApp {
         };
         let showing = doc.marp.as_ref().is_some_and(|view| view.showing);
         self.markdown_source();
-        let view = self.documents[self.active]
+        let view = self
+            .documents
+            .active_mut()
+            .unwrap()
             .marp
             .get_or_insert_with(View::default);
         view.showing = !showing;
@@ -119,9 +122,10 @@ impl EditorApp {
     }
     /// Cancel obsolete or hidden preview work instead of continuing background rendering on each edit.
     pub(super) fn marp_tick(&mut self) {
+        let active = self.documents.active_index();
         for (index, doc) in self.documents.iter_mut().enumerate() {
             if let Some(view) = &mut doc.marp
-                && (index != self.active
+                && (index != active
                     || !view.showing
                     || view
                         .attempted
@@ -136,13 +140,13 @@ impl EditorApp {
     /// Render the cached slide preview and explicit rebuild/export controls for the active document.
     pub(super) fn marp_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let id = self.documents[self.active].id;
+        let id = self.documents[self.documents.active_index()].id;
         let mut refresh = false;
         let mut export = None;
         let mut settings = false;
         let mut refresh_button = None;
         {
-            let view = self.documents[self.active].marp.as_mut().unwrap();
+            let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
             ui.horizontal_wrapped(|ui| {
                 let button = ui.add_enabled(!view.busy, egui::Button::new("Refresh slides"));
                 refresh = button.clicked();
@@ -213,7 +217,7 @@ impl EditorApp {
             ui.label("Connect and finish opening the project to render slides.");
             return;
         }
-        let doc = &self.documents[self.active];
+        let doc = self.documents.active().unwrap();
         let path = doc
             .path
             .clone()
@@ -232,7 +236,7 @@ impl EditorApp {
             self.start_marp(id, Format::Pdf, None, ctx);
         }
         let focus = self.take_editor_focus(ui, ctx).is_some()
-            || self.documents[self.active]
+            || self.documents[self.documents.active_index()]
                 .marp
                 .as_ref()
                 .is_some_and(|view| view.focus);
@@ -240,7 +244,7 @@ impl EditorApp {
             && self.pending.is_none()
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
-        let view = self.documents[self.active].marp.as_mut().unwrap();
+        let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
         let Some(pdf) = &mut view.pdf else {
             ui.label("Slides use an installed Marp CLI and browser on the project host, and desktop Poppler for display.");
             ui.label("The current buffer is rendered without saving it.");
@@ -456,14 +460,16 @@ impl EditorApp {
                 Ok(Completed::Preview(loaded, reply.warnings))
             })()
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::Marp {
+            let _ = tx.send(Event::workspace(
                 generation,
-                id,
-                version,
-                token,
-                exporting,
-                result: Box::new(result),
-            });
+                WorkspaceEvent::Marp {
+                    id,
+                    version,
+                    token,
+                    exporting,
+                    result: Box::new(result),
+                },
+            ));
             ctx.request_repaint();
         });
     }
@@ -524,7 +530,7 @@ impl EditorApp {
                 );
                 self.notify(message, false);
                 if let Some(parent) = parent
-                    && self.expanded.contains(&parent)
+                    && self.explorer_state.expanded.contains(&parent)
                 {
                     self.list(parent, ctx);
                 }
@@ -564,14 +570,16 @@ impl EditorApp {
             let result = source
                 .render(page, &budget, limit, &cancel)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::MarpPage {
+            let _ = tx.send(Event::workspace(
                 generation,
-                id,
-                version,
-                token,
-                page,
-                result,
-            });
+                WorkspaceEvent::MarpPage {
+                    id,
+                    version,
+                    token,
+                    page,
+                    result,
+                },
+            ));
             ctx.request_repaint();
         });
     }
@@ -629,7 +637,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_marp();
-        let doc = &app.documents[app.active];
+        let doc = app.documents.active().unwrap();
         assert!(doc.dirty() && !doc.is_preview());
         assert_eq!(doc.text, marp::TEMPLATE);
         assert!(doc.saved_text.is_empty());
@@ -648,7 +656,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_marp();
-        let doc = &mut app.documents[app.active];
+        let doc = app.documents.active_mut().unwrap();
         let id = doc.id;
         let version = doc.edit_version;
         let view = doc.marp.as_mut().unwrap();
@@ -657,9 +665,15 @@ mod tests {
         view.token = 1;
         view.export_token = 1;
         app.marp_complete(id, version, 1, true, Err("Export refused".into()), &ctx);
-        let view = app.documents[app.active].marp.as_ref().unwrap();
+        let view = app.documents[app.documents.active_index()]
+            .marp
+            .as_ref()
+            .unwrap();
         assert!(view.busy && !view.exporting);
-        assert_eq!(app.documents[app.active].text, marp::TEMPLATE);
+        assert_eq!(
+            app.documents[app.documents.active_index()].text,
+            marp::TEMPLATE
+        );
     }
 
     #[test]
@@ -668,18 +682,21 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_marp();
-        let doc = &mut app.documents[app.active];
+        let doc = app.documents.active_mut().unwrap();
         let version = doc.edit_version;
         let view = doc.marp.as_mut().unwrap();
         view.showing = true;
         view.attempted = Some((version, Settings::default(), "deck.md".into()));
         app.markdown_source();
-        let view = app.documents[app.active].marp.as_mut().unwrap();
+        let view = app.documents.active_mut().unwrap().marp.as_mut().unwrap();
         assert!(!view.showing && view.attempted.is_some());
         view.busy = true;
         let cancel = view.cancel.clone();
         app.markdown_source();
-        let view = app.documents[app.active].marp.as_ref().unwrap();
+        let view = app.documents[app.documents.active_index()]
+            .marp
+            .as_ref()
+            .unwrap();
         assert!(cancel.load(Ordering::Acquire) && !view.busy && view.attempted.is_none());
     }
 }

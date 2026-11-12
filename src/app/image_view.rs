@@ -236,7 +236,7 @@ impl ImageView {
 impl EditorApp {
     /// Route a zoom shortcut to the active image/PDF preview rather than source font sizing.
     pub(super) fn zoom_image_shortcut(&mut self, ctx: &egui::Context, factor: f32) -> bool {
-        let Some(doc) = self.documents.get_mut(self.active) else {
+        let Some(doc) = self.documents.active_mut() else {
             return false;
         };
         if ctx.memory(|m| m.has_focus(ImageView::focus_id(doc.id)))
@@ -297,16 +297,18 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::Open("image.png".into()),
-                result: Box::new(Ok(files::Response {
-                    path: "/image.png".into(),
-                    revision: "initial".into(),
-                    preview: Some(decoded(&app.image_budget, 4, 3)),
-                    ..Default::default()
-                })),
-            })
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::Open("image.png".into()),
+                    result: Box::new(Ok(files::Response {
+                        path: "/image.png".into(),
+                        revision: "initial".into(),
+                        preview: Some(decoded(&app.image_budget, 4, 3)),
+                        ..Default::default()
+                    })),
+                },
+            ))
             .unwrap();
         app.poll(ctx);
         app
@@ -391,16 +393,18 @@ mod tests {
         app.documents[0].image.as_mut().unwrap().loading = true;
         for (version, width) in [(4, 2), (5, 8)] {
             app.tx
-                .send(Event::Done {
-                    generation: app.generation,
-                    job: Job::Reload { id, version },
-                    result: Box::new(Ok(files::Response {
-                        path: "/image.png".into(),
-                        revision: "updated".into(),
-                        preview: Some(decoded(&budget, width, 4)),
-                        ..Default::default()
-                    })),
-                })
+                .send(Event::workspace(
+                    app.generation,
+                    WorkspaceEvent::Done {
+                        job: Job::Reload { id, version },
+                        result: Box::new(Ok(files::Response {
+                            path: "/image.png".into(),
+                            revision: "updated".into(),
+                            preview: Some(decoded(&budget, width, 4)),
+                            ..Default::default()
+                        })),
+                    },
+                ))
                 .unwrap();
         }
         app.poll(&ctx);
@@ -410,11 +414,13 @@ mod tests {
         let version = app.documents[0].edit_version;
         app.documents[0].image.as_mut().unwrap().loading = true;
         app.tx
-            .send(Event::Done {
-                generation: app.generation,
-                job: Job::Reload { id, version },
-                result: Box::new(Err("Image transfer failed".into())),
-            })
+            .send(Event::workspace(
+                app.generation,
+                WorkspaceEvent::Done {
+                    job: Job::Reload { id, version },
+                    result: Box::new(Err("Image transfer failed".into())),
+                },
+            ))
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.documents[0].image.as_ref().unwrap().original, [8, 4]);

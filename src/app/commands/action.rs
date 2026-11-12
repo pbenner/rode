@@ -417,7 +417,7 @@ impl EditorApp {
             Command::DebugStop => self.stop_debugger(),
             Command::Breakpoint => self.toggle_cursor_breakpoint(),
             Command::ReloadImage => {
-                if let Some(doc) = self.documents.get(self.active) {
+                if let Some(doc) = self.documents.active() {
                     self.reload_image(doc.id, ctx);
                 }
             }
@@ -430,7 +430,7 @@ impl EditorApp {
             Command::LatexStop => self.stop_latex(),
             Command::MarpSlides => self.toggle_marp(ctx),
             Command::MarpExport(format) => {
-                if let Some(doc) = self.documents.get(self.active) {
+                if let Some(doc) = self.documents.active() {
                     self.marp_export(doc.id, format);
                 } else {
                     self.notify("Open a Markdown file to export Marp slides.", false);
@@ -444,7 +444,7 @@ impl EditorApp {
             Command::Extensions => self.set_dialog(Dialog::Extensions),
             Command::Hex => self.set_dialog(Dialog::HexOpen),
             Command::ReloadPdf => {
-                if let Some(doc) = self.documents.get(self.active) {
+                if let Some(doc) = self.documents.active() {
                     self.reload_pdf(doc.id, ctx);
                 }
             }

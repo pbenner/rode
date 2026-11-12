@@ -147,6 +147,16 @@ sys.exit(17)
             self.assertFalse(fixture_home.exists())
         self.assertEqual(dict(os.environ), before)
 
+    def test_inherited_native_probe_cannot_replace_independent_test_snapshots(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "caller-ui.json"
+            path.write_text("caller snapshot")
+            code = "import os; assert 'RODE_UI_TEST_STATE' not in os.environ"
+            with patch.dict(os.environ, RODE_UI_TEST_STATE=str(path)):
+                self.assertEqual(rust_tests.isolated([sys.executable, "-c", code]), 0)
+                self.assertEqual(os.environ["RODE_UI_TEST_STATE"], str(path))
+            self.assertEqual(path.read_text(), "caller snapshot")
+
     def test_cargo_runner_is_structured_and_custom_filters_are_preserved(self):
         with (
             patch(

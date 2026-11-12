@@ -232,9 +232,7 @@ impl EditorApp {
                 Ok(Outcome::Route(profile))
                     if self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels =>
                 {
-                    self.profile = *profile;
-                    self.profile_baseline = None;
-                    self.profile_form += 1;
+                    self.connection_profiles.select(*profile, false);
                     self.set_dialog(Dialog::Connect);
                 }
                 Ok(Outcome::Route(_)) => {}

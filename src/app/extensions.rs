@@ -18,6 +18,17 @@ pub(super) struct Extensions {
     pub cancel: Arc<AtomicBool>,
 }
 impl Extensions {
+    fn cancel_work(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        self.cancel = Arc::new(AtomicBool::new(false));
+    }
+
+    pub(super) fn reset_project(&mut self) {
+        self.cancel_work();
+        self.busy = false;
+        self.registry.revision = self.registry.revision.wrapping_add(1);
+    }
+
     /// Load bounded installed manifests and saved enablement; loading alone never runs adapter executables.
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         let preferences = storage
@@ -39,8 +50,7 @@ impl Extensions {
 impl EditorApp {
     /// Cancel captured adapter jobs and rotate the flag so future work has a fresh lifetime.
     pub(super) fn cancel_extensions(&mut self) {
-        self.extensions.cancel.store(true, Ordering::Release);
-        self.extensions.cancel = Arc::new(AtomicBool::new(false));
+        self.extensions.cancel_work();
     }
     /// Read effective bundled-feature enablement from the current registry.
     pub(super) fn feature(&self, feature: Feature) -> bool {
@@ -131,7 +141,7 @@ impl EditorApp {
     }
     /// Explain a disabled specialized viewer while preserving access to the underlying document state.
     pub(super) fn disabled_document_ui(&self, ui: &mut egui::Ui) -> bool {
-        let Some(doc) = self.documents.get(self.active) else {
+        let Some(doc) = self.documents.active() else {
             return false;
         };
         let feature = if doc.notebook.is_some() {
@@ -353,7 +363,7 @@ impl EditorApp {
         else {
             return;
         };
-        let doc = self.documents.get(self.active).filter(|d| !d.is_preview());
+        let doc = self.documents.active().filter(|d| !d.is_preview());
         let invocation = registry.invocation(
             manifest,
             command.into(),

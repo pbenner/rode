@@ -114,11 +114,13 @@ impl EditorApp {
                 Ok(response)
             })
             .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::Tool {
+            let _ = tx.send(Event::workspace(
                 generation,
-                job: Box::new(job),
-                result: Box::new(result),
-            });
+                WorkspaceEvent::Tool {
+                    job: Box::new(job),
+                    result: Box::new(result),
+                },
+            ));
             ctx.request_repaint();
         });
     }
@@ -195,7 +197,7 @@ impl EditorApp {
             ctx.request_repaint_after(Duration::from_secs(5));
         }
         if self.workbench.prefs.live_checks
-            && let Some(doc) = self.documents.get(self.active)
+            && let Some(doc) = self.documents.active()
             && let Some(path) = doc.path.as_deref()
         {
             let language = crate::languages::detect(Some(path));

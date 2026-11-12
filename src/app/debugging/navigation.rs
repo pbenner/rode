@@ -37,7 +37,7 @@ impl EditorApp {
             return;
         }
         if let Some(path) = &self.debugger.source_loading {
-            if self.opening.contains(path) {
+            if self.documents.is_opening(path) {
                 return;
             }
             self.debugger.source_loading = None;

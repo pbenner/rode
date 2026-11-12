@@ -269,10 +269,8 @@ fn notebook_shutdown_probe() {
             let event = app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
             let reloaded = matches!(
                 &event,
-                Event::Done {
-                    job: Job::Reload { .. },
-                    ..
-                }
+                Event::Workspace { event, .. }
+                    if matches!(event.as_ref(), WorkspaceEvent::Done { job: Job::Reload { .. }, .. })
             );
             events.push(event);
             if reloaded {

@@ -166,7 +166,7 @@ impl EditorApp {
                     Ok(()) => self.dialog = Dialog::None,
                     Err(error) => self.sessions.runtimes.error = error.to_string(),
                 }
-            } else if !self.opening.contains(&info.document) {
+            } else if !self.documents.is_opening(&info.document) {
                 self.sessions.runtimes.attaching = None;
                 self.sessions.runtimes.error =
                     "Notebook could not be opened; retained kernel state was left untouched".into();
@@ -261,7 +261,7 @@ impl EditorApp {
                 .position(|d| d.path.as_deref() == Some(&info.document) && d.notebook.is_some())
             {
                 if current {
-                    self.active = index;
+                    self.documents.select_index(index);
                     self.focus_editor(ctx);
                 } else if let Err(error) = self.attach_notebook_runtime(index, info, ctx) {
                     self.sessions.runtimes.error = error.to_string();

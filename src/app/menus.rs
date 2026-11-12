@@ -173,7 +173,7 @@ impl EditorApp {
         });
         if check(ui, "Show hidden files", "", self.show_hidden) {
             self.show_hidden = !self.show_hidden;
-            self.tree_dirty = true;
+            self.explorer_state.tree_dirty = true;
         }
         ui.add_space(4.);
         ui.separator();

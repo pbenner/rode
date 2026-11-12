@@ -360,3 +360,24 @@ fn enter_in_notebook_find_reveals_and_selects_a_matching_cell() {
     );
     assert_eq!(app.documents[0].notebook.as_ref().unwrap().active, expected);
 }
+
+#[test]
+fn unchanged_notebook_reload_keeps_view_state_and_source_identity() {
+    let mut docs = documents::Documents::default();
+    let images = Arc::new(markdown::Images::default());
+    let shutdowns = notebook_view::Shutdowns::default();
+    let book = crate::notebook::Notebook::default();
+    let response = Response {
+        path: "book.ipynb".into(),
+        text: book.serialize().unwrap(),
+        revision: "r1".into(),
+        notebook: Some(Ok(book)),
+        ..Default::default()
+    };
+    docs.open(response.clone(), &images, &shutdowns);
+    let doc = docs.active_mut().unwrap();
+    doc.notebook.as_mut().unwrap().error = "retained view state".into();
+    doc.reload(response, &images, &shutdowns);
+    assert_eq!(doc.notebook.as_ref().unwrap().error, "retained view state");
+    assert_eq!(doc.edit_version, 0);
+}

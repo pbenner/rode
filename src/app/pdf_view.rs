@@ -260,11 +260,17 @@ impl Drop for PdfView {
 }
 
 impl EditorApp {
+    /// Cancel the old project's queued PDF work before installing a fresh lifetime.
+    pub(super) fn reset_pdf_requests(&mut self) {
+        self.pdf_cancel.store(true, Ordering::Release);
+        self.pdf_cancel = Arc::new(AtomicBool::new(false));
+    }
+
     /// Render the active PDF and dispatch requested page turns/reloads after releasing its borrow.
     pub(super) fn pdf_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
         let Some(doc) = self
             .documents
-            .get(self.active)
+            .get(self.documents.active_index())
             .filter(|doc| doc.pdf.is_some())
         else {
             return false;
@@ -276,7 +282,7 @@ impl EditorApp {
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
         let palette = self.themes.active().palette;
-        let view = self.documents[self.active].pdf.as_mut().unwrap();
+        let view = self.documents.active_mut().unwrap().pdf.as_mut().unwrap();
         let (reload, page) = view.ui(ui, id, palette, focus, keyboard, "Page");
         if reload {
             self.reload_pdf(id, ctx);
@@ -309,14 +315,16 @@ impl EditorApp {
             let result = source
                 .render(page, &budget, texture_limit, &cancel)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::PdfPage {
+            let _ = tx.send(Event::workspace(
                 generation,
-                id,
-                version,
-                token,
-                page,
-                result,
-            });
+                WorkspaceEvent::PdfPage {
+                    id,
+                    version,
+                    token,
+                    page,
+                    result,
+                },
+            ));
             ctx.request_repaint();
         });
     }
@@ -455,7 +463,7 @@ mod tests {
         app.pdf_page(id, 0, 0, 1, Err("Renderer failed".into()));
         assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
         assert!(!app.documents[0].preview_loading());
-        app.clear_project(true);
+        app.clear_project(documents::Retention::Keep);
         let pixels = app.documents[0]
             .pdf
             .as_ref()

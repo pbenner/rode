@@ -669,7 +669,7 @@ impl EditorApp {
                 }
             }
         }
-        if let Some(path) = self.documents.get(self.active).and_then(|d| d.path.clone())
+        if let Some(path) = self.documents.active().and_then(|d| d.path.clone())
             && ui.button("Blame current file").clicked()
         {
             self.git_command(

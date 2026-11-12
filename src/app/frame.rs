@@ -80,7 +80,7 @@ impl EditorApp {
         let Some(workspace) = &self.workspace else {
             let file = self
                 .documents
-                .get(self.active)
+                .get(self.documents.active_index())
                 .and_then(|d| d.path.as_deref());
             let title = file.map_or_else(
                 || "RODE".into(),

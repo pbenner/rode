@@ -357,14 +357,16 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
     let old_generation = app.generation;
     app.generation += 1;
     app.tx
-        .send(Event::Tool {
-            generation: old_generation,
-            job: Box::new(ToolJob::Monitor),
-            result: Box::new(Ok(project::Response::Monitor(project::Monitor {
-                hostname: "old-host".into(),
-                ..Default::default()
-            }))),
-        })
+        .send(Event::workspace(
+            old_generation,
+            WorkspaceEvent::Tool {
+                job: Box::new(ToolJob::Monitor),
+                result: Box::new(Ok(project::Response::Monitor(project::Monitor {
+                    hostname: "old-host".into(),
+                    ..Default::default()
+                }))),
+            },
+        ))
         .unwrap();
     app.poll(&ctx);
     assert!(!app.workbench.monitoring.monitor_busy);
