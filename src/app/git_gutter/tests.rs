@@ -243,6 +243,15 @@ fn markers_stay_in_their_own_strip_and_deletions_remain_visible_at_both_ends() {
                 gutter = ui
                     .allocate_exact_size(egui::vec2(72., 60.), Sense::hover())
                     .0;
+                let mut job = egui::text::LayoutJob::simple(
+                    "a\nb\n".into(),
+                    FontId::monospace(14.),
+                    palette.text,
+                    f32::INFINITY,
+                );
+                job.sections[0].format.line_height = Some(20.);
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                let rows = editor_view::gutter::Rows::new(&galley, gutter.left_top());
                 diff::paint(
                     ui,
                     &[
@@ -269,7 +278,7 @@ fn markers_stay_in_their_own_strip_and_deletions_remain_visible_at_both_ends() {
                     ],
                     1,
                     gutter,
-                    20.,
+                    rows,
                     palette,
                 );
             });
@@ -353,7 +362,21 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
                 let gutter = ui
                     .allocate_exact_size(egui::vec2(72., 20.), Sense::hover())
                     .0;
-                state.paint(ui, doc, gutter, 20., palette);
+                let mut job = egui::text::LayoutJob::simple(
+                    "x".into(),
+                    FontId::monospace(14.),
+                    palette.text,
+                    f32::INFINITY,
+                );
+                job.sections[0].format.line_height = Some(20.);
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                state.paint(
+                    ui,
+                    doc,
+                    gutter,
+                    editor_view::gutter::Rows::new(&galley, gutter.left_top()),
+                    palette,
+                );
             });
         });
         output
@@ -389,4 +412,214 @@ fn clean_crlf_checkouts_do_not_show_every_line_as_modified() {
     assert_eq!(&*baseline, "one\ntwo\n");
     assert!(changes(&baseline, "one\r\ntwo\r\n").is_empty());
     assert_eq!(changes(&baseline, "one\r\nchanged\r\n"), [(1, 1, Modified)]);
+}
+
+#[test]
+fn editor_markers_align_with_rendered_rows_throughout_long_files() {
+    for scale in [0.75, 1., 1.25, 1.5, 2.] {
+        for font_size in [14., 15., 19., 26.] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.set_ui_scale(scale, &ctx);
+            ctx.style_mut(|style| {
+                style.scroll_animation.duration = egui::emath::Rangef::new(0., 0.)
+            });
+            app.font_size = font_size;
+            app.new_file();
+            let source: String = (0..240)
+                .map(|n| {
+                    format!(
+                        "let line_{n} = {n}; // {}\n",
+                        if n % 11 == 0 { "λ🧪" } else { "λ" }
+                    )
+                })
+                .collect();
+            let doc = app.documents.active_mut().unwrap();
+            doc.text = source.clone();
+            doc.lines = 241;
+            doc.path = Some("/project/source.rs".into());
+            app.git_gutter.key = Some(Key {
+                id: doc.id,
+                path: doc.path.clone().unwrap(),
+            });
+            app.git_gutter.rendered = Some((
+                doc.edit_version,
+                [0, 64, 199]
+                    .into_iter()
+                    .map(|line| Marker {
+                        line,
+                        count: 1,
+                        kind: Modified,
+                    })
+                    .collect(),
+            ));
+            for scrolled in [false, true] {
+                let height = if scrolled { 480. } else { 12000. };
+                if scrolled {
+                    let at = source[..source.find("let line_199 ").unwrap()]
+                        .chars()
+                        .count();
+                    app.documents.active_mut().unwrap().selection = Some((at, at));
+                }
+                let frame = |app: &mut EditorApp| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1200., height),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| app.editor(ctx),
+                    )
+                };
+                // A requested caret jump changes the scroll offset for the next pass.
+                frame(&mut app);
+                frame(&mut app);
+                let output = frame(&mut app);
+                let (text, clip) = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(text) if text.galley.text() == source => {
+                            Some((text, s.clip_rect))
+                        }
+                        _ => None,
+                    })
+                    .expect("Missing source text");
+                if scrolled {
+                    assert!(text.pos.y < clip.top(), "Source did not scroll");
+                }
+                let markers: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == egui::Color32::from_rgb(60, 145, 235) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected: Vec<_> = [0, 64, 199]
+                    .into_iter()
+                    .filter_map(|line| {
+                        let row = text.galley.rows[line].rect().translate(text.pos.to_vec2());
+                        (row.bottom() > clip.top() && row.top() < clip.bottom())
+                            .then_some((line, row))
+                    })
+                    .collect();
+                assert!(
+                    !expected.is_empty(),
+                    "scale={scale}, font={font_size}, scrolled={scrolled}, text origin={:?}, clip={clip:?}",
+                    text.pos
+                );
+                assert_eq!(markers.len(), expected.len());
+                for ((line, row), marker) in expected.into_iter().zip(markers) {
+                    let tolerance = 0.51 / scale;
+                    assert!(
+                        (marker.top() - row.top().max(clip.top())).abs() <= tolerance,
+                        "scale={scale}, font={font_size}, scrolled={scrolled}, line={}: marker {marker:?}, row {row:?}",
+                        line + 1
+                    );
+                    assert!(
+                        (marker.bottom() - row.bottom().min(clip.bottom())).abs() <= tolerance,
+                        "scale={scale}, font={font_size}, scrolled={scrolled}, line={}: marker {marker:?}, row {row:?}",
+                        line + 1
+                    );
+                    let number = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| match &s.shape {
+                            egui::Shape::Text(number)
+                                if number.galley.text() == (line + 1).to_string() =>
+                            {
+                                Some(number)
+                            }
+                            _ => None,
+                        })
+                        .expect("Missing line number");
+                    let center = number
+                        .galley
+                        .rect
+                        .translate(number.pos.to_vec2())
+                        .center()
+                        .y;
+                    assert!(
+                        (center - row.center().y).abs() <= tolerance,
+                        "Line number drift at {}",
+                        line + 1
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_source_keeps_line_one_and_its_deletion_marker_visible() {
+    for font_size in [14., 26.] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.font_size = font_size;
+        app.new_file();
+        let doc = app.documents.active_mut().unwrap();
+        doc.path = Some("/project/empty.rs".into());
+        app.git_gutter.key = Some(Key {
+            id: doc.id,
+            path: doc.path.clone().unwrap(),
+        });
+        app.git_gutter.rendered = Some((
+            doc.edit_version,
+            vec![Marker {
+                line: 0,
+                count: 3,
+                kind: Deleted,
+            }],
+        ));
+        let frame = |app: &mut EditorApp| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.editor(ctx),
+            )
+        };
+        frame(&mut app);
+        let output = frame(&mut app);
+        let palette = app.themes.active().palette;
+        let deletion = output
+            .shapes
+            .iter()
+            .find(|s| {
+                matches!(&s.shape,
+            egui::Shape::Path(path) if path.fill == palette.error)
+            })
+            .expect("Empty-file deletion marker disappeared");
+        let number = output
+            .shapes
+            .iter()
+            .find(|s| {
+                matches!(&s.shape,
+            egui::Shape::Text(text) if text.galley.text() == "1")
+            })
+            .expect("Empty-file line number disappeared");
+        assert!(
+            deletion
+                .clip_rect
+                .contains_rect(deletion.shape.visual_bounding_rect())
+        );
+        assert!(
+            number
+                .clip_rect
+                .contains_rect(number.shape.visual_bounding_rect())
+        );
+    }
 }

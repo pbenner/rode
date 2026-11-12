@@ -49,12 +49,19 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
     git("config", "user.name", "Gutter fixture")
     git("config", "user.email", "fixture@example.invalid")
     git("config", "core.autocrlf", "input")
+    (root / "empty.txt").write_text("removed line\n")
     (root / "crlf.txt").write_bytes(b"one\r\ntwo\r\n")
     path = root / "source changes.txt"
     path.write_text("one\nold\nkeep\ndelete\nlast\n")
     (root / ".gitignore").write_text("ignored.txt\n")
+    long_source = [f"let line_{n} = {n};\n" for n in range(1, 241)]
+    (root / "long.rs").write_text("".join(long_source))
     git("add", ".")
     git("commit", "-qm", "Initial")
+    (root / "empty.txt").write_text("")
+    for line in [0, 64, 199]:
+        long_source[line] = f"let line_{line + 1} = 999;\n"
+    (root / "long.rs").write_text("".join(long_source))
     staged = "one\nchanged\nkeep\nlast\nextra\n"
     path.write_text(staged)
     git("add", "--", path.name)
@@ -137,6 +144,16 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             markers([])
             ui.open_file(root / "crlf.txt")
             markers([])
+            ui.open_file(root / "empty.txt")
+            markers(["git-change-deleted:1"])
+            ui.open_file(root / "long.rs")
+            markers(["git-change-modified:1"])
+            ui.click("source-editor")
+            key("End", ("Control_L",))
+            markers(["git-change-modified:200"])
+            screenshot(window, "long-source-scrolled.png")
+            key("Home", ("Control_L",))
+            markers(["git-change-modified:1"])
             ui.open_file(root / "new.txt")
             markers(["git-change-added:1"])
             ui.open_file(root / "ignored.txt")

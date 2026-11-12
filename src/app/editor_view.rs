@@ -7,6 +7,8 @@
 //! and guarded project/window actions remain with the application coordinator.
 use super::*;
 
+pub(super) mod gutter;
+
 impl EditorApp {
     /// Render the active specialized or source document, retaining native edit/cursor/undo
     /// state and updating buffer versions only for accepted source changes.
@@ -159,14 +161,11 @@ impl EditorApp {
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.horizontal_top(|ui| {
-                            let line_height =
-                                ui.fonts_mut(|f| f.row_height(&FontId::monospace(font_size)));
                             let digits=doc.lines.max(1).ilog10()+1;
                             let digit_width=ui.fonts_mut(|f|f.glyph_width(&FontId::monospace(font_size),'0'));
                             let gutter_width=46.0+(digits as f32*digit_width).max(24.0);
-                            let gutter_top = ui.cursor().min;
                             let (gutter, _) = ui.allocate_exact_size(
-                                egui::vec2(gutter_width, line_height * doc.lines as f32),
+                                egui::vec2(gutter_width, 0.0),
                                 Sense::hover(),
                             );
                             if queued_focus == Some(doc.id)
@@ -182,7 +181,7 @@ impl EditorApp {
                                 .cursor_at_end(false)
                                 .font(FontId::monospace(font_size))
                                 .desired_width(ui.available_width().max(80.0))
-                                .desired_rows(doc.lines.max(2))
+                                .desired_rows(2)
                                 .frame(false)
                                 .margin(egui::vec2(6.0, 0.0))
                                 .layouter(&mut layouter)
@@ -210,21 +209,18 @@ impl EditorApp {
                                     .translate(output.galley_pos.to_vec2());
                                 ui.scroll_to_rect(caret, Some(Align::Center));
                             }
-                            let painter = ui
-                                .painter()
-                                .with_clip_rect(ui.clip_rect().intersect(gutter));
-                            let first = ((ui.clip_rect().top() - gutter_top.y) / line_height)
-                                .floor()
-                                .max(0.0) as usize;
-                            let last = (((ui.clip_rect().bottom() - gutter_top.y) / line_height)
-                                .ceil()
-                                .max(0.0) as usize
-                                + 1)
-                            .min(doc.lines);
-                            for line in first..last {
-                                let y=gutter_top.y+(line as f32+0.5)*line_height;
+                            let rows = gutter::Rows::new(&output.galley, output.galley_pos);
+                            let gutter = egui::Rect::from_min_max(
+                                egui::pos2(gutter.left(), rows.bounds().top()),
+                                egui::pos2(gutter.right(), rows.bounds().bottom()),
+                            );
+                            let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(gutter));
+                            let visible = rows.visible(ui.clip_rect());
+                            for line in visible.clone() {
+                                let row = rows.line(line).unwrap();
+                                let y = row.center().y;
                                 if debug_enabled && let Some(path)=&doc.path {
-                                    let rect=egui::Rect::from_min_max(egui::pos2(gutter.left(),y-line_height/2.),egui::pos2(gutter.left()+16.,y+line_height/2.));
+                                    let rect=egui::Rect::from_min_max(egui::pos2(gutter.left(),row.top()),egui::pos2(gutter.left()+16.,row.bottom()));
                                     let response=ui.interact(rect,id.with(("breakpoint",line)),Sense::click()).on_hover_text("Toggle breakpoint · F9");
                                     if response.clicked(){breakpoint_toggle=Some((path.clone(),line+1));}
                                     if let Some(bp)=debug_breakpoints.iter().find(|b|b.line==line+1){
@@ -238,9 +234,9 @@ impl EditorApp {
                                 painter.text(
                                     egui::pos2(
                                         gutter.right() - 13.0,
-                                        gutter_top.y + line as f32 * line_height,
+                                        y,
                                     ),
-                                    egui::Align2::RIGHT_TOP,
+                                    egui::Align2::RIGHT_CENTER,
                                     (line + 1).to_string(),
                                     FontId::monospace(font_size),
                                     if line + 1 == doc.cursor.0 {
@@ -258,28 +254,24 @@ impl EditorApp {
                                 Stroke::new(1.0_f32, palette.border),
                             );
                             if !output.response.changed() {
-                                git_gutter.paint(ui, doc, gutter, line_height, palette);
+                                git_gutter.paint(ui, doc, gutter, rows, palette);
                                 for (issue_index, issue) in diagnostics
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, d)| d.row > first && d.row <= last)
+                                    .filter(|(_, d)| d.row > visible.start && d.row <= visible.end)
                                 {
                                     let color = if issue.severity == "error" {
                                         palette.error
                                     } else {
                                         palette.accent
                                     };
-                                    let marker = egui::pos2(
-                                        gutter.left() + 21.0,
-                                        gutter_top.y
-                                            + (issue.row - 1) as f32 * line_height
-                                            + line_height / 2.0,
-                                    );
+                                    let row = rows.line(issue.row - 1).unwrap();
+                                    let marker = egui::pos2(gutter.left() + 21.0, row.center().y);
                                     painter.circle_filled(marker, 3.0, color);
                                     ui.interact(
                                         egui::Rect::from_center_size(
                                             marker,
-                                            egui::vec2(12., line_height),
+                                            egui::vec2(12., row.height()),
                                         ),
                                         id.with(("issue", issue_index)),
                                         Sense::hover(),

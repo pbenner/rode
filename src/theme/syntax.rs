@@ -248,6 +248,16 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
             .unwrap_or_else(|| settings.ps.find_syntax_plain_text());
         let theme = &settings.ts.themes["base16-mocha.dark"];
         let font_id = FontId::monospace(f32::from_bits(size));
+        let foreground = theme
+            .settings
+            .foreground
+            .map(|c| Color32::from_rgb(c.r, c.g, c.b))
+            .unwrap_or(Color32::WHITE);
+        // Empty source still needs a formatted row for its caret, line number
+        // and deletion boundary. A job without sections has zero row height.
+        if code.is_empty() {
+            return LayoutJob::simple(code.into(), font_id, foreground, f32::INFINITY);
+        }
         let mut highlighter = syntect::easy::HighlightLines::new(syntax, theme);
         let mut job = LayoutJob {
             text: code.into(),
@@ -256,16 +266,7 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
         let mut offset = 0;
         for line in syntect::util::LinesWithEndings::from(code) {
             let Ok(tokens) = highlighter.highlight_line(line, &settings.ps) else {
-                return LayoutJob::simple(
-                    code.into(),
-                    font_id,
-                    theme
-                        .settings
-                        .foreground
-                        .map(|c| Color32::from_rgb(c.r, c.g, c.b))
-                        .unwrap_or(Color32::WHITE),
-                    f32::INFINITY,
-                );
+                return LayoutJob::simple(code.into(), font_id, foreground, f32::INFINITY);
             };
             for (style, token) in tokens {
                 let color =

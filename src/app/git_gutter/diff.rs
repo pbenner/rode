@@ -91,21 +91,27 @@ pub(super) fn paint(
     markers: &[Marker],
     id: u64,
     gutter: egui::Rect,
-    height: f32,
+    rows: editor_view::gutter::Rows<'_>,
     palette: theme::Palette,
 ) {
     let clip = gutter.intersect(ui.clip_rect());
+    if !clip.is_positive() {
+        return;
+    }
     let painter = ui.painter().with_clip_rect(clip);
     let x = gutter.right() - 8.;
     for marker in markers {
-        let top = gutter.top() + marker.line as f32 * height;
-        let bottom = if marker.kind == Kind::Deleted {
-            top
+        let span = if marker.kind == Kind::Deleted {
+            let boundary = rows.boundary(marker.line);
+            egui::Rect::from_min_max(egui::pos2(x, boundary), egui::pos2(x, boundary))
         } else {
-            top + marker.count as f32 * height
+            let Some(span) = rows.span(marker.line, marker.count) else {
+                continue;
+            };
+            span
         };
         // Skip offscreen hunks before allocating hover text or probe identities.
-        if top > clip.bottom() + 3. || bottom < clip.top() - 3. {
+        if span.top() > clip.bottom() + 3. || span.bottom() < clip.top() - 3. {
             continue;
         }
         let (rect, label, name, color) = match marker.kind {
@@ -113,8 +119,8 @@ pub(super) fn paint(
                 let added = marker.kind == Kind::Added;
                 (
                     egui::Rect::from_min_max(
-                        egui::pos2(x - 2., top),
-                        egui::pos2(x + 2., top + marker.count as f32 * height),
+                        egui::pos2(x - 2., span.top()),
+                        egui::pos2(x + 2., span.bottom()),
                     ),
                     if added {
                         "Added since HEAD"
@@ -131,7 +137,10 @@ pub(super) fn paint(
                 )
             }
             Kind::Deleted => {
-                let y = top.clamp(gutter.top() + 3., gutter.bottom() - 3.);
+                let padding = 3_f32.min(gutter.height() / 2.);
+                let y = span
+                    .top()
+                    .clamp(gutter.top() + padding, gutter.bottom() - padding);
                 (
                     egui::Rect::from_center_size(egui::pos2(x, y), egui::vec2(7., 6.)),
                     format!("{} deleted line(s) since HEAD", marker.count),

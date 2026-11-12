@@ -124,7 +124,7 @@ impl State {
         ui: &mut egui::Ui,
         doc: &Document,
         gutter: egui::Rect,
-        line_height: f32,
+        rows: editor_view::gutter::Rows<'_>,
         palette: theme::Palette,
     ) {
         if self
@@ -151,7 +151,7 @@ impl State {
                 },
                 &response,
             );
-            diff::paint(ui, markers, doc.id, gutter, line_height, palette);
+            diff::paint(ui, markers, doc.id, gutter, rows, palette);
         }
     }
 }
