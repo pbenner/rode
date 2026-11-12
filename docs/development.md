@@ -433,6 +433,15 @@ processes for failure cleanup; unsupported hosts record a `pidfd` capability ski
 Run the connected case with
 `RODE_SSH_TEST_FILTER=owner_exit_closes_only_its_authenticated_master bash scripts/test-ssh.sh`.
 
+Agent Markdown regressions cover column alignment with proportional and code
+fonts, empty cells, escaped pipes, Unicode, formulas, multiple tables and streamed
+updates. They assert viewport containment, horizontal scrolling and native
+selection/copy across blocks. `python3 scripts/test-agent-markdown-ui.py` streams
+a deterministic mixed Markdown reply, then checks the real clipboard against a
+fixture at wide and narrow native window sizes; it runs in the `agents` CI group.
+The table layout reuses the message parser and selectable buffer, with measured
+column spacing and cached paragraph layouts so prose still wraps independently.
+
 The main agent fixture uses named controls for provider/settings changes, permission replies, Stop and history navigation. It verifies complete setting values, finished host work and the rendered window size before dependent input. Its explicit sleeps only poll bounded conditions or pace physical drag/double-click gestures; they do not acknowledge asynchronous work. Fixture RPC readers accept only newline-terminated JSON records, so an in-progress write cannot appear as a reply; malformed completed records still fail. Clipboard comparisons and backend request checks retain the exact prompt assertions.
 
 The workspace fixture resolves tab, detach, dock and reattach controls by name,

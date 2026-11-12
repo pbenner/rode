@@ -707,9 +707,20 @@ impl EditorApp {
                             egui::Frame::new().fill(if message.role == Role::User {palette.raised}else{palette.background}).inner_margin(8).corner_radius(4).show(ui,|ui| {
                                 let copy = ui.horizontal(|ui| {
                                     ui.label(RichText::new(&message.title).strong().size(11.).color(if message.role == Role::Notice {palette.muted}else{palette.accent}));
-                                    message.role == Role::Assistant && icons::small(ui,Icon::Copy,"Copy response").clicked()
+                                    if message.role == Role::Assistant {
+                                        let button = icons::small(ui,Icon::Copy,"Copy response");
+                                        if message.text.len() <= 64 * 1024 {
+                                            ui_probe::value(ui, "agent-copy-response", &button, &message.text);
+                                        }
+                                        button.clicked()
+                                    } else {
+                                        false
+                                    }
                                 }).inner;
-                                render_message(ui,&message.text,palette,copy);
+                                let output = render_message(ui,&message.text,palette,copy);
+                                if message.role == Role::Assistant && message.text.len() <= 64 * 1024 {
+                                    ui_probe::value(ui, "agent-response", &output.response, &message.text);
+                                }
                             });
                         }
                     });
@@ -1240,20 +1251,46 @@ fn render_message(
     copy_response: bool,
 ) -> egui::text_edit::TextEditOutput {
     let layout = message::layout(ui, text, palette);
-    let job = &layout.job;
     // A parent can request more width than the visible transcript, especially
     // during resizing. Wrap to the visible edge rather than that larger layout.
     let visible_width = ui
         .available_width()
         .min(ui.clip_rect().right() - ui.next_widget_position().x)
         .max(1.);
+    let id = ui.make_persistent_id("message-text");
+    let viewport =
+        egui::Rect::from_min_size(ui.next_widget_position(), egui::vec2(visible_width, 0.));
+    let render = |ui: &mut egui::Ui| {
+        render_message_layout(ui, &layout, palette, copy_response, viewport, id)
+    };
+    if layout.has_tables() {
+        egui::ScrollArea::horizontal()
+            .id_salt(id.with("table-scroll"))
+            .max_width(visible_width)
+            .auto_shrink([false, true])
+            .show(ui, render)
+            .inner
+    } else {
+        render(ui)
+    }
+}
+
+/// Keep one selection and clipboard path for wrapped prose and aligned table rows.
+fn render_message_layout(
+    ui: &mut egui::Ui,
+    layout: &message::MessageLayout,
+    palette: theme::Palette,
+    copy_response: bool,
+    viewport: egui::Rect,
+    id: egui::Id,
+) -> egui::text_edit::TextEditOutput {
+    let job = &layout.job;
+    let visible_width = viewport.width();
     let mut display = job.text.as_str();
     let mut layouter = |ui: &egui::Ui, _: &dyn egui::TextBuffer, width: f32| {
-        let mut job = job.clone();
-        job.wrap.max_width = width.min(visible_width).max(1.);
-        ui.fonts_mut(|fonts| fonts.layout_job(job))
+        let prose_offset = (viewport.left() - ui.next_widget_position().x).max(0.);
+        layout.galley(ui, width.min(visible_width).max(1.), prose_offset)
     };
-    let id = ui.make_persistent_id("message-text");
     let previous_selection =
         if ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Secondary)) {
             egui::TextEdit::load_state(ui.ctx(), id)
@@ -1279,7 +1316,7 @@ fn render_message(
         output.cursor_range = output.state.cursor.range(&output.galley);
         output.state.clone().store(ui.ctx(), id);
     }
-    layout.paint(ui, &output, palette.text);
+    layout.paint(ui, &output, palette);
     // TextEdit owns keyboard selection/copy. Replace only commands it just emitted,
     // expanding the single-character formula slots into portable TeX source.
     if let Some(range) = output

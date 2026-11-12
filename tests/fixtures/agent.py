@@ -634,6 +634,10 @@ try:
             elif message == "exit":
                 finish("Last reply before exit.")
                 break
+            elif message == "markdown-tables":
+                for line in (root / "markdown-response.md").read_text().splitlines(keepends=True):
+                    reply(line)
+                finish("")
             else:
                 if message == "rewrite":
                     (root / "main.py").write_text("# written by the agent\n")

@@ -134,6 +134,7 @@ SUITES = {
     ],
     "agents": [
         ui("agent"),
+        ui("agent-markdown"),
         ui("agent-questions"),
         ui("agent-file-only"),
         ui("agent-history"),

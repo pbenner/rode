@@ -6,11 +6,13 @@ use std::{ops::Range, sync::Arc};
 
 mod formulas;
 mod math;
+mod tables;
 
 /// One selectable buffer with native formula artwork at stable character positions.
 pub(super) struct MessageLayout {
     pub job: LayoutJob,
     formulas: Vec<PlacedFormula>,
+    tables: Vec<tables::Table>,
 }
 
 struct PlacedFormula {
@@ -26,6 +28,15 @@ enum Artwork {
 }
 
 impl MessageLayout {
+    pub fn has_tables(&self) -> bool {
+        !self.tables.is_empty()
+    }
+
+    /// Wrap prose to the viewport while keeping table columns together in one selectable buffer.
+    pub fn galley(&self, ui: &egui::Ui, width: f32, prose_offset: f32) -> Arc<egui::Galley> {
+        tables::galley(ui, &self.job, &self.tables, width, prose_offset)
+    }
+
     /// Expand formula placeholders back to their original TeX for clipboard use.
     pub fn copy(&self, range: Range<usize>) -> String {
         let mut out = String::new();
@@ -51,8 +62,11 @@ impl MessageLayout {
         &self,
         ui: &egui::Ui,
         output: &egui::text_edit::TextEditOutput,
-        color: egui::Color32,
+        palette: theme::Palette,
     ) {
+        for table in &self.tables {
+            table.paint(ui, output, palette);
+        }
         for formula in &self.formulas {
             let cursor = output.galley.pos_from_cursor(egui::text::CCursor {
                 index: formula.character,
@@ -72,11 +86,11 @@ impl MessageLayout {
                         texture.id(),
                         rect,
                         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                        color,
+                        palette.text,
                     );
                 }
                 Artwork::Source(galley) => {
-                    ui.painter().galley(rect.min, galley.clone(), color);
+                    ui.painter().galley(rect.min, galley.clone(), palette.text);
                 }
             }
         }
@@ -91,7 +105,9 @@ struct Layout {
     links: Vec<(String, usize)>,
     code: Option<String>,
     gap: usize,
-    table_cell: bool,
+    table: Option<usize>,
+    table_cell_start: usize,
+    tables: Vec<tables::Table>,
     characters: usize,
     formulas: Vec<PlacedFormula>,
 }
@@ -149,7 +165,8 @@ impl Layout {
             let dimensions = galley.size();
             (Artwork::Source(galley), dimensions)
         };
-        if formula.display {
+        let block = formula.display && self.table.is_none();
+        if block {
             self.separate(2);
         }
         self.flush_gap();
@@ -171,7 +188,7 @@ impl Layout {
             artwork,
         });
         self.format = previous;
-        if formula.display {
+        if block {
             self.separate(2);
         }
     }
@@ -193,7 +210,9 @@ pub(super) fn layout(ui: &egui::Ui, text: &str, palette: theme::Palette) -> Mess
         links: vec![],
         code: None,
         gap: 0,
-        table_cell: false,
+        table: None,
+        table_cell_start: 0,
+        tables: vec![],
         characters: 0,
         formulas: vec![],
     };
@@ -252,16 +271,35 @@ pub(super) fn layout(ui: &egui::Ui, text: &str, palette: theme::Palette) -> Mess
                         out.links.push((dest_url.into_string(), out.job.text.len()));
                         out.format.color = palette.accent;
                     }
-                    Tag::Table(_) => out.separate(2),
+                    Tag::Table(alignments) => {
+                        out.separate(2);
+                        out.table = Some(out.tables.len());
+                        out.tables.push(tables::Table::new(alignments));
+                    }
                     Tag::TableHead | Tag::TableRow => {
-                        out.separate(1);
-                        out.table_cell = false;
+                        let table = out.table.unwrap();
+                        if out.tables[table].rows.is_empty() {
+                            out.flush_gap();
+                        } else {
+                            out.append("\n");
+                        }
+                        out.tables[table].row(out.job.text.len(), out.characters);
+                        if matches!(tag, Tag::TableHead) {
+                            out.format.color = palette.accent;
+                            out.format.font_id.size += 1.;
+                        }
                     }
                     Tag::TableCell => {
-                        if out.table_cell {
+                        if !out.tables[out.table.unwrap()]
+                            .rows
+                            .last()
+                            .unwrap()
+                            .cells
+                            .is_empty()
+                        {
                             out.append(" | ");
                         }
-                        out.table_cell = true;
+                        out.table_cell_start = out.job.text.len();
                     }
                     _ => {}
                 }
@@ -275,12 +313,20 @@ pub(super) fn layout(ui: &egui::Ui, text: &str, palette: theme::Palette) -> Mess
                         out.separate(2);
                     }
                     TagEnd::Paragraph => out.separate(if out.lists.is_empty() { 2 } else { 1 }),
-                    TagEnd::Heading(_) | TagEnd::BlockQuote(_) | TagEnd::Table => out.separate(2),
+                    TagEnd::Heading(_) | TagEnd::BlockQuote(_) => out.separate(2),
+                    TagEnd::TableCell => {
+                        out.tables[out.table.unwrap()]
+                            .cell(out.table_cell_start..out.job.text.len());
+                    }
+                    TagEnd::Table => {
+                        out.tables[out.table.take().unwrap()].range.end = out.job.text.len();
+                        out.separate(2);
+                    }
                     TagEnd::List(_) => {
                         out.lists.pop();
                         out.separate(if out.lists.is_empty() { 2 } else { 1 });
                     }
-                    TagEnd::Item | TagEnd::TableHead | TagEnd::TableRow => out.separate(1),
+                    TagEnd::Item => out.separate(1),
                     TagEnd::Link => {
                         if let Some((url, start)) = out.links.pop()
                             && out.job.text[start..].trim() != url
@@ -337,9 +383,13 @@ pub(super) fn layout(ui: &egui::Ui, text: &str, palette: theme::Palette) -> Mess
             _ => {}
         }
     }
+    for table in &mut out.tables {
+        table.prepare(ui, &mut out.job);
+    }
     MessageLayout {
         job: out.job,
         formulas: out.formulas,
+        tables: out.tables,
     }
 }
 
