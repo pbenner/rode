@@ -141,7 +141,7 @@ impl EditorApp {
                 _ => self.agents.running.error = "Unexpected background-agent service reply".into(),
             }
             if mutating && !self.agents.running.error.is_empty() {
-                self.abort_session_quit(self.agents.running.error.clone(), ctx);
+                self.abort_exit(self.agents.running.error.clone(), ctx);
             }
         }
         if self.agents.running.mutating {
@@ -357,15 +357,15 @@ mod tests {
             &ctx,
         );
         let until = Instant::now() + Duration::from_secs(5);
-        while app.preparing {
+        while app.workspace.preparing() {
             app.poll(&ctx);
             assert!(Instant::now() < until);
             std::thread::sleep(Duration::from_millis(5));
         }
         app.poll_agents(&ctx);
-        app.quit_terminals(&ctx);
-        assert!(app.session_exit_pending());
-        assert!(!app.quitting);
+        app.request_exit(&ctx);
+        assert!(app.exit_pending());
+        assert!(!app.exit.closing());
         assert!(
             reply
                 .send(Err("End agent failed on the original host".into()))
@@ -374,8 +374,8 @@ mod tests {
         );
         app.poll_agents(&ctx);
         assert!(app.agents.running.error.contains("End agent failed"));
-        assert!(!app.session_exit_pending());
-        assert!(!app.quitting);
+        assert!(!app.exit_pending());
+        assert!(!app.exit.closing());
     }
 
     #[test]
@@ -387,13 +387,13 @@ mod tests {
         let (reply, receiver) = mpsc::channel();
         app.agents.running.pending = Some(receiver);
         app.agents.running.mutating = true;
-        app.quit_terminals(&ctx);
-        assert!(app.session_exit_pending());
+        app.request_exit(&ctx);
+        assert!(app.exit_pending());
         drop(reply);
         app.poll_agents(&ctx);
         assert!(!app.agent_installation_pending());
-        assert!(!app.session_exit_pending());
-        assert!(!app.quitting);
+        assert!(!app.exit_pending());
+        assert!(!app.exit.closing());
         assert!(app.agents.running.error.contains("worker disconnected"));
     }
 }

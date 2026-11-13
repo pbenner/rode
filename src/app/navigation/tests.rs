@@ -245,9 +245,7 @@ fn batched_emacs_edits_finish_before_the_native_save_prefix() {
                 ..Default::default()
             },
             |ctx| {
-                app.replay_style_input(ctx);
-                app.navigation_shortcuts(ctx);
-                app.editing_shortcuts(ctx);
+                app.route_input(ctx);
                 app.editor(ctx);
             },
         );

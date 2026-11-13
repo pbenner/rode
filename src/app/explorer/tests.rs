@@ -96,7 +96,7 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
                 share_network: false,
                 ..Default::default()
             };
-            app.workspace = Some(Workspace {
+            app.workspace.set_fixture(Some(Workspace {
                 root: "/project".into(),
                 remote: remote.then(|| {
                     Remote::new(Profile {
@@ -109,7 +109,7 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
                 ready: true,
                 plan: Default::default(),
                 sandbox_options: inherited.clone(),
-            });
+            }));
             let path = "/project/selected folder";
             let saved_options = sandbox::Options {
                 enabled: true,
@@ -130,7 +130,7 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
             }
             app.new_file();
             app.documents[0].text = "unsaved edits".into();
-            let token = app.project_token;
+            let token = app.workspace.preparation_identity();
             let defaults = app.sandbox_defaults.clone();
             app.open_folder_dialog_at(path.into());
             assert!(app.dialog == Dialog::Folder);
@@ -143,8 +143,8 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
                 if saved { saved_options } else { inherited }
             );
             assert_eq!(app.sandbox_defaults, defaults);
-            assert!(app.pending.is_none() && !app.preparing);
-            assert_eq!(app.project_token, token);
+            assert!(app.pending.is_none() && !app.workspace.preparing());
+            assert_eq!(app.workspace.preparation_identity(), token);
             assert_eq!(app.workspace.as_ref().unwrap().root, "/project");
             assert!(app.documents[0].dirty());
 
@@ -199,10 +199,10 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
             assert!(
                 matches!(&app.pending, Some(Action::Project { path: selected, remote: selected_remote, options }) if selected == path && *selected_remote == remote && options == &chosen)
             );
-            assert_eq!(app.project_token, token);
+            assert_eq!(app.workspace.preparation_identity(), token);
             assert_eq!(app.workspace.as_ref().unwrap().root, "/project");
             assert_eq!(app.documents[0].text, "unsaved edits");
-            assert!(!app.preparing);
+            assert!(!app.workspace.preparing());
         }
     }
 }
@@ -357,7 +357,7 @@ fn mutation_controls_follow_actual_policy_connection_and_pending_io() {
     let cc = eframe::CreationContext::_new_kittest(ctx);
     let mut app = EditorApp::new(&cc, Startup::default());
     assert!(!app.explorer_writable());
-    app.workspace = Some(Workspace {
+    app.workspace.set_fixture(Some(Workspace {
         root: "/project".into(),
         remote: None,
         connected: true,
@@ -368,16 +368,16 @@ fn mutation_controls_follow_actual_policy_connection_and_pending_io() {
             ..Default::default()
         },
         sandbox_options: Default::default(),
-    });
+    }));
     assert!(!app.explorer_writable());
     app.workspace.as_mut().unwrap().plan.active = false;
     assert!(
         app.explorer_writable(),
         "Unavailable sandbox options are not an active read-only policy"
     );
-    app.preparing = true;
+    app.workspace.begin_preparation();
     assert!(!app.explorer_writable());
-    app.preparing = false;
+    app.workspace.cancel_preparation();
     app.explorer_state.busy = true;
     assert!(!app.explorer_writable());
     app.explorer_state.busy = false;
@@ -397,7 +397,7 @@ fn project_preparation_cannot_invalidate_an_inflight_explorer_operation() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    let token = app.project_token;
+    let token = app.workspace.preparation_identity();
     app.explorer_state.busy = true;
     app.prepare_project(
         "/project".into(),
@@ -407,8 +407,8 @@ fn project_preparation_cannot_invalidate_an_inflight_explorer_operation() {
         None,
         &ctx,
     );
-    assert!(!app.preparing);
-    assert_eq!(app.project_token, token);
+    assert!(!app.workspace.preparing());
+    assert_eq!(app.workspace.preparation_identity(), token);
     assert!(app.explorer_state.busy);
 }
 
@@ -538,7 +538,7 @@ fn focused_delete_confirmations_submit_one_enter_and_remove_files_or_nonempty_fo
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(Workspace {
+        app.workspace.set_fixture(Some(Workspace {
             root: root.clone(),
             remote: None,
             connected: true,
@@ -548,7 +548,7 @@ fn focused_delete_confirmations_submit_one_enter_and_remove_files_or_nonempty_fo
                 ..Default::default()
             },
             sandbox_options: Default::default(),
-        });
+        }));
         app.explorer_form(Kind::Delete, entry(target.to_str().unwrap(), directory));
         let mut render = |events| {
             let _ = ctx.run(
@@ -598,14 +598,14 @@ fn a_deleted_files_retained_editor_blocks_reusing_its_path() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(Workspace {
+    app.workspace.set_fixture(Some(Workspace {
         root: root.clone(),
         remote: None,
         connected: true,
         ready: true,
         plan: Default::default(),
         sandbox_options: Default::default(),
-    });
+    }));
     app.new_file();
     app.documents[0].path = Some(path.to_string_lossy().into_owned());
     app.documents[0].text = "retained unsaved contents".into();

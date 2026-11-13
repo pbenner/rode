@@ -100,7 +100,7 @@ fn app(root: &std::path::Path) -> (EditorApp, egui::Context) {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(Workspace {
+    app.workspace.set_fixture(Some(Workspace {
         root: root.to_str().unwrap().into(),
         remote: None,
         connected: true,
@@ -110,7 +110,7 @@ fn app(root: &std::path::Path) -> (EditorApp, egui::Context) {
             ..Default::default()
         },
         sandbox_options: Default::default(),
-    });
+    }));
     (app, ctx)
 }
 #[test]
@@ -322,14 +322,14 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
         ..Default::default()
     })
     .unwrap();
-    app.workspace = Some(Workspace {
+    app.workspace.set_fixture(Some(Workspace {
         root: "/not-yet-open".into(),
         remote: Some(remote),
         connected: false,
         ready: false,
         plan: Default::default(),
         sandbox_options: Default::default(),
-    });
+    }));
     app.workbench.panel = Some(Panel::Monitor);
     assert!(!app.monitor_ready());
     app.workbench_tick(&ctx);
@@ -763,7 +763,7 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
     assert_eq!(app.workbench.draft.marp.program, "another-marp");
     assert_ne!(app.workbench.draft.sandbox, app.workbench.prefs.sandbox);
     assert!(
-        !app.preparing,
+        !app.workspace.preparing(),
         "Saving tool settings must not start a sandbox probe"
     );
 }

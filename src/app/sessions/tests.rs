@@ -14,7 +14,7 @@ fn reattachment_accepts_both_user_modes_but_not_other_roots_or_policies() {
         prefix: vec!["sandbox".into(), "--".into()],
         ..Default::default()
     };
-    app.workspace = Some(workspace);
+    app.workspace.set_fixture(Some(workspace));
     for sandboxed in [false, true] {
         let plan = app.terminal_plan(sandboxed);
         let mut info: rode_session::Info = serde_json::from_value(serde_json::json!({
@@ -49,7 +49,7 @@ fn queued_commands_keep_their_policy_and_never_fall_through_to_a_host_shell() {
         prefix: vec!["sandbox".into(), "--".into()],
         ..Default::default()
     };
-    app.workspace = Some(workspace);
+    app.workspace.set_fixture(Some(workspace));
     let project = app.session_plan();
     let host = app.terminal_plan(false);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -99,7 +99,7 @@ fn a_failed_new_terminal_drops_queued_commands_without_an_automatic_retry() {
     let mut app = EditorApp::new(&cc, Startup::default());
     let mut workspace = crate::app::tests::remote_workspace();
     workspace.plan.root = workspace.root.clone();
-    app.workspace = Some(workspace);
+    app.workspace.set_fixture(Some(workspace));
     let plan = app.session_plan();
     let policy = service::fingerprint(&plan);
     let (terminal, stream) = Terminal::stream(&ctx, "Failed shell".into(), |_| {});
@@ -133,18 +133,80 @@ fn quitting_waits_for_a_toggle_and_keeps_the_window_open_if_it_fails() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.sessions.persistence_pending = true;
-    app.quit_terminals(&ctx);
-    assert!(!app.quitting);
+    app.request_exit(&ctx);
+    assert!(!app.exit.closing());
     assert!(app.dialog == Dialog::TerminalExit);
     app.handle_session(Job::Persistence, Err("Host connection lost".into()), &ctx);
-    assert!(!app.quitting);
-    assert!(!app.sessions.quit_waiting);
+    assert!(!app.exit.closing());
+    assert!(!app.exit.waiting());
     assert!(app.dialog == Dialog::None);
     assert!(
         app.notice
             .as_ref()
             .is_some_and(|(message, error, _)| *error && message.contains("Host connection lost"))
     );
+}
+
+#[test]
+fn edits_received_while_exit_waits_for_cleanup_still_require_a_dirty_buffer_decision() {
+    for (approved_discard, later_edit) in [(false, true), (true, true), (true, false)] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        app.documents[0].acknowledge_save("source.txt".into(), "".into(), "rev".into());
+        if approved_discard {
+            app.documents[0].text = "already approved discard".into();
+            app.documents[0].modified = true;
+            app.documents[0].edit_version += 1;
+        }
+        app.sessions.persistence_pending = true;
+        if approved_discard {
+            app.perform(Action::Quit, &ctx); // Explicit Discard in the shared dirty-buffer guard.
+        } else {
+            app.guarded(Action::Quit, &ctx);
+        }
+        assert!(app.exit_pending());
+
+        // An already submitted tool may deliver accepted source edits during cleanup.
+        if later_edit {
+            app.documents[0].text = "late worker edit".into();
+            app.documents[0].modified = true;
+            app.documents[0].edit_version += 1;
+        }
+        app.sessions.persistence_pending = false;
+        app.session_tick(&ctx);
+        assert_eq!(app.exit.closing(), !later_edit);
+        assert!(!app.exit_pending());
+        if later_edit {
+            assert!(matches!(app.pending, Some(Action::Quit)));
+            assert_eq!(app.documents[0].text, "late worker edit");
+            // Keep editing cancels this quit; an idle tick cannot restart it.
+            app.pending = None;
+            app.session_tick(&ctx);
+            assert!(!app.exit.closing());
+        }
+    }
+}
+
+#[test]
+fn transport_loss_cannot_turn_a_missing_persistence_acknowledgement_into_a_clean_exit() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    app.sessions.persistence_pending = true;
+    app.request_exit(&ctx);
+    assert!(app.exit_pending());
+    app.detach_ssh(&ctx);
+    app.session_tick(&ctx);
+    assert!(!app.exit_pending());
+    assert!(!app.exit.closing());
+    assert!(app.workspace.is_none());
+    assert!(app.notice.as_ref().is_some_and(|(message, error, _)| {
+        *error && message.contains("Workspace changed while closing")
+    }));
 }
 
 #[test]
@@ -157,8 +219,8 @@ fn quit_still_guards_unsaved_source_before_any_terminal_cleanup() {
     app.documents[0].modified = true;
     app.guarded(Action::Quit, &ctx);
     assert!(matches!(app.pending, Some(Action::Quit)));
-    assert!(!app.quitting);
-    assert!(!app.sessions.quit_waiting);
+    assert!(!app.exit.closing());
+    assert!(!app.exit.waiting());
     assert_eq!(app.documents[0].text, "keep these edits");
 }
 
@@ -167,7 +229,8 @@ fn disconnect_waits_for_terminal_startup_and_persistence_changes() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     for starting in [true, false] {
         app.sessions.starting = starting;
         app.sessions.persistence_pending = !starting;
@@ -175,7 +238,11 @@ fn disconnect_waits_for_terminal_startup_and_persistence_changes() {
         app.disconnect_ssh(&ctx);
         assert!(app.workspace.as_ref().unwrap().connected);
         assert_eq!(app.workers.generation(), generation);
-        assert!(!app.connection_cancel.load(Ordering::Acquire));
+        assert!(
+            !app.workspace
+                .connection_cancellation()
+                .load(Ordering::Acquire)
+        );
     }
 }
 
@@ -194,7 +261,7 @@ fn one_terminal_creation_menu_requires_a_mode_without_changing_the_current_shell
                     workspace.remote = None;
                     workspace.plan.active = active;
                     workspace.plan.requested = true;
-                    app.workspace = Some(workspace);
+                    app.workspace.set_fixture(Some(workspace));
                 }
                 let (terminal, _stream) =
                     Terminal::stream(&ctx, "Existing shell / NORMAL MODE".into(), |_| {});

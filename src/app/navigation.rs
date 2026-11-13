@@ -32,16 +32,12 @@ impl Pane {
 /// Layout measurements are rebuilt each frame; remembered focus survives asynchronous opens.
 pub(super) struct State {
     pub bindings: bindings::Bindings,
-    pub editing: editing::State,
     pub active: Pane,
     pub used: bool,
     pending: Option<Pane>,
     /// Focus requests target a native host so another tool window cannot consume them.
     pending_viewport: egui::ViewportId,
     leader: Option<Instant>,
-    // Commands following source input must join the source replay queue after
-    // the editor has translated that input, preserving order across frames.
-    source_tail: Vec<egui::Event>,
     pub zoom: Option<Pane>,
     pub widths: [Option<f32>; 2],
     rects: [Option<egui::Rect>; 5],
@@ -54,13 +50,11 @@ impl State {
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         Self {
             bindings: bindings::Bindings::load(storage),
-            editing: Default::default(),
             active: Pane::Editor,
             used: false,
             pending: None,
             pending_viewport: egui::ViewportId::ROOT,
             leader: None,
-            source_tail: Vec::new(),
             zoom: None,
             widths: [None; 2],
             rects: [None; 5],
@@ -99,6 +93,28 @@ impl State {
     pub fn accepts_editor_focus(&self) -> bool {
         !self.used || self.active == Pane::Editor
     }
+    /// A partial prefix has no authority after its source context is replaced.
+    pub(super) fn cancel_input(&mut self) {
+        self.leader = None;
+    }
+    /// Identify navigation commands before source edits are handed to TextEdit.
+    pub(super) fn command_event(&self, event: &egui::Event, modifiers: egui::Modifiers) -> bool {
+        let prefix = self.bindings.prefix(false);
+        match event {
+            egui::Event::Key {
+                key,
+                modifiers,
+                pressed: true,
+                ..
+            } => {
+                prefix.matches(*key, *modifiers, false)
+                    || self.leader.is_some()
+                    || self.bindings.action(*key, *modifiers, false).is_some()
+            }
+            egui::Event::Cut => prefix.key == Key::X && modifiers.matches_exact(prefix.modifiers),
+            _ => false,
+        }
+    }
     /// Consume only command events, before TextEdit and the PTY see them. In
     /// particular, a prefix is not a terminal mode that remaps ordinary typing.
     fn input(&mut self, ctx: &egui::Context) -> Vec<NavAction> {
@@ -111,35 +127,11 @@ impl State {
         let mut actions = vec![];
         let terminal_focus = Terminal::focused(ctx);
         let prefix = self.bindings.prefix(terminal_focus);
-        let source_focus = self.editing.has_focus(ctx);
-        self.source_tail.clear();
         ctx.input_mut(|input| {
             let cut_prefix=prefix.key==Key::X && (input.modifiers.matches_exact(prefix.modifiers)||input.events.iter().any(|event|matches!(event,egui::Event::Key {key:Key::X,modifiers,..} if modifiers.matches_exact(prefix.modifiers))));
             let mut swallow_text = self.leader.is_some();
-            let mut source_input = false;
-            let mut defer_tail = false;
             input.events.retain(|event| {
-                let command = match event {
-                    egui::Event::Key { key, modifiers, pressed: true, .. } =>
-                        prefix.matches(*key, *modifiers, false)
-                            || self.leader.is_some()
-                            || self.bindings.action(*key, *modifiers, false).is_some(),
-                    egui::Event::Cut => cut_prefix && !terminal_focus,
-                    _ => false,
-                };
-                if defer_tail || (source_focus && source_input && command) {
-                    defer_tail = true;
-                    // Cut carries no modifiers. Preserve the already recognized
-                    // prefix even if Ctrl is released before this tail replays.
-                    self.source_tail.push(if command && matches!(event, egui::Event::Cut) {
-                        egui::Event::Key {
-                            key: prefix.key, physical_key: None, pressed: true,
-                            repeat: false, modifiers: prefix.modifiers,
-                        }
-                    } else { event.clone() });
-                    return false;
-                }
-                let retain = match event {
+                match event {
                 egui::Event::Key {
                     key,
                     modifiers,
@@ -186,15 +178,7 @@ impl State {
                 | egui::Event::Cut
                 | egui::Event::Paste(_) => !swallow_text,
                 _ => true,
-                };
-                source_input |= retain && matches!(event,
-                    egui::Event::Key { pressed: true, .. }
-                    | egui::Event::Text(_)
-                    | egui::Event::Paste(_)
-                    | egui::Event::Cut
-                    | egui::Event::Copy
-                    | egui::Event::Ime(_));
-                retain
+                }
             });
         });
         if self.leader.is_some() {
@@ -241,7 +225,7 @@ impl EditorApp {
             || self.dialog != Dialog::None
             || self.pending.is_some()
             || self.workbench_modal()
-            || self.session_exit_pending()
+            || self.exit_pending()
             || self.vaults.locking
             || egui::Popup::is_any_open(ctx)
         {
@@ -256,7 +240,7 @@ impl EditorApp {
     pub(super) fn navigate(&mut self, action: NavAction, ctx: &egui::Context) {
         use NavAction::*;
         self.navigation.used = true;
-        self.navigation.editing.cancel_sequence();
+        self.input.editing.cancel_sequence();
         match action {
             Left | Right | Up | Down => {
                 let current = self.navigation.active;
@@ -600,7 +584,7 @@ impl EditorApp {
         let modal = self.dialog != Dialog::None
             || self.pending.is_some()
             || self.workbench_modal()
-            || self.session_exit_pending();
+            || self.exit_pending();
         if self.navigation.modal && !modal {
             self.navigation.pending = Some(self.navigation.active);
             self.navigation.pending_viewport = ctx.viewport_id();

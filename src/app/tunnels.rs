@@ -341,7 +341,7 @@ impl EditorApp {
         };
         let mut profile = remote.profile.clone();
         // Retain the current folder and explicit project policy in the new profile.
-        if let Some(workspace) = &self.workspace {
+        if let Some(workspace) = self.workspace.as_ref() {
             profile.root = workspace.root.clone();
             profile.sandbox = workspace.sandbox_options.clone();
         }

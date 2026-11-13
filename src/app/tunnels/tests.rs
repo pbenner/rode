@@ -13,7 +13,8 @@ fn new_tunnel_setup_allows_automatic_credentials_without_selecting_a_key_filenam
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         if remote {
-            app.workspace = Some(crate::app::tests::remote_workspace());
+            app.workspace
+                .set_fixture(Some(crate::app::tests::remote_workspace()));
         }
         app.dialog = Dialog::Tunnels;
         app.tunnels.page = Page::New;
@@ -117,7 +118,8 @@ fn tunnel_host_selection_supports_local_work_and_never_falls_back_from_remote() 
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     let workspace = app.workspace.as_mut().unwrap();
     workspace.ready = false;
     workspace.plan.active = true;
@@ -244,7 +246,7 @@ fn tunnel_addresses_name_the_service_host_and_support_older_remote_services() {
         port: 22022,
         host_key_alias: "compute-alias".into(),
     }));
-    app.workspace = Some(workspace);
+    app.workspace.set_fixture(Some(workspace));
     app.dialog = Dialog::Tunnels;
     app.tunnels.available = vec![Info {
         id: "remote-tunnel".into(),
@@ -360,7 +362,8 @@ fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_a
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(crate::app::tests::remote_workspace());
+        app.workspace
+            .set_fixture(Some(crate::app::tests::remote_workspace()));
         app.tunnel_tick(&ctx);
         assert!(
             app.tunnels.pending.is_none(),
@@ -493,7 +496,8 @@ fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.dialog = Dialog::Tunnels;
     app.tunnels.generation = Some(app.workers.generation());
     click(&mut app, &ctx, "New tunnel");
@@ -556,7 +560,8 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                 let mut app = EditorApp::new(&cc, Startup::default());
                 app.select_theme(theme, &ctx);
                 ctx.set_zoom_factor(scale);
-                app.workspace = Some(crate::app::tests::remote_workspace());
+                app.workspace
+                    .set_fixture(Some(crate::app::tests::remote_workspace()));
                 app.dialog = Dialog::Tunnels;
                 app.tunnels.available = (0..8)
                     .map(|n| Info {
@@ -698,7 +703,8 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         if remote {
-            app.workspace = Some(crate::app::tests::remote_workspace());
+            app.workspace
+                .set_fixture(Some(crate::app::tests::remote_workspace()));
         }
         app.dialog = Dialog::Tunnels;
         app.tunnels.page = Page::New;
@@ -717,7 +723,7 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
         cc.storage = Some(&storage);
         let mut reopened = EditorApp::new(&cc, Startup::default());
         if remote {
-            reopened.workspace = app.workspace.take();
+            reopened.workspace.set_fixture(app.workspace.take_fixture());
         }
         reopened.tunnel_tick(&ctx); // Workspace generation changes retain the library.
         reopened.dialog = Dialog::Tunnels;
@@ -792,7 +798,8 @@ fn saved_tunnel_loads_are_bound_to_the_selected_host_account_port_and_config() {
     ui_probe::install_at(&ctx, path.clone());
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.save_tunnel_configuration(saved_spec(), false);
     let id = app.tunnels.saved.entries.keys().next().unwrap().clone();
     let profile = app
@@ -886,7 +893,8 @@ fn network_listener_choice_survives_saving_and_offers_direct_connection_details(
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         if remote {
-            app.workspace = Some(crate::app::tests::remote_workspace());
+            app.workspace
+                .set_fixture(Some(crate::app::tests::remote_workspace()));
         }
         app.dialog = Dialog::Tunnels;
         app.tunnels.page = Page::New;
@@ -1028,7 +1036,8 @@ fn hidden_status_refreshes_are_throttled_and_do_not_occupy_setup_actions() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.tunnels.generation = Some(app.workers.generation());
     let (tx, rx) = mpsc::channel();
     app.tunnels.background = Some(rx);
@@ -1079,7 +1088,8 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.tunnels.generation = Some(app.workers.generation());
     app.tunnels.available = vec![observed_tunnel(Status::Connected)];
     app.tunnels.observation = Some(Ok(()));

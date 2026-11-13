@@ -9,7 +9,7 @@ pub(in crate::app) enum Job {
         remote: bool,
         options: sandbox::Options,
         keep_buffers: bool,
-        token: u64,
+        token: workspace::PreparationId,
         documents_at_start: Vec<(u64, u64)>,
         /// Startup restores saved host/project grants, optionally forcing sandboxing on.
         restore_saved: Option<bool>,
@@ -19,7 +19,7 @@ pub(in crate::app) enum Job {
     /// Local CLI file opened without inferring an unsafe whole-home project.
     StandaloneFile {
         path: String,
-        token: u64,
+        token: workspace::PreparationId,
     },
     Browse {
         remote: bool,

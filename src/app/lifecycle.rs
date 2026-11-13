@@ -5,11 +5,96 @@
 //! lifetime without a repeated exit prompt.
 use super::*;
 
+mod exit;
+pub(super) use exit::Exit;
+
+impl EditorApp {
+    /// Report an application quit currently waiting for owned lifetime acknowledgements.
+    pub(super) fn exit_pending(&self) -> bool {
+        self.exit.waiting()
+    }
+    /// Cancel a waiting exit and retain its failure as a visible notice instead of silently closing.
+    pub(super) fn abort_exit(&mut self, error: String, ctx: &egui::Context) {
+        if self.exit.waiting() {
+            self.exit.cancel();
+            self.dialog = Dialog::None;
+            self.focus_editor(ctx);
+        }
+        self.notify(error, true);
+    }
+    /// Include pending terminal/runtime creation, lifetime changes and cleanup in the exit barrier.
+    pub(super) fn runtime_work_pending(&self) -> bool {
+        self.exit_readiness().runtime_pending()
+    }
+    fn final_quit(&mut self, ctx: &egui::Context) {
+        self.exit.close();
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+    }
+    /// Release foreground views/controllers and wait for lifetime acknowledgements before
+    /// normal exit; persistent host work follows its existing acknowledged policy.
+    pub(super) fn request_exit(&mut self, ctx: &egui::Context) {
+        if !self.debugger.change_pending() {
+            self.leave_debugger();
+        }
+        self.cancel_agent_installation();
+        let readiness = self.exit_readiness();
+        let dirty_versions = self
+            .documents
+            .iter()
+            .filter(|doc| doc.dirty())
+            .map(|doc| (doc.id, doc.edit_version));
+        if self.exit.request(readiness, dirty_versions) {
+            self.final_quit(ctx);
+        } else {
+            self.set_dialog(Dialog::TerminalExit);
+        }
+    }
+    /// Keep pending exit cleanup visible and expose failures while the window still owns its work.
+    pub(super) fn terminal_exit_dialog(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+        ui.heading("Closing RODE");
+        ui.spinner();
+        ui.label(if self.agent_installation_pending() {
+            "Finishing agent setup/lifetime changes and cleaning installation files…"
+        } else {
+            "Finishing submitted work and runtime lifetime changes…"
+        });
+        ui.small("RODE will close automatically when it completes.");
+    }
+    /// Advance only an existing quit intent once all domain owners acknowledge completion.
+    pub(super) fn advance_exit(&mut self, ctx: &egui::Context) -> bool {
+        if !self.exit.waiting() || self.exit_readiness().pending() {
+            return false;
+        }
+        if self
+            .documents
+            .iter()
+            .any(|doc| doc.dirty() && !self.exit.discard_approved(doc.id, doc.edit_version))
+        {
+            self.exit.cancel();
+            self.dialog = Dialog::None;
+            self.guarded(Action::Quit, ctx);
+        } else {
+            self.request_exit(ctx);
+        }
+        true
+    }
+    /// Aggregate narrow domain readiness without transferring their cleanup owners.
+    pub(super) fn exit_readiness(&self) -> exit::Readiness {
+        exit::Readiness {
+            terminals: self.sessions.lifetime_pending(),
+            runtimes: self.sessions.runtime_shutdown_pending(),
+            notebooks: self.notebook_lifetime_pending(),
+            debugger: self.debugger.lifetime_pending(),
+            installation: self.agent_installation_pending(),
+        }
+    }
+}
+
 impl EditorApp {
     /// Cancel native close until the shared quit guards accept it. Wait for save
     /// acknowledgements before retrying a pending quit, then honor runtime/encrypted cleanup.
     pub(super) fn handle_close_request(&mut self, ctx: &egui::Context) {
-        if self.quitting {
+        if self.exit.closing() {
             return;
         }
         let requested = ctx.input(|input| input.viewport().close_requested());
@@ -61,7 +146,7 @@ pub(in crate::app) mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
         let output = native_close(&mut app, &ctx);
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert!(matches!(app.pending, Some(Action::Quit)));
         assert!(
             output.viewport_output[&egui::ViewportId::ROOT]
@@ -73,11 +158,11 @@ pub(in crate::app) mod tests {
         app.pending = None;
         app.vaults.needs_lock = true;
         native_close(&mut app, &ctx);
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert!(app.notice.as_ref().unwrap().0.contains("encrypted"));
         app.vaults.needs_lock = false;
         native_close(&mut app, &ctx);
-        assert!(app.quitting);
+        assert!(app.exit.closing());
     }
 
     #[test]
@@ -89,12 +174,12 @@ pub(in crate::app) mod tests {
         app.documents[0].text = "submitted".into();
         app.documents[0].saving = true;
         native_close(&mut app, &ctx);
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert!(matches!(app.pending, Some(Action::Quit)));
 
         app.documents[0].acknowledge_save("saved.txt".into(), "submitted".into(), "rev".into());
         let _ = ctx.run(Default::default(), |ctx| app.handle_close_request(ctx));
-        assert!(app.quitting);
+        assert!(app.exit.closing());
         assert!(app.pending.is_none());
     }
 
@@ -128,7 +213,7 @@ pub(in crate::app) mod tests {
                 }
             }
             let _ = ctx.run(Default::default(), |ctx| app.handle_close_request(ctx));
-            assert!(!app.quitting, "{outcome}");
+            assert!(!app.exit.closing(), "{outcome}");
             assert_eq!(app.pending.is_some(), outcome != "cancelled", "{outcome}");
         }
     }
@@ -143,12 +228,12 @@ pub(in crate::app) mod tests {
         native_close(&mut app, &ctx);
         app.documents[0].acknowledge_save("one.txt".into(), "".into(), "rev".into());
         let _ = ctx.run(Default::default(), |ctx| app.handle_close_request(ctx));
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert!(app.pending.is_some());
         app.documents[1].acknowledge_save("two.txt".into(), "".into(), "rev".into());
         app.vaults.needs_lock = true;
         let output = native_close(&mut app, &ctx);
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert!(app.notice.as_ref().unwrap().0.contains("encrypted"));
         assert!(
             output.viewport_output[&egui::ViewportId::ROOT]

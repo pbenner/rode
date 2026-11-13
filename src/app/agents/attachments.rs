@@ -358,7 +358,7 @@ mod tests {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(Workspace {
+        app.workspace.set_fixture(Some(Workspace {
             root: "/remote/project".into(),
             remote: Some(
                 crate::ssh::Remote::new(crate::ssh::Profile {
@@ -371,7 +371,7 @@ mod tests {
             ready: false,
             plan: Default::default(),
             sandbox_options: Default::default(),
-        });
+        }));
         app.poll_agents(&ctx);
         app.attach_agent_file(path.to_string_lossy().into(), true, &ctx);
         let deadline = Instant::now() + Duration::from_secs(5);

@@ -26,6 +26,9 @@ fn notebook_shutdown_ownership_survives_view_replacement_and_reports_failures() 
         "shutdown_failure",
         "reload_persistent",
         "reload_foreground",
+        "leave_workspace",
+        "leave_disabled",
+        "leave_vault",
     ] {
         let root = tempfile::tempdir().unwrap();
         let wrapper = root.path().join("helper.py");
@@ -224,6 +227,48 @@ fn notebook_shutdown_probe() {
     )
     .unwrap();
     prepared.recv_timeout(Duration::from_secs(5)).unwrap();
+    if case.starts_with("leave_") {
+        let until = Instant::now() + Duration::from_secs(10);
+        while kernel.pending() {
+            kernel.poll();
+            assert!(Instant::now() < until, "Initial attachment did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.documents[0].notebook.as_mut().unwrap().kernel = Some(kernel);
+        let reason = match case.as_str() {
+            "leave_workspace" => workspace::LeaveReason::ProjectChanged,
+            "leave_disabled" => workspace::LeaveReason::NotebooksDisabled,
+            "leave_vault" => workspace::LeaveReason::VaultLock,
+            _ => unreachable!(),
+        };
+        app.leave_notebooks(reason);
+        let stopping = reason == workspace::LeaveReason::VaultLock;
+        assert_eq!(app.notebook_shutdowns.pending(), stopping);
+        loop {
+            app.poll_notebooks(&ctx);
+            let infos = host.infos();
+            if stopping {
+                if !app.notebook_shutdowns.pending() {
+                    assert!(
+                        infos.is_empty(),
+                        "Stop was acknowledged before host cleanup"
+                    );
+                    break;
+                }
+            } else if infos
+                .iter()
+                .any(|info| info.id == host.id && info.alive && info.persistent && !info.attached)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < until,
+                "Typed leave policy did not reach the host"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        return;
+    }
     if case.starts_with("reload_") {
         let until = Instant::now() + Duration::from_secs(10);
         while kernel.pending() {
@@ -240,14 +285,14 @@ fn notebook_shutdown_probe() {
                 std::thread::sleep(Duration::from_millis(5));
             }
         }
-        app.workspace = Some(crate::app::Workspace {
+        app.workspace.set_fixture(Some(crate::app::Workspace {
             root: host.plan.root.clone(),
             remote: None,
             connected: true,
             ready: true,
             plan: host.plan.clone(),
             sandbox_options: Default::default(),
-        });
+        }));
         let doc = &mut app.documents[0];
         let path = root
             .path()
@@ -306,7 +351,7 @@ fn notebook_shutdown_probe() {
     let failure = case == "shutdown_failure";
     let blocked = BlockedHelper::new(primary.parent().unwrap(), failure);
     app.toggle_notebook_source(&ctx);
-    assert!(app.sessions_need_exit_check());
+    assert!(app.runtime_work_pending());
     blocked.wait();
     if case == "close_tab" {
         app.perform(crate::app::Action::CloseTab(app.documents[0].id), &ctx);
@@ -322,12 +367,12 @@ fn notebook_shutdown_probe() {
         assert!(!app.documents[0].notebook.as_ref().unwrap().source_mode);
     }
     assert!(
-        app.sessions_need_exit_check(),
+        app.runtime_work_pending(),
         "Replacing a view discarded its pending shutdown"
     );
-    app.quit_terminals(&ctx);
+    app.request_exit(&ctx);
     assert!(
-        !app.quitting,
+        !app.exit.closing(),
         "Window closed before the host accepted shutdown"
     );
     assert!(
@@ -343,8 +388,8 @@ fn notebook_shutdown_probe() {
         std::thread::sleep(Duration::from_millis(5));
     }
     if failure {
-        assert!(!app.quitting);
-        assert!(!app.session_exit_pending());
+        assert!(!app.exit.closing());
+        assert!(!app.exit_pending());
         assert!(
             app.notice.as_ref().is_some_and(
                 |(message, error, _)| *error && message.contains("RODE_SESSION_HELPER")
@@ -361,6 +406,6 @@ fn notebook_shutdown_probe() {
             "Shutdown was acknowledged before the runtime disappeared"
         );
         app.session_tick(&ctx);
-        assert!(app.quitting);
+        assert!(app.exit.closing());
     }
 }

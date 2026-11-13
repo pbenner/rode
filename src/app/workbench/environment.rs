@@ -42,13 +42,11 @@ impl EditorApp {
     pub(in crate::app) fn sync_project_environment(&mut self) {
         let mut settings = self.workbench.prefs.environment.clone();
         settings.mise &= self.feature(crate::extensions::Feature::Mise);
-        if let Some(workspace) = &mut self.workspace {
-            workspace.plan.environment = if settings.mise {
-                settings
-            } else {
-                Default::default()
-            };
-        }
+        self.workspace.set_environment(if settings.mise {
+            settings
+        } else {
+            Default::default()
+        });
     }
 
     pub(in crate::app) fn request_mise(

@@ -71,7 +71,7 @@ impl EditorApp {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
             if let Err(error) = result {
-                self.abort_session_quit(error, ctx);
+                self.abort_exit(error, ctx);
             }
         }
         if let Some(result) = self

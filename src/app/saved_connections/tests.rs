@@ -396,7 +396,7 @@ fn profile_save_survives_workspace_reset_without_claiming_a_newer_forms_identity
     app.connection_profiles.saving = true;
     app.connection_profiles.select(saved[1].clone(), true);
     app.connection_profiles.draft.user = "unsaved-login".into();
-    app.reset_workspace();
+    app.reset_workspace(workspace::LeaveReason::ProjectChanged);
     app.workers
         .profiles(&ctx)
         .send(ProfileEvent::Saved {

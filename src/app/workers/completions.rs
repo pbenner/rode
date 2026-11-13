@@ -11,7 +11,7 @@ impl EditorApp {
         match &job {
             Job::List(_, epoch) if *epoch != self.explorer_state.epoch => return,
             Job::Prepare { token, .. } | Job::StandaloneFile { token, .. }
-                if *token != self.project_token =>
+                if !self.workspace.finish_preparation(*token) =>
             {
                 return;
             }
@@ -36,7 +36,7 @@ impl EditorApp {
             }
             Job::BrowseFiles { .. } => self.file_browser.loading = false,
             Job::AgentAttachment { .. } => {}
-            Job::Prepare { .. } | Job::StandaloneFile { .. } => self.preparing = false,
+            Job::Prepare { .. } | Job::StandaloneFile { .. } => {}
             Job::Browse { .. } => self.project_picker.loading = false,
             Job::List(path, _) => {
                 self.explorer_state.loading.remove(path);
@@ -120,6 +120,7 @@ impl EditorApp {
                 }
                 Job::StandaloneFile { path, .. } => self.open_file(path, ctx),
                 Job::Prepare {
+                    token,
                     remote,
                     options,
                     keep_buffers,
@@ -133,12 +134,16 @@ impl EditorApp {
                         .filter(|d| d.dirty())
                         .any(|d| !documents_at_start.contains(&(d.id, d.edit_version)));
                     if !keep_buffers && new_edits {
-                        self.pending = Some(Action::PreparedProject {
-                            response: Box::new(response),
-                            remote,
-                            options,
-                            open_file,
-                        });
+                        self.workspace.hold_prepared(
+                            token,
+                            workspace::Prepared {
+                                response,
+                                remote,
+                                options,
+                                open_file,
+                            },
+                        );
+                        self.pending = Some(Action::PreparedProject { id: token });
                     } else {
                         self.commit_project(
                             response,
@@ -157,10 +162,7 @@ impl EditorApp {
                 }
                 Job::Explorer(_) => unreachable!("Explorer results are handled above"),
                 Job::List(path, _) => {
-                    if let Some(workspace) = &mut self.workspace
-                        && workspace.root == path
-                    {
-                        workspace.root.clone_from(&response.path);
+                    if self.workspace.canonicalize_root(&path, &response.path) {
                         self.explorer_state.expanded.insert(response.path.clone());
                     }
                     self.explorer_state.loaded(path, response);

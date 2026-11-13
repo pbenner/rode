@@ -45,6 +45,7 @@ mod frame;
 mod git_gutter;
 mod icons;
 mod image_view;
+mod input;
 mod latex_tools;
 mod layout;
 mod lifecycle;
@@ -134,17 +135,14 @@ pub use documents::Document;
 /// ownership or discarding state.
 enum Action {
     PreparedProject {
-        response: Box<Response>,
-        remote: bool,
-        options: sandbox::Options,
-        open_file: Option<String>,
+        id: workspace::PreparationId,
     },
     Project {
         path: String,
         remote: bool,
         options: sandbox::Options,
     },
-    Remote(Profile),
+    Remote(Box<Profile>),
     CloseTab(u64),
     Quit,
     LockEncrypted,
@@ -187,11 +185,12 @@ pub struct EditorApp {
     font_save_pending: bool,
     agents: agents::Agents,
     tabs: chrome::Tabs,
+    input: input::Router,
     navigation: navigation::State,
     workbench: Workbench,
     debugger: debugging::State,
     extensions: extensions::Extensions,
-    workspace: Option<Workspace>,
+    workspace: workspace::Controller,
     documents: documents::Documents,
     git_gutter: git_gutter::State,
     /// Cleanup ownership survives notebook view replacement and tab removal.
@@ -203,8 +202,6 @@ pub struct EditorApp {
     sessions: sessions::Sessions,
     tunnels: tunnels::Tunnels,
     ssh_master: Option<Terminal>,
-    preparing: bool,
-    project_token: u64,
     file_browser: file_browser::State,
     project_picker: project_dialog::State,
     sandbox_defaults: sandbox::Options,
@@ -224,8 +221,7 @@ pub struct EditorApp {
     marp_overwrite: bool,
     connection_profiles: saved_connections::State,
     pending: Option<Action>,
-    quitting: bool,
-    connection_cancel: Arc<AtomicBool>,
+    exit: lifecycle::Exit,
     notice: Option<(String, bool, Instant)>,
     status: String,
     font_size: f32,
@@ -310,11 +306,12 @@ impl EditorApp {
             font_save_pending: false,
             agents: agents::Agents::load(storage),
             tabs: Default::default(),
+            input: Default::default(),
             navigation: navigation::State::load(storage),
             workbench: Workbench::load(storage),
             debugger: Default::default(),
             extensions: extensions::Extensions::load(storage),
-            workspace: None,
+            workspace: Default::default(),
             documents: Default::default(),
             git_gutter: Default::default(),
             notebook_shutdowns: Default::default(),
@@ -324,8 +321,6 @@ impl EditorApp {
             sessions: Default::default(),
             tunnels: tunnels::Tunnels::load(storage, &mut warnings),
             ssh_master: None,
-            preparing: false,
-            project_token: 0,
             file_browser: Default::default(),
             project_picker: Default::default(),
             sandbox_defaults: storage
@@ -348,8 +343,7 @@ impl EditorApp {
             marp_overwrite: false,
             connection_profiles: saved_connections::State::new(),
             pending: None,
-            quitting: false,
-            connection_cancel: Arc::new(AtomicBool::new(false)),
+            exit: Default::default(),
             notice: None,
             status: "Ready".into(),
             font_size: storage
@@ -468,8 +462,7 @@ impl EditorApp {
             self.notify(error.to_string(), true);
             return;
         }
-        self.project_token += 1;
-        self.preparing = true;
+        let token = self.workspace.begin_preparation();
         self.status = if remote {
             "Opening SSH project…"
         } else {
@@ -489,7 +482,7 @@ impl EditorApp {
                 remote,
                 options,
                 keep_buffers,
-                token: self.project_token,
+                token,
                 documents_at_start: self
                     .documents
                     .iter()
@@ -535,9 +528,16 @@ impl EditorApp {
             .vaults
             .take_project(&response.path, connection.as_ref());
         if remote || (keep_buffers && self.workspace.as_ref().is_some_and(|w| w.remote.is_none())) {
-            self.clear_project(documents::Retention::from(keep_buffers));
+            self.clear_project(
+                documents::Retention::from(keep_buffers),
+                if keep_buffers {
+                    workspace::LeaveReason::PolicyChanged
+                } else {
+                    workspace::LeaveReason::ProjectChanged
+                },
+            );
         } else {
-            self.reset_workspace();
+            self.reset_workspace(workspace::LeaveReason::ProjectChanged);
         }
         let connection = connection.map(|mut r| {
             r.profile.root = response.path.clone();
@@ -545,14 +545,12 @@ impl EditorApp {
             self.connection_profiles.adopt(r.profile.clone());
             r
         });
-        self.workspace = Some(Workspace {
-            root: response.path.clone(),
-            remote: connection,
-            connected: true,
-            ready: true,
-            plan: plan.clone(),
-            sandbox_options: options.clone(),
-        });
+        self.workspace.activate(
+            response.path.clone(),
+            connection,
+            plan.clone(),
+            options.clone(),
+        );
         self.vaults.active = encrypted;
         self.vaults.lost = false;
         self.vaults.released = false;
@@ -564,7 +562,6 @@ impl EditorApp {
             .directories
             .insert(response.path, response.entries);
         self.explorer_state.tree_dirty = true;
-        self.preparing = false;
         self.load_project_tools(ctx);
         if let Some(draft) = settings_draft {
             self.restore_settings_draft(draft);
@@ -678,7 +675,7 @@ impl EditorApp {
         if reconnect {
             self.leave_debugger();
             self.stop_latex();
-            self.connection_cancel.store(true, Ordering::Release);
+            self.workspace.cancel_connection();
             self.terminal = None;
             self.release_workspace_transport();
             self.workers.invalidate_workspace();
@@ -686,19 +683,13 @@ impl EditorApp {
             self.explorer_state.loading.clear();
             self.documents.reconnecting();
         } else {
-            self.reset_workspace();
+            self.reset_workspace(workspace::LeaveReason::ProjectChanged);
         }
-        self.workspace = Some(Workspace {
-            root: profile.root.clone(),
-            remote: Some(remote.clone()),
-            connected: false,
-            ready: false,
-            plan: sandbox::Plan {
-                root: profile.root.clone(),
-                ..Default::default()
-            },
-            sandbox_options: profile.sandbox.clone(),
-        });
+        self.workspace.connecting(
+            remote.clone(),
+            profile.root.clone(),
+            profile.sandbox.clone(),
+        );
         match Terminal::remote(ctx, &remote) {
             Ok(terminal) => {
                 let alive = terminal.alive.clone();
@@ -706,8 +697,7 @@ impl EditorApp {
                 self.show_terminal = true;
                 self.terminal_intent();
                 self.status = "Connecting · complete any prompts in the terminal".into();
-                let cancel = Arc::new(AtomicBool::new(false));
-                self.connection_cancel = cancel.clone();
+                let cancel = self.workspace.begin_connection();
                 let replies = self.workers.workspace(ctx);
                 let vault_work = self.vaults.work();
                 std::thread::spawn(move || {
@@ -754,7 +744,7 @@ impl EditorApp {
         if matches!(
             action,
             Action::Project { .. } | Action::Remote(_) | Action::PreparedProject { .. }
-        ) && self.sessions_need_exit_check()
+        ) && self.runtime_work_pending()
         {
             self.notify("Wait for runtime startup or submitted state changes to be acknowledged before switching projects.",false);
             return;
@@ -784,15 +774,17 @@ impl EditorApp {
                         .filter(|w| w.remote.is_some() == *remote)
                         .and_then(|w| w.remote.as_ref()),
                 ),
-                Action::PreparedProject {
-                    response, remote, ..
-                } => !client.matches(
-                    &response.path,
-                    self.workspace
-                        .as_ref()
-                        .filter(|w| w.remote.is_some() == *remote)
-                        .and_then(|w| w.remote.as_ref()),
-                ),
+                Action::PreparedProject { id } => {
+                    self.workspace.prepared(*id).is_some_and(|prepared| {
+                        !client.matches(
+                            &prepared.response.path,
+                            self.workspace
+                                .as_ref()
+                                .filter(|w| w.remote.is_some() == prepared.remote)
+                                .and_then(|w| w.remote.as_ref()),
+                        )
+                    })
+                }
                 _ => false,
             };
             if leaves_project && self.vaults.staged.is_none() {
@@ -825,12 +817,18 @@ impl EditorApp {
     /// dirty-buffer, encrypted-mount or runtime-lifetime checks to reach this method.
     fn perform(&mut self, action: Action, ctx: &egui::Context) {
         match action {
-            Action::PreparedProject {
-                response,
-                remote,
-                options,
-                open_file,
-            } => self.commit_project(*response, remote, options, false, open_file, ctx),
+            Action::PreparedProject { id } => {
+                if let Some(prepared) = self.workspace.take_prepared(id) {
+                    self.commit_project(
+                        prepared.response,
+                        prepared.remote,
+                        prepared.options,
+                        false,
+                        prepared.open_file,
+                        ctx,
+                    );
+                }
+            }
             Action::Project {
                 path,
                 remote,
@@ -838,7 +836,7 @@ impl EditorApp {
             } => self.prepare_project(path, options, remote, false, None, ctx),
             Action::Remote(profile) => {
                 let resume = self.can_resume_ssh(&profile);
-                self.connect(profile, ctx, resume);
+                self.connect(*profile, ctx, resume);
             }
             Action::CloseTab(id) => {
                 if self.documents.iter().any(|doc| {
@@ -858,8 +856,11 @@ impl EditorApp {
 
             Action::Quit => {
                 if self.vaults.active.is_some() && self.vaults.lost && self.vaults.released {
-                    self.clear_project(documents::Retention::Discard);
-                    self.quit_terminals(ctx);
+                    self.clear_project(
+                        documents::Retention::Discard,
+                        workspace::LeaveReason::ProjectChanged,
+                    );
+                    self.request_exit(ctx);
                 } else if self.vaults.active.is_some() {
                     self.lock_encrypted(true, ctx);
                 } else if self.vaults.pending.is_some()
@@ -871,7 +872,7 @@ impl EditorApp {
                         true,
                     );
                 } else {
-                    self.quit_terminals(ctx);
+                    self.request_exit(ctx);
                 }
             }
             Action::LockEncrypted => self.lock_encrypted(false, ctx),
@@ -1099,92 +1100,6 @@ impl EditorApp {
             self.focus_editor(ctx);
         }
     }
-
-    /// Route global editor actions after honoring modal barriers and native terminal focus.
-    fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.pending.is_some()
-            || self.workbench_modal()
-            || self.session_exit_pending()
-            || self.vaults.locking
-        {
-            return;
-        }
-        if self.terminal_any_visible()
-            && self.tool_viewport(workbench::ToolTab::Terminal) == ctx.viewport_id()
-            && self.dialog == Dialog::None
-            && !egui::Popup::is_any_open(ctx)
-        {
-            Terminal::prepare_input(ctx);
-        }
-        let terminal_focus = Terminal::focused(ctx)
-            && self.terminal_any_visible()
-            && self.tool_viewport(workbench::ToolTab::Terminal) == ctx.viewport_id();
-        let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
-        if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::P) {
-            self.set_dialog(Dialog::Commands);
-        }
-        self.consume_command(Command::Folder, ctx);
-        self.consume_command(Command::Extensions, ctx);
-        if self.dialog != Dialog::None {
-            return;
-        }
-        if !egui::Popup::is_any_open(ctx) {
-            self.consume_command(Command::Sidebar, ctx);
-        }
-        self.consume_command(Command::Terminal, ctx);
-        self.debugger_shortcuts(ctx, terminal_focus);
-        if consume(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Tab)
-            || consume(egui::Modifiers::COMMAND, Key::PageUp)
-        {
-            self.cycle_tab(-1, ctx);
-        } else if consume(egui::Modifiers::CTRL, Key::Tab)
-            || consume(egui::Modifiers::COMMAND, Key::PageDown)
-        {
-            self.cycle_tab(1, ctx);
-        }
-        for panel in [Panel::Git, Panel::Problems, Panel::Agent] {
-            self.consume_command(Command::Panel(panel), ctx);
-        }
-        if !terminal_focus {
-            self.consume_command(Command::Format, ctx);
-            if !self.consume_command(Command::SaveAs, ctx) && Command::Save.consume(ctx) {
-                if self.navigation.bindings.style() == navigation::Style::Emacs {
-                    self.show_find = true;
-                    self.find_focus = true;
-                } else {
-                    self.execute_command(Command::Save, ctx);
-                }
-            }
-            self.consume_command(Command::Open, ctx);
-            self.consume_command(Command::New, ctx);
-            if consume(egui::Modifiers::COMMAND, Key::W)
-                && let Some(doc) = self.documents.active()
-            {
-                self.guarded(Action::CloseTab(doc.id), ctx);
-            }
-            for command in [Command::Explorer, Command::Find, Command::Markdown] {
-                self.consume_command(command, ctx);
-            }
-            if (consume(egui::Modifiers::COMMAND, Key::Equals)
-                || consume(egui::Modifiers::COMMAND, Key::Plus))
-                && !self.zoom_image_shortcut(ctx, 1.25)
-            {
-                self.font_size = (self.font_size + 1.0).min(26.0);
-                self.font_save_pending = true;
-            }
-            if consume(egui::Modifiers::COMMAND, Key::Minus)
-                && !self.zoom_image_shortcut(ctx, 1. / 1.25)
-            {
-                self.font_size = (self.font_size - 1.0).max(10.0);
-                self.font_save_pending = true;
-            }
-            self.consume_command(Command::UiScaleReset, ctx);
-        }
-        if !terminal_focus && self.show_find && consume(egui::Modifiers::NONE, Key::Escape) {
-            self.show_find = false;
-            self.focus_editor(ctx);
-        }
-    }
 }
 
 /// Recognize the platform extension shortcut even when the native backend translates it
@@ -1233,10 +1148,7 @@ impl eframe::App for EditorApp {
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
         self.handle_close_request(ctx);
-        self.replay_style_input(ctx);
-        self.navigation_shortcuts(ctx);
-        self.editing_shortcuts(ctx);
-        self.shortcuts(ctx);
+        self.route_input(ctx);
         if (self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal())
             && Terminal::focused(ctx)
         {
@@ -1287,7 +1199,7 @@ impl eframe::App for EditorApp {
         // Optional automation hook for a bounded native-window smoke test.
         if std::env::var_os("RODE_SMOKE_TEST").is_some() {
             if self.started.elapsed() > Duration::from_secs(5) {
-                self.quitting = true;
+                self.exit.close();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
                 ctx.request_repaint_after(Duration::from_millis(100));
@@ -1323,7 +1235,7 @@ impl eframe::App for EditorApp {
 impl Drop for EditorApp {
     fn drop(&mut self) {
         self.connection_profiles.join_writer();
-        self.reset_workspace();
+        self.reset_workspace(workspace::LeaveReason::WindowClosed);
     }
 }
 

@@ -80,7 +80,7 @@ impl EditorApp {
         match intent {
             Some(Intent::Connect(profile)) => {
                 self.connection_profiles.select(profile.clone(), true);
-                self.guarded(Action::Remote(profile), ctx);
+                self.guarded(Action::Remote(Box::new(profile)), ctx);
             }
             Some(Intent::Edit {
                 profile,

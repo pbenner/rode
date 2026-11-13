@@ -130,7 +130,8 @@ fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images()
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_notebook();
     app.documents[0].path = Some("/remote/work.ipynb".into());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.detach_ssh(&ctx);
     app.run_notebook(false, &ctx);
     assert!(app.documents[0].notebook.as_ref().unwrap().kernel.is_none());
@@ -204,7 +205,7 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
         app.markdown_images.clone(),
         app.notebook_shutdowns.clone(),
     ));
-    app.workspace = Some(Workspace {
+    app.workspace.set_fixture(Some(Workspace {
         root: root.path().to_string_lossy().into(),
         remote: None,
         ready: true,
@@ -226,7 +227,7 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
         )
         .unwrap(),
         sandbox_options: Default::default(),
-    });
+    }));
     app.run_notebook(true, &ctx);
     let start = Instant::now();
     while app.documents[0].notebook.as_ref().unwrap().error.is_empty() {
@@ -270,7 +271,7 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
     };
     view.set_execution_target(Some(target.clone()));
     app.documents[0].notebook = Some(view);
-    app.workspace = Some(Workspace {
+    app.workspace.set_fixture(Some(Workspace {
         root: root.path().to_string_lossy().into(),
         remote: None,
         ready: true,
@@ -292,7 +293,7 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
         )
         .unwrap(),
         sandbox_options: Default::default(),
-    });
+    }));
     app.run_notebook(true, &ctx);
     let start = Instant::now();
     while app.documents[0].notebook.as_ref().unwrap().error.is_empty() {

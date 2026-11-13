@@ -110,7 +110,7 @@ impl EditorApp {
                         Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.set_min_size(egui::vec2(width, 19.));
-                            let (connection, color) = match &self.workspace {
+                            let (connection, color) = match self.workspace.as_ref() {
                                 Some(w) if w.remote.is_some() => (
                                     format!(
                                         "↗ SSH {}{}",

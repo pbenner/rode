@@ -292,6 +292,48 @@ Different identities protect different lifetimes:
 
 Capture these identifiers and the source snapshot before dispatch. Check them before publishing results. A canceled worker may still deliver a result, so cancellation does not replace validation. Failed/stale preview reloads retain the previous usable view, and closing/replacing a view releases its texture and memory leases.
 
+## Workspace and input owners
+
+`app/workspace/control.rs` owns the active workspace, connection cancellation and
+project candidate. Views receive an immutable workspace reference. Authentication,
+preparation, activation, environment replacement, suspension and transport release
+use explicit operations; production callers cannot mutate readiness or candidate
+identities directly. Preparing a replacement leaves the active project usable.
+
+Preparation identities are opaque and independent of inbox generations. A reply
+must finish the matching preparation exactly once before changing UI state. A
+prepared candidate waiting for a dirty-buffer decision remains in the controller;
+the confirmation carries only its identity. Superseded replies and confirmations
+cannot consume, cancel or replace a newer candidate. The inbox still owns reply
+generations; cancellation alone does not admit a completion.
+
+`app/lifecycle.rs` owns window exit intent, independently of terminal discovery
+caches. Its private exit controller aggregates domain readiness snapshots; it
+never takes ownership of processes, runtime shutdowns or encrypted leases. Cleanup
+errors cancel automatic exit. A forced workspace change also cancels a waiting
+quit because losing an acknowledgement is not proof of completed cleanup. The
+existing dirty-buffer and encrypted-project guards run before requesting exit.
+Accepted discard decisions record document versions. If a worker delivers newer
+unsaved edits during cleanup, exit returns to the shared guard; an unchanged
+discard decision is not prompted again.
+
+`app/input.rs` owns source replay and the production routing entry point for both
+root and detached windows. `navigation` owns pane focus/bindings and emits typed
+navigation actions; its editing interpreter translates keymaps into native
+TextEdit events without accessing `EditorApp`. Global commands use the existing
+typed command dispatcher. The adapter applies those actions through domain guards.
+
+Commands following source input wait for that source widget's application
+acknowledgement. Keymap-generated replay precedes the command tail, so a Save
+cannot snapshot text from before earlier edits in the same native frame. The
+bounded queue captures document, style and viewport identity, including recognized
+native clipboard prefixes. Modal, document, style and focus changes invalidate
+replay. Explicit tab, new-file and clean-close shortcuts finish earlier edits on the old
+document, then admit following input only after the destination editor establishes its
+focus and cursor state. Unrelated context changes discard the old source batch.
+Detached tools cannot acknowledge or drain the root source queue. Native
+TextEdit undo/IME handling and terminal/form input remain at their widget boundary.
+
 ## Document collection and workspace teardown
 
 `Documents` owns the buffer vector, active index, monotonic ID allocator and
@@ -310,6 +352,10 @@ edits. Recovery paths remain non-authorizing metadata.
 Project teardown lives in `app/workspace.rs`. Domain controllers stop or detach
 owned work before the coordinator releases the transport. Explicit buffer
 retention keeps same-host policy replacements distinct from discarding a project.
+The typed leave reason selects lifetime policy independently of status text:
+ordinary project/policy changes, disconnect, window close and notebook disabling
+detach persistent notebooks; vault locking stops them. Notebook shutdowns remain
+owned by the window registry until the host acknowledges termination.
 Disconnect first unbinds remote paths into exact-connection recovery records;
 reconnect preserves those records until successful host preparation authorizes
 restoration. Pending notebook/debugger cleanup owners survive view replacement,

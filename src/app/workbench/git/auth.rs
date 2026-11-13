@@ -172,14 +172,14 @@ mod tests {
         ui_probe::install_at(&ctx, path.clone());
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(Workspace {
+        app.workspace.set_fixture(Some(Workspace {
             root: "/fixture".into(),
             remote: None,
             connected: true,
             ready: true,
             plan: Default::default(),
             sandbox_options: Default::default(),
-        });
+        }));
         app.workbench
             .git
             .auth

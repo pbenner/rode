@@ -40,7 +40,7 @@ fn worker_flood_yields_to_close_and_delivers_every_batch_in_order() {
         (MAX_EVENTS_PER_FRAME - 1).to_string()
     );
     assert!(matches!(app.pending, Some(Action::Quit)));
-    assert!(!app.quitting);
+    assert!(!app.exit.closing());
     assert!(
         output.viewport_output[&egui::ViewportId::ROOT]
             .commands
@@ -97,7 +97,10 @@ fn stale_context_opens_cannot_clear_new_pending_reads_or_replace_retained_buffer
     app.documents.active_mut().unwrap().text = "retained source".into();
     let old_generation = app.workers.generation();
     app.documents.begin_open("current.txt".into());
-    app.clear_project(documents::Retention::Keep);
+    app.clear_project(
+        documents::Retention::Keep,
+        workspace::LeaveReason::ProjectChanged,
+    );
     assert!(!app.documents.has_pending_opens());
     app.documents.begin_open("current.txt".into());
     app.workers
@@ -138,7 +141,8 @@ fn a_disconnect_during_a_batch_rejects_later_host_replies_but_keeps_global_compl
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.new_file();
     let id = app.documents.selected_id().unwrap();
     app.documents.active_mut().unwrap().text = "unsaved source".into();

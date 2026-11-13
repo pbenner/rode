@@ -156,7 +156,7 @@ fn file_menu_aligns_shortcuts_and_opens_the_existing_project_dialog() {
             );
             assert!(app.dialog == Dialog::Folder);
             assert!(!egui::Popup::is_any_open(&ctx));
-            assert!(app.pending.is_none() && !app.preparing);
+            assert!(app.pending.is_none() && !app.workspace.preparing());
         }
     }
 }

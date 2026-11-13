@@ -145,7 +145,7 @@ impl EditorApp {
         ui.horizontal_wrapped(|ui| {
             let sandbox = section == SettingsSection::Sandbox;
             let enabled = if sandbox {
-                !self.preparing && !self.explorer_state.busy
+                !self.workspace.preparing() && !self.explorer_state.busy
             } else {
                 changed
             };
@@ -410,7 +410,7 @@ impl EditorApp {
 
     fn sandbox_settings_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
-        if let Some(workspace) = &self.workspace {
+        if let Some(workspace) = self.workspace.as_ref() {
             ui.label(palette.tag(workspace.plan.label()));
             ui.add_space(8.);
         }
@@ -425,7 +425,7 @@ impl EditorApp {
                 .ui(ui, &mut self.workbench.draft.sandbox, palette);
             sandbox_options_ui(ui, &mut self.workbench.draft.sandbox, palette);
             ui.add_space(8.);
-            if self.preparing {
+            if self.workspace.preparing() {
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label("Probing updated sandbox…");
@@ -465,7 +465,7 @@ impl EditorApp {
     /// Select host/project-keyed settings after preparation, retain the actual requested
     /// sandbox options and refresh only tools needed by the visible context.
     pub(in crate::app) fn load_project_tools(&mut self, ctx: &egui::Context) {
-        let Some(w) = &self.workspace else {
+        let Some(w) = self.workspace.as_ref() else {
             return;
         };
         self.workbench.key = self.project_settings_key(&w.root, w.remote.is_some());

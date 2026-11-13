@@ -6,6 +6,12 @@
 use super::*;
 
 impl EditorApp {
+    /// Cancel only the guarded candidate that the visible decision belongs to.
+    fn cancel_guarded_action(&mut self) {
+        if let Some(Action::PreparedProject { id }) = self.pending.take() {
+            self.workspace.cancel_prepared(id);
+        }
+    }
     /// Render the exclusive current dialog and common dirty-buffer confirmation on its owning viewport.
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if ctx.viewport_id() != self.dialog_viewport {
@@ -27,7 +33,7 @@ impl EditorApp {
                         let keep = palette.primary(ui, "Keep editing");
                         ui_probe::button(ui, "guard-keep-editing", &keep);
                         if keep.clicked() {
-                            self.pending = None;
+                            self.cancel_guarded_action();
                             self.focus_editor(ctx);
                         }
                         let discard =
@@ -40,7 +46,7 @@ impl EditorApp {
                     });
                 });
             if modal.should_close() {
-                self.pending = None;
+                self.cancel_guarded_action();
                 self.focus_editor(ctx);
             }
             return;
@@ -148,7 +154,7 @@ impl EditorApp {
                 }
             });
         if response.should_close()
-            && !(self.dialog == Dialog::TerminalExit && self.session_exit_pending())
+            && !(self.dialog == Dialog::TerminalExit && self.exit_pending())
             && !self.vaults.locking
         {
             self.dialog = Dialog::None;
@@ -178,7 +184,7 @@ impl EditorApp {
         match intent {
             Some(saved_connections::FormIntent::Connect(profile)) => {
                 self.dialog = Dialog::None;
-                self.guarded(Action::Remote(*profile), ctx);
+                self.guarded(Action::Remote(profile), ctx);
             }
             Some(saved_connections::FormIntent::Save) => {
                 self.connection_profiles.save(self.workers.profiles(ctx));

@@ -77,7 +77,7 @@ impl EditorApp {
     /// Display actual host/project preparation and sandbox state independently of requested settings.
     pub(super) fn workspace_banner(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        let Some(workspace) = &self.workspace else {
+        let Some(workspace) = self.workspace.as_ref() else {
             let file = self
                 .documents
                 .get(self.documents.active_index())
@@ -130,7 +130,7 @@ impl EditorApp {
                     )
                 })
                 .unwrap_or_default(),
-            if !ready && (connecting || self.preparing) {
+            if !ready && (connecting || self.workspace.preparing()) {
                 " [Opening project]"
             } else if ready && plan.active {
                 " [Sandbox]"
@@ -142,7 +142,7 @@ impl EditorApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_window_title = title;
         }
-        if remote.is_none() && !plan.requested && !self.preparing {
+        if remote.is_none() && !plan.requested && !self.workspace.preparing() {
             return;
         }
         chrome::workspace_banner_panel(ctx, palette).show(ctx, |ui| {
@@ -171,7 +171,7 @@ impl EditorApp {
                         if connected || connecting {
                             if ui
                                 .add_enabled(
-                                    !self.sessions_need_exit_check(),
+                                    !self.runtime_work_pending(),
                                     IconButton::new(Icon::Close, "Disconnect"),
                                 )
                                 .on_hover_text("Disconnect SSH and preserve open files. Terminals with Persist enabled keep running; other terminals end after their last view detaches.")
@@ -195,7 +195,7 @@ impl EditorApp {
                         20.,
                     )
                     .on_hover_text(&root);
-                    if self.preparing {
+                    if self.workspace.preparing() {
                         ui.spinner();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

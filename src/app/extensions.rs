@@ -110,7 +110,7 @@ impl EditorApp {
                 }
             }
             if id == Feature::Notebooks.id() {
-                self.stop_notebook_kernels("Notebook extension disabled");
+                self.leave_notebooks(workspace::LeaveReason::NotebooksDisabled);
             }
             if id == Feature::Agents.id() {
                 self.stop_project_agent();

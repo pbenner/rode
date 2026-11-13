@@ -9,7 +9,8 @@ fn source_guards_and_panel_do_not_start_a_process() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.toggle_panel(Panel::Debug, &ctx);
     assert!(app.debugger.client.is_none());
-    app.workspace = Some(crate::app::tests::remote_workspace());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.new_file();
     app.documents[0].text = "keep this unsaved source".into();
     app.documents[0].modified = true;
@@ -35,12 +36,12 @@ fn closing_waits_for_debug_cleanup_then_completes_without_an_event() {
     let mut app = EditorApp::new(&cc, Startup::default());
     let flag = Arc::new(AtomicBool::new(true));
     app.debugger.cleanups.push(flag.clone());
-    app.quit_terminals(&ctx);
-    assert!(!app.quitting);
-    assert!(app.session_exit_pending());
+    app.request_exit(&ctx);
+    assert!(!app.exit.closing());
+    assert!(app.exit_pending());
     flag.store(false, Ordering::Release);
     app.session_tick(&ctx);
-    assert!(app.quitting);
+    assert!(app.exit.closing());
 }
 /// Reproducible render-only profile, without a display or installed debugger.
 /// Explicitly ignored: reports timings rather than asserting machine speed.

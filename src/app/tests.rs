@@ -15,7 +15,7 @@ fn workspace_banners_paint_the_full_background_and_pad_themed_controls() {
                 app.new_file();
                 app.documents[0].path = Some("/tmp/standalone.rs".into());
             } else {
-                app.workspace = Some(remote_workspace());
+                app.workspace.set_fixture(Some(remote_workspace()));
             }
             // Reuse panel state while changing themes, including the first
             // frame after switching from a compact theme to larger controls.
@@ -108,7 +108,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     app.documents[0].text = "keep these edits".into();
     app.documents[0].modified = true;
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.preparing || app.documents.has_pending_opens() {
+    while app.workspace.preparing() || app.documents.has_pending_opens() {
         app.poll(&ctx);
         assert!(
             Instant::now() < deadline,
@@ -194,7 +194,7 @@ fn startup_file_mode_never_overrides_explicit_policies_or_directory_requests() {
             remote: false,
             options: options.clone(),
             keep_buffers: false,
-            token: 7,
+            token: workspace::PreparationId::fixture(7),
             documents_at_start: vec![],
             restore_saved: Some(force),
             open_file: None,
@@ -209,7 +209,7 @@ fn startup_file_mode_never_overrides_explicit_policies_or_directory_requests() {
         };
         workers::resolve_startup_path(&mut request, &mut job, &policies, &alias).unwrap();
         assert_eq!(
-            matches!(job, Job::StandaloneFile { token: 7, .. }),
+            matches!(job, Job::StandaloneFile { token, .. } if token == workspace::PreparationId::fixture(7)),
             standalone,
             "{input:?}, force={force}, saved={saved}"
         );
@@ -252,7 +252,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             },
         );
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.preparing || app.documents.has_pending_opens() {
+        while app.workspace.preparing() || app.documents.has_pending_opens() {
             app.poll(&ctx);
             assert!(
                 Instant::now() < deadline,
@@ -305,7 +305,7 @@ fn local_startup_missing_path_reports_an_error_without_creating_a_workspace() {
         },
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while app.preparing {
+    while app.workspace.preparing() {
         app.poll(&ctx);
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
@@ -458,8 +458,8 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.project_token = 1;
-    app.preparing = true;
+
+    let preparation = app.workspace.begin_preparation();
     // The request started with no buffers, but the user edited while waiting.
     app.new_file();
     app.documents[0].text = "typed during slow project opening".into();
@@ -478,7 +478,7 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
                 remote: false,
                 options: Default::default(),
                 keep_buffers: false,
-                token: 1,
+                token: preparation,
                 documents_at_start: vec![],
                 restore_saved: None,
                 open_file: Some(file.to_string_lossy().into_owned()),
@@ -489,11 +489,18 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
     app.poll(&ctx);
     assert!(matches!(
         &app.pending,
-        Some(Action::PreparedProject { open_file: Some(path), .. }) if path == &file.to_string_lossy()
+        Some(Action::PreparedProject { id }) if app.workspace.prepared(*id).and_then(|p| p.open_file.as_deref()) == file.to_str()
     ));
     assert_eq!(app.documents[0].text, "typed during slow project opening");
     assert!(app.workspace.is_none());
-    app.pending = None; // Keep editing.
+    // Superseding work invalidates the old confirmation without discarding the buffer.
+    let obsolete = app.pending.take().unwrap();
+    let current = app.workspace.begin_preparation();
+    app.perform(obsolete, &ctx);
+    assert!(app.workspace.preparing());
+    assert!(app.workspace.prepared(preparation).is_none());
+    assert!(app.workspace.is_none());
+    assert!(app.workspace.finish_preparation(current));
     assert_eq!(app.documents.len(), 1);
 }
 
@@ -504,7 +511,7 @@ fn file_operations_wait_until_the_requested_project_environment_is_ready() {
     let mut app = EditorApp::new(&cc, Startup::default());
     let mut workspace = remote_workspace();
     workspace.ready = false;
-    app.workspace = Some(workspace);
+    app.workspace.set_fixture(Some(workspace));
     app.new_file();
     app.documents[0].text = "keep edits".into();
     app.save_document(app.documents[0].id, "/not-written.rs".into(), true, &ctx);
@@ -542,7 +549,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(remote_workspace());
+    app.workspace.set_fixture(Some(remote_workspace()));
     let remote = app.workspace.as_ref().unwrap().remote.clone().unwrap();
     std::fs::write(&remote.socket, "owned connection fixture").unwrap();
     app.new_file();
@@ -554,18 +561,18 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     doc.edit_version = 3;
     doc.selection = Some((2, 5));
     let generation = app.workers.generation();
-    let project_token = app.project_token;
+    let project_token = app.workspace.preparation_identity();
     let folder_token = app.project_picker.token;
-    let cancel = app.connection_cancel.clone();
-    app.preparing = true;
+    let cancel = app.workspace.connection_cancellation().clone();
+    app.workspace.begin_preparation();
     app.disconnect_ssh(&ctx);
     assert!(app.workspace.is_none());
     assert!(!app.project_ready());
-    assert!(!app.preparing);
+    assert!(!app.workspace.preparing());
     assert!(cancel.load(Ordering::Acquire));
     assert!(!remote.socket.exists());
     assert!(app.workers.generation() > generation);
-    assert!(app.project_token > project_token);
+    assert_ne!(app.workspace.preparation_identity(), project_token);
     assert!(app.project_picker.token > folder_token);
     assert_eq!(app.documents[0].text, "unsaved remote edits");
     assert!(app.documents[0].dirty());
@@ -604,7 +611,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
 fn open_folder_defaults_to_the_remote_host_and_local_open_is_explicit() {
     let cc = eframe::CreationContext::_new_kittest(egui::Context::default());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(remote_workspace());
+    app.workspace.set_fixture(Some(remote_workspace()));
     let socket = app
         .workspace
         .as_ref()
@@ -636,7 +643,7 @@ fn project_switch_still_protects_unsaved_buffers() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.workspace = Some(remote_workspace());
+    app.workspace.set_fixture(Some(remote_workspace()));
     app.new_file();
     app.documents[0].text = "unsaved remote edits".into();
     app.guarded(
@@ -648,7 +655,7 @@ fn project_switch_still_protects_unsaved_buffers() {
         &ctx,
     );
     assert!(app.pending.is_some());
-    assert!(!app.preparing);
+    assert!(!app.workspace.preparing());
     assert_eq!(app.documents[0].text, "unsaved remote edits");
     assert_eq!(
         app.workspace.as_ref().unwrap().root,

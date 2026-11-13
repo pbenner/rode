@@ -84,11 +84,17 @@ pub(super) struct Sessions {
     confirm: Option<Confirm>,
     rename: Option<(String, String)>,
     persistence_pending: bool,
-    quit_waiting: bool,
     allocation_draft: slurm::Allocation,
     allocation_error: String,
 }
 impl Sessions {
+    /// Creation and persistence mutations must be acknowledged before leaving this window.
+    pub(super) fn lifetime_pending(&self) -> bool {
+        self.starting || self.persistence_pending
+    }
+    pub(super) fn runtime_shutdown_pending(&self) -> bool {
+        self.runtimes.shutdown_pending()
+    }
     /// Check active and hidden views by stable window-local view key.
     pub(super) fn has_view(&self, key: &str) -> bool {
         self.active.as_ref().is_some_and(|m| m.key == key)
@@ -186,40 +192,9 @@ impl EditorApp {
             .as_ref()
             .and_then(|workspace| workspace.remote.clone())
     }
-    /// Report an application quit currently waiting for owned lifetime acknowledgements.
-    pub(super) fn session_exit_pending(&self) -> bool {
-        self.sessions.quit_waiting
-    }
-    /// Cancel a waiting exit and retain its failure as a visible notice instead of silently closing.
-    pub(super) fn abort_session_quit(&mut self, error: String, ctx: &egui::Context) {
-        if self.sessions.quit_waiting {
-            self.sessions.quit_waiting = false;
-            self.dialog = Dialog::None;
-            self.focus_editor(ctx);
-        }
-        self.notify(error, true);
-    }
     /// Report serialized terminal creation/control work that prevents a conflicting lifetime action.
     pub(super) fn session_busy(&self) -> bool {
         self.sessions.starting || self.sessions.busy
-    }
-    /// Include pending terminal/runtime creation, lifetime changes and cleanup in the exit barrier.
-    pub(super) fn sessions_need_exit_check(&self) -> bool {
-        self.sessions.starting
-            || self.sessions.persistence_pending
-            || self.sessions.runtimes.shutdown_pending()
-            || self.notebook_shutdowns.pending()
-            || self.debugger_stopping()
-            || self.documents.iter().any(|doc| {
-                doc.notebook
-                    .as_ref()
-                    .is_some_and(|view| view.lifetime_pending())
-            })
-            || self
-                .debugger
-                .client
-                .as_ref()
-                .is_some_and(|c| c.lifetime_pending())
     }
     /// Discard project discovery/view state while retaining approved runtime termination workers.
     pub(super) fn session_context_reset(&mut self) {
@@ -498,11 +473,7 @@ impl EditorApp {
     /// Drain runtime completions, advance waiting exits and refresh visible session/scheduler caches.
     pub(super) fn session_tick(&mut self, ctx: &egui::Context) {
         self.poll_runtimes(ctx);
-        if self.sessions.quit_waiting
-            && !self.sessions_need_exit_check()
-            && !self.agent_installation_pending()
-        {
-            self.quit_terminals(ctx);
+        if self.advance_exit(ctx) {
             return;
         }
         for terminal in self.terminal.iter().chain(self.ssh_master.iter()) {
@@ -705,12 +676,12 @@ impl EditorApp {
                     self.sessions.queued.clear();
                     self.notify(error, true);
                 }
-                if matches!(job, Job::Persistence) && self.sessions.quit_waiting {
-                    self.sessions.quit_waiting = false;
+                if matches!(job, Job::Persistence) && self.exit.waiting() {
+                    self.exit.cancel();
                     self.dialog = Dialog::None;
                     self.focus_editor(ctx);
-                } else if self.sessions.quit_waiting && !self.sessions_need_exit_check() {
-                    self.quit_terminals(ctx);
+                } else {
+                    self.advance_exit(ctx);
                 }
                 return;
             }
@@ -820,9 +791,7 @@ impl EditorApp {
             None
         };
         self.drain_terminal_commands(ctx, created_policy);
-        if self.sessions.quit_waiting && !self.sessions_need_exit_check() {
-            self.quit_terminals(ctx);
-        }
+        self.advance_exit(ctx);
     }
     /// Render cached terminals, runtimes and scheduler jobs with explicit attach/end/release actions.
     pub(super) fn sessions_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1188,7 +1157,7 @@ impl EditorApp {
     /// A queued project command must never enter an explicitly unrestricted shell.
     /// Capture each command's policy and create another view when it differs.
     fn drain_terminal_commands(&mut self, ctx: &egui::Context, created_policy: Option<&str>) {
-        if self.session_busy() || self.sessions.quit_waiting {
+        if self.session_busy() || self.exit.waiting() {
             return;
         }
         while let Some(next) = self.sessions.queued.front() {
@@ -1228,7 +1197,7 @@ impl EditorApp {
         let detail = mode.unwrap_or("No project terminal attached").to_owned();
         let project = self.session_plan();
         let ready = !self.session_busy()
-            && !self.preparing
+            && !self.workspace.preparing()
             && !self.vaults.locking
             && self
                 .workspace
@@ -1294,40 +1263,5 @@ impl EditorApp {
             super::ui_probe::button(ui, "terminal-new-menu", &menu.0);
             menu.0.on_hover_text("Create a terminal on this host. Choose sandboxed or outside the sandbox; existing terminals keep running.");
         });
-    }
-    fn final_quit(&mut self, ctx: &egui::Context) {
-        self.quitting = true;
-        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
-    }
-    /// Release foreground views/controllers and wait for lifetime acknowledgements before
-    /// normal exit; persistent host work follows its existing acknowledged policy.
-    pub(super) fn quit_terminals(&mut self, ctx: &egui::Context) {
-        if !self
-            .debugger
-            .client
-            .as_ref()
-            .is_some_and(|c| c.lifetime_pending())
-        {
-            self.leave_debugger();
-        }
-        self.cancel_agent_installation();
-        if self.sessions_need_exit_check() || self.agent_installation_pending() {
-            self.sessions.quit_waiting = true;
-            self.set_dialog(Dialog::TerminalExit);
-        } else {
-            self.final_quit(ctx);
-        }
-    }
-    /// Keep pending exit cleanup visible and expose failures while the window still owns its work.
-    pub(super) fn terminal_exit_dialog(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
-        self.sessions.quit_waiting = true;
-        ui.heading("Closing RODE");
-        ui.spinner();
-        ui.label(if self.agent_installation_pending() {
-            "Finishing agent setup/lifetime changes and cleaning installation files…"
-        } else {
-            "Finishing submitted work and runtime lifetime changes…"
-        });
-        ui.small("RODE will close automatically when it completes.");
     }
 }

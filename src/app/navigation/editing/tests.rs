@@ -14,6 +14,7 @@ fn motions_use_character_indices_and_word_classes() {
 struct Editor {
     ctx: egui::Context,
     editing: State,
+    queue: input::Replay,
     text: String,
     style: Style,
     path: &'static str,
@@ -23,6 +24,7 @@ impl Editor {
         let mut editor = Self {
             ctx: Default::default(),
             editing: Default::default(),
+            queue: Default::default(),
             text: text.into(),
             style,
             path: "main.rs",
@@ -40,10 +42,15 @@ impl Editor {
                 ..Default::default()
             },
             |ctx| {
-                self.editing.replay(ctx, Some(1), self.style, true);
-                effects = self
-                    .editing
-                    .route(ctx, 1, &self.text, self.style, Some(self.path));
+                self.queue
+                    .replay(ctx, Some(input::Scope::new(ctx, 1, self.style)));
+                effects = self.editing.route(
+                    ctx,
+                    input::Scope::new(ctx, 1, self.style),
+                    &self.text,
+                    Some(self.path),
+                    &mut self.queue,
+                );
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let mut output = egui::TextEdit::multiline(&mut self.text)
                         .id(egui::Id::new(("document", 1u64)))
@@ -66,6 +73,7 @@ impl Editor {
                         .active()
                         .palette,
                     );
+                    self.queue.acknowledge(ui.ctx(), 1);
                 });
             },
         );
@@ -81,7 +89,7 @@ impl Editor {
     }
     fn drain(&mut self) {
         for _ in 0..32 {
-            if self.editing.deferred.is_empty() {
+            if !self.queue.pending() {
                 return;
             }
             self.frame(vec![]);
@@ -171,9 +179,10 @@ fn deferred_input_is_discarded_when_focus_or_document_changes() {
         egui::Event::Text("ix".into()),
         key(Key::Escape, egui::Modifiers::NONE),
     ]);
-    assert!(!e.editing.deferred.is_empty());
-    e.editing.replay(&e.ctx, Some(2), Style::Vim, true);
-    assert!(e.editing.deferred.is_empty());
+    assert!(e.queue.pending());
+    e.queue
+        .replay(&e.ctx, Some(input::Scope::new(&e.ctx, 2, Style::Vim)));
+    assert!(!e.queue.pending());
 }
 
 #[test]
@@ -194,7 +203,17 @@ fn command_palette_and_modified_editor_shortcuts_remain_available_in_vim() {
             ..Default::default()
         },
         |ctx| {
-            assert!(editing.route(ctx, 1, "source", Style::Vim, None).is_empty());
+            assert!(
+                editing
+                    .route(
+                        ctx,
+                        input::Scope::new(ctx, 1, Style::Vim),
+                        "source",
+                        None,
+                        &mut input::Replay::default()
+                    )
+                    .is_empty()
+            );
             assert!(ctx.input(|i| i.events.iter().any(|event| matches!(
                 event,
                 egui::Event::Key {

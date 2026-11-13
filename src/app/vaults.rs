@@ -211,7 +211,7 @@ impl EditorApp {
             self.notify("The encrypted project's lock state is unknown. Reconnect and unlock it again before locking or exiting.", true);
             return;
         }
-        if self.sessions_need_exit_check() || self.has_live_terminal_views() {
+        if self.runtime_work_pending() || self.has_live_terminal_views() {
             self.notify("Stop terminal sessions with Sessions → End before locking this encrypted project or exiting RODE. Detached/shared jobs must be stopped too.", true);
             return;
         }
@@ -221,7 +221,7 @@ impl EditorApp {
             return;
         }
         self.stop_project_agent();
-        self.stop_notebook_kernels("Locking encrypted project");
+        self.leave_notebooks(workspace::LeaveReason::VaultLock);
         self.stop_debugger();
         self.stop_latex();
         self.cancel_extensions();
@@ -317,9 +317,7 @@ impl EditorApp {
                                 } else {
                                     self.vaults.lost = true;
                                     self.vaults.released = locked || message.starts_with("Another RODE window still has this encrypted project open.");
-                                    if let Some(workspace) = &mut self.workspace {
-                                        workspace.ready = false;
-                                    }
+                                    self.workspace.suspend_project();
                                     errors.push(if locked {
                                         "The encrypted filesystem closed on its host. Unsaved buffers are preserved; unlock again to restore file access.".into()
                                     } else {
@@ -333,9 +331,7 @@ impl EditorApp {
                     }
                     crate::process::Event::Error(error) => {
                         self.vaults.lost = true;
-                        if let Some(workspace) = &mut self.workspace {
-                            workspace.ready = false;
-                        }
+                        self.workspace.suspend_project();
                         errors.push(error);
                     }
                     crate::process::Event::Exited(_) => {
@@ -343,9 +339,7 @@ impl EditorApp {
                         if closed.is_none() {
                             self.vaults.lost = true;
                             errors.push("Encrypted-project connection ended; its lock state is unknown. Reconnect and unlock explicitly before accessing files.".into());
-                            if let Some(workspace) = &mut self.workspace {
-                                workspace.ready = false;
-                            }
+                            self.workspace.suspend_project();
                         }
                     }
                     _ => {}
@@ -430,19 +424,11 @@ impl EditorApp {
                 let quitting = self.vaults.quit_after_lock;
                 self.vaults.active = None;
                 self.vaults.needs_lock = false;
-                self.clear_project(documents::Retention::Discard);
-                if let Some(workspace) = &mut self.workspace {
-                    if workspace.remote.is_some() {
-                        workspace.root = "~".into();
-                        workspace.ready = false;
-                        workspace.plan = Default::default();
-                        if let Some(remote) = &mut workspace.remote {
-                            remote.profile.root = "~".into();
-                        }
-                    } else {
-                        self.workspace = None;
-                    }
-                }
+                self.clear_project(
+                    documents::Retention::Discard,
+                    workspace::LeaveReason::VaultLock,
+                );
+                self.workspace.clear_project_context();
                 self.status = if shared_exit {
                     "Encrypted project remains open in another RODE window"
                 } else {
@@ -451,7 +437,7 @@ impl EditorApp {
                 .into();
                 self.dialog = Dialog::None;
                 if quitting {
-                    self.quit_terminals(ctx);
+                    self.request_exit(ctx);
                 }
             } else if !active {
                 self.vaults.pending = None;
@@ -478,7 +464,7 @@ impl EditorApp {
             }
             self.notify(self.vaults.message.clone(), true);
         }
-        if !self.preparing
+        if !self.workspace.preparing()
             && self.pending.is_none()
             && let Some(client) = self.vaults.staged.take()
         {
@@ -731,7 +717,7 @@ mod tests {
             );
             assert_eq!(app.vaults.needs_lock, !locked);
             crate::app::lifecycle::tests::native_close(&mut app, &ctx);
-            assert_eq!(app.quitting, locked);
+            assert_eq!(app.exit.closing(), locked);
         }
     }
     #[test]
@@ -741,7 +727,7 @@ mod tests {
             let work = app.vaults.work();
             crate::app::lifecycle::tests::native_close(&mut app, &ctx);
             assert!(app.vaults.locking);
-            assert!(!app.quitting);
+            assert!(!app.exit.closing());
             app.poll_vaults(&ctx);
             assert!(!app.vaults.lock_sent);
             drop(work);
@@ -751,7 +737,7 @@ mod tests {
                 app.poll_vaults(&ctx);
                 std::thread::sleep(Duration::from_millis(5));
             }
-            assert_eq!(app.quitting, locked);
+            assert_eq!(app.exit.closing(), locked);
             assert_eq!(app.vaults.active.is_none(), locked);
         }
     }
@@ -763,7 +749,7 @@ mod tests {
         app.lock_encrypted(true, &ctx);
         app.poll_vaults(&ctx);
         assert!(app.vaults.locking && !app.vaults.lock_sent);
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         drop(work);
         let until = Instant::now() + Duration::from_secs(5);
         while app.vaults.locking {
@@ -772,7 +758,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(app.vaults.active.is_some());
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert_eq!(app.documents[0].text, "keep text");
         assert!(app.vaults.message.contains("UNLOCKED"));
     }
@@ -784,7 +770,7 @@ mod tests {
         );
         app.lock_encrypted(true, &ctx);
         let until = Instant::now() + Duration::from_secs(5);
-        while !app.quitting {
+        while !app.exit.closing() {
             assert!(Instant::now() < until);
             app.poll_vaults(&ctx);
             std::thread::sleep(Duration::from_millis(5));
@@ -794,7 +780,7 @@ mod tests {
         let (mut app, ctx) = active(true);
         app.vaults.lost = true;
         app.lock_encrypted(true, &ctx);
-        assert!(!app.quitting && !app.vaults.locking);
+        assert!(!app.exit.closing() && !app.vaults.locking);
         assert!(!app.documents.is_empty());
     }
     #[test]
@@ -818,13 +804,13 @@ mod tests {
         assert_eq!(app.documents[0].text, "do not discard on network loss");
         assert!(app.documents[0].dirty());
         assert!(app.vaults.active.is_some());
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         assert!(app.vaults.released);
         app.guarded(Action::Quit, &ctx);
         assert!(matches!(app.pending, Some(Action::Quit)));
         app.pending = None; // Explicitly discard through the existing guard.
         app.perform(Action::Quit, &ctx);
-        assert!(app.quitting);
+        assert!(app.exit.closing());
     }
     #[test]
     fn ssh_loss_clears_workspace_but_retains_the_unknown_encrypted_lease() {
@@ -833,7 +819,7 @@ mod tests {
         workspace.root = "/plain".into();
         workspace.remote.as_mut().unwrap().profile.root = "/plain".into();
         app.vaults.active.as_mut().unwrap().remote = workspace.remote.clone();
-        app.workspace = Some(workspace);
+        app.workspace.set_fixture(Some(workspace));
         app.documents[0].path = Some("/plain/main.rs".into());
         app.documents[0].text = "unsaved encrypted source".into();
         app.documents[0].modified = true;
@@ -846,7 +832,7 @@ mod tests {
         app.encrypted_dialog();
         assert!(app.vaults.remote);
         app.lock_encrypted(true, &ctx);
-        assert!(!app.quitting && !app.vaults.locking);
+        assert!(!app.exit.closing() && !app.vaults.locking);
     }
     #[test]
     fn cancelled_unlock_cleanup_waits_for_file_operations_and_exit_waits_for_cleanup() {
@@ -858,7 +844,7 @@ mod tests {
         assert_eq!(app.vaults.closing.len(), 1);
         assert!(!app.vaults.closing[0].1);
         app.perform(Action::Quit, &ctx);
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
         drop(work);
         let until = Instant::now() + Duration::from_secs(5);
         while app.vaults.cleanup_pending() {
@@ -867,7 +853,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         app.perform(Action::Quit, &ctx);
-        assert!(app.quitting);
+        assert!(app.exit.closing());
     }
     #[test]
     fn lock_and_exit_keep_unsaved_change_protection() {
@@ -880,7 +866,7 @@ mod tests {
         app.pending = None;
         app.guarded(Action::Quit, &ctx);
         assert!(matches!(app.pending, Some(Action::Quit)));
-        assert!(!app.quitting && !app.vaults.locking);
+        assert!(!app.exit.closing() && !app.vaults.locking);
     }
     #[test]
     fn successful_lock_clears_plaintext_tabs_and_dialog_cancel_clears_passwords() {

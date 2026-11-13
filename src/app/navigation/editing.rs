@@ -16,7 +16,6 @@
 use super::*;
 use bindings::Style;
 use egui::text::{CCursor, CCursorRange};
-use std::collections::VecDeque;
 mod standard;
 #[cfg(test)]
 mod tests;
@@ -49,8 +48,6 @@ pub(in crate::app) struct State {
     g: bool,
     anchor: usize,
     command: Option<String>,
-    deferred: VecDeque<egui::Event>,
-    deferred_bytes: usize,
     after: Option<usize>,
     after_range: Option<CCursorRange>,
     composing: bool,
@@ -61,12 +58,14 @@ pub(in crate::app) struct State {
     pub(super) notice: Option<String>,
 }
 impl State {
-    /// Whether queued source commands still belong to the focused text editor.
-    pub(super) fn has_focus(&self, ctx: &egui::Context) -> bool {
-        self.doc
-            .is_some_and(|id| ctx.memory(|m| m.has_focus(egui::Id::new(("document", id)))))
+    /// Native focus/context changes end composition and any partial keymap command.
+    pub(in crate::app) fn cancel_context(&mut self) {
+        self.composing = false;
+        self.cancel_sequence();
     }
-
+    pub(in crate::app) fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
+    }
     /// Drop a partial operator/count/command when context or input permission changes.
     pub(in crate::app) fn cancel_sequence(&mut self) {
         self.count = 0;
@@ -121,21 +120,6 @@ impl State {
             };
         }
     }
-    fn defer(&mut self, event: egui::Event) {
-        let bytes = match &event {
-            egui::Event::Text(s) | egui::Event::Paste(s) => s.len(),
-            _ => 0,
-        };
-        if self.deferred.len() < 512 && self.deferred_bytes + bytes <= LIMIT {
-            self.deferred.push_back(event);
-            self.deferred_bytes += bytes;
-        } else {
-            self.notice = Some(
-                "Queued keyboard input exceeded the editor limit; remaining input was discarded."
-                    .into(),
-            );
-        }
-    }
     fn register(
         &mut self,
         ctx: &egui::Context,
@@ -185,34 +169,20 @@ impl State {
         self.checkpoint_after = true;
         true
     }
-    pub fn replay(&mut self, ctx: &egui::Context, id: Option<u64>, style: Style, allowed: bool) {
-        if self.deferred.is_empty() {
-            return;
-        }
-        if !allowed
-            || self.doc != id
-            || self.style != style
-            || !id.is_some_and(|id| ctx.memory(|m| m.has_focus(egui::Id::new(("document", id)))))
-        {
-            self.deferred.clear();
-            self.deferred_bytes = 0;
-            return;
-        }
-        ctx.input_mut(|i| {
-            let mut events: Vec<_> = self.deferred.drain(..).collect();
-            events.append(&mut i.events);
-            i.events = events;
-        });
-        self.deferred_bytes = 0;
-    }
     pub fn route(
         &mut self,
         ctx: &egui::Context,
-        id: u64,
+        scope: input::Scope,
         source: &str,
-        style: Style,
         path: Option<&str>,
+        queue: &mut input::Replay,
     ) -> Vec<NavAction> {
+        let input::Scope {
+            document: id,
+            style,
+            ..
+        } = scope;
+        queue.bind(scope);
         self.bind(id, style);
         let target = egui::Id::new(("document", id));
         let mut edit = egui::TextEdit::load_state(ctx, target).unwrap_or_default();
@@ -228,7 +198,7 @@ impl State {
         let mut halt = false;
         for event in events {
             if halt {
-                self.defer(event);
+                queue.defer(event);
                 continue;
             }
             let standard_action = (style == Style::Standard)
@@ -308,7 +278,7 @@ impl State {
             };
             let native_undo = matches!(&event,egui::Event::Key{key:Key::Z,pressed:true,modifiers,..} if modifiers.command);
             if (handled || native_undo) && pending {
-                self.defer(event);
+                queue.defer(event);
                 halt = true;
                 continue;
             }
@@ -331,7 +301,7 @@ impl State {
                         egui::Event::Text(value) => {
                             for (command_index, (offset, c)) in value.char_indices().enumerate() {
                                 if command_index >= 32 {
-                                    self.defer(egui::Event::Text(value[offset..].into()));
+                                    queue.defer(egui::Event::Text(value[offset..].into()));
                                     halt = true;
                                     break;
                                 }
@@ -351,7 +321,7 @@ impl State {
                                 if halt {
                                     let next = offset + c.len_utf8();
                                     if next < value.len() {
-                                        self.defer(egui::Event::Text(value[next..].into()));
+                                        queue.defer(egui::Event::Text(value[next..].into()));
                                     }
                                     break;
                                 }
@@ -461,7 +431,7 @@ impl State {
             edit.store(ctx, target);
         }
         ctx.input_mut(|i| i.events = native);
-        if !self.deferred.is_empty() {
+        if queue.pending() {
             ctx.request_repaint();
         }
         effects
@@ -645,156 +615,4 @@ fn key_event_undo(redo: bool) -> egui::Event {
             egui::Modifiers::COMMAND
         },
     )
-}
-
-impl EditorApp {
-    /// Return the active source-style mode indicator for the editor chrome.
-    pub(in crate::app) fn editing_hint<'a>(&self, hint: &'a str) -> &'a str {
-        match (self.navigation.bindings.style(), hint) {
-            (Style::Emacs, "Ctrl+N") => "",
-            (Style::Emacs, "Ctrl+P") => "Ctrl+X Ctrl+F",
-            (Style::Emacs, "Ctrl+S") => "Ctrl+X Ctrl+S",
-            (Style::Emacs, "Ctrl+Shift+S") => "Ctrl+X Ctrl+W",
-            (Style::Emacs, "Ctrl+W") => "Ctrl+X k",
-            (Style::Emacs, "Ctrl+F") => "Ctrl+S",
-            (Style::Vim, "Ctrl+W") => "Ctrl+W c",
-            (Style::Vim, "Ctrl+F") => "Normal: /",
-            _ => hint,
-        }
-    }
-    /// Navigate the configured source search in either direction using character cursor offsets.
-    pub(in crate::app) fn style_find_match(&mut self, reverse: bool, ctx: &egui::Context) {
-        if self.styled_source().is_none() || self.find.is_empty() {
-            return;
-        }
-        let Some(doc) = self.documents.active_mut() else {
-            return;
-        };
-        let range = egui::TextEdit::load_state(ctx, egui::Id::new(("document", doc.id)))
-            .and_then(|s| s.cursor.char_range())
-            .unwrap_or_default();
-        let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
-        let point = if reverse {
-            range.as_sorted_char_range().start
-        } else {
-            range.as_sorted_char_range().end
-        };
-        let byte = doc
-            .text
-            .char_indices()
-            .nth(point)
-            .map_or(doc.text.len(), |(byte, _)| byte);
-        let found = if reverse {
-            matches
-                .iter()
-                .rev()
-                .find(|(start, _)| *start < byte)
-                .or(matches.last())
-        } else {
-            matches
-                .iter()
-                .find(|(start, _)| *start > byte || (!range.is_empty() && *start == byte))
-                .or(matches.first())
-        };
-        if let Some((start, end)) = found {
-            doc.selection = Some((
-                doc.text[..*start].chars().count(),
-                doc.text[..*end].chars().count(),
-            ));
-            self.focus_editor(ctx);
-        }
-    }
-    fn styled_source(&self) -> Option<(u64, &str)> {
-        let doc = self.documents.active()?;
-        if doc.image.is_some()
-            || doc.pdf.is_some()
-            || doc.hex.is_some()
-            || doc.notebook.as_ref().is_some_and(|v| !v.source_mode())
-            || doc.markdown.as_ref().is_some_and(|v| v.showing)
-            || doc.marp.as_ref().is_some_and(|v| v.showing)
-        {
-            return None;
-        }
-        Some((doc.id, &doc.text))
-    }
-    fn editing_allowed(&self, ctx: &egui::Context) -> bool {
-        ctx.input(|i| i.focused)
-            && self.dialog == Dialog::None
-            && self.pending.is_none()
-            && !self.workbench_modal()
-            && !self.vaults.locking
-            && !egui::Popup::is_any_open(ctx)
-    }
-    /// Replay deferred native edit events only into the same eligible document and shortcut style.
-    pub(in crate::app) fn replay_style_input(&mut self, ctx: &egui::Context) {
-        let id = self.styled_source().map(|(id, _)| id);
-        let allowed = self.editing_allowed(ctx);
-        self.navigation
-            .editing
-            .replay(ctx, id, self.navigation.bindings.style(), allowed);
-    }
-    /// Translate supported Standard/Emacs/Vim input into the existing source edit/undo path;
-    /// modal barriers, terminal focus and unsupported document modes keep their normal input.
-    pub(in crate::app) fn editing_shortcuts(&mut self, ctx: &egui::Context) {
-        let navigation_tail = std::mem::take(&mut self.navigation.source_tail);
-        let style = self.navigation.bindings.style();
-        if !self.editing_allowed(ctx) {
-            self.navigation.editing.composing = false;
-            self.navigation.editing.cancel_sequence();
-            return;
-        }
-        let Some((id, _)) = self.styled_source() else {
-            self.navigation.editing.composing = false;
-            return;
-        };
-        let target = egui::Id::new(("document", id));
-        let escape_reclaim = style == Style::Vim
-            && ctx.input(|i| i.key_pressed(Key::Escape))
-            && ctx.memory(|m| m.had_focus_last_frame(target) && m.focused().is_none());
-        if escape_reclaim {
-            ctx.memory_mut(|m| m.request_focus(target));
-        }
-        let keyboard = ctx.input(|i| {
-            i.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Text(_)
-                        | egui::Event::Paste(_)
-                        | egui::Event::Cut
-                        | egui::Event::Copy
-                        | egui::Event::Ime(_)
-                        | egui::Event::Key { pressed: true, .. }
-                )
-            })
-        });
-        if !ctx.memory(|m| m.has_focus(target)) {
-            self.navigation.editing.composing = false;
-            self.navigation.editing.cancel_sequence();
-            return;
-        }
-        if !keyboard {
-            return;
-        }
-        let text = &self.documents.active().unwrap().text;
-        for action in self.navigation.editing.route(
-            ctx,
-            id,
-            text,
-            style,
-            self.documents[self.documents.active_index()].display_path(),
-        ) {
-            self.navigate(action, ctx);
-        }
-        // Translation may defer several earlier edits. Append navigation only
-        // after those edits; replay applies the existing focus/style guards.
-        for event in navigation_tail {
-            self.navigation.editing.defer(event);
-        }
-        if !self.navigation.editing.deferred.is_empty() {
-            ctx.request_repaint();
-        }
-        if let Some(message) = self.navigation.editing.notice.take() {
-            self.notify(message, true);
-        }
-    }
 }

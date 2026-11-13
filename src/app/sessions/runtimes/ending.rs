@@ -207,19 +207,19 @@ mod tests {
             );
             queue.push(request("closing")).unwrap();
             app.sessions.runtimes.endings = Some(queue);
-            app.quit_terminals(&ctx);
-            assert!(app.sessions.quit_waiting);
-            assert!(!app.quitting);
+            app.request_exit(&ctx);
+            assert!(app.exit.waiting());
+            assert!(!app.exit.closing());
             release.send(()).unwrap();
             let until = Instant::now() + Duration::from_secs(5);
-            while app.sessions.quit_waiting && !app.quitting {
+            while app.exit.waiting() && !app.exit.closing() {
                 app.session_tick(&ctx);
                 assert!(Instant::now() < until);
                 std::thread::sleep(Duration::from_millis(1));
             }
-            assert_eq!(app.quitting, succeeds);
+            assert_eq!(app.exit.closing(), succeeds);
             if !succeeds {
-                assert!(!app.sessions.quit_waiting);
+                assert!(!app.exit.waiting());
                 assert!(app.dialog == Dialog::None);
                 assert!(app.notice.as_ref().is_some_and(
                     |(message, error, _)| *error && message.contains("Host connection lost")

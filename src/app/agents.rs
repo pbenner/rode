@@ -286,7 +286,7 @@ impl EditorApp {
         }
         self.agents.retired.retain(Chat::work_pending);
         if let Some(error) = retirement_error {
-            self.abort_session_quit(error, ctx);
+            self.abort_exit(error, ctx);
         }
         let was_busy = self.agents.chat.busy;
         self.agents.chat.poll();
@@ -305,7 +305,7 @@ impl EditorApp {
             }
         }
         if let Some(error) = self.agents.chat.take_persistence_error() {
-            self.abort_session_quit(error, ctx);
+            self.abort_exit(error, ctx);
         }
         if self.agents.attaching
             && let Some(config) = self.agents.chat.attached_config().cloned()
@@ -1118,7 +1118,7 @@ impl EditorApp {
             || self.agents.history_open
             || self.agents.browser.is_some()
             || self.agents.runtime.installing()
-            || self.quitting
+            || self.exit.closing()
             || self.dialog != Dialog::None
             || self.pending.is_some()
             || self.workbench_modal()

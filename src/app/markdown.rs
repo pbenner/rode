@@ -887,7 +887,10 @@ mod tests {
             Ok(TexturePoll::Ready { .. })
         ));
         assert_eq!(app.image_budget.used(), 16);
-        app.clear_project(documents::Retention::Keep);
+        app.clear_project(
+            documents::Retention::Keep,
+            workspace::LeaveReason::ProjectChanged,
+        );
         assert!(cancel.load(Ordering::Acquire));
         assert_eq!(app.image_budget.used(), 0);
         let decoded =

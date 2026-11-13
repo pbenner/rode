@@ -457,7 +457,10 @@ mod tests {
         app.pdf_page(id, 0, 0, 1, Err("Renderer failed".into()));
         assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
         assert!(!app.documents[0].preview_loading());
-        app.clear_project(documents::Retention::Keep);
+        app.clear_project(
+            documents::Retention::Keep,
+            workspace::LeaveReason::ProjectChanged,
+        );
         let pixels = app.documents[0]
             .pdf
             .as_ref()

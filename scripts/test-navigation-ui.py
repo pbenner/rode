@@ -26,6 +26,7 @@ from ui_harness import (
     screenshot,
     text,
     wait_for_effect,
+    write_python_launcher,
 )
 
 wait_for = partial(wait_for_effect, timeout=10)
@@ -57,7 +58,7 @@ def run():
         second.write_text("second\n")
         (root / "completion-target.txt").write_text("completed\n")
         shell = base / "shell"
-        shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
+        shell.write_text("#!/bin/sh\nexec bash --noprofile --norc\n")
         shell.chmod(0o755)
         env = fixture_environment(
             base,
@@ -74,13 +75,13 @@ def run():
             wrapper = tools / "ssh"
             # The unprivileged fixture sshd cannot allocate a login TTY.
             # This affects the fixture login channel only, not native PTYs.
-            wrapper.write_text(
-                "#!/usr/bin/python3\nimport os,sys\n"
+            write_python_launcher(
+                wrapper,
+                "import os,sys\n"
                 + "binary="
                 + repr(real_ssh)
-                + "\nos.execv(binary,[binary]+['-T' if a=='-tt' else a for a in sys.argv[1:]])\n"
+                + "\nos.execv(binary,[binary]+['-T' if a=='-tt' else a for a in sys.argv[1:]])\n",
             )
-            wrapper.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + os.environ["PATH"]
             args += [
                 "--ssh",
@@ -145,38 +146,59 @@ def run():
                 append(ui, second, "second-edit\n")
                 nav("t")
                 ui.terminal_input()
+                # SSH shells come from the project host, independently of the GUI's SHELL.
+                # Pin the readline fixture in this PTY and acknowledge it before shell-key checks.
+                text("exec bash --noprofile --norc -i\n")
+                text("printf '%s\\n' \"${BASH_VERSION:+bash-ready}\" > bash-ready.out\n")
+                ui.wait(
+                    lambda: (root / "bash-ready.out").read_text() == "bash-ready\n",
+                    "Interactive Bash fixture did not become ready on the project host",
+                )
                 text("cat completion-")
                 key("Tab")
                 text(" > completed.out\n")
-                wait_for(lambda: (root / "completed.out").exists(), "Shell Tab/focus failed")
-                assert (root / "completed.out").read_text() == "completed\n"
+                wait_for(
+                    lambda: (root / "completed.out").read_text() == "completed\n",
+                    "Shell Tab/focus failed",
+                )
                 text("echo should-be-killed")
                 key("a", ("Control_L",))
                 key("k", ("Control_L",))
                 text("echo shell-one > one.out\n")
-                wait_for(lambda: (root / "one.out").exists(), "Ctrl+K was intercepted")
+                wait_for(
+                    lambda: (root / "one.out").read_text() == "shell-one\n",
+                    "Ctrl+K was intercepted",
+                )
                 # Persistence reveals a hidden terminal and retains input focus.
                 nav("q")
                 nav("s")
                 ui.terminal_input()
                 text("echo persistence > persistence.out\n")
                 wait_for(
-                    lambda: (root / "persistence.out").exists(),
+                    lambda: (root / "persistence.out").read_text() == "persistence\n",
                     "Persistence command left focus on a hidden pane",
                 )
                 nav("s")
                 nav("n")
                 ui.terminal_input()
                 text("echo shell-two > two.out\n")
-                wait_for(lambda: (root / "two.out").exists(), "New terminal focus failed")
+                wait_for(
+                    lambda: (root / "two.out").read_text() == "shell-two\n",
+                    "New terminal focus failed",
+                )
                 nav("bracketleft")
                 ui.terminal_input()
                 text("echo previous > previous.out\n")
-                wait_for(lambda: (root / "previous.out").exists(), "Previous terminal failed")
+                wait_for(
+                    lambda: (root / "previous.out").read_text() == "previous\n",
+                    "Previous terminal failed",
+                )
                 nav("bracketright")
                 ui.terminal_input()
                 text("echo next > next.out\n")
-                wait_for(lambda: (root / "next.out").exists(), "Next terminal failed")
+                wait_for(
+                    lambda: (root / "next.out").read_text() == "next\n", "Next terminal failed"
+                )
                 nav("k", ("Shift_L",))
                 screenshot(window, "taller-terminal.png")
                 nav("m")
@@ -189,7 +211,8 @@ def run():
                 ui.terminal_input()
                 text("echo restored > restored.out\n")
                 wait_for(
-                    lambda: (root / "restored.out").exists(), "Palette did not restore shell focus"
+                    lambda: (root / "restored.out").read_text() == "restored\n",
+                    "Palette did not restore shell focus",
                 )
                 # Select the second palette result with Down (UI theme list order).
                 key("p", ("Control_L", "Shift_L"))
@@ -203,7 +226,8 @@ def run():
                 ui.terminal_input()
                 text("echo after-escape > escaped.out\n")
                 wait_for(
-                    lambda: (root / "escaped.out").exists(), "Escape did not restore shell focus"
+                    lambda: (root / "escaped.out").read_text() == "after-escape\n",
+                    "Escape did not restore shell focus",
                 )
                 nav("e")
                 append(ui, second, "back-to-editor\n")
@@ -229,7 +253,7 @@ def run():
                 ui.terminal_input()
                 text("echo selected > selected.out\n")
                 wait_for(
-                    lambda: (root / "selected.out").exists(),
+                    lambda: (root / "selected.out").read_text() == "selected\n",
                     "Terminal focus failed after palette selection",
                 )
                 nav("p")
@@ -270,7 +294,10 @@ def run():
                 nav("t", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
                 ui.terminal_input()
                 text("echo remapped > remapped.out\n")
-                wait_for(lambda: (root / "remapped.out").exists(), "Remapped leader failed")
+                wait_for(
+                    lambda: (root / "remapped.out").read_text() == "remapped\n",
+                    "Remapped leader failed",
+                )
                 nav("e", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
                 append(ui, second, "remapped-editor\n")
                 assert nested.read_text() == "nested\nnested-edit\n"

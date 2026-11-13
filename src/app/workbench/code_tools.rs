@@ -510,14 +510,14 @@ mod tests {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.workspace = Some(Workspace {
+        app.workspace.set_fixture(Some(Workspace {
             root: root.path().to_string_lossy().into(),
             remote: None,
             connected: true,
             ready: true,
             plan: Default::default(),
             sandbox_options: Default::default(),
-        });
+        }));
         app.extensions.registry.set_enabled("rode.languages", true);
         app.workbench.prefs.format_on_save = true;
         app.workbench.prefs.check_on_save = true;

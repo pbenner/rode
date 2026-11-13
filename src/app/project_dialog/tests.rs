@@ -54,7 +54,8 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                 ctx.style_mut(|style| style.animation_time = 0.);
                 ui_probe::install_at(&ctx, state.clone());
                 if remote {
-                    app.workspace = Some(crate::app::tests::remote_workspace());
+                    app.workspace
+                        .set_fixture(Some(crate::app::tests::remote_workspace()));
                 }
                 app.set_dialog(Dialog::Folder);
                 app.project_picker.needs_load = false;
@@ -161,7 +162,7 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                         "/work/a-long-project-path/selected-project"
                     );
                     assert_eq!(app.project_picker.remote, remote);
-                    assert!(app.pending.is_none() && !app.preparing);
+                    assert!(app.pending.is_none() && !app.workspace.preparing());
                 }
                 let size = egui::vec2(650., 480.);
                 let snapshot = frame(&mut app, &ctx, &state, size, vec![]);
@@ -175,7 +176,7 @@ fn project_validation_and_actions_stay_visible_when_rules_scroll_on_small_window
                 );
                 frame(&mut app, &ctx, &state, size, vec![pointer(point, false)]);
                 assert!(app.dialog == Dialog::None);
-                assert!(app.pending.is_none() && !app.preparing);
+                assert!(app.pending.is_none() && !app.workspace.preparing());
                 assert!(app.notice.is_some(), "Browsing must retain the notice");
             }
         }

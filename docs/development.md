@@ -1014,6 +1014,17 @@ screen, replay and transport limits still apply while output is draining.
 
 ## Lifecycle and hex rendering review
 
+Use `python3 scripts/rust_tests.py --locked --profile ci -p rode --lib` for the
+isolated Rust regressions after workspace, lifecycle or input ownership changes.
+`app::workspace::control` checks stale/duplicate preparation replies, superseded
+confirmations, cancellation, active-context preservation and connection-token
+ownership. The application preparation test also submits an old confirmation
+after a replacement request starts. `app::lifecycle` and `app::sessions` check
+readiness/failure barriers and forced transport loss while a persistence reply
+is outstanding. Late worker edits still require a new dirty-buffer decision, while an unchanged approved discard does not. The notebook shutdown probe uses the real host service to check
+that ordinary leave/disable detaches persistent work and vault locking terminates
+it; the registry must retain shutdown ownership until acknowledgement.
+
 The regression tests cover native window close with clean encrypted-project buffers, waiting for active operations before verified lock, failed locks preventing exit, unbound buffers with plain-text extension checkers, remote tools exiting before reading their password input, asynchronous SSH terminal attachment, and starting a native service from an executable unlinked by an update. Project UI checks also start a new shell after replacing the running editor's file. Parallel SSH and sandbox helper directories use a per-process sequence in addition to PID/time, so equal clock samples cannot collide. Finished terminal views do not send another signal to their reaped child. Disassembly results retain their buffer version, offset and decoder mode; changing only decoding parameters reuses the full-file object report.
 
 `cargo test --lib app::lifecycle` also checks closing while a save acknowledgement is still in flight. A successful save completes the pending quit only when every buffer is clean; failed saves, newer edits, cancelled quits and encrypted-project cleanup retain their guards. The native editor smoke test waits for the formatted write instead of assuming a fixed formatter latency. SSH agent and debugger cleanup checks identify their marked child in the runner's PID namespace before shutdown, so sandbox-local PIDs cannot be mistaken for unrelated host processes. The installer UI fixture runs a private copy of the editor to avoid discovering a development bundle beside the original executable.
@@ -1028,11 +1039,20 @@ On the development machine, a dirty 8 MiB binary differing at its final byte too
 
 ## Keyboard navigation checks
 
+The navigation fixture explicitly starts interactive Bash in the terminal on
+the project host and waits for its readiness marker before checking readline
+Tab/Ctrl+K behavior. A desktop `SHELL` value does not select an SSH host's shell.
+Terminal command assertions wait for complete expected file contents, including
+the completion result, rather than treating redirection's file creation as
+command completion. Run the fixture locally and through the private SSH host
+after changing its shell setup; `RODE_TEST_SLOW_UI=1` and
+`RODE_TEST_AWKWARD_PATHS=1` exercise delayed frames and quoted temporary paths.
+
 `cargo test --lib navigation` checks default bindings, exact modifiers, leader input consumption, list selection, invalid-edit rollback, remapping/reload and per-binding concurrent preference merges. On an isolated X display, `RODE_TEST_BINARY=target/release/rode python3 scripts/test-navigation-ui.py` exercises the workflow entirely with keyboard events: explorer expansion/opening, file suggestions, pane focus, terminal creation/cycling, shell Tab/Ctrl+K, dialog return, resizing/maximization and UI binding persistence. Screenshots/logs are in `target/navigation-ui/`. Set `RODE_NAVIGATION_UI=1` when running `scripts/test-ssh.sh` to repeat the keyboard workflow over real SSH. Run the terminal-key, layout and project UI regressions after changes to focus routing. Window-manager grabs cannot be reproduced by the isolated X test; defaults deliberately contain no Alt.
 
 Style regressions use `cargo test --lib navigation`: preset validation/isolation, Standard indentation/comment/line commands, native Emacs mark/kill/yank, Unicode motions, Vim operators/counts/visual selection, shared native undo, batched input ordering and cancellation of queued input after context changes. Standard regressions cover reversed selections, the excluded next-line boundary, CRLF, empty/final lines, stable indentation, AltGr, IME composition, buffer limits, focus/modal barriers and key-release handling. `scripts/test-shortcut-styles-ui.py`, included in the workspace suite, checks actual native indentation, comments and line commands, Ctrl+X clipboard events, all three source keymaps, safe file saves, shell Ctrl+W, pane switching and immediate style persistence. Use `RODE_SHORTCUT_STYLES_UI=1` in the isolated SSH fixture for the same workflow over SSH. Captures/logs go to `target/shortcut-styles-ui/` and `target/shortcut-styles-ssh-ui/`.
 
-Source edits preceding a navigation prefix stay ahead of that prefix in the bounded replay queue. A deferred native Ctrl+X clipboard event retains its recognized prefix modifiers even after Ctrl is released. The Rust regression batches Emacs mark/kill/yank, replacement and Save into one input frame; the native fixture also batches the Emacs edit sequence when `RODE_TEST_SLOW_UI=1`. Buffer fingerprints and save acknowledgements distinguish editing failures from disk-write failures, and failed native runs retain the fixture documents and UI snapshot.
+Source edits preceding a navigation prefix or global shortcut stay ahead of that command in the bounded replay queue. `app::input` verifies that batched source edits reach disk before Save completes, tab/new/close commands preserve following input under the destination keymap, and replay requires acknowledgement from the matching native source widget. A deferred native Ctrl+X clipboard event retains its recognized prefix modifiers even after Ctrl is released. The Rust regression batches Emacs mark/kill/yank, replacement and Save into one input frame; the native fixture also batches the Emacs edit sequence when `RODE_TEST_SLOW_UI=1`. Buffer fingerprints and save acknowledgements distinguish editing failures from disk-write failures, and failed native runs retain the fixture documents and UI snapshot.
 
 ## Interface scaling checks
 

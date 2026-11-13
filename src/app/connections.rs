@@ -48,7 +48,7 @@ impl EditorApp {
         if self.workspace.as_ref().is_none_or(|w| w.remote.is_none()) {
             return;
         }
-        if self.sessions_need_exit_check() || self.agent_installation_pending() {
+        if self.runtime_work_pending() || self.agent_installation_pending() {
             self.notify(
                 "Wait for terminal startup or persistence changes to finish before disconnecting SSH.",
                 false,
@@ -62,11 +62,8 @@ impl EditorApp {
     pub(super) fn connection_completed(&mut self, result: Result<(), String>, ctx: &egui::Context) {
         match result {
             Ok(()) => {
-                if let Some(workspace) = &mut self.workspace {
-                    workspace.connected = true;
-                    let root = workspace.root.clone();
+                if let Some((root, options)) = self.workspace.connected() {
                     self.status = "SSH connected".into();
-                    let options = workspace.sandbox_options.clone();
                     let restore = self.startup_restore.take();
                     if self.vaults.lost && self.vaults.active.is_some() {
                         self.encrypted_dialog();
@@ -132,7 +129,7 @@ impl EditorApp {
                 self.connect(profile, ctx, true);
             } else {
                 // Local paths must never carry over into an SSH workspace.
-                self.guarded(Action::Remote(profile), ctx);
+                self.guarded(Action::Remote(Box::new(profile)), ctx);
             }
         } else {
             self.set_dialog(Dialog::Connect);
@@ -160,12 +157,15 @@ impl EditorApp {
             }
         }
         self.last_ssh = Some(remote.profile.clone());
-        self.connection_cancel.store(true, Ordering::Release);
+        self.workspace.cancel_connection();
         self.startup_restore = None;
         // Drop views before the master; persistent services retain their own jobs.
         // A lost encrypted lease still requires explicit unlock/lock recovery.
         let encrypted_lease = self.vaults.active.take();
-        self.clear_project(documents::Retention::Keep);
+        self.clear_project(
+            documents::Retention::Keep,
+            workspace::LeaveReason::Disconnected,
+        );
         if encrypted_lease.is_some() {
             self.vaults.active = encrypted_lease;
             self.vaults.lost = true;
@@ -295,7 +295,7 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         let mut workspace = crate::app::tests::remote_workspace();
         workspace.remote.as_mut().unwrap().profile.root = workspace.root.clone();
-        app.workspace = Some(workspace);
+        app.workspace.set_fixture(Some(workspace));
         app.new_file();
         let doc = &mut app.documents[0];
         doc.path = Some("/scratch/researcher/project/main.rs".into());
@@ -336,7 +336,7 @@ mod tests {
             let mut app = EditorApp::new(&cc, Startup::default());
             let mut workspace = crate::app::tests::remote_workspace();
             workspace.ready = ready;
-            app.workspace = Some(workspace);
+            app.workspace.set_fixture(Some(workspace));
             app.show_terminal = true;
             app.terminal_intent();
             Terminal::focus(&ctx);
@@ -505,7 +505,7 @@ mod tests {
             .unwrap();
         app.poll(&ctx);
         assert!(app.workspace.is_none());
-        assert!(!app.preparing);
+        assert!(!app.workspace.preparing());
     }
 
     #[test]
@@ -596,7 +596,7 @@ mod tests {
         assert!(app.can_resume_ssh(app.last_ssh.as_ref().unwrap()));
         let original_host = workspace.remote.as_ref().unwrap().profile.host.clone();
         workspace.remote.as_mut().unwrap().profile.host = "different-host".into();
-        app.workspace = Some(workspace);
+        app.workspace.set_fixture(Some(workspace));
         app.restore_ssh_buffers();
         assert!(app.documents[0].path.is_none());
         app.workspace
@@ -649,7 +649,7 @@ mod tests {
         let workspace = remembered_workspace(&app);
         app.disconnect_ssh(&ctx);
         app.documents[0].recovery.as_mut().unwrap().encrypted = true;
-        app.workspace = Some(workspace);
+        app.workspace.set_fixture(Some(workspace));
         app.restore_ssh_buffers();
         assert!(app.documents[0].path.is_none());
         assert!(app.documents[0].recovery.is_some());

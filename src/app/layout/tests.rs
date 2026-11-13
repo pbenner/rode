@@ -340,7 +340,8 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                     } else if scene == "slides" {
                         app.new_marp();
                         // Paint the toolbar without starting a project-host renderer.
-                        app.workspace = Some(crate::app::tests::remote_workspace());
+                        app.workspace
+                            .set_fixture(Some(crate::app::tests::remote_workspace()));
                         app.workspace.as_mut().unwrap().connected = false;
                     }
                     let dialogs = if scene == "dialogs" {

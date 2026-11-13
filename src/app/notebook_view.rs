@@ -173,6 +173,14 @@ impl View {
         self.display_ids.clear();
         self.pending_clear.clear();
     }
+    /// Typed workspace operations decide lifetime policy; status text is presentation only.
+    fn leave(&mut self, reason: workspace::LeaveReason) {
+        if reason.stops_persistent_work() {
+            self.stop(reason.message());
+        } else {
+            self.detach(reason.message());
+        }
+    }
     /// Return the current raw-JSON editing mode for execution guards.
     fn source(&mut self) -> bool {
         self.source_mode
@@ -341,16 +349,20 @@ impl EditorApp {
             self.notebook_shutdowns.clone(),
         ));
     }
+    /// Window-owned shutdowns and submitted view lifetime edits both block normal exit.
+    pub(super) fn notebook_lifetime_pending(&self) -> bool {
+        self.notebook_shutdowns.pending()
+            || self
+                .documents
+                .iter()
+                .any(|doc| doc.notebook.as_ref().is_some_and(View::lifetime_pending))
+    }
     /// Dispose notebook attachments when context changes. Encrypted-project locking
     /// explicitly stops even persistent kernels; other changes honor their persistence.
-    pub(super) fn stop_notebook_kernels(&mut self, reason: &str) {
+    pub(super) fn leave_notebooks(&mut self, reason: workspace::LeaveReason) {
         for doc in &mut self.documents {
             if let Some(view) = &mut doc.notebook {
-                if reason == "Locking encrypted project" {
-                    view.stop(reason);
-                } else {
-                    view.detach(reason);
-                }
+                view.leave(reason);
                 for cell in view.cells.values_mut() {
                     if let Some(preview) = &mut cell.preview {
                         preview.invalidate();
@@ -432,7 +444,7 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Notebooks) {
             return;
         }
-        if self.preparing
+        if self.workspace.preparing()
             || self
                 .workspace
                 .as_ref()
@@ -592,7 +604,7 @@ impl EditorApp {
     /// only to matching cell versions, serialize accepted changes and report cleanup failures.
     pub(super) fn poll_notebooks(&mut self, ctx: &egui::Context) {
         for error in self.notebook_shutdowns.poll() {
-            self.abort_session_quit(error, ctx);
+            self.abort_exit(error, ctx);
         }
         if self.notebook_shutdowns.pending() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -797,10 +809,10 @@ impl EditorApp {
             }
             doc.notebook = Some(view);
         }
-        if self.session_exit_pending()
+        if self.exit_pending()
             && let Some(error) = failure
         {
-            self.abort_session_quit(error, ctx);
+            self.abort_exit(error, ctx);
         }
     }
     fn notebook_picture_jobs(&self, view: &View, jobs: Vec<PictureJob>, ctx: &egui::Context) {

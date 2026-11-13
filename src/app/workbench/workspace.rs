@@ -584,8 +584,7 @@ impl EditorApp {
 
     /// Apply the same modal input boundary in whole-sidebar and individual-tab windows.
     fn detached_shortcuts(&mut self, ctx: &egui::Context) {
-        self.navigation_shortcuts(ctx);
-        self.shortcuts(ctx);
+        self.route_input(ctx);
         if self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal() {
             ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("terminal-input")));
         }
@@ -677,7 +676,7 @@ mod tests {
             let mut app = EditorApp::new(&cc, Startup::default());
             let mut workspace = crate::app::tests::remote_workspace();
             workspace.connected = false;
-            app.workspace = Some(workspace);
+            app.workspace.set_fixture(Some(workspace));
             app.toggle_panel(Panel::Settings, &ctx);
             app.workbench.detached = detached;
             app.workbench.tools_hidden = hidden;
@@ -997,9 +996,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    app.navigation_shortcuts(ctx);
-                    app.editing_shortcuts(ctx);
-                    app.shortcuts(ctx);
+                    app.route_input(ctx);
                     app.navigation.begin_layout();
                     app.activity(ctx);
                     app.explorer(ctx);

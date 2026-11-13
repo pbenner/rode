@@ -426,7 +426,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         let root = root.to_string_lossy().into_owned();
-        app.workspace = Some(Workspace {
+        app.workspace.set_fixture(Some(Workspace {
             root: root.clone(),
             remote: None,
             connected: true,
@@ -436,7 +436,7 @@ mod tests {
                 ..Default::default()
             },
             sandbox_options: Default::default(),
-        });
+        }));
         app.new_file();
         app.documents[0].path = Some(root_path(&app).join("main.tex").to_string_lossy().into());
         app.documents[0].text = "saved".into();
@@ -495,7 +495,10 @@ mod tests {
         assert!(app.document_issues(&app.documents[0]).is_empty());
         app.latex.busy = true;
         let cancel = app.latex.cancel.clone();
-        app.clear_project(documents::Retention::Keep);
+        app.clear_project(
+            documents::Retention::Keep,
+            workspace::LeaveReason::ProjectChanged,
+        );
         assert!(cancel.load(Ordering::Acquire));
         app.complete_latex(1, true, vec![(id, 2)], Ok(Default::default()), &ctx);
         assert!(app.latex.result.is_none());

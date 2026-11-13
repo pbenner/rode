@@ -37,6 +37,18 @@ pub(super) struct State {
     was_live: bool,
 }
 impl State {
+    /// Submitted lifetime edits cannot be detached until their reply is observed.
+    pub(super) fn change_pending(&self) -> bool {
+        self.client.as_ref().is_some_and(Client::lifetime_pending)
+    }
+    /// Cleanup stays with the debugger even after its visible attachment is reset.
+    pub(super) fn stopping(&self) -> bool {
+        self.cleanups.iter().any(|f| f.load(Ordering::Acquire))
+            || self.client.as_ref().is_some_and(Client::is_stopping)
+    }
+    pub(super) fn lifetime_pending(&self) -> bool {
+        self.change_pending() || self.stopping()
+    }
     /// Reset project UI without discarding retained asynchronous cleanup guards.
     fn reset_project(&mut self) {
         self.client = None;
@@ -357,15 +369,7 @@ impl EditorApp {
     }
     /// Include retired cleanup flags and the current controller's pending stop in lifecycle guards.
     pub(super) fn debugger_stopping(&self) -> bool {
-        self.debugger
-            .cleanups
-            .iter()
-            .any(|f| f.load(Ordering::Acquire))
-            || self
-                .debugger
-                .client
-                .as_ref()
-                .is_some_and(Client::is_stopping)
+        self.debugger.stopping()
     }
     /// Report a controller whose protocol phase has not ended; this is separate from cleanup pending.
     pub(super) fn debugger_active(&self) -> bool {
@@ -425,9 +429,8 @@ impl EditorApp {
         if client.phase == Phase::Starting || client.pending() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
-        if self.session_exit_pending() && !client.error.is_empty() && client.error != previous_error
-        {
-            self.abort_session_quit(client.error.clone(), ctx);
+        if self.exit_pending() && !client.error.is_empty() && client.error != previous_error {
+            self.abort_exit(client.error.clone(), ctx);
         }
         self.debugger.client = Some(client);
     }

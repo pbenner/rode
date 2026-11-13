@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn file_listing_waits_for_the_project_policy_instead_of_using_raw_host_access() {
         let (mut app, ctx) = app();
-        app.preparing = true;
+        app.workspace.begin_preparation();
         app.set_dialog(Dialog::Open);
         app.browse_files("/project".into(), &ctx);
         assert!(!app.file_browser.loading);

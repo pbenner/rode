@@ -606,7 +606,8 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_marp();
         app.documents[0].path = Some("/remote/slides.marp.md".into());
-        app.workspace = Some(crate::app::tests::remote_workspace());
+        app.workspace
+            .set_fixture(Some(crate::app::tests::remote_workspace()));
         app.detach_ssh(&ctx);
         app.start_marp(app.documents[0].id, Format::Pdf, None, &ctx);
         assert!(!app.documents[0].marp.as_ref().unwrap().busy);
@@ -635,7 +636,7 @@ mod tests {
         app.dialog = Dialog::None;
         app.guarded(Action::Quit, &ctx);
         assert!(matches!(app.pending, Some(Action::Quit)));
-        assert!(!app.quitting);
+        assert!(!app.exit.closing());
     }
 
     #[test]

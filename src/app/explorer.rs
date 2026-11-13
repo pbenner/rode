@@ -54,7 +54,7 @@ fn valid_name(name: &str) -> bool {
 impl EditorApp {
     fn explorer_writable(&self) -> bool {
         self.project_ready()
-            && !self.preparing
+            && !self.workspace.preparing()
             && !self.explorer_state.busy
             && !self.documents.has_pending_opens()
             && !self.documents.iter().any(|doc| doc.saving)
@@ -444,7 +444,7 @@ impl EditorApp {
                 });
             }
             ui.add_space(12.0);
-            if let Some(workspace) = &self.workspace {
+            if let Some(workspace) = self.workspace.as_ref() {
                 let root = workspace.root.clone();
                 let remote = workspace.remote.is_some();
                 let connected = workspace.connected;
