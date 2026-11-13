@@ -8,32 +8,27 @@ import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/sessions-ui")
-# Target each native window by its newly mapped XID.
-import ctypes
-import re
-
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click_button,
     close_window,
-    display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     palette_command,
     request_close,
     screenshot,
+    stop_process,
     text,
     wait_for_button,
     wait_for_project,
     wait_for_ui_state,
-    x11,
-    xtest,
+    wait_for_window,
+    write_python_launcher,
 )
-
-x11.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-x11.XResizeWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_uint, ctypes.c_uint]
 
 
 def wait_for(check, message):
@@ -44,24 +39,6 @@ def wait_for(check, message):
             return result
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def focus(window):
-    x11.XRaiseWindow(display, window)
-    focus_window(window)
-
-
-def window_for(process, previous):
-    for _ in range(150):
-        tree = subprocess.check_output(["xwininfo", "-root", "-tree"], text=True)
-        for match in re.finditer(r'(0x[0-9a-f]+) "RODE', tree):
-            window = int(match[1], 16)
-            if window not in previous:
-                focus(window)
-                return window
-        assert process.poll() is None
-        time.sleep(0.05)
-    raise AssertionError("No native RODE window")
 
 
 def wait_for_marker(path, expected, message):
@@ -81,6 +58,7 @@ def rpc(environment, action, **values):
         [str(BINARY), "--session-service", "request"],
         input=json.dumps(dict(action=action, **values)).encode(),
         env=environment,
+        timeout=10,
     )
     reply = json.loads(output)
     assert reply["kind"] != "error", reply
@@ -95,32 +73,33 @@ def run():
         tools.mkdir()
         released = root / "released"
         queue = tools / "squeue"
-        queue.write_text(
-            "#!/usr/bin/python3\nfrom pathlib import Path\n"
+        write_python_launcher(
+            queue,
+            "from pathlib import Path\n"
             f"if not Path({str(released)!r}).exists():\n"
             " print('42|RUNNING|2:30|1:00:00|gpu01|cpu=16,gres/gpu=4,gres/gpu:a100=4|training')\n"
-            "print('43|PENDING|0:00|2:00:00|(Resources)|gres/gpu=8|waiting')\n"
+            "print('43|PENDING|0:00|2:00:00|(Resources)|gres/gpu=8|waiting')\n",
         )
         cancel = tools / "scancel"
-        cancel.write_text(
-            "#!/usr/bin/python3\nimport os,sys\nfrom pathlib import Path\n"
+        write_python_launcher(
+            cancel,
+            "import os,sys\nfrom pathlib import Path\n"
             "assert sys.argv[1:]==['--user',str(os.geteuid()),'--','42']\n"
-            f'Path({str(released)!r}).write_text("42")\n'
+            f'Path({str(released)!r}).write_text("42")\n',
         )
         shell = tools / "shell"
         shell.write_text("#!/bin/sh\nexec /bin/bash --noprofile --norc\n")
         for path in [queue, cancel, shell]:
             path.chmod(0o755)
-        environment = dict(
-            os.environ,
-            XDG_CONFIG_HOME=str(base / "config"),
-            XDG_DATA_HOME=str(base / "data"),
+        environment = fixture_environment(
+            base,
             PATH=str(tools) + os.pathsep + os.environ["PATH"],
             SHELL=str(shell),
             RODE_SESSION_DIR=str(base / "sessions"),
         )
         processes, windows = [], []
         state_paths = {}
+        clients = {}
         with (ARTIFACTS / "native.log").open("w") as log:
 
             def launch():
@@ -133,11 +112,13 @@ def run():
                 )
                 processes.append(process)
                 state_paths[process.pid] = state_path
-                window = window_for(
-                    process, [wid for proc, wid in zip(processes, windows) if proc.poll() is None]
-                )
+                window = wait_for_window(process, ARTIFACTS / "native.log")
                 windows.append(window)
                 wait_for_project(window, process, ARTIFACTS / "native.log", root)
+                focus_window(window)
+                clients[process.pid] = NativeUI(
+                    window, process, ARTIFACTS / "native.log", state_path, root
+                )
                 return process, window
 
             def infos():
@@ -209,27 +190,14 @@ def run():
                 assert first["persistent"] is False, "New terminals must default to persistence off"
                 shell_command("TOKEN=preserved; echo ready > first.ok", "first.ok", "ready\n")
 
-                def persistence_button(
-                    enabled, name, width=1380, height=900, accent=(220, 163, 37)
-                ):
-                    # The toggle must stay at the far right in both states.
-                    # Move the pointer away before comparing the actual fill.
-                    control("terminal-persist:" + ("on" if enabled else "off"))
-                    xtest.XTestFakeMotionEvent(display, -1, 600, 200, 0)
-                    x11.XFlush(display)
-                    screenshot(window, name)
-                    raw = subprocess.check_output(
-                        ["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"]
+                def persistence_button(enabled, name):
+                    clients[process.pid].button_fill(
+                        "terminal-persist:" + ("on" if enabled else "off"),
+                        "terminal-new-menu",
+                        name,
+                        filled=enabled,
+                        right_edge="pane-Terminal",
                     )
-                    assert len(raw) == width * height * 3
-                    right = range(width - 92, width - 14)
-                    header = range(98, 122) if width >= 1000 else range(124, 148)
-                    filled = sum(
-                        raw[(y * width + x) * 3 : (y * width + x) * 3 + 3] == bytes(accent)
-                        for y in header
-                        for x in right
-                    )
-                    assert (filled > 500) if enabled else (filled < 100), (name, filled)
 
                 persistence_button(False, "persist-off.png")
                 click_control("terminal-persist:off")
@@ -260,11 +228,10 @@ def run():
                 )
                 control("terminal-persist:on")
                 command("Theme: Phosphor")
-                persistence_button(True, "persist-phosphor.png", accent=(125, 235, 164))
+                persistence_button(True, "persist-phosphor.png")
                 command("Theme: Carbon")
-                x11.XResizeWindow(display, window, 850, 560)
-                x11.XFlush(display)
-                persistence_button(True, "persist-compact.png", width=850, height=560)
+                clients[process.pid].resize(850, 560)
+                persistence_button(True, "persist-compact.png")
                 click_control("terminal-persist:on")
                 wait_for(
                     lambda: any(
@@ -272,7 +239,7 @@ def run():
                     ),
                     "Compact Persist button could not switch off",
                 )
-                persistence_button(False, "persist-compact-off.png", width=850, height=560)
+                persistence_button(False, "persist-compact-off.png")
                 click_control("terminal-persist:off")
                 wait_for(
                     lambda: any(
@@ -280,8 +247,7 @@ def run():
                     ),
                     "Compact Persist button could not switch on",
                 )
-                x11.XResizeWindow(display, window, 1380, 900)
-                x11.XFlush(display)
+                clients[process.pid].resize(1380, 900)
                 terminal_ready(first, refocus=True)
                 # Acknowledge the command before switching terminals, then keep
                 # it blocked until its view and desktop process have exited.
@@ -360,7 +326,7 @@ def run():
                 )
                 close_window(other_window, other)
                 assert any(info["id"] == first["id"] and info["alive"] for info in infos())
-                focus(window)
+                focus_window(window)
                 terminal_ready(first, refocus=True)
                 shell_command(
                     "printf '%s' \"$TOKEN\" > still-shared.ok", "still-shared.ok", "preserved"
@@ -368,7 +334,10 @@ def run():
                 command("Terminal: Sessions and Slurm allocations")
                 screenshot(window, "before-release.png")
                 # Refresh and removed terminal rows can move the allocation
-                # within the scroller. Click its current visible control.
+                # below the viewport, especially on a scaled/restored window.
+                clients[process.pid].scroll_to_control(
+                    "Release allocation", over="session-attach:" + first["id"]
+                )
                 click_control("Release allocation")
                 control("session-confirm")
                 assert not released.exists(), "Release ran without confirmation"
@@ -416,16 +385,14 @@ def run():
                 for process, window in zip(processes, windows):
                     if process.poll() is None:
                         try:
-                            focus(window)
+                            focus_window(window)
                             screenshot(window, f"failure-{process.pid}.png")
                         except Exception as error:
                             print(f"Could not capture window {process.pid}: {error}")
                 raise
             finally:
                 for process in processes:
-                    if process.poll() is None:
-                        process.terminate()
-                        process.wait(timeout=5)
+                    stop_process(process)
                 for info in infos():
                     rpc(environment, "end", id=info["id"], policy=info["policy"])
 

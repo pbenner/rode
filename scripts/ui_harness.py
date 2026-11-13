@@ -12,9 +12,11 @@ import contextlib
 import ctypes as c
 import hashlib
 import json
+import math
 import os
 import re
 import signal
+import statistics
 import subprocess
 import sys
 import time
@@ -451,6 +453,113 @@ class NativeUI:
             f"Window did not render at {width} × {height}",
         )
 
+    def scroll_to_control(self, name, *, over, timeout=12):
+        """Reveal a lower control using wheel input over a visible list child.
+
+        The initial anchor supplies a point inside the scroller even after that
+        child scrolls away. Recheck the target after every acknowledged wheel
+        event; never click it or assume a row count, screen position or delay.
+        """
+        deadline = time.monotonic() + timeout
+
+        def visible(state):
+            return any(button["name"] == name and button["enabled"] for button in state["buttons"])
+
+        state = self.layout()
+        if visible(state):
+            return
+        point = self.control(over, timeout=max(0.001, deadline - time.monotonic()))
+        focus_window(self.window)
+        while time.monotonic() < deadline:
+            before = state["pass"]
+            click(*point, button=5)
+            state = self.layout(
+                lambda state: state["pass"] > before,
+                f"List did not acknowledge scrolling toward {name!r}",
+                timeout=max(0.001, deadline - time.monotonic()),
+            )
+            if visible(state):
+                return
+        raise AssertionError(f"Could not scroll to {name!r}. Log: {self.log_path}")
+
+    def button_fill(self, name, reference, artifact, *, filled, right_edge=None, timeout=12):
+        """Check real button paint against an idle secondary button in the same frame.
+
+        Theme colours come from the rendered reference, not duplicated RGB
+        constants. Require two matching captures after pointer acknowledgement;
+        reject captures spanning geometry changes. An idle layout need not
+        repaint again. Polling never repeats clicks. Both image tools share the
+        observation deadline, so a stalled capture cannot hang the scenario.
+        """
+        deadline = time.monotonic() + timeout
+        before = self.layout()["pass"]
+        x, y, _, _ = window_geometry(self.window)
+        move_pointer(x + 4, y + 4)
+        previous = None
+        last = "No matching frame"
+
+        def controls(state):
+            buttons = {button["name"]: button for button in state["buttons"]}
+            names = [name, reference] + ([right_edge] if right_edge else [])
+            if any(key not in buttons for key in names):
+                return None
+            if any(
+                not buttons[key]["enabled"] or buttons[key]["hovered"] for key in [name, reference]
+            ):
+                return None
+            return tuple(tuple(buttons[key]["rect"]) for key in names)
+
+        while time.monotonic() < deadline:
+            state = self.layout(
+                lambda state: state["pass"] > before and controls(state) is not None,
+                f"No idle {name!r} and {reference!r} controls",
+                timeout=max(0.001, deadline - time.monotonic()),
+            )
+            bounds = controls(state)
+            scale = state["pixels_per_point"]
+            geometry = window_geometry(self.window)
+            _, _, width, height = geometry
+            signature = (bounds, scale, tuple(state["size"]), geometry)
+            if any(
+                abs(actual - logical * scale) > 2
+                for actual, logical in zip((width, height), state["size"])
+            ):
+                last = f"Window {geometry} disagrees with layout {state['size']} at scale {scale}"
+                previous = None
+                continue
+            try:
+                screenshot(self.window, artifact, timeout=max(0.001, deadline - time.monotonic()))
+                raw = subprocess.check_output(
+                    ["convert", str(ARTIFACTS / artifact), "-depth", "8", "rgb:-"],
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError(
+                    f"Button capture timed out: {artifact}. Log: {self.log_path}"
+                ) from error
+            after = self.layout(timeout=max(0.001, deadline - time.monotonic()))
+            if signature != (
+                controls(after),
+                after["pixels_per_point"],
+                tuple(after["size"]),
+                window_geometry(self.window),
+            ):
+                last = "Control or window geometry changed during capture"
+                previous = None
+                continue
+            if right_edge and abs(bounds[0][2] - bounds[2][2]) > 2:
+                raise AssertionError(f"{name} is not aligned with {right_edge}: {bounds}")
+            contrast = button_fill_contrast(raw, width, height, bounds[0], bounds[1], scale)
+            last = f"contrast={contrast:.3f}, bounds={bounds}, scale={scale}, pass={state['pass']}"
+            matches = contrast > 0.5 if filled else contrast < 0.35
+            if matches and previous == signature:
+                return contrast
+            previous = signature if matches else None
+        raise AssertionError(
+            f"{name} did not render {'filled' if filled else 'unfilled'} within {timeout}s. "
+            f"Last observation: {last}. Screenshot: {ARTIFACTS / artifact}. Log: {self.log_path}"
+        )
+
     def wait(self, check, message, *, timeout=20):
         """Poll an effect; missing files are transient, other fixture errors remain failures."""
         return wait_for_effect(
@@ -748,8 +857,8 @@ def focus_window(window, timeout=20):
     raise AssertionError(f"Cannot focus RODE window {hex(window)} within {timeout}s: {state}")
 
 
-def screenshot(window, name):
-    """Capture the owning window; scenario readiness must be established by its caller."""
+def screenshot(window, name, *, timeout=10):
+    """Bound capture of the owning window; callers establish scenario readiness."""
     subprocess.run(
         [
             "import",
@@ -760,7 +869,49 @@ def screenshot(window, name):
             str(ARTIFACTS / name),
         ],
         check=True,
+        timeout=timeout,
     )
+
+
+def button_fill_contrast(raw, width, height, rect, reference, scale):
+    """Fraction of a button interior contrasting with an idle reference fill.
+
+    Exclude strokes/focus rings and use the reference's median RGB to ignore
+    glyphs and antialiasing. A 12-level per-channel tolerance absorbs minor
+    raster differences; requiring most of the target to contrast rejects text
+    and outlines masquerading as a selected fill. Invalid captures fail loudly.
+    """
+    if len(raw) != width * height * 3:
+        raise AssertionError("Screenshot dimensions disagree with its RGB data")
+    if not math.isfinite(scale) or scale <= 0:
+        raise AssertionError(f"Invalid display scale: {scale}")
+
+    def interior(bounds):
+        left, top, right, bottom = bounds
+        left, top = math.ceil((left + 2) * scale), math.ceil((top + 2) * scale)
+        right, bottom = math.floor((right - 2) * scale), math.floor((bottom - 2) * scale)
+        if not (0 <= left < right <= width and 0 <= top < bottom <= height):
+            raise AssertionError(
+                f"Button interior {bounds} at {scale} is outside {width} × {height}"
+            )
+        return [
+            raw[(y * width + x) * 3 : (y * width + x) * 3 + 3]
+            for y in range(top, bottom)
+            for x in range(left, right)
+        ]
+
+    samples = interior(reference)
+    background = tuple(
+        statistics.median(pixel[channel] for pixel in samples) for channel in range(3)
+    )
+
+    def contrasts(pixel):
+        return any(abs(actual - expected) > 12 for actual, expected in zip(pixel, background))
+
+    if sum(not contrasts(pixel) for pixel in samples) / len(samples) <= 0.5:
+        raise AssertionError("Reference button has no dominant background fill")
+    pixels = interior(rect)
+    return sum(contrasts(pixel) for pixel in pixels) / len(pixels)
 
 
 def theme(name, *, ui):

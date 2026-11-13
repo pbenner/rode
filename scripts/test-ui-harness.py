@@ -16,12 +16,14 @@ from unittest.mock import Mock, call, patch
 from ui_harness import (
     NativeUI,
     background,
+    button_fill_contrast,
     click_button,
     delayed_input,
     focus_request,
     focus_window,
     palette_command,
     read_json_lines,
+    screenshot,
     stop_fixture_agents,
     stop_process,
     viewport_state_path,
@@ -647,6 +649,66 @@ class PaletteReadinessTests(unittest.TestCase):
         self.assertEqual(self.read.call_count, 5)
 
 
+class ButtonPaintTests(unittest.TestCase):
+    @staticmethod
+    def image(scale=1, *, fill=(210, 130, 40), background=(25, 30, 35), outline=False):
+        width, height = round(110 * scale), round(30 * scale)
+        pixels = bytearray(bytes(background) * width * height)
+        for y in range(round(4 * scale), round(26 * scale)):
+            for x in range(round(4 * scale), round(46 * scale)):
+                if (
+                    not outline
+                    or x < 6 * scale
+                    or x >= 44 * scale
+                    or y < 6 * scale
+                    or y >= 24 * scale
+                ):
+                    offset = (y * width + x) * 3
+                    pixels[offset : offset + 3] = bytes(fill)
+        return bytes(pixels), width, height, (4, 4, 46, 26), (55, 4, 105, 26), scale
+
+    def test_theme_colours_and_fractional_scaling_do_not_change_fill_detection(self):
+        for scale in [1, 1.25, 2]:
+            for colour in [(210, 130, 40), (100, 220, 170), (240, 100, 220)]:
+                self.assertGreater(button_fill_contrast(*self.image(scale, fill=colour)), 0.5)
+
+    def test_minor_raster_differences_are_tolerated_for_an_unfilled_button(self):
+        self.assertLess(button_fill_contrast(*self.image(fill=(31, 26, 43))), 0.35)
+
+    def test_missing_fill_and_focus_outline_cannot_satisfy_the_filled_check(self):
+        for options in [dict(fill=(25, 30, 35)), dict(outline=True)]:
+            self.assertLess(button_fill_contrast(*self.image(**options)), 0.5)
+
+    def test_text_pixels_do_not_masquerade_as_fill_or_corrupt_the_reference(self):
+        raw, width, height, rect, reference, scale = self.image(fill=(25, 30, 35))
+        pixels = bytearray(raw)
+        for left in [10, 61]:
+            for y in range(10, 15):
+                for x in range(left, left + 25):
+                    offset = (y * width + x) * 3
+                    pixels[offset : offset + 3] = bytes((230, 230, 230))
+        self.assertLess(button_fill_contrast(pixels, width, height, rect, reference, scale), 0.35)
+
+    def test_a_filled_button_cannot_satisfy_the_unfilled_check(self):
+        self.assertGreater(button_fill_contrast(*self.image()), 0.35)
+
+    def test_invalid_capture_or_control_geometry_is_not_treated_as_pending_paint(self):
+        raw, width, height, rect, reference, scale = self.image()
+        with self.assertRaisesRegex(AssertionError, "RGB data"):
+            button_fill_contrast(raw[:-1], width, height, rect, reference, scale)
+        for invalid in [(-10, 0, 10, 20), (0, 0, 3, 3), (0, 0, 1000, 1000)]:
+            with self.assertRaisesRegex(AssertionError, "outside"):
+                button_fill_contrast(raw, width, height, invalid, reference, scale)
+        with self.assertRaisesRegex(AssertionError, "display scale"):
+            button_fill_contrast(raw, width, height, rect, reference, 0)
+
+    def test_screenshot_process_has_an_explicit_deadline(self):
+        with patch.dict(os.environ, DISPLAY=":fixture"), patch("ui_harness.subprocess.run") as run:
+            screenshot(0x123, "paint.png", timeout=1.5)
+            self.assertEqual(run.call_args.kwargs["timeout"], 1.5)
+            self.assertTrue(run.call_args.kwargs["check"])
+
+
 class NativeUIReadinessTests(unittest.TestCase):
     def setUp(self):
         delay = patch("ui_harness.delayed_input", side_effect=lambda _: nullcontext())
@@ -688,6 +750,31 @@ class NativeUIReadinessTests(unittest.TestCase):
             self.assertEqual(read.call_count, 3)
             click.assert_not_called()
 
+    def test_visible_controls_need_no_scrolling(self):
+        state = dict(self.paint_state(0), buttons=[dict(name="release", enabled=True)])
+        with (
+            patch.object(self.ui, "layout", return_value=state),
+            patch("ui_harness.click") as click,
+        ):
+            self.ui.scroll_to_control("release", over="list-child")
+            click.assert_not_called()
+
+    def test_scrolling_uses_the_live_anchor_and_observes_each_wheel_event(self):
+        states = [
+            dict(self.paint_state(0), buttons=[]),
+            dict(self.paint_state(1), buttons=[dict(name="release", enabled=False)]),
+            dict(self.paint_state(2), buttons=[dict(name="release", enabled=True)]),
+        ]
+        with (
+            patch.object(self.ui, "layout", side_effect=states),
+            patch.object(self.ui, "control", return_value=(245, 367)) as control,
+            patch("ui_harness.focus_window"),
+            patch("ui_harness.click") as click,
+        ):
+            self.ui.scroll_to_control("release", over="list-child")
+            self.assertEqual(control.call_args.args, ("list-child",))
+            self.assertEqual(click.call_args_list, [call(245, 367, button=5)] * 2)
+
     def test_visual_background_waits_for_painted_pixels_without_a_fixed_render_delay(self):
         with (
             patch("ui_harness.screenshot") as capture,
@@ -698,6 +785,89 @@ class NativeUIReadinessTests(unittest.TestCase):
         ):
             background(0x123, "theme.png", (16, 16, 16))
             self.assertEqual(capture.call_count, 2)
+
+    @staticmethod
+    def paint_state(number, *, moved=False):
+        return {
+            "pid": 42,
+            "pass": number,
+            "size": [110, 30],
+            "pixels_per_point": 1,
+            "buttons": [
+                dict(
+                    name="toggle",
+                    enabled=True,
+                    hovered=False,
+                    rect=[4 if not moved else 5, 4, 46, 26],
+                ),
+                dict(name="reference", enabled=True, hovered=False, rect=[55, 4, 105, 26]),
+            ],
+        }
+
+    def test_fill_waits_for_two_captures_without_demanding_idle_repaints_or_activating_input(self):
+        # A correct idle UI need not repaint after acknowledging the pointer.
+        states = [self.paint_state(0)] + [self.paint_state(1)] * 6
+        with (
+            patch.object(self.ui, "layout", side_effect=states),
+            patch("ui_harness.window_geometry", return_value=(0, 0, 110, 30)),
+            patch("ui_harness.move_pointer") as move,
+            patch("ui_harness.screenshot") as capture,
+            patch("ui_harness.subprocess.check_output", return_value=b"pixels"),
+            patch("ui_harness.button_fill_contrast", side_effect=[0.1, 0.8, 0.8]),
+            patch("ui_harness.click") as click,
+            patch("ui_harness.key") as key,
+        ):
+            self.ui.button_fill("toggle", "reference", "paint.png", filled=True)
+            self.assertEqual(capture.call_count, 3)
+            move.assert_called_once_with(4, 4)
+            click.assert_not_called()
+            key.assert_not_called()
+
+    def test_capture_spanning_a_layout_change_is_discarded(self):
+        states = [self.paint_state(number, moved=number >= 2) for number in range(7)]
+        with (
+            patch.object(self.ui, "layout", side_effect=states),
+            patch("ui_harness.window_geometry", return_value=(0, 0, 110, 30)),
+            patch("ui_harness.move_pointer"),
+            patch("ui_harness.screenshot") as capture,
+            patch("ui_harness.subprocess.check_output", return_value=b"pixels"),
+            patch("ui_harness.button_fill_contrast", return_value=0.8) as contrast,
+        ):
+            self.ui.button_fill("toggle", "reference", "paint.png", filled=True)
+            self.assertEqual(capture.call_count, 3)
+            self.assertEqual(contrast.call_count, 2)
+
+    def test_capture_timeout_reports_the_artifact_and_log(self):
+        with (
+            patch.object(self.ui, "layout", side_effect=[self.paint_state(0), self.paint_state(1)]),
+            patch("ui_harness.window_geometry", return_value=(0, 0, 110, 30)),
+            patch("ui_harness.move_pointer"),
+            patch("ui_harness.screenshot", side_effect=subprocess.TimeoutExpired("capture", 3)),
+            self.assertRaisesRegex(AssertionError, "paint.png.*log"),
+        ):
+            self.ui.button_fill("toggle", "reference", "paint.png", filled=True)
+
+    def test_missing_or_stuck_fill_fails_with_contrast_and_artifact_diagnostics(self):
+        for filled, contrast in [(True, 0.1), (False, 0.8)]:
+            with self.subTest(filled=filled):
+                ticks = iter(number / 100 for number in range(100))
+                with (
+                    patch("ui_harness.time.monotonic", side_effect=lambda: next(ticks)),
+                    patch.object(
+                        self.ui,
+                        "layout",
+                        side_effect=[self.paint_state(0)] + [self.paint_state(1)] * 30,
+                    ),
+                    patch("ui_harness.window_geometry", return_value=(0, 0, 110, 30)),
+                    patch("ui_harness.move_pointer"),
+                    patch("ui_harness.screenshot"),
+                    patch("ui_harness.subprocess.check_output", return_value=b"pixels"),
+                    patch("ui_harness.button_fill_contrast", return_value=contrast),
+                    self.assertRaisesRegex(AssertionError, "contrast=.*paint.png.*log"),
+                ):
+                    self.ui.button_fill(
+                        "toggle", "reference", "paint.png", filled=filled, timeout=0.25
+                    )
 
     def test_complete_path_not_just_the_first_edit_is_required_before_submission(self):
         path = "folder/file with spaces.txt"
