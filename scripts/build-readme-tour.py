@@ -8,6 +8,7 @@ The screenshots remain unmodified inside the caption frame.
 """
 
 import argparse
+import json
 import shutil
 import subprocess
 import tempfile
@@ -28,7 +29,7 @@ SCENES = [
         4,
         2,
         "Work where your files live.",
-        "OpenSSH aliases, keys and jump hosts | reuse the authenticated connection",
+        "SSH aliases, keys and jump hosts | tools run on the project host",
         "Actual SSH connection to an isolated loopback host",
     ),
     (
@@ -36,8 +37,8 @@ SCENES = [
         4,
         3,
         "One project. One sandbox policy.",
-        "Editor access, shells, agents and tools share the active policy",
-        "Actual bubblewrap sandbox | explicit filesystem grants",
+        "Project policy for editor access, agents and tools | separate terminal and Git modes",
+        "Actual project sandbox | explicit filesystem grants",
     ),
     (
         "04-persist-off",
@@ -68,7 +69,7 @@ SCENES = [
         3,
         6,
         "Choose your coding agent.",
-        "Codex, local models and ACP | project-host execution",
+        "Codex, Claude Code, local models and ACP | project-host execution",
         "Provider controls | no model call or staged conversation",
     ),
     (
@@ -84,8 +85,8 @@ SCENES = [
         3,
         8,
         "Review changes in the editor.",
-        "Git diffs, staging, branches and worktrees on the project host",
-        "Real Git diff in the demonstration repository",
+        "Change markers and inline previews | Git staging, branches and worktrees",
+        "Real Git change preview in the demonstration repository",
     ),
 ]
 
@@ -104,6 +105,8 @@ def main():
     for name, *_ in SCENES:
         if not (options.captures / f"{name}.png").is_file():
             parser.error(f"Missing native capture: {name}.png")
+    manifest = options.captures / "capture.json"
+    metadata = json.loads(manifest.read_text()) if manifest.exists() else {}
     font = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
     if not font.is_file():
         parser.error(f"Required font not found: {font}")
@@ -113,6 +116,9 @@ def main():
         work = Path(directory)
         frames = []
         for index, (name, seconds, chapter, title, subtitle, note) in enumerate(SCENES):
+            if name == "03-sandbox" and metadata.get("sandbox_backend") in ("bwrap", "landlock"):
+                backend = "Landlock" if metadata["sandbox_backend"] == "landlock" else "bubblewrap"
+                note = f"Actual {backend} sandbox | explicit filesystem grants"
             filters = ["pad=1380:1040:0:100:color=0x101010"]
             for label, content, x, y, size, colour in (
                 ("title", title, "28", 16, 38, "0xe0ad37"),

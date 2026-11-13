@@ -756,7 +756,7 @@ Shared tool presentation lives in `src/app/layout.rs`; see the [UI layout conven
 
 The README embeds `assets/rode-tour.gif` and links to an H.264 MP4 and a still PNG. The 30-second tour holds captioned native screenshots rather than recording every idle frame. The GIF uses variable frame durations and a shared palette; the MP4 uses H.264, `yuv420p` and fast-start metadata. Keep the GIF below 1 MiB when refreshing it and inspect the encoded text at README size.
 
-`scripts/capture-readme-tour.py` captures a fresh demonstration project at 1380×900 with isolated preferences and session storage. It uses the native UI harness and the existing loopback SSH fixture. Install the UI/SSH prerequisites above and provide a Python environment containing `jupyter_client`, `ipykernel` and Matplotlib. Build the current editor and matching helper before capturing:
+`scripts/capture-readme-tour.py` captures a fresh demonstration project at 1380×900 with isolated preferences and session storage. It uses named native controls and readiness acknowledgements from the UI harness, including the inline Git change preview, and the existing loopback SSH fixture. Install the UI/SSH prerequisites above and provide a Python environment containing `jupyter_client`, `ipykernel` and Matplotlib. Build the current editor and matching helper before capturing:
 
 ```sh
 cargo build --locked --release --bins
@@ -764,11 +764,11 @@ RODE_TEST_BINARY="$PWD/target/release/rode" \
 RODE_SESSION_HELPER="$PWD/target/release/rode-sessiond" \
 RODE_TEST_JUPYTER=/absolute/path/to/python \
 RODE_SSH_RUN_TRANSPORT=0 LIBGL_ALWAYS_SOFTWARE=1 \
-xvfb-run -a -s '-screen 0 1600x1100x24' \
+python3 scripts/ui_display.py -- \
   bash scripts/test-ssh.sh python3 scripts/capture-readme-tour.py
 ```
 
-The capture script checks real notebook output and the terminal persistence acknowledgements, records the source revision and binary/capture hashes in `target/readme-demo/captures/capture.json`, and publishes the new capture set only after all scenes complete. `--output` selects another capture directory. It removes its temporary project and closes its owned sessions. Review the captured screens after UI changes, since interaction coordinates may need updating.
+The capture script checks real notebook output and the terminal persistence acknowledgements, records the source revision, selected sandbox backend and binary/capture hashes in `target/readme-demo/captures/capture.json`, and publishes the new capture set only after all scenes complete. `--output` selects another capture directory. It removes its temporary project and closes its owned sessions. Review every captured screen after UI changes. The SSH scenes use an active Landlock sandbox by default; pass `--sandbox-backend bwrap` on a host that supports bubblewrap. Capture fails if the requested sandbox is unavailable rather than labelling normal mode as sandboxed.
 
 `scripts/build-readme-tour.py` lists the captions and timings. With FFmpeg (including libx264 and drawtext) and DejaVu Sans installed, encode the captures into the three assets:
 
@@ -776,7 +776,7 @@ The capture script checks real notebook output and the terminal persistence ackn
 python3 scripts/build-readme-tour.py target/readme-demo/captures
 ```
 
-The captures use the native editor, a real Python notebook kernel, a real loopback SSH connection, active bubblewrap isolation and a real Git diff. The terminal frames show persistence being enabled. The agent frame shows provider selection without model inference. The Slurm form uses the existing deterministic scheduler fixture with an empty queue; it requests no real allocation. Keep those distinctions in the captions. Saved captures stay under ignored `target/`; do not capture personal chats, credentials or private projects. A clean checkout needs fresh captures before encoding.
+The captures use the native editor, a real Python notebook kernel, a real loopback SSH connection, an active project sandbox and a real Git change preview. Local scenes use normal project mode; the remote scenes verify active sandboxing. The terminal frames show persistence being enabled. The agent frame shows provider selection without model inference. The Slurm form uses the existing deterministic scheduler fixture with an empty queue; it requests no real allocation. Keep those distinctions in the captions. Saved captures stay under ignored `target/`; do not capture personal chats, credentials or private projects. A clean checkout needs fresh captures before encoding.
 
 After regeneration, check all three files visually, use `ffprobe` to check duration/dimensions/codec, and review README links. Re-encoding existing captures needs no application rebuild. Repository-relative GIF embedding works without uploading a GitHub attachment; the MP4 is a linked file, not an assumed inline README video player.
 

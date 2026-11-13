@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Capture the README tour from the current native editor on a private X display.
 
-Run under xvfb-run and scripts/test-ssh.sh with RODE_SSH_RUN_TRANSPORT=0.
+Run under scripts/ui_display.py and scripts/test-ssh.sh with RODE_SSH_RUN_TRANSPORT=0.
 Uses installed Jupyter packages, an isolated demo project and an empty Slurm
 fixture. No model inference or real scheduler allocation is requested.
 """
 
 import argparse
-import ctypes
 import hashlib
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+from fixture_support import fixture_directory, fixture_environment
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = '''import math
@@ -77,6 +77,7 @@ def main():
     """Create isolated demo projects and deterministic service fixtures, capture native views and clean up owned processes."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "target/readme-demo/captures")
+    parser.add_argument("--sandbox-backend", choices=("landlock", "bwrap"), default="landlock")
     options = parser.parse_args()
     binary = Path(os.environ.get("RODE_TEST_BINARY", ROOT / "target/release/rode")).resolve()
     helper = Path(os.environ.get("RODE_SESSION_HELPER", binary.parent / "rode-sessiond")).resolve()
@@ -92,8 +93,7 @@ def main():
     subprocess.run([str(python), "-c", "import jupyter_client, ipykernel, matplotlib"], check=True)
     options.output.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="rode-tour-") as directory:
-        base = Path(directory)
+    with fixture_directory(prefix="rode-tour-") as base:
         project = base / "signal-lab"
         project.mkdir()
         captures = base / "captures"
@@ -102,12 +102,9 @@ def main():
         os.environ["RODE_SESSION_DIR"] = str(base / "sessions")
         import ui_harness as ui
 
-        ui.x11.XResizeWindow.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_ulong,
-            ctypes.c_uint,
-            ctypes.c_uint,
-        ]
+        # The shared harness may relocate artifacts into a configured CI run.
+        # Publish from its actual directory rather than the requested path.
+        captures = ui.ARTIFACTS
         (project / "analysis.py").write_text(SOURCE)
         (project / "README.md").write_text(
             "# Signal Lab\n\nA synthetic experiment for the RODE feature tour.\n\n"
@@ -118,7 +115,7 @@ def main():
         (project / "pyproject.toml").write_text(
             '[project]\nname = "signal-lab"\nversion = "0.1.0"\nrequires-python = ">=3.11"\n'
         )
-        (project / ".gitignore").write_text(".venv\n__pycache__/\n")
+        (project / ".gitignore").write_text(".venv\n__pycache__/\n.tour-*\n")
         (project / ".venv").symlink_to(python.parent.parent)
         notebook = project / "results.ipynb"
         notebook.write_text(
@@ -179,38 +176,31 @@ def main():
             '#!/bin/sh\nexport PS1="signal-lab $ "\nexec /bin/bash --noprofile --norc\n'
         )
         shell.chmod(0o755)
-        environment = dict(
-            os.environ,
-            XDG_CONFIG_HOME=str(base / "config"),
-            XDG_DATA_HOME=str(base / "data"),
-            XDG_CACHE_HOME=str(base / "cache"),
+        environment = fixture_environment(
+            base,
             MPLCONFIGDIR=str(base / "matplotlib"),
             RODE_SESSION_HELPER=str(helper),
             SHELL=str(shell),
             PATH=str(tools) + os.pathsep + os.environ["PATH"],
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL="/dev/null",
         )
+        # The local scenes intentionally demonstrate ordinary project mode.
+        # The remote scene below requests and verifies an active sandbox.
+        preferences = Path(environment["XDG_DATA_HOME"]) / "rode/app.ron"
+        preferences.parent.mkdir(parents=True, exist_ok=True)
+        preferences.write_text(json.dumps({"sandbox_defaults": json.dumps({"enabled": False})}))
 
-        def command(value):
-            """Invoke a typed application command through the real command palette and allow a render pass."""
-            ui.key("p", ("Control_L", "Shift_L"))
-            ui.text(value)
-            ui.key("Return")
-            time.sleep(0.4)
-
-        def open_file(name):
-            """Focus the editor and select a fixture document through the native file picker."""
-            ui.key("space", ("Control_L",))
-            ui.key("e")
-            ui.key("p", ("Control_L",))
-            ui.text(name)
-            ui.key("Return")
-            time.sleep(0.5)
-
-        def capture(window, name):
-            """Move the pointer outside the editor, capture its native window and announce the artifact name."""
-            ui.xtest.XTestFakeMotionEvent(ui.display, -1, 1500, 1020, 0)
-            ui.x11.XFlush(ui.display)
-            ui.screenshot(window, name + ".png")
+        def capture(native, name):
+            """Capture an acknowledged native scene with its pointer outside the content."""
+            before = native.layout()["pass"]
+            x, y, _, _ = ui.window_geometry(native.window)
+            ui.move_pointer(x + 4, y + 4)
+            native.layout(lambda state: state["pass"] > before, "Pointer move was not acknowledged")
+            # The first capture lets pending presentation finish; retain the
+            # second capture, then inspect every scene before publication.
+            ui.screenshot(native.window, name + ".png")
+            ui.screenshot(native.window, name + ".png")
             print(f"Captured {name}", flush=True)
 
         def sessions():
@@ -228,55 +218,84 @@ def main():
         def editor(args, env, name):
             """Own one demo process/window, capturing failures and reaping only that process on every exit path."""
             with (options.output / f"{name}.log").open("w") as log:
+                state_path = base / f"{name}-ui-state.json"
                 process = subprocess.Popen(
-                    [str(binary), *args, "--theme", "carbon"], env=env, stdout=log, stderr=log
+                    [str(binary), *args, "--theme", "carbon"],
+                    env=dict(env, RODE_UI_TEST_STATE=str(state_path)),
+                    stdout=log,
+                    stderr=log,
                 )
                 window = None
                 try:
                     window = ui.wait_for_window(process, options.output / f"{name}.log")
+                    ui.wait_for_project(window, process, log.name, project)
                     ui.focus_window(window)
-                    ui.x11.XResizeWindow(ui.display, window, 1380, 900)
-                    ui.x11.XFlush(ui.display)
-                    time.sleep(0.8)
-                    yield window
+                    native = ui.NativeUI(window, process, log.name, state_path, project)
+                    native.resize(1380, 900)
+                    yield native
                     ui.close_window(window, process)
                 except Exception:
-                    if window and process.poll() is None:
-                        capture(window, name + "-failure")
-                        shutil.copyfile(
-                            captures / f"{name}-failure.png", options.output / f"{name}-failure.png"
-                        )
+                    try:
+                        if window and process.poll() is None:
+                            ui.screenshot(window, name + "-failure.png")
+                            shutil.copyfile(
+                                captures / f"{name}-failure.png",
+                                options.output / f"{name}-failure.png",
+                            )
+                        if state_path.exists():
+                            shutil.copyfile(state_path, options.output / f"{name}-failure.json")
+                    except Exception as error:
+                        print(f"Could not retain {name} failure diagnostics: {error}")
                     raise
                 finally:
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                            process.wait()
+                    ui.stop_process(process)
 
         try:
-            with editor([str(project)], environment, "local") as window:
-                open_file("README.md")
-                open_file("analysis.py")
-                capture(window, "01-editor")
-                command("Terminal: New terminal")
+            with editor([str(project)], environment, "local") as native:
+                native.open_file("README.md")
+                native.open_file("analysis.py")
+                native.control("git-change-modified:4")
+                capture(native, "01-editor")
+                native.command("Terminal: New terminal")
                 wait_for(lambda: len(sessions()) == 1, "Demo terminal did not start")
-                ui.text("clear\npython3 analysis.py\n")
-                time.sleep(0.5)
-                capture(window, "04-persist-off")
-                ui.click(1325, 108)
+                native.terminal_input()
+                ui.text("clear; python3 analysis.py; printf ready > .tour-terminal-ready\n")
+                native.wait(
+                    lambda: (project / ".tour-terminal-ready").exists(),
+                    "Terminal command did not finish",
+                )
+                native.button_fill(
+                    "terminal-persist:off", "terminal-new-menu", "04-persist-off.png", filled=False
+                )
+                native.click("terminal-persist:off")
                 wait_for(lambda: sessions()[0]["persistent"], "Persistence was not enabled")
-                capture(window, "04-persist-on")
-                ui.click(1325, 108)
+                native.button_fill(
+                    "terminal-persist:on", "terminal-new-menu", "04-persist-on.png", filled=True
+                )
+                native.click("terminal-persist:on")
                 wait_for(lambda: not sessions()[0]["persistent"], "Persistence was not disabled")
-                open_file("results.ipynb")
-                command("Notebook: Run all cells")
+                native.open_file("results.ipynb")
+                native.layout(
+                    lambda state: state.get("notebook") is not None, "Notebook did not load"
+                )
+                native.command("Notebook: Run all cells")
+                native.layout(
+                    lambda state: (
+                        (current := state.get("notebook")) is not None
+                        and not current["busy"]
+                        and current["cells"][0]["execution_count"] is not None
+                    ),
+                    "Notebook execution did not finish",
+                    timeout=45,
+                )
+                ui.key("s", ("Control_L",))
+                native.layout(
+                    lambda state: (state.get("notebook") or {}).get("saved") is True,
+                    "Notebook save was not acknowledged",
+                )
 
                 def plot_saved():
-                    """Save notebook state and report a real PNG output, surfacing kernel errors instead of waiting indefinitely."""
-                    ui.key("s", ("Control_L",))
+                    """Observe the acknowledged save; never resubmit Save while waiting for output."""
                     outputs = json.loads(notebook.read_text())["cells"][0]["outputs"]
                     errors = [output for output in outputs if output["output_type"] == "error"]
                     if errors:
@@ -284,25 +303,24 @@ def main():
                     return any("image/png" in output.get("data", {}) for output in outputs)
 
                 wait_for(plot_saved, "The real notebook kernel did not return a plot", timeout=45)
-                time.sleep(0.5)
-                capture(window, "05-notebook")
-                command("Agent: Chat")
-                ui.click(1173, 116)
-                capture(window, "06-agents")
+                capture(native, "05-notebook")
+                native.command("Agent: Chat")
+                native.click("agent-provider-menu")
+                native.control("agent-provider-Claude")
+                capture(native, "06-agents")
                 ui.key("Escape")
-                command("Terminal: Allocate Slurm resources")
-                time.sleep(0.5)
-                capture(window, "07-slurm")
+                native.absent("agent-provider-Claude")
+                native.command("Terminal: Allocate Slurm resources")
+                native.control("menu-file", enabled=False)
+                capture(native, "07-slurm")
                 assert not (base / "slurm-state/job.json").exists(), (
                     "Demo requested a scheduler allocation"
                 )
                 ui.key("Escape")
-                open_file("analysis.py")
-                command("Git: Source control")
-                time.sleep(0.8)
-                ui.click(337, 325)
-                capture(window, "08-git")
-                ui.click(1226, 142)
+                native.open_file("analysis.py")
+                native.click("git-change-modified:4")
+                native.control("git-peek-diff")
+                capture(native, "08-git")
         finally:
             # Only this fixture's private service and its owned terminals.
             for session in sessions():
@@ -318,20 +336,20 @@ def main():
                     timeout=10,
                 )
 
-        ssh_tools = base / "ssh-tools"
-        ssh_tools.mkdir()
-        wrapper = ssh_tools / "ssh"
-        wrapper.write_text(
-            "#!/usr/bin/python3\nimport os,sys\nbinary="
-            + repr(shutil.which("ssh"))
-            + '\nos.execv(binary,[binary]+["-T" if a=="-tt" else a for a in sys.argv[1:]])\n'
+        remote_environment = fixture_environment(base / "remote", environment=environment)
+        policy = {"enabled": True, "backend": options.sandbox_backend}
+        project_key = json.dumps(
+            [["rode-test", "", "", ssh_config, ""], str(project)], separators=(",", ":")
         )
-        wrapper.chmod(0o755)
-        remote_environment = dict(
-            environment,
-            PATH=str(ssh_tools) + os.pathsep + environment["PATH"],
-            XDG_CONFIG_HOME=str(base / "remote-config"),
-            XDG_DATA_HOME=str(base / "remote-data"),
+        preferences = Path(remote_environment["XDG_DATA_HOME"]) / "rode/app.ron"
+        preferences.parent.mkdir(parents=True, exist_ok=True)
+        preferences.write_text(
+            json.dumps(
+                {
+                    "sandbox_defaults": json.dumps(policy),
+                    "project_preferences": json.dumps({project_key: {"sandbox": policy}}),
+                }
+            )
         )
         with editor(
             [
@@ -345,28 +363,25 @@ def main():
             ],
             remote_environment,
             "ssh",
-        ) as window:
+        ) as native:
 
             def connected():
                 """Wait for the SSH fixture title to confirm prepared sandbox state rather than an opening project."""
-                info = subprocess.check_output(["xwininfo", "-id", hex(window)], text=True)
+                info = subprocess.check_output(
+                    ["xwininfo", "-id", hex(native.window)], text=True, timeout=5
+                )
                 return "[Sandbox]" in info and "[Opening project]" not in info
 
-            wait_for(connected, "SSH project did not enter an actual bubblewrap sandbox")
-            time.sleep(1)
-            ui.click(115, 265)
-            time.sleep(0.8)
-            ui.key("space", ("Control_L",))
-            ui.key("e")
-            capture(window, "02-ssh")
-            command("Project: Settings and sandbox access")
-            ui.xtest.XTestFakeMotionEvent(ui.display, -1, 1160, 700, 0)
-            for _ in range(15):
-                ui.xtest.XTestFakeButtonEvent(ui.display, 5, 1, 0)
-                ui.xtest.XTestFakeButtonEvent(ui.display, 5, 0, 0)
-                ui.x11.XFlush(ui.display)
-                time.sleep(0.06)
-            capture(window, "03-sandbox")
+            wait_for(
+                connected, f"SSH project did not enter an actual {options.sandbox_backend} sandbox"
+            )
+            native.open_file("analysis.py")
+            native.control("source-editor", focused=True)
+            capture(native, "02-ssh")
+            native.command("Project: Settings and sandbox access")
+            native.click("settings-category-Sandbox")
+            native.control("settings-save")
+            capture(native, "03-sandbox")
 
         manifest = {
             "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -374,6 +389,7 @@ def main():
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip(),
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "sandbox_backend": options.sandbox_backend,
             "captures": {},
         }
         for name in SCENES:
