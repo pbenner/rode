@@ -266,10 +266,10 @@ fn notebook_shutdown_probe() {
         app.reload_clean_documents(&ctx);
         let mut events = Vec::new();
         loop {
-            let event = app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let event = app.workers.receive_timeout(Duration::from_secs(5)).unwrap();
             let reloaded = matches!(
                 &event,
-                Event::Workspace { event, .. }
+                workers::Message::Workspace(event)
                     if matches!(event.as_ref(), WorkspaceEvent::Done { job: Job::Reload { .. }, .. })
             );
             events.push(event);
@@ -278,7 +278,15 @@ fn notebook_shutdown_probe() {
             }
         }
         for event in events {
-            app.tx.send(event).unwrap();
+            match event {
+                workers::Message::Workspace(event) => {
+                    app.workers.workspace(&ctx).send(*event).unwrap();
+                }
+                workers::Message::Profiles(event) => {
+                    app.workers.profiles(&ctx).send(event).unwrap();
+                }
+                workers::Message::Expired => {}
+            }
         }
         app.poll(&ctx);
         let doc = &app.documents[0];

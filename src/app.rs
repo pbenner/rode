@@ -34,6 +34,7 @@ mod commands;
 mod connections;
 mod debugging;
 mod dialogs;
+mod diff_view;
 mod documents;
 mod editor_view;
 mod execution;
@@ -79,7 +80,7 @@ use std::{
     time::{Duration, Instant},
 };
 use workbench::{Panel, ToolJob, Workbench};
-use workers::{Event, Job, WorkspaceEvent};
+use workers::{Job, WorkspaceEvent};
 
 /// Validate the serialized map before shared preference merging accepts project settings.
 pub(crate) fn validate_project_preferences(text: &str) -> Result<(), serde_json::Error> {
@@ -195,8 +196,8 @@ pub struct EditorApp {
     git_gutter: git_gutter::State,
     /// Cleanup ownership survives notebook view replacement and tab removal.
     notebook_shutdowns: notebook_view::Shutdowns,
-    /// Captured host/project generation; old workers may finish but cannot update this context.
-    generation: u64,
+    /// Owns completion admission and the workspace clock independently of domain state.
+    workers: workers::Inbox,
     explorer_state: explorer::State,
     terminal: Option<Terminal>,
     sessions: sessions::Sessions,
@@ -225,8 +226,6 @@ pub struct EditorApp {
     pending: Option<Action>,
     quitting: bool,
     connection_cancel: Arc<AtomicBool>,
-    tx: mpsc::Sender<Event>,
-    rx: mpsc::Receiver<Event>,
     notice: Option<(String, bool, Instant)>,
     status: String,
     font_size: f32,
@@ -300,7 +299,6 @@ impl EditorApp {
         cc.egui_ctx.set_zoom_factor(ui_scale);
         let markdown_images = Arc::new(markdown::Images::default());
         cc.egui_ctx.add_texture_loader(markdown_images.clone());
-        let (tx, rx) = mpsc::channel();
         let mut app = Self {
             vaults: Default::default(),
             latex: Default::default(),
@@ -320,7 +318,7 @@ impl EditorApp {
             documents: Default::default(),
             git_gutter: Default::default(),
             notebook_shutdowns: Default::default(),
-            generation: 0,
+            workers: Default::default(),
             explorer_state: Default::default(),
             terminal: None,
             sessions: Default::default(),
@@ -352,8 +350,6 @@ impl EditorApp {
             pending: None,
             quitting: false,
             connection_cancel: Arc::new(AtomicBool::new(false)),
-            tx,
-            rx,
             notice: None,
             status: "Ready".into(),
             font_size: storage
@@ -685,7 +681,7 @@ impl EditorApp {
             self.connection_cancel.store(true, Ordering::Release);
             self.terminal = None;
             self.release_workspace_transport();
-            self.generation += 1;
+            self.workers.invalidate_workspace();
             self.workbench.reset_monitor();
             self.explorer_state.loading.clear();
             self.documents.reconnecting();
@@ -712,9 +708,7 @@ impl EditorApp {
                 self.status = "Connecting · complete any prompts in the terminal".into();
                 let cancel = Arc::new(AtomicBool::new(false));
                 self.connection_cancel = cancel.clone();
-                let tx = self.tx.clone();
-                let thread_ctx = ctx.clone();
-                let generation = self.generation;
+                let replies = self.workers.workspace(ctx);
                 let vault_work = self.vaults.work();
                 std::thread::spawn(move || {
                     let _vault_work = vault_work;
@@ -737,11 +731,7 @@ impl EditorApp {
                         }
                         std::thread::sleep(Duration::from_millis(200));
                     };
-                    let _ = tx.send(Event::workspace(
-                        generation,
-                        WorkspaceEvent::Connected { result },
-                    ));
-                    thread_ctx.request_repaint();
+                    let _ = replies.send(WorkspaceEvent::Connected { result });
                 });
                 Terminal::focus(ctx);
             }

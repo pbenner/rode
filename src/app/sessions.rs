@@ -413,9 +413,7 @@ impl EditorApp {
         self.sessions.busy = true;
         let remote = self.session_remote();
         let root = self.session_plan().root;
-        let generation = self.generation;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
@@ -439,11 +437,7 @@ impl EditorApp {
                 }
             })()
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::Session { job, result },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::Session { job, result });
         });
     }
     /// Open terminal/runtime/scheduler discovery and queue independent metadata refreshes.
@@ -485,9 +479,7 @@ impl EditorApp {
                 cancel,
             },
         };
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
-        let generation = self.generation;
+        let replies = self.workers.workspace(ctx);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
@@ -500,11 +492,7 @@ impl EditorApp {
             })
             .and_then(|response| response.tool.context("Missing Slurm response"))
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::Session { job, result },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::Session { job, result });
         });
     }
     /// Drain runtime completions, advance waiting exits and refresh visible session/scheduler caches.

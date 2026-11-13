@@ -8,10 +8,11 @@ use super::*;
 use crate::sandbox::PlanExt as _;
 
 mod diff;
+mod peek;
 mod repository;
 #[cfg(test)]
 mod tests;
-use diff::Marker;
+use diff::Changes;
 
 const REFRESH: Duration = Duration::from_secs(2);
 const DEBOUNCE: Duration = Duration::from_millis(150);
@@ -36,7 +37,8 @@ pub(super) struct State {
     baseline: Option<repository::Baseline>,
     refreshed: Option<Instant>,
     observed: Option<(u64, Instant)>,
-    rendered: Option<(u64, Vec<Marker>)>,
+    rendered: Option<(u64, Changes)>,
+    peek: Option<usize>,
 }
 
 pub(super) struct Completed {
@@ -44,7 +46,12 @@ pub(super) struct Completed {
     version: u64,
     refreshed: bool,
     baseline: Option<repository::Baseline>,
-    markers: Vec<Marker>,
+    changes: Changes,
+}
+
+pub(super) enum PeekAction {
+    Navigate(usize),
+    Close,
 }
 
 /// Clear the global concurrency slot on every exit, including cancellation/panic.
@@ -72,6 +79,7 @@ impl State {
         self.refreshed = None;
         self.observed = None;
         self.rendered = None;
+        self.peek = None;
     }
 
     fn select(&mut self, key: Key, version: u64, now: Instant) {
@@ -80,6 +88,7 @@ impl State {
             self.key = Some(key);
         }
         if self.observed.is_none_or(|(v, _)| v != version) {
+            self.peek = None;
             // Initial display is immediate; subsequent edits are debounced.
             let changed = if self.observed.is_none() {
                 now - DEBOUNCE
@@ -115,7 +124,27 @@ impl State {
         }
         // Painting also checks the current version, so an edit in this frame or
         // between dispatch and completion cannot temporarily shift old markers.
-        self.rendered = Some((result.version, result.markers));
+        if self.peek.is_some()
+            && self
+                .rendered
+                .as_ref()
+                .is_none_or(|(v, changes)| *v != result.version || changes != &result.changes)
+        {
+            self.peek = None;
+        }
+        self.rendered = Some((result.version, result.changes));
+    }
+
+    /// Keep decorations and open previews tied to one document and buffer revision.
+    fn current(&self, doc: &Document) -> Option<&Changes> {
+        let key = self.key.as_ref()?;
+        if key.id != doc.id || doc.path.as_ref() != Some(&key.path) {
+            return None;
+        }
+        self.rendered
+            .as_ref()
+            .filter(|(version, _)| *version == doc.edit_version)
+            .map(|(_, changes)| changes)
     }
 
     /// Draw only admitted, current markers in the strip between numbers and text.
@@ -126,17 +155,8 @@ impl State {
         gutter: egui::Rect,
         rows: editor_view::gutter::Rows<'_>,
         palette: theme::Palette,
-    ) {
-        if self
-            .key
-            .as_ref()
-            .is_none_or(|k| k.id != doc.id || doc.path.as_ref() != Some(&k.path))
-        {
-            return;
-        }
-        if let Some((version, markers)) = &self.rendered
-            && *version == doc.edit_version
-        {
+    ) -> Option<usize> {
+        if let Some(changes) = self.current(doc) {
             let response = ui.interact(
                 gutter.intersect(ui.clip_rect()),
                 egui::Id::new(("git-gutter-state", doc.id)),
@@ -151,8 +171,13 @@ impl State {
                 },
                 &response,
             );
-            diff::paint(ui, markers, doc.id, gutter, rows, palette);
+            let marker = diff::paint(ui, &changes.markers, doc.id, gutter, rows, palette)?;
+            return changes
+                .hunks
+                .iter()
+                .position(|hunk| hunk.markers.contains(&marker));
         }
+        None
     }
 }
 
@@ -215,9 +240,7 @@ impl EditorApp {
         let remote = workspace.remote.clone();
         let plan = workspace.plan.clone();
         let vault_work = self.vaults.work();
-        let generation = self.generation;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         std::thread::spawn(move || {
             let _running = running;
             let _vault_work = vault_work;
@@ -247,29 +270,25 @@ impl EditorApp {
                 } else {
                     baseline
                 };
-                let markers = if cancel.load(Ordering::Acquire) {
-                    Vec::new()
+                let changes = if cancel.load(Ordering::Acquire) {
+                    Changes::default()
                 } else {
                     baseline
                         .as_ref()
-                        .and_then(|base| diff::markers(&base.text, &text))
+                        .and_then(|base| diff::compare(&base.text, &text))
                         .unwrap_or_default()
                 };
-                (baseline, markers)
+                (baseline, changes)
             }))
             .unwrap_or_default();
             if !cancel.load(Ordering::Acquire) {
-                let _ = tx.send(Event::workspace(
-                    generation,
-                    WorkspaceEvent::GitGutter(Completed {
-                        token,
-                        version,
-                        refreshed: refresh,
-                        baseline: result.0,
-                        markers: result.1,
-                    }),
-                ));
-                ctx.request_repaint();
+                let _ = replies.send(WorkspaceEvent::GitGutter(Completed {
+                    token,
+                    version,
+                    refreshed: refresh,
+                    baseline: result.0,
+                    changes: result.1,
+                }));
             }
         });
     }

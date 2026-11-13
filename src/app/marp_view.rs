@@ -413,13 +413,11 @@ impl EditorApp {
         };
         let page = view.pdf.as_ref().map_or(1, |pdf| pdf.page);
         let version = doc.edit_version;
-        let generation = self.generation;
         let plan = self.workspace.as_ref().map(|w| w.plan.clone());
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
         let gate = self.marp_gate.clone();
         let budget = self.image_budget.clone();
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let limit = ctx.input(|i| i.max_texture_side);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
@@ -460,17 +458,13 @@ impl EditorApp {
                 Ok(Completed::Preview(loaded, reply.warnings))
             })()
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::Marp {
-                    id,
-                    version,
-                    token,
-                    exporting,
-                    result: Box::new(result),
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::Marp {
+                id,
+                version,
+                token,
+                exporting,
+                result: Box::new(result),
+            });
         });
     }
     /// Accept preview/export results only for the captured document, source and request identity.
@@ -558,9 +552,7 @@ impl EditorApp {
             return;
         };
         let version = doc.edit_version;
-        let generation = self.generation;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let budget = self.image_budget.clone();
         let limit = ctx.input(|i| i.max_texture_side);
         let vault_work = self.vaults.work();
@@ -570,17 +562,13 @@ impl EditorApp {
             let result = source
                 .render(page, &budget, limit, &cancel)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::MarpPage {
-                    id,
-                    version,
-                    token,
-                    page,
-                    result,
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::MarpPage {
+                id,
+                version,
+                token,
+                page,
+                result,
+            });
         });
     }
     /// Schedule a cancellable render of one page from the retained slide-preview PDF.

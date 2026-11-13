@@ -1,5 +1,6 @@
 //! Bounded line comparison and viewport-clipped gutter geometry.
 use super::*;
+use std::{fmt::Write as _, ops::Range};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -16,11 +17,28 @@ pub(super) struct Marker {
     pub kind: Kind,
 }
 
+/// One exact edit operation with zero-based, half-open HEAD/current line ranges.
+/// Split replacement markers share this same preview, including final-newline state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Hunk {
+    pub markers: Range<usize>,
+    pub old: Range<usize>,
+    pub new: Range<usize>,
+    pub patch: String,
+}
+
+/// Decorations and previews are produced together from one bounded comparison.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Changes {
+    pub markers: Vec<Marker>,
+    pub hunks: Vec<Hunk>,
+}
+
 /// Compare Unicode line content, normalizing CRLF as Git's text checkouts do
 /// while retaining missing final newlines. A deadline failure omits markers
 /// instead of displaying an approximate whole-file replacement. Large documents
 /// never enter the diff algorithm.
-pub(super) fn markers(old: &str, new: &str) -> Option<Vec<Marker>> {
+pub(super) fn compare(old: &str, new: &str) -> Option<Changes> {
     if [old, new].iter().any(|s| {
         s.len() > MAX_BYTES
             || s.contains('\0')
@@ -40,9 +58,14 @@ pub(super) fn markers(old: &str, new: &str) -> Option<Vec<Marker>> {
     if Instant::now() >= deadline {
         return None;
     }
-    let mut markers = Vec::new();
+    let mut changes = Changes::default();
     for op in diff.ops() {
         let (tag, old, new) = op.as_tag_tuple();
+        if tag == similar::DiffTag::Equal {
+            continue;
+        }
+        let markers = &mut changes.markers;
+        let first = markers.len();
         let (removed, inserted) = (old.len(), new.len());
         use similar::DiffTag;
         match tag {
@@ -82,8 +105,32 @@ pub(super) fn markers(old: &str, new: &str) -> Option<Vec<Marker>> {
                 }
             }
         }
+        let mut patch = format!(
+            "@@ -{},{} +{},{} @@\n",
+            old.start + usize::from(!old.is_empty()),
+            old.len(),
+            new.start + usize::from(!new.is_empty()),
+            new.len(),
+        );
+        for change in diff.iter_changes(op) {
+            let prefix = match change.tag() {
+                similar::ChangeTag::Delete => '-',
+                similar::ChangeTag::Insert => '+',
+                similar::ChangeTag::Equal => ' ',
+            };
+            let _ = write!(patch, "{prefix}{}", change.value());
+            if change.missing_newline() {
+                patch.push_str("\n\\ No newline at end of file\n");
+            }
+        }
+        changes.hunks.push(Hunk {
+            markers: first..markers.len(),
+            old,
+            new,
+            patch,
+        });
     }
-    Some(markers)
+    Some(changes)
 }
 
 pub(super) fn paint(
@@ -93,14 +140,15 @@ pub(super) fn paint(
     gutter: egui::Rect,
     rows: editor_view::gutter::Rows<'_>,
     palette: theme::Palette,
-) {
+) -> Option<usize> {
     let clip = gutter.intersect(ui.clip_rect());
     if !clip.is_positive() {
-        return;
+        return None;
     }
     let painter = ui.painter().with_clip_rect(clip);
     let x = gutter.right() - 8.;
-    for marker in markers {
+    let mut clicked = None;
+    for (index, marker) in markers.iter().enumerate() {
         let span = if marker.kind == Kind::Deleted {
             let boundary = rows.boundary(marker.line);
             egui::Rect::from_min_max(egui::pos2(x, boundary), egui::pos2(x, boundary))
@@ -168,15 +216,20 @@ pub(super) fn paint(
         }
         let response = ui
             .interact(
-                visible,
+                visible.expand2(egui::vec2(2., 0.)).intersect(clip),
                 egui::Id::new(("git-gutter", id, name, marker.line)),
-                Sense::hover(),
+                Sense::click(),
             )
-            .on_hover_text(label);
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(format!("{label} · Click to show change"));
         ui_probe::button(
             ui,
             &format!("git-change-{name}:{}", marker.line + 1),
             &response,
         );
+        if response.clicked() {
+            clicked = Some(index);
+        }
     }
+    clicked
 }

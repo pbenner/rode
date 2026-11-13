@@ -304,9 +304,7 @@ impl EditorApp {
         };
         let version = doc.edit_version;
         let budget = self.image_budget.clone();
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
-        let generation = self.generation;
+        let replies = self.workers.workspace(ctx);
         let texture_limit = ctx.input(|input| input.max_texture_side);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
@@ -315,17 +313,13 @@ impl EditorApp {
             let result = source
                 .render(page, &budget, texture_limit, &cancel)
                 .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::PdfPage {
-                    id,
-                    version,
-                    token,
-                    page,
-                    result,
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::PdfPage {
+                id,
+                version,
+                token,
+                page,
+                result,
+            });
         });
     }
     /// Schedule a bounded page render with captured document version, request token and cancellation.

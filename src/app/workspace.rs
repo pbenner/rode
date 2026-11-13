@@ -40,7 +40,7 @@ impl EditorApp {
         self.explorer_state.reset();
         self.file_browser.reset();
         self.navigation.editing = Default::default();
-        self.generation += 1;
+        self.workers.invalidate_workspace();
         self.show_find = false;
     }
 

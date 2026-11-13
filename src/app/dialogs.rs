@@ -181,7 +181,7 @@ impl EditorApp {
                 self.guarded(Action::Remote(*profile), ctx);
             }
             Some(saved_connections::FormIntent::Save) => {
-                self.connection_profiles.save(&self.tx, ctx);
+                self.connection_profiles.save(self.workers.profiles(ctx));
             }
             Some(saved_connections::FormIntent::Cancel) => self.dialog = Dialog::None,
             Some(saved_connections::FormIntent::Error(error)) => self.notify(error, true),

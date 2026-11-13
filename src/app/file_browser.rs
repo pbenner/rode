@@ -658,21 +658,19 @@ mod tests {
         let token = app.file_browser.token;
         app.set_dialog(Dialog::HexOpen);
         app.dialog_input = "keep.bin".into();
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::BrowseFiles {
-                        token,
-                        local: false,
-                        path: "/first".into(),
-                    },
-                    result: Box::new(Ok(files::Response {
-                        path: "/stale".into(),
-                        ..Default::default()
-                    })),
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::BrowseFiles {
+                    token,
+                    local: false,
+                    path: "/first".into(),
                 },
-            ))
+                result: Box::new(Ok(files::Response {
+                    path: "/stale".into(),
+                    ..Default::default()
+                })),
+            })
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.dialog_input, "keep.bin");
@@ -680,21 +678,19 @@ mod tests {
         let token = app.file_browser.token;
         app.file_browser.requested = "/old".into();
         app.file_browser.location = "/new".into();
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::BrowseFiles {
-                        token,
-                        local: false,
-                        path: "/old".into(),
-                    },
-                    result: Box::new(Ok(files::Response {
-                        path: "/stale".into(),
-                        ..Default::default()
-                    })),
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::BrowseFiles {
+                    token,
+                    local: false,
+                    path: "/old".into(),
                 },
-            ))
+                result: Box::new(Ok(files::Response {
+                    path: "/stale".into(),
+                    ..Default::default()
+                })),
+            })
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.file_browser.location, "/new");
@@ -708,26 +704,24 @@ mod tests {
         app.file_browser.requested = "/project".into();
         app.file_browser.location = "/project".into();
         let token = app.file_browser.token;
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::BrowseFiles {
-                        token,
-                        local: false,
-                        path: "/project".into(),
-                    },
-                    result: Box::new(Ok(files::Response {
-                        path: "/canonical/project".into(),
-                        entries: vec![Entry {
-                            path: "/canonical/project/file.txt".into(),
-                            name: "file.txt".into(),
-                            dir: false,
-                        }],
-                        ..Default::default()
-                    })),
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::BrowseFiles {
+                    token,
+                    local: false,
+                    path: "/project".into(),
                 },
-            ))
+                result: Box::new(Ok(files::Response {
+                    path: "/canonical/project".into(),
+                    entries: vec![Entry {
+                        path: "/canonical/project/file.txt".into(),
+                        name: "file.txt".into(),
+                        dir: false,
+                    }],
+                    ..Default::default()
+                })),
+            })
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.dialog_input, "new-name.txt");
@@ -747,7 +741,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|e| e.contains("environment"))
         );
-        assert!(app.rx.try_recv().is_err());
+        assert!(app.workers.is_empty());
     }
     #[test]
     fn loading_disables_stale_rows_without_losing_keyboard_focus() {

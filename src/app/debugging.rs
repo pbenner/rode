@@ -192,7 +192,7 @@ impl EditorApp {
             );
             return;
         }
-        if self.debugger.draft_generation == Some(self.generation)
+        if self.debugger.draft_generation == Some(self.workers.generation())
             && let Err(e) = self.apply_debug_config()
         {
             self.notify(format!("Invalid debugger configuration: {e}"), true);
@@ -439,11 +439,11 @@ impl EditorApp {
             "Launch, pause and inspect programs on the project host",
             self.themes.active().palette,
         );
-        if self.debugger.draft_generation != Some(self.generation) {
+        if self.debugger.draft_generation != Some(self.workers.generation()) {
             self.debugger
                 .config
                 .load(&self.workbench.debugger_settings().config);
-            self.debugger.draft_generation = Some(self.generation);
+            self.debugger.draft_generation = Some(self.workers.generation());
         }
         let host = self
             .workspace

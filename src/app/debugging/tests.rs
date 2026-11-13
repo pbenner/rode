@@ -163,6 +163,62 @@ fn delayed_source_navigation_waits_for_old_reads_and_cancels_on_resume() {
     assert_eq!(app.documents.active_index(), unchanged);
     assert!(app.debugger.pending_jump.is_none());
 }
+
+#[test]
+fn focused_source_does_not_acknowledge_a_pending_step_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let state_path = directory.path().join("ui-state.json");
+    let ctx = egui::Context::default();
+    ui_probe::install_at(&ctx, state_path.clone());
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_file();
+    let doc = app.documents.active_mut().unwrap();
+    doc.path = Some("/project/main.py".into());
+    doc.text = "first\nλ second\nthird\nfourth\n".into();
+    doc.saved_text = doc.text.clone();
+    doc.selection = Some((0, 0));
+    app.focus_editor(&ctx);
+    let render = |app: &mut EditorApp| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200., 800.),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.editor(ctx),
+        );
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&state_path).unwrap()).unwrap()
+    };
+    let focused = |state: &serde_json::Value, name: &str| {
+        state["buttons"].as_array().unwrap().iter().any(|button| {
+            button["name"] == name && button["enabled"] == true && button["focused"] == true
+        })
+    };
+    render(&mut app);
+    render(&mut app);
+    let mut client = Client::default();
+    client.phase = Phase::Paused;
+    for row in [3, 4] {
+        app.debugger.pending_jump = Some(navigation::Target::new(
+            "/project/main.py".into(),
+            row,
+            1,
+            client.inspection_epoch(),
+        ));
+        let destination = format!("source-editor-cursor:{row}:1");
+        let before = render(&mut app);
+        // A fresh, focused editor frame can still precede the source jump.
+        assert!(focused(&before, "source-editor"));
+        assert!(!focused(&before, &destination));
+        app.resolve_debug_source(&client, &ctx);
+        let after = render(&mut app);
+        assert!(focused(&after, &destination), "{after}");
+        assert!(app.debugger.pending_jump.is_none());
+    }
+}
 #[test]
 fn configuration_draft_keeps_incomplete_json_without_reparsing_on_draw() {
     let mut draft = configuration::Draft::default();

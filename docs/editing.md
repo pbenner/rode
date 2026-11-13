@@ -7,6 +7,17 @@ source editor shows changes beside the line numbers: green bars for added lines,
 blue bars for modified lines, and red triangles where lines were deleted. Hover
 a marker for its meaning. Breakpoints and diagnostics keep their own gutter space.
 
+Click a marker to reveal its source location and open a read-only change preview
+inside the editor. Removed
+lines appear in red and added lines in green, with the old and current line
+ranges above them. **Previous** and **Next** move between changes and reveal the
+corresponding source location. Click the same marker again, select **Close**, or
+press **Escape** to dismiss the preview. The preview uses the same comparison as
+the markers, including unsaved text; opening it does not save, stage or discard
+anything. It closes when the buffer, file or comparison changes, so an old hunk
+cannot be mistaken for current code.
+Previews above 1 MiB display a truncation notice.
+
 Markers compare the current buffer with the file in `HEAD`, including staged and
 unsaved edits. New, non-ignored files show added lines; ignored files and files
 outside a repository have no markers. Committing changes updates the baseline

@@ -157,23 +157,21 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
             let chosen = app.project_picker.sandbox.clone();
             app.project_picker.needs_load = false;
             app.project_picker.loading = true;
-            app.tx
-                .send(Event::workspace(
-                    app.generation,
-                    WorkspaceEvent::Done {
-                        job: Job::Browse {
-                            remote,
-                            token: app.project_picker.token,
-                            path: path.into(),
-                            options,
-                        },
-                        result: Box::new(Ok(files::Response {
-                            path: path.into(),
-                            entries: vec![entry("/project/selected folder/child", true)],
-                            ..Default::default()
-                        })),
+            app.workers
+                .workspace(&ctx)
+                .send(WorkspaceEvent::Done {
+                    job: Job::Browse {
+                        remote,
+                        token: app.project_picker.token,
+                        path: path.into(),
+                        options,
                     },
-                ))
+                    result: Box::new(Ok(files::Response {
+                        path: path.into(),
+                        entries: vec![entry("/project/selected folder/child", true)],
+                        ..Default::default()
+                    })),
+                })
                 .unwrap();
             app.poll(&ctx);
             assert_eq!(app.project_picker.sandbox, chosen);
@@ -239,22 +237,20 @@ fn canonical_folder_replies_restore_saved_policy_only_before_the_user_edits_it()
         }
         let chosen = app.project_picker.sandbox.clone();
         app.project_picker.needs_load = false;
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::Browse {
-                        remote: false,
-                        token: browse.token,
-                        path: browse.path,
-                        options: browse.options,
-                    },
-                    result: Box::new(Ok(files::Response {
-                        path: canonical.into(),
-                        ..Default::default()
-                    })),
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::Browse {
+                    remote: false,
+                    token: browse.token,
+                    path: browse.path,
+                    options: browse.options,
                 },
-            ))
+                result: Box::new(Ok(files::Response {
+                    path: canonical.into(),
+                    ..Default::default()
+                })),
+            })
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.project_picker.path, canonical);
@@ -471,18 +467,16 @@ fn stale_directory_replies_cannot_restore_rows_or_clear_new_loading_state() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.explorer_state.epoch = 2;
     app.explorer_state.loading.insert("/project".into());
-    app.tx
-        .send(Event::workspace(
-            app.generation,
-            WorkspaceEvent::Done {
-                job: Job::List("/project".into(), 1),
-                result: Box::new(Ok(Response {
-                    path: "/project".into(),
-                    entries: vec![entry("/project/stale", false)],
-                    ..Default::default()
-                })),
-            },
-        ))
+    app.workers
+        .workspace(&ctx)
+        .send(WorkspaceEvent::Done {
+            job: Job::List("/project".into(), 1),
+            result: Box::new(Ok(Response {
+                path: "/project".into(),
+                entries: vec![entry("/project/stale", false)],
+                ..Default::default()
+            })),
+        })
         .unwrap();
     app.poll(&ctx);
     assert!(app.explorer_state.directories.is_empty());

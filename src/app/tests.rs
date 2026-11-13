@@ -471,22 +471,20 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
         sandbox: Default::default(),
     })
     .unwrap();
-    app.tx
-        .send(Event::workspace(
-            app.generation,
-            WorkspaceEvent::Done {
-                job: Job::Prepare {
-                    remote: false,
-                    options: Default::default(),
-                    keep_buffers: false,
-                    token: 1,
-                    documents_at_start: vec![],
-                    restore_saved: None,
-                    open_file: Some(file.to_string_lossy().into_owned()),
-                },
-                result: Box::new(Ok(response)),
+    app.workers
+        .workspace(&ctx)
+        .send(WorkspaceEvent::Done {
+            job: Job::Prepare {
+                remote: false,
+                options: Default::default(),
+                keep_buffers: false,
+                token: 1,
+                documents_at_start: vec![],
+                restore_saved: None,
+                open_file: Some(file.to_string_lossy().into_owned()),
             },
-        ))
+            result: Box::new(Ok(response)),
+        })
         .unwrap();
     app.poll(&ctx);
     assert!(matches!(
@@ -555,7 +553,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     doc.modified = true;
     doc.edit_version = 3;
     doc.selection = Some((2, 5));
-    let generation = app.generation;
+    let generation = app.workers.generation();
     let project_token = app.project_token;
     let folder_token = app.project_picker.token;
     let cancel = app.connection_cancel.clone();
@@ -566,7 +564,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     assert!(!app.preparing);
     assert!(cancel.load(Ordering::Acquire));
     assert!(!remote.socket.exists());
-    assert!(app.generation > generation);
+    assert!(app.workers.generation() > generation);
     assert!(app.project_token > project_token);
     assert!(app.project_picker.token > folder_token);
     assert_eq!(app.documents[0].text, "unsaved remote edits");
@@ -583,11 +581,9 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     assert!(app.pending.is_none());
     assert!(app.ssh_master.is_none());
     assert!(app.terminal.is_none());
-    app.tx
-        .send(Event::workspace(
-            generation,
-            WorkspaceEvent::Connected { result: Ok(()) },
-        ))
+    app.workers
+        .workspace_at(&ctx, generation)
+        .send(WorkspaceEvent::Connected { result: Ok(()) })
         .unwrap();
     app.poll(&ctx);
     assert!(app.workspace.is_none());
@@ -685,19 +681,17 @@ fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
         project: None,
         tool: None,
     };
-    app.tx
-        .send(Event::workspace(
-            app.generation,
-            WorkspaceEvent::Done {
-                job: Job::Browse {
-                    remote: false,
-                    token,
-                    path: old,
-                    options: app.project_picker.sandbox.clone(),
-                },
-                result: Box::new(Ok(response.clone())),
+    app.workers
+        .workspace(&ctx)
+        .send(WorkspaceEvent::Done {
+            job: Job::Browse {
+                remote: false,
+                token,
+                path: old,
+                options: app.project_picker.sandbox.clone(),
             },
-        ))
+            result: Box::new(Ok(response.clone())),
+        })
         .unwrap();
     app.poll(&ctx);
     assert_eq!(app.dialog_input, "keep-this.rs");
@@ -705,19 +699,17 @@ fn late_folder_browse_cannot_overwrite_another_dialog_or_user_input() {
     let old = app.project_picker.path.clone();
     let token = app.project_picker.token;
     app.project_picker.path = "/newly/typed/path".into();
-    app.tx
-        .send(Event::workspace(
-            app.generation,
-            WorkspaceEvent::Done {
-                job: Job::Browse {
-                    remote: false,
-                    token,
-                    path: old,
-                    options: app.project_picker.sandbox.clone(),
-                },
-                result: Box::new(Ok(response)),
+    app.workers
+        .workspace(&ctx)
+        .send(WorkspaceEvent::Done {
+            job: Job::Browse {
+                remote: false,
+                token,
+                path: old,
+                options: app.project_picker.sandbox.clone(),
             },
-        ))
+            result: Box::new(Ok(response)),
+        })
         .unwrap();
     app.poll(&ctx);
     assert_eq!(app.project_picker.path, "/newly/typed/path");

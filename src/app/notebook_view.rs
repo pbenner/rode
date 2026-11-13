@@ -380,22 +380,16 @@ impl EditorApp {
         let id = doc.id;
         let version = doc.edit_version;
         let text = doc.text.clone();
-        let generation = self.generation;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
             let result = Notebook::parse(&text).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::NotebookParsed {
-                    id,
-                    version,
-                    result,
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::NotebookParsed {
+                id,
+                version,
+                result,
+            });
         });
     }
     /// Install a parsed notebook only for the still-current document version;

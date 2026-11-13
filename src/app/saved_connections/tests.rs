@@ -352,21 +352,23 @@ fn saved_connection_results_preserve_drafts_and_prevent_stale_reload() {
     );
     app.new_file();
     app.documents[0].text = "unsaved source".into();
-    app.tx
-        .send(Event::Profiles(ProfileEvent::Changed {
+    app.workers
+        .profiles(&ctx)
+        .send(ProfileEvent::Changed {
             result: Err("Read-only configuration".into()),
             removed: Some("Alpha".into()),
-        }))
+        })
         .unwrap();
     app.poll(&ctx);
     assert_eq!(app.connection_profiles.profiles.len(), 3);
     assert!(!app.connection_profiles.saving);
     assert!(app.notice.as_ref().unwrap().1);
-    app.tx
-        .send(Event::Profiles(ProfileEvent::Changed {
+    app.workers
+        .profiles(&ctx)
+        .send(ProfileEvent::Changed {
             result: Ok(profiles().into_iter().skip(1).collect()),
             removed: Some("Alpha".into()),
-        }))
+        })
         .unwrap();
     app.poll(&ctx);
     assert_eq!(
@@ -395,12 +397,13 @@ fn profile_save_survives_workspace_reset_without_claiming_a_newer_forms_identity
     app.connection_profiles.select(saved[1].clone(), true);
     app.connection_profiles.draft.user = "unsaved-login".into();
     app.reset_workspace();
-    app.tx
-        .send(Event::Profiles(ProfileEvent::Saved {
+    app.workers
+        .profiles(&ctx)
+        .send(ProfileEvent::Saved {
             result: Ok(saved.clone()),
             submitted: Box::new(saved[0].clone()),
             form: submitted_form,
-        }))
+        })
         .unwrap();
     app.poll(&ctx);
     assert_eq!(app.connection_profiles.profiles.len(), saved.len());

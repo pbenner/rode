@@ -296,19 +296,17 @@ mod tests {
     fn opened(ctx: &egui::Context) -> EditorApp {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::Open("image.png".into()),
-                    result: Box::new(Ok(files::Response {
-                        path: "/image.png".into(),
-                        revision: "initial".into(),
-                        preview: Some(decoded(&app.image_budget, 4, 3)),
-                        ..Default::default()
-                    })),
-                },
-            ))
+        app.workers
+            .workspace(ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::Open("image.png".into()),
+                result: Box::new(Ok(files::Response {
+                    path: "/image.png".into(),
+                    revision: "initial".into(),
+                    preview: Some(decoded(&app.image_budget, 4, 3)),
+                    ..Default::default()
+                })),
+            })
             .unwrap();
         app.poll(ctx);
         app
@@ -392,19 +390,17 @@ mod tests {
         app.documents[0].edit_version = 5;
         app.documents[0].image.as_mut().unwrap().loading = true;
         for (version, width) in [(4, 2), (5, 8)] {
-            app.tx
-                .send(Event::workspace(
-                    app.generation,
-                    WorkspaceEvent::Done {
-                        job: Job::Reload { id, version },
-                        result: Box::new(Ok(files::Response {
-                            path: "/image.png".into(),
-                            revision: "updated".into(),
-                            preview: Some(decoded(&budget, width, 4)),
-                            ..Default::default()
-                        })),
-                    },
-                ))
+            app.workers
+                .workspace(&ctx)
+                .send(WorkspaceEvent::Done {
+                    job: Job::Reload { id, version },
+                    result: Box::new(Ok(files::Response {
+                        path: "/image.png".into(),
+                        revision: "updated".into(),
+                        preview: Some(decoded(&budget, width, 4)),
+                        ..Default::default()
+                    })),
+                })
                 .unwrap();
         }
         app.poll(&ctx);
@@ -413,14 +409,12 @@ mod tests {
         assert!(!app.documents[0].dirty());
         let version = app.documents[0].edit_version;
         app.documents[0].image.as_mut().unwrap().loading = true;
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::Reload { id, version },
-                    result: Box::new(Err("Image transfer failed".into())),
-                },
-            ))
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::Reload { id, version },
+                result: Box::new(Err("Image transfer failed".into())),
+            })
             .unwrap();
         app.poll(&ctx);
         assert_eq!(app.documents[0].image.as_ref().unwrap().original, [8, 4]);

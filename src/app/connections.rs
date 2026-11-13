@@ -418,11 +418,11 @@ mod tests {
         let (master, stream) = Terminal::stream(&ctx, "SSH fixture".into(), |_| {});
         app.ssh_master = Some(master);
         app.last_window_title = "RODE [SSH old host]".into();
-        let generation = app.generation;
+        let generation = app.workers.generation();
         stream.end();
         app.poll(&ctx);
         assert!(app.workspace.is_none());
-        assert!(app.generation > generation);
+        assert!(app.workers.generation() > generation);
         assert!(app.ssh_master.is_none());
         assert!(app.documents[0].path.is_none());
         app.workspace_banner(&ctx);
@@ -454,14 +454,12 @@ mod tests {
         app.workspace.as_mut().unwrap().connected = false;
         let (master, stream) = Terminal::stream(&ctx, "SSH login".into(), |_| {});
         app.ssh_master = Some(master);
-        let generation = app.generation;
-        app.tx
-            .send(Event::workspace(
-                generation,
-                WorkspaceEvent::Connected {
-                    result: Err("fixture authentication failed".into()),
-                },
-            ))
+        let generation = app.workers.generation();
+        app.workers
+            .workspace_at(&ctx, generation)
+            .send(WorkspaceEvent::Connected {
+                result: Err("fixture authentication failed".into()),
+            })
             .unwrap();
         app.poll(&ctx);
         // Feed after cleanup, exercising the PTY-exit/read race explicitly.
@@ -501,11 +499,9 @@ mod tests {
                 .0
                 .contains("authentication failed")
         );
-        app.tx
-            .send(Event::workspace(
-                generation,
-                WorkspaceEvent::Connected { result: Ok(()) },
-            ))
+        app.workers
+            .workspace_at(&ctx, generation)
+            .send(WorkspaceEvent::Connected { result: Ok(()) })
             .unwrap();
         app.poll(&ctx);
         assert!(app.workspace.is_none());

@@ -313,7 +313,7 @@ fn tunnel_route_result_respects_dismissal_and_setup_navigation() {
         let mut app = EditorApp::new(&cc, Startup::default());
         let (tx, rx) = mpsc::channel();
         app.connection_profiles.draft.host = "current-compute".into();
-        app.tunnels.generation = Some(app.generation);
+        app.tunnels.generation = Some(app.workers.generation());
         app.tunnels.pending = Some(rx);
         app.dialog = dialog;
         app.tunnels.page = page;
@@ -340,14 +340,14 @@ fn tunnel_results_from_an_old_workspace_cannot_replace_the_new_profile() {
     let mut app = EditorApp::new(&cc, Startup::default());
     let (tx, rx) = mpsc::channel();
     app.connection_profiles.draft.host = "current-compute".into();
-    app.tunnels.generation = Some(app.generation);
+    app.tunnels.generation = Some(app.workers.generation());
     app.tunnels.pending = Some(rx);
     tx.send(Ok(Outcome::Route(Box::new(Profile {
         host: "old-compute".into(),
         ..Default::default()
     }))))
     .unwrap();
-    app.generation += 1;
+    app.workers.invalidate_workspace();
     app.tunnel_tick(&ctx);
     assert_eq!(app.connection_profiles.draft.host, "current-compute");
     assert!(app.tunnels.pending.is_none());
@@ -495,7 +495,7 @@ fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.workspace = Some(crate::app::tests::remote_workspace());
     app.dialog = Dialog::Tunnels;
-    app.tunnels.generation = Some(app.generation);
+    app.tunnels.generation = Some(app.workers.generation());
     click(&mut app, &ctx, "New tunnel");
     assert_eq!(app.tunnels.page, Page::New);
     app.tunnel_tick(&ctx);
@@ -841,7 +841,7 @@ fn saved_tunnel_loads_are_bound_to_the_selected_host_account_port_and_config() {
         .as_mut()
         .unwrap()
         .profile = profile;
-    app.generation += 1;
+    app.workers.invalidate_workspace();
     app.dialog = Dialog::None;
     app.tunnel_tick(&ctx);
     assert!(app.tunnels.saved.entries.contains_key(&id));
@@ -1029,7 +1029,7 @@ fn hidden_status_refreshes_are_throttled_and_do_not_occupy_setup_actions() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.workspace = Some(crate::app::tests::remote_workspace());
-    app.tunnels.generation = Some(app.generation);
+    app.tunnels.generation = Some(app.workers.generation());
     let (tx, rx) = mpsc::channel();
     app.tunnels.background = Some(rx);
     app.tunnels.spec.name = "Unfinished setup".into();
@@ -1080,7 +1080,7 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.workspace = Some(crate::app::tests::remote_workspace());
-    app.tunnels.generation = Some(app.generation);
+    app.tunnels.generation = Some(app.workers.generation());
     app.tunnels.available = vec![observed_tunnel(Status::Connected)];
     app.tunnels.observation = Some(Ok(()));
     app.vaults.locking = true;
@@ -1103,7 +1103,7 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
     app.tunnels.background = Some(rx);
     tx.send(Ok(vec![observed_tunnel(Status::Connected)]))
         .unwrap();
-    app.generation += 1;
+    app.workers.invalidate_workspace();
     app.tunnel_tick(&ctx);
     assert!(app.tunnels.available.is_empty() && app.tunnels.observation.is_none());
     assert!(app.tunnels.pending.is_none());

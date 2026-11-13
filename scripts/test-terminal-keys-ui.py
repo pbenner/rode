@@ -50,16 +50,6 @@ def mouse_button(x, y, button, pressed):
     time.sleep(0.08)
 
 
-def clipboard():
-    result = subprocess.run(
-        ["xclip", "-selection", "clipboard", "-o"],
-        capture_output=True,
-        text=True,
-        timeout=2,
-    )
-    return result.stdout if result.returncode == 0 else ""
-
-
 def check_selection(window, root, click_control, command, focus_terminal, ui):
     """Exercise actual mouse selection and the native system clipboard."""
     text("python3 selection-input.py\n")
@@ -83,10 +73,18 @@ def check_selection(window, root, click_control, command, focus_terminal, ui):
             check=True,
             timeout=2,
         )
+        # Confirm that the clipboard serves the sentinel before testing Copy.
+        # A previous copied value must not satisfy the result assertion.
+        ui.wait(
+            lambda: ui.clipboard() == "clipboard sentinel",
+            f"{label}: clipboard sentinel did not acquire ownership",
+            timeout=8,
+        )
         action()
-        wait_for(
-            lambda: clipboard() == "SELECT_ME",
+        ui.wait(
+            lambda: ui.clipboard() == "SELECT_ME",
             f"{label}: copied text did not match selection",
+            timeout=8,
         )
         assert not (root / "selection-result").exists(), "Copy leaked input into the PTY"
 

@@ -187,9 +187,9 @@ impl EditorApp {
     /// Poll tunnel workers and schedule bounded discovery without blocking the UI.
     /// A workspace generation change resets live state while retaining saved configurations.
     pub(super) fn tunnel_tick(&mut self, ctx: &egui::Context) {
-        if self.tunnels.generation != Some(self.generation) {
+        if self.tunnels.generation != Some(self.workers.generation()) {
             self.tunnels = Tunnels {
-                generation: Some(self.generation),
+                generation: Some(self.workers.generation()),
                 saved: std::mem::take(&mut self.tunnels.saved),
                 ..Default::default()
             };

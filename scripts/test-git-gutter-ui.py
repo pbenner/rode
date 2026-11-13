@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Real Git gutter markers, unsaved edits and baseline refresh on local/SSH hosts."""
+"""Git markers and read-only change peeks, including unsaved text and host policy."""
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from ui_harness import (
     focus_window,
     key,
     screenshot,
+    text,
     wait_for_project,
     wait_for_window,
 )
@@ -59,7 +61,7 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
     git("add", ".")
     git("commit", "-qm", "Initial")
     (root / "empty.txt").write_text("")
-    for line in [0, 64, 199]:
+    for line in [0, 35, 64, 199]:
         long_source[line] = f"let line_{line + 1} = 999;\n"
     (root / "long.rs").write_text("".join(long_source))
     staged = "one\nchanged\nkeep\nlast\nextra\n"
@@ -121,8 +123,46 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
                 ["git-change-modified:2", "git-change-deleted:4", "git-change-added:5"]
             )
             screenshot(window, "staged-changes.png")
+            modified_patch = "@@ -2,1 +2,1 @@\n-old\n+changed\n"
+            deleted_patch = "@@ -4,1 +3,0 @@\n-delete\n"
+            added_patch = "@@ -5,0 +5,1 @@\n+extra\n"
+            staged_index = git("diff", "--cached", "--binary")
+            ui.click("git-change-modified:2")
+            ui.value("git-peek-patch", modified_patch)
+            screenshot(window, "change-preview.png")
+            ui.click("git-peek-diff")
+            ui.copy("git-peek-diff", modified_patch)
+            text("READ_ONLY")
+            ui.value("git-peek-patch", modified_patch)
+            ui.click("source-editor")
+            ui.source(staged)
+            assert path.read_text() == staged
+            assert git("diff", "--cached", "--binary") == staged_index
+            ui.resize(850, 560)
+            ui.control("git-peek-close")
+            ui.value("git-peek-patch", modified_patch)
+            screenshot(window, "change-preview-compact.png")
+            ui.resize(1380, 900)
+            ui.click("git-peek-next")
+            ui.value("git-peek-patch", deleted_patch)
+            ui.control("source-editor-cursor:4:1", focused=True)
+            ui.click("git-peek-next")
+            ui.value("git-peek-patch", added_patch)
+            ui.control("source-editor-cursor:5:1", focused=True)
+            ui.click("git-peek-previous")
+            ui.value("git-peek-patch", deleted_patch)
+            key("Escape")
+            ui.absent("git-peek-diff")
+            ui.control("source-editor", focused=True)
+            ui.click("git-change-deleted:4")
+            ui.value("git-peek-patch", deleted_patch)
+            ui.click("git-change-deleted:4")
+            ui.absent("git-peek-diff")
+            ui.click("git-change-added:5")
+            ui.value("git-peek-patch", added_patch)
             ui.click("source-editor")
             ui.fill("source-editor", "one\nchanged\nkeep\nlast\nextra\nunsaved\n")
+            ui.absent("git-peek-diff")
             unsaved_layout = markers(
                 ["git-change-modified:2", "git-change-deleted:4", "git-change-added:5"]
             )
@@ -137,26 +177,50 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
                 "Unsaved line was not decorated"
             )
             assert path.read_text() == staged, "Gutter computation wrote the unsaved buffer"
+            ui.click("git-change-added:5")
+            ui.value("git-peek-patch", "@@ -5,0 +5,2 @@\n+extra\n+unsaved\n")
+            ui.click("git-peek-close")
+            ui.control("source-editor", focused=True)
             key("z", ("Control_L",))
             ui.source(staged)
             markers(["git-change-modified:2", "git-change-deleted:4", "git-change-added:5"])
+            ui.click("git-change-modified:2")
+            ui.value("git-peek-patch", modified_patch)
             git("commit", "-qm", "Staged changes")
             markers([])
+            ui.absent("git-peek-diff")
             ui.open_file(root / "crlf.txt")
             markers([])
             ui.open_file(root / "empty.txt")
             markers(["git-change-deleted:1"])
+            ui.click("git-change-deleted:1")
+            ui.value("git-peek-patch", "@@ -1,1 +0,0 @@\n-removed line\n")
             ui.open_file(root / "long.rs")
-            markers(["git-change-modified:1"])
+            ui.absent("git-peek-diff")
+            markers(["git-change-modified:1", "git-change-modified:36"])
+            ui.click("git-change-modified:36")
+            ui.value(
+                "git-peek-patch", "@@ -36,1 +36,1 @@\n-let line_36 = 36;\n+let line_36 = 999;\n"
+            )
+            # Opening the preview shrinks the source viewport. The selected
+            # change must remain visible after that layout and source jump.
+            ui.control("source-editor-cursor:36:1", focused=True)
+            ui.control("git-change-modified:36")
+            screenshot(window, "long-source-peek.png")
+            ui.click("git-peek-close")
+            ui.control("source-editor", focused=True)
             ui.click("source-editor")
             key("End", ("Control_L",))
             markers(["git-change-modified:200"])
             screenshot(window, "long-source-scrolled.png")
             key("Home", ("Control_L",))
-            markers(["git-change-modified:1"])
+            markers(["git-change-modified:1", "git-change-modified:36"])
             ui.open_file(root / "new.txt")
             markers(["git-change-added:1"])
+            ui.click("git-change-added:1")
+            ui.value("git-peek-patch", "@@ -0,0 +1,1 @@\n+untracked\n")
             ui.open_file(root / "ignored.txt")
+            ui.absent("git-peek-diff")
             ui.control("source-git-unavailable")
             ui.layout(
                 lambda layout: all(
@@ -171,8 +235,14 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             close_window(window, process)
             window = None
             print(
-                "Git gutter: staged/unsaved edits, undo, commit, untracked/ignored and missing repository passed."
+                "Git gutter: read-only previews, change navigation, staged/unsaved edits, undo, commit, untracked/ignored and missing repository passed."
             )
+        except Exception:
+            if window is not None and process.poll() is None:
+                screenshot(window, "failure.png")
+            if state.exists():
+                shutil.copyfile(state, ARTIFACTS / "failure-layout.json")
+            raise
         finally:
             if process.poll() is None:
                 process.kill()

@@ -90,7 +90,7 @@ impl State {
         }
     }
 
-    pub(in crate::app) fn save(&mut self, tx: &mpsc::Sender<Event>, ctx: &egui::Context) {
+    pub(in crate::app) fn save(&mut self, replies: workers::ProfileSender) {
         if self.saving {
             return;
         }
@@ -99,36 +99,26 @@ impl State {
         let form = self.form_id;
         self.reload = None;
         self.saving = true;
-        let tx = tx.clone();
-        let ctx = ctx.clone();
         self.writer = Some(std::thread::spawn(move || {
             let result =
                 ssh::save_profile(&profile, previous.as_ref()).map_err(|e| format!("{e:#}"));
             if let Err(error) = &result {
                 eprintln!("Connection profile was not saved: {error}");
             }
-            let _ = tx.send(Event::Profiles(ProfileEvent::Saved {
+            let _ = replies.send(ProfileEvent::Saved {
                 result,
                 submitted: Box::new(profile),
                 form,
-            }));
-            ctx.request_repaint();
+            });
         }));
     }
 
-    pub(in crate::app) fn edit(
-        &mut self,
-        edit: ProfileListEdit,
-        tx: &mpsc::Sender<Event>,
-        ctx: &egui::Context,
-    ) {
+    pub(in crate::app) fn edit(&mut self, edit: ProfileListEdit, replies: workers::ProfileSender) {
         if self.saving {
             return;
         }
         self.reload = None;
         self.saving = true;
-        let tx = tx.clone();
-        let ctx = ctx.clone();
         self.writer = Some(std::thread::spawn(move || {
             let removed = match &edit {
                 ProfileListEdit::Remove(profile) => Some(profile.label()),
@@ -138,8 +128,7 @@ impl State {
             if let Err(error) = &result {
                 eprintln!("Saved connections were not updated: {error}");
             }
-            let _ = tx.send(Event::Profiles(ProfileEvent::Changed { result, removed }));
-            ctx.request_repaint();
+            let _ = replies.send(ProfileEvent::Changed { result, removed });
         }));
     }
 

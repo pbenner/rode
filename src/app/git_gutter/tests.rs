@@ -4,8 +4,9 @@ use diff::{Kind::*, Marker};
 use std::process::Command;
 
 fn changes(old: &str, new: &str) -> Vec<(usize, usize, diff::Kind)> {
-    diff::markers(old, new)
+    diff::compare(old, new)
         .unwrap()
+        .markers
         .into_iter()
         .map(|m| (m.line, m.count, m.kind))
         .collect()
@@ -40,9 +41,122 @@ fn deletions_empty_buffers_crlf_and_final_newlines_have_exact_anchors() {
     assert_eq!(changes("a\n", "a"), [(0, 1, Modified)]);
     assert!(changes("", "").is_empty());
     assert!(changes("a\nb\n", "a\r\nb\r\n").is_empty());
-    assert!(diff::markers("binary\0", "text").is_none());
-    assert!(diff::markers("", &"x".repeat(MAX_BYTES + 1)).is_none());
-    assert!(diff::markers("", &"\n".repeat(MAX_LINES)).is_none());
+    assert!(diff::compare("binary\0", "text").is_none());
+    assert!(diff::compare("", &"x".repeat(MAX_BYTES + 1)).is_none());
+    assert!(diff::compare("", &"\n".repeat(MAX_LINES)).is_none());
+}
+
+#[test]
+fn previews_keep_exact_old_new_ranges_and_shared_replacement_markers() {
+    let changes = diff::compare("a\nλ old\nremoved\n", "a\nnew\n").unwrap();
+    assert_eq!(changes.hunks.len(), 1);
+    let hunk = &changes.hunks[0];
+    assert_eq!(hunk.old, 1..3);
+    assert_eq!(hunk.new, 1..2);
+    assert_eq!(hunk.markers, 0..2);
+    assert_eq!(hunk.patch, "@@ -2,2 +2,1 @@\n-λ old\n-removed\n+new\n");
+    assert_eq!(changes.markers[0].kind, Modified);
+    assert_eq!(changes.markers[1].kind, Deleted);
+
+    let changes = diff::compare("first\nkeep\nlast\n", "keep\n").unwrap();
+    assert_eq!(changes.hunks.len(), 2);
+    assert_eq!(changes.hunks[0].patch, "@@ -1,1 +0,0 @@\n-first\n");
+    assert_eq!(changes.hunks[1].patch, "@@ -3,1 +1,0 @@\n-last\n");
+    assert_eq!(changes.hunks[0].markers, 0..1);
+    assert_eq!(changes.hunks[1].markers, 1..2);
+}
+
+#[test]
+fn previews_preserve_empty_new_unicode_and_missing_newline_changes() {
+    assert_eq!(
+        diff::compare("", "λ\r\n").unwrap().hunks[0].patch,
+        "@@ -0,0 +1,1 @@\n+λ\n"
+    );
+    assert_eq!(
+        diff::compare("all\nremoved\n", "").unwrap().hunks[0].patch,
+        "@@ -1,2 +0,0 @@\n-all\n-removed\n"
+    );
+    assert_eq!(
+        diff::compare("λ\n", "λ").unwrap().hunks[0].patch,
+        "@@ -1,1 +1,1 @@\n-λ\n+λ\n\\ No newline at end of file\n"
+    );
+    assert_eq!(
+        diff::compare("λ", "λ\n").unwrap().hunks[0].patch,
+        "@@ -1,1 +1,1 @@\n-λ\n\\ No newline at end of file\n+λ\n"
+    );
+    assert!(diff::compare("a\r\n", "a\n").unwrap().hunks.is_empty());
+}
+
+#[test]
+fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_changes() {
+    let mut documents = documents::Documents::default();
+    documents.new_file();
+    let doc = documents.active_mut().unwrap();
+    doc.path = Some("/project/source.rs".into());
+    let key = Key {
+        id: doc.id,
+        path: doc.path.clone().unwrap(),
+    };
+    let mut state = State::default();
+    state.select(key.clone(), doc.edit_version, Instant::now());
+    let comparison = diff::compare("old\n", "current\n").unwrap();
+    state.rendered = Some((doc.edit_version, comparison.clone()));
+    assert!(matches!(
+        state.toggle_peek(doc, 0),
+        Some(PeekAction::Navigate(1))
+    ));
+    assert_eq!(state.peek, Some(0));
+    assert!(state.peek_height(doc, 500.) > 0.);
+    assert_eq!(state.peek_height(doc, 50.), 0.);
+    state.pending = Some(1);
+    state.complete(Completed {
+        token: 1,
+        version: doc.edit_version,
+        refreshed: true,
+        baseline: None,
+        changes: comparison.clone(),
+    });
+    assert_eq!(
+        state.peek,
+        Some(0),
+        "Polling an unchanged HEAD must not dismiss the preview"
+    );
+    assert!(matches!(state.toggle_peek(doc, 0), Some(PeekAction::Close)));
+    assert_eq!(state.peek, None);
+    let _ = state.toggle_peek(doc, 0);
+    state.pending = Some(2);
+    state.complete(Completed {
+        token: 1,
+        version: doc.edit_version,
+        refreshed: true,
+        baseline: None,
+        changes: Changes::default(),
+    });
+    assert_eq!(
+        state.peek,
+        Some(0),
+        "A stale worker cannot dismiss current content"
+    );
+    state.complete(Completed {
+        token: 2,
+        version: doc.edit_version,
+        refreshed: true,
+        baseline: None,
+        changes: Changes::default(),
+    });
+    assert_eq!(state.peek, None);
+    state.rendered = Some((doc.edit_version, comparison));
+    let _ = state.toggle_peek(doc, 0);
+    doc.edit_version += 1;
+    assert_eq!(state.peek_height(doc, 500.), 0.);
+    state.select(key, doc.edit_version, Instant::now());
+    assert_eq!(state.peek, None);
+    state.rendered.as_mut().unwrap().0 = doc.edit_version;
+    let _ = state.toggle_peek(doc, 0);
+    doc.path = None;
+    assert_eq!(state.peek_height(doc, 500.), 0.);
+    state.reset();
+    assert_eq!(state.peek, None);
 }
 
 struct Repo {
@@ -207,7 +321,7 @@ fn debounce_reply_admission_and_resets_preserve_the_single_worker_bound() {
         version: 0,
         refreshed: true,
         baseline: None,
-        markers: vec![],
+        changes: Changes::default(),
     });
     assert_eq!(state.rendered.as_ref().unwrap().0, 0); // paint rejects version 1
     assert_eq!(state.due(now + DEBOUNCE), None); // worker still owns its slot
@@ -223,7 +337,7 @@ fn debounce_reply_admission_and_resets_preserve_the_single_worker_bound() {
         version: 0,
         refreshed: true,
         baseline: None,
-        markers: vec![],
+        changes: Changes::default(),
     });
     assert!(state.baseline.is_none());
     assert_eq!(state.due(now), None);
@@ -252,7 +366,7 @@ fn markers_stay_in_their_own_strip_and_deletions_remain_visible_at_both_ends() {
                 job.sections[0].format.line_height = Some(20.);
                 let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
                 let rows = editor_view::gutter::Rows::new(&galley, gutter.left_top());
-                diff::paint(
+                let _ = diff::paint(
                     ui,
                     &[
                         Marker {
@@ -350,11 +464,14 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
     );
     state.rendered = Some((
         0,
-        vec![Marker {
-            line: 0,
-            count: 1,
-            kind: Added,
-        }],
+        Changes {
+            markers: vec![Marker {
+                line: 0,
+                count: 1,
+                kind: Added,
+            }],
+            ..Default::default()
+        },
     ));
     let paint_count = |doc: &Document| {
         let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -370,7 +487,7 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
                 );
                 job.sections[0].format.line_height = Some(20.);
                 let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-                state.paint(
+                let _ = state.paint(
                     ui,
                     doc,
                     gutter,
@@ -445,14 +562,17 @@ fn editor_markers_align_with_rendered_rows_throughout_long_files() {
             });
             app.git_gutter.rendered = Some((
                 doc.edit_version,
-                [0, 64, 199]
-                    .into_iter()
-                    .map(|line| Marker {
-                        line,
-                        count: 1,
-                        kind: Modified,
-                    })
-                    .collect(),
+                Changes {
+                    markers: [0, 64, 199]
+                        .into_iter()
+                        .map(|line| Marker {
+                            line,
+                            count: 1,
+                            kind: Modified,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
             ));
             for scrolled in [false, true] {
                 let height = if scrolled { 480. } else { 12000. };
@@ -574,11 +694,14 @@ fn empty_source_keeps_line_one_and_its_deletion_marker_visible() {
         });
         app.git_gutter.rendered = Some((
             doc.edit_version,
-            vec![Marker {
-                line: 0,
-                count: 3,
-                kind: Deleted,
-            }],
+            Changes {
+                markers: vec![Marker {
+                    line: 0,
+                    count: 3,
+                    kind: Deleted,
+                }],
+                ..Default::default()
+            },
         ));
         let frame = |app: &mut EditorApp| {
             ctx.run(

@@ -692,9 +692,7 @@ impl EditorApp {
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
         let plan = self.workspace.as_ref().map(|w| w.plan.clone());
         let budget = self.image_budget.clone();
-        let generation = self.generation;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let limit = ctx.input(|i| i.max_texture_side);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
@@ -729,16 +727,12 @@ impl EditorApp {
                 ))
                 .unwrap_or_else(|_| Err(anyhow::anyhow!("Image decoder failed")))
                 .map_err(|e| format!("{e:#}"));
-                let _ = tx.send(Event::workspace(
-                    generation,
-                    WorkspaceEvent::MarkdownImage {
-                        id,
-                        token,
-                        uri,
-                        result,
-                    },
-                ));
-                ctx.request_repaint();
+                let _ = replies.send(WorkspaceEvent::MarkdownImage {
+                    id,
+                    token,
+                    uri,
+                    result,
+                });
             }
         });
     }

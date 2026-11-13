@@ -12,6 +12,30 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-it
 
 The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html`, `target/doc/rode_runtime_core/index.html`, `target/doc/rode_session/index.html`, `target/doc/rode_host_core/index.html`, `target/doc/rode_host_protocol/index.html` and `target/doc/rode_bwrap/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures; the [release checklist](release.md) distinguishes ordinary checks from platform and package validation.
 
+## Completion ownership
+
+`EditorApp` owns a `workers::Inbox`, which owns the completion channel and the
+workspace generation. Workers returning application-level results capture a
+`WorkspaceSender` before they start and submit only their domain result. The sender retains the captured
+generation and requests a UI repaint when it enqueues a reply. Features cannot
+construct a transport envelope, mutate the receiver or choose a generation for
+a production reply. Cancellation and file/service resource guards remain with
+the domain owner. Controller-local workers, such as binary analysis and notebook
+raster loading, retain their local channels under those controllers instead of
+using the application inbox.
+
+Saved-connection writes use `ProfileSender`, whose lifetime belongs to the
+window. Project changes invalidate workspace replies while preserving these
+storage acknowledgements. Draft/form identity checks still belong to the saved
+connection controller.
+
+The UI admits one message at a time through the inbox. This is significant: a
+connection failure handled early in a frame can invalidate later replies already
+in the queue. Pre-admitting a batch would lose that guarantee. Expired replies
+still consume the per-frame budget, keeping a stale-message flood from starving
+native input. Numeric generation reads outside the inbox are limited to
+project-bound draft/cache identities; producers do not assemble reply lifetimes.
+
 ## Source map
 
 | Source | Responsibility |
@@ -21,8 +45,10 @@ The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/i
 | `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Ordered project teardown, window-owned transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
+| `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers and change peeks; document/version admission prevents stale previews |
+| `src/app/diff_view.rs` | Shared bounded, selectable, read-only unified diff renderer for the Git panel and source change peeks |
 | `src/app/frame.rs` | Application menus, connection banners, activity controls and pane entry views; routes through the existing lifecycle guards |
-| `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed result lifetimes, bounded polling and file-domain admission/completion |
+| `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
 | `src/app/dialogs.rs`, `src/app/appearance.rs` | Guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
@@ -243,14 +269,15 @@ coordinator updates document bindings only after host success. Failed recursive
 deletions invalidate affected caches so partial changes are rediscovered; stale
 listing replies cannot clear a newer loading marker.
 
-Every queued desktop result has an explicit lifetime envelope:
-`Event::Workspace` carries a generation and a domain payload, while
-`Event::Profiles` carries a shared-preference completion. The bounded poll checks
-the live generation for each workspace event before routing it. If an earlier
-event disconnects or replaces the workspace, later old-host replies in the same
-batch are rejected. File-domain admission then checks tokens, mutation epochs and
-buffer versions **before** clearing pending markers. Profile completions continue
-to reach their window-owned controller.
+Application-level results enter a private `workers::Inbox` envelope.
+`WorkspaceSender` binds a domain payload to its captured generation;
+`ProfileSender` carries a window-owned shared-preference completion. The inbox
+checks the live generation for each dequeued workspace event before returning it
+to the bounded domain dispatcher. If an earlier event disconnects or replaces
+the workspace, later old-host replies in the same batch are rejected. File-domain
+admission then checks tokens, mutation epochs and buffer versions **before**
+clearing pending markers. Profile completions continue to reach their window-owned
+controller.
 
 Different identities protect different lifetimes:
 

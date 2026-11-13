@@ -14,9 +14,11 @@ const MAX_EVENTS_PER_FRAME: usize = 64;
 
 mod completions;
 mod events;
+mod inbox;
 #[cfg(test)]
 mod tests;
-pub(super) use events::{Event, Job, WorkspaceEvent};
+pub(super) use events::{Job, WorkspaceEvent};
+pub(super) use inbox::{Inbox, Message, ProfileSender, WorkspaceSender};
 
 /// Resolve a local startup file to its parent before restoring that folder's
 /// saved policy. Run on the dispatch worker; project pickers and SSH requests
@@ -167,9 +169,7 @@ impl EditorApp {
         } else {
             Default::default()
         };
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
-        let generation = self.generation;
+        let replies: WorkspaceSender = self.workers.workspace(ctx);
         let image_budget = self.image_budget.clone();
         let notebooks_enabled = self.feature(crate::extensions::Feature::Notebooks);
         let extension_cancel = self.extensions.cancel.clone();
@@ -363,14 +363,10 @@ impl EditorApp {
             {
                 std::mem::swap(text, snapshot);
             }
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::Done {
-                    job,
-                    result: Box::new(result),
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::Done {
+                job,
+                result: Box::new(result),
+            });
         });
     }
 
@@ -423,7 +419,7 @@ impl EditorApp {
             self.notify(error, true);
         }
         for index in 0..MAX_EVENTS_PER_FRAME {
-            let Ok(event) = self.rx.try_recv() else {
+            let Some(event) = self.workers.receive() else {
                 break;
             };
             if index + 1 == MAX_EVENTS_PER_FRAME {
@@ -432,11 +428,11 @@ impl EditorApp {
                 ctx.request_repaint();
             }
             match event {
-                Event::Profiles(completion) => self.profile_completed(completion),
-                Event::Workspace { generation, event } if generation == self.generation => {
+                Message::Profiles(completion) => self.profile_completed(completion),
+                Message::Workspace(event) => {
                     self.workspace_event(*event, ctx);
                 }
-                Event::Workspace { .. } => {}
+                Message::Expired => {}
             }
         }
         self.poll_connection_health(ctx);

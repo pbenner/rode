@@ -90,7 +90,9 @@ impl EditorApp {
                 self.set_dialog(Dialog::Connect);
                 self.connection_profiles.name_focus = focus_name;
             }
-            Some(Intent::Change(edit)) => self.connection_profiles.edit(edit, &self.tx, ctx),
+            Some(Intent::Change(edit)) => self
+                .connection_profiles
+                .edit(edit, self.workers.profiles(ctx)),
             None => {}
         }
     }

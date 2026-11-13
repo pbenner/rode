@@ -142,8 +142,8 @@ def run(remote=False, isolated=False):
                 key("s", ("Control_L",))
                 wait_for(lambda: "unsaved" in source.read_text(), "Source save failed")
                 # Code and debugger tools share the workspace; return to source.
-                key("space", ("Control_L",))
-                key("e")
+                ui.navigate("e")
+                ui.control("source-editor-saved")
                 key("Home", ("Control_L",))
                 ui.control("source-editor-at-start", focused=True)
                 key("F9")
@@ -153,7 +153,7 @@ def run(remote=False, isolated=False):
                     lambda: rpc.exists() and '"command": "scopes"' in rpc.read_text(),
                     "Debugger never paused",
                 )
-                ui.control("source-editor", focused=True)
+                ui.control("source-editor-cursor:3:1", focused=True)
                 screenshot(window, label + "-paused.png")
                 if not remote and not isolated:
                     ui.command("Debug: Show debugger")
@@ -203,24 +203,10 @@ def run(remote=False, isolated=False):
                     ),
                     "Debugger did not inspect the stepped frame",
                 )
-                before = json.loads((base / "ui-state.json").read_text())["pass"]
-                wait_for_ui_state(
-                    process,
-                    log_path,
-                    base / "ui-state.json",
-                    lambda state: (
-                        state["pass"] > before
-                        and any(
-                            button["name"] == "source-editor"
-                            and button["enabled"]
-                            and button["focused"]
-                            for button in state["buttons"]
-                        )
-                    ),
-                    "Stepped source did not acquire input focus",
-                )
-                key("space", ("Control_L",))
-                key("t")
+                # The editor was already focused before F10. Only its rendered
+                # destination acknowledges the step's asynchronous source jump.
+                ui.control("source-editor-cursor:4:1", focused=True, timeout=12)
+                ui.navigate("t")
                 wait_for_ui_state(
                     process,
                     log_path,

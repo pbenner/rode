@@ -106,15 +106,13 @@ impl EditorApp {
             .collect();
         self.latex.token = self.latex.token.wrapping_add(1);
         let token = self.latex.token;
-        let generation = self.generation;
         self.latex.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.latex.cancel.clone();
         self.latex.busy = true;
         self.status = "Building LaTeX…".into();
         self.latex.error.clear();
         self.latex.output_open = true;
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
@@ -127,16 +125,12 @@ impl EditorApp {
                 }
             })()
             .map_err(|error| format!("{error:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::Latex {
-                    token,
-                    preview,
-                    versions,
-                    result: Box::new(result),
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::Latex {
+                token,
+                preview,
+                versions,
+                result: Box::new(result),
+            });
         });
     }
     /// Apply a current build reply and versioned source diagnostics, retaining compiler errors for inspection.

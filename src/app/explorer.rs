@@ -77,7 +77,7 @@ impl EditorApp {
         self.explorer_state.form = Some(Form {
             kind,
             entry: entry.clone(),
-            generation: self.generation,
+            generation: self.workers.generation(),
         });
         self.set_dialog(Dialog::Explorer);
         self.explorer_state.input = match kind {
@@ -208,7 +208,7 @@ impl EditorApp {
         };
         let kind = form.kind;
         let entry = form.entry.clone();
-        let current = form.generation == self.generation;
+        let current = form.generation == self.workers.generation();
         let palette = self.themes.active().palette;
         layout::heading(ui, kind.title(), &entry.path, palette);
         if kind == Kind::Delete {

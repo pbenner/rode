@@ -354,19 +354,17 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
         Duration::from_secs(2),
     );
     app.workbench.reset_monitor();
-    let old_generation = app.generation;
-    app.generation += 1;
-    app.tx
-        .send(Event::workspace(
-            old_generation,
-            WorkspaceEvent::Tool {
-                job: Box::new(ToolJob::Monitor),
-                result: Box::new(Ok(project::Response::Monitor(project::Monitor {
-                    hostname: "old-host".into(),
-                    ..Default::default()
-                }))),
-            },
-        ))
+    let old_generation = app.workers.generation();
+    app.workers.invalidate_workspace();
+    app.workers
+        .workspace_at(&ctx, old_generation)
+        .send(WorkspaceEvent::Tool {
+            job: Box::new(ToolJob::Monitor),
+            result: Box::new(Ok(project::Response::Monitor(project::Monitor {
+                hostname: "old-host".into(),
+                ..Default::default()
+            }))),
+        })
         .unwrap();
     app.poll(&ctx);
     assert!(!app.workbench.monitoring.monitor_busy);

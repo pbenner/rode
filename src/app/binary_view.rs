@@ -1078,22 +1078,20 @@ mod tests {
         let submitted = hex.buffer.bytes().clone();
         hex.buffer.patch(2, vec![8]).unwrap();
         app.documents[0].modified = true;
-        app.tx
-            .send(Event::workspace(
-                app.generation,
-                WorkspaceEvent::Done {
-                    job: Job::SaveBinary {
-                        id,
-                        bytes: submitted,
-                        _lease: app.documents[0].hex.as_ref().unwrap()._lease.clone(),
-                    },
-                    result: Box::new(Ok(files::Response {
-                        path: "/example.bin".into(),
-                        revision: "saved".into(),
-                        ..Default::default()
-                    })),
+        app.workers
+            .workspace(&ctx)
+            .send(WorkspaceEvent::Done {
+                job: Job::SaveBinary {
+                    id,
+                    bytes: submitted,
+                    _lease: app.documents[0].hex.as_ref().unwrap()._lease.clone(),
                 },
-            ))
+                result: Box::new(Ok(files::Response {
+                    path: "/example.bin".into(),
+                    revision: "saved".into(),
+                    ..Default::default()
+                })),
+            })
             .unwrap();
         app.poll(&ctx);
         assert!(app.documents[0].dirty());

@@ -171,10 +171,10 @@ fn disconnect_waits_for_terminal_startup_and_persistence_changes() {
     for starting in [true, false] {
         app.sessions.starting = starting;
         app.sessions.persistence_pending = !starting;
-        let generation = app.generation;
+        let generation = app.workers.generation();
         app.disconnect_ssh(&ctx);
         assert!(app.workspace.as_ref().unwrap().connected);
-        assert_eq!(app.generation, generation);
+        assert_eq!(app.workers.generation(), generation);
         assert!(!app.connection_cancel.load(Ordering::Acquire));
     }
 }

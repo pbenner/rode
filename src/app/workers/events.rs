@@ -1,23 +1,6 @@
-//! Typed lifetime envelopes. Workspace generation is checked once before domain routing;
-//! profile storage completions belong to the window and survive context changes.
+//! Domain job descriptions and result payloads. The inbox owns lifecycle
+//! envelopes and admission; feature producers never choose envelope generations.
 use super::*;
-
-pub(in crate::app) enum Event {
-    Workspace {
-        generation: u64,
-        event: Box<WorkspaceEvent>,
-    },
-    Profiles(ProfileEvent),
-}
-
-impl Event {
-    pub(in crate::app) fn workspace(generation: u64, event: WorkspaceEvent) -> Self {
-        Self::Workspace {
-            generation,
-            event: Box::new(event),
-        }
-    }
-}
 
 /// Captured completion intent for file workers. Prepare/project-folder discovery uses raw
 /// host scope; ordinary lists, file pickers and source operations use the active plan.

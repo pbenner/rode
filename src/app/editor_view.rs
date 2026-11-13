@@ -25,6 +25,8 @@ impl EditorApp {
         }
         let palette = self.themes.active().palette;
         let mut breakpoint_toggle = None;
+        let mut change_clicked = None;
+        let mut peek_action = None;
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome.is_decorated() { 8 } else { 0 }))
             .show(ctx, |ui| {
@@ -103,6 +105,8 @@ impl EditorApp {
                 if self.show_find {
                     self.find_bar(ui);
                 }
+                let peek_height = self.git_gutter.peek_height(self.documents.active().unwrap(), ui.available_height());
+                let source_height = if peek_height > 0. { (ui.available_height() - peek_height).max(40.) } else { f32::INFINITY };
                 let queued_focus = self.take_editor_focus(ui, ctx);
                 let shortcut_style=self.navigation.bindings.style();
                 if shortcut_style!=navigation::Style::Standard {ui.label(palette.tag(self.navigation.editing.label(shortcut_style)));}
@@ -158,6 +162,7 @@ impl EditorApp {
                 egui::ScrollArea::both()
                     .id_salt(("editor-scroll", doc.id))
                     .auto_shrink([false, false])
+                    .max_height(source_height)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.horizontal_top(|ui| {
@@ -254,7 +259,7 @@ impl EditorApp {
                                 Stroke::new(1.0_f32, palette.border),
                             );
                             if !output.response.changed() {
-                                git_gutter.paint(ui, doc, gutter, rows, palette);
+                                change_clicked = git_gutter.paint(ui, doc, gutter, rows, palette);
                                 for (issue_index, issue) in diagnostics
                                     .iter()
                                     .enumerate()
@@ -356,9 +361,33 @@ impl EditorApp {
                                 }
                                 doc.cursor = (line, col);
                             }
+                            if output.cursor_range.is_some() {
+                                ui_probe::button(
+                                    ui,
+                                    &format!("source-editor-cursor:{}:{}", doc.cursor.0, doc.cursor.1),
+                                    &output.response,
+                                );
+                            }
                         });
                     });
+                peek_action = self.git_gutter.peek_ui(ui, self.documents.active().unwrap(), palette, peek_height);
             });
+        if let Some(index) = change_clicked {
+            if let Some(doc) = self.documents.active() {
+                peek_action = self.git_gutter.toggle_peek(doc, index);
+            }
+            ctx.request_repaint();
+        }
+        match peek_action {
+            Some(git_gutter::PeekAction::Navigate(row)) => {
+                if let Some(id) = self.documents.selected_id() {
+                    self.jump_to_issue(id, row, 1);
+                    self.focus_editor(ctx);
+                }
+            }
+            Some(git_gutter::PeekAction::Close) => self.focus_editor(ctx),
+            None => {}
+        }
         if let Some((path, line)) = breakpoint_toggle {
             self.toggle_breakpoint(path, line);
         }

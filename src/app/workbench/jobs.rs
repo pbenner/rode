@@ -39,10 +39,8 @@ impl EditorApp {
                     | project::Request::GitStash { .. }
             );
         let git_host_plan = self.workbench.git.host_plan.clone();
-        let generation = self.generation;
         let cancel = self.extensions.cancel.clone();
-        let tx = self.tx.clone();
-        let ctx = ctx.clone();
+        let replies = self.workers.workspace(ctx);
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
@@ -114,14 +112,10 @@ impl EditorApp {
                 Ok(response)
             })
             .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::workspace(
-                generation,
-                WorkspaceEvent::Tool {
-                    job: Box::new(job),
-                    result: Box::new(result),
-                },
-            ));
-            ctx.request_repaint();
+            let _ = replies.send(WorkspaceEvent::Tool {
+                job: Box::new(job),
+                result: Box::new(result),
+            });
         });
     }
     /// Require a prepared, connected project and no encrypted-project lock in progress.
