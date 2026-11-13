@@ -4,6 +4,25 @@
 //! or change the selected index independently. IDs never reset on workspace changes.
 use super::*;
 
+/// Source-only projection for keyboard interpretation; preview policy stays with documents.
+pub(super) struct Source<'a> {
+    pub id: u64,
+    pub text: &'a str,
+    pub path: Option<&'a str>,
+}
+
+/// Save/dirty facts used by exit coordination without borrowing mutable buffers.
+#[derive(Default)]
+pub(super) struct ExitSnapshot {
+    pub dirty_versions: Vec<(u64, u64)>,
+    pub saving: bool,
+}
+impl ExitSnapshot {
+    pub fn settled(&self) -> bool {
+        self.dirty_versions.is_empty() && !self.saving
+    }
+}
+
 /// One stable tab identity and editable source/save baseline, with optional specialized
 /// document state. Only bound paths authorize project-host file operations; recovery paths are
 /// display/reconnect metadata.
@@ -230,6 +249,35 @@ impl Default for Documents {
 }
 
 impl Documents {
+    pub(super) fn active_source(&self) -> Option<Source<'_>> {
+        let doc = self.active()?;
+        if doc.image.is_some()
+            || doc.pdf.is_some()
+            || doc.hex.is_some()
+            || doc.notebook.as_ref().is_some_and(|v| !v.source_mode())
+            || doc.markdown.as_ref().is_some_and(|v| v.showing)
+            || doc.marp.as_ref().is_some_and(|v| v.showing)
+        {
+            return None;
+        }
+        Some(Source {
+            id: doc.id,
+            text: &doc.text,
+            path: doc.display_path(),
+        })
+    }
+    pub(super) fn exit_snapshot(&self) -> ExitSnapshot {
+        ExitSnapshot {
+            dirty_versions: self
+                .items
+                .iter()
+                .filter(|doc| doc.dirty())
+                .map(|doc| (doc.id, doc.edit_version))
+                .collect(),
+            saving: self.items.iter().any(|doc| doc.saving),
+        }
+    }
+
     pub(super) fn active_index(&self) -> usize {
         self.active
     }

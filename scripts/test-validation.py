@@ -327,6 +327,31 @@ class ValidationTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_version_identity_ignores_stderr_warnings_but_keeps_stderr_only_versions(self):
+        release = "mise 1.0"
+        warning = "initial warning"
+
+        def probe(command, **_kwargs):
+            if command[0] == "fixture-mise":
+                return subprocess.CompletedProcess(command, 0, release + "\n", warning + "\n")
+            if command[0] == "ssh":
+                return subprocess.CompletedProcess(command, 0, "", "OpenSSH_fixture\n")
+            return subprocess.CompletedProcess(command, 0, "stable version\n", "")
+
+        with (
+            patch.object(validation_report.subprocess, "run", side_effect=probe),
+            patch.object(validation_report.shutil, "which", return_value=None),
+        ):
+            environment = {"RODE_TEST_MISE": "fixture-mise"}
+            before = validation_report.toolchain(environment)
+            warning = "later automatic maintenance warning"
+            after = validation_report.toolchain(environment)
+            self.assertEqual(before, after)
+            self.assertEqual(after["tools"]["mise"]["version"], "mise 1.0")
+            self.assertEqual(after["tools"]["ssh"]["version"], "OpenSSH_fixture")
+            release = "mise 1.1"
+            self.assertNotEqual(before, validation_report.toolchain(environment))
+
     def test_identity_includes_dirty_untracked_and_executable_source_but_not_ignored_results(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

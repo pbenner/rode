@@ -1147,7 +1147,6 @@ impl eframe::App for EditorApp {
         self.git_gutter_tick(ctx);
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
-        self.handle_close_request(ctx);
         self.route_input(ctx);
         if (self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal())
             && Terminal::focused(ctx)
@@ -1162,6 +1161,8 @@ impl eframe::App for EditorApp {
         self.activity(ctx);
         self.explorer(ctx);
         self.workspace_content(ctx);
+        // Accepted source events must update dirty/version state before Quit guards.
+        self.handle_close_request(ctx);
         self.dialogs(ctx);
         self.workbench_windows(ctx);
         self.extension_windows(ctx);

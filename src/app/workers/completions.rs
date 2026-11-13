@@ -86,7 +86,9 @@ impl EditorApp {
         }
         match result {
             Err(error) => {
-                if let Job::AgentAttachment { token, .. } = job {
+                if matches!(&job, Job::Save { .. } | Job::SaveBinary { .. }) {
+                    self.abort_exit(error, ctx);
+                } else if let Job::AgentAttachment { token, .. } = job {
                     self.agents.files.finish(token, Err(error));
                 } else if matches!(job, Job::Browse { .. }) {
                     self.project_picker.error = Some(error);

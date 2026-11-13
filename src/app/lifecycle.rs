@@ -38,15 +38,9 @@ impl EditorApp {
         }
         self.cancel_agent_installation();
         let readiness = self.exit_readiness();
-        let dirty_versions = self
-            .documents
-            .iter()
-            .filter(|doc| doc.dirty())
-            .map(|doc| (doc.id, doc.edit_version));
-        if self.exit.request(readiness, dirty_versions) {
-            self.final_quit(ctx);
-        } else {
-            self.set_dialog(Dialog::TerminalExit);
+        match self.exit.request(readiness, self.documents.exit_snapshot()) {
+            exit::Decision::Close => self.final_quit(ctx),
+            exit::Decision::Wait => self.set_dialog(Dialog::TerminalExit),
         }
     }
     /// Keep pending exit cleanup visible and expose failures while the window still owns its work.
@@ -62,19 +56,19 @@ impl EditorApp {
     }
     /// Advance only an existing quit intent once all domain owners acknowledge completion.
     pub(super) fn advance_exit(&mut self, ctx: &egui::Context) -> bool {
-        if !self.exit.waiting() || self.exit_readiness().pending() {
+        if !self.exit.waiting() {
             return false;
         }
-        if self
-            .documents
-            .iter()
-            .any(|doc| doc.dirty() && !self.exit.discard_approved(doc.id, doc.edit_version))
+        match self
+            .exit
+            .advance(self.exit_readiness(), self.documents.exit_snapshot())
         {
-            self.exit.cancel();
-            self.dialog = Dialog::None;
-            self.guarded(Action::Quit, ctx);
-        } else {
-            self.request_exit(ctx);
+            exit::Progress::Idle => return false,
+            exit::Progress::RecheckDocuments => {
+                self.dialog = Dialog::None;
+                self.guarded(Action::Quit, ctx);
+            }
+            exit::Progress::RetryCleanup => self.request_exit(ctx),
         }
         true
     }
@@ -103,18 +97,21 @@ impl EditorApp {
         if requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
+        let ready = self.exit.native_request(requested, self.input.pending());
+        if self.input.pending() {
+            ctx.request_repaint();
+            return;
+        }
         // A save can reach disk before its acknowledgement reaches the UI. If
         // close arrived in between, finish the original request once every
         // buffer is clean. Failed saves and edits made during saving retain
         // the dirty-buffer guard; encrypted/runtime guards still run below.
-        if matches!(self.pending, Some(Action::Quit))
-            && !self.documents.iter().any(|doc| doc.dirty() || doc.saving)
-        {
+        if matches!(self.pending, Some(Action::Quit)) && self.documents.exit_snapshot().settled() {
             self.pending = None;
             self.guarded(Action::Quit, ctx);
             return;
         }
-        if requested && self.dialog != Dialog::TerminalExit {
+        if ready && self.dialog != Dialog::TerminalExit {
             self.guarded(Action::Quit, ctx);
         }
     }
@@ -181,6 +178,53 @@ pub(in crate::app) mod tests {
         let _ = ctx.run(Default::default(), |ctx| app.handle_close_request(ctx));
         assert!(app.exit.closing());
         assert!(app.pending.is_none());
+    }
+
+    #[test]
+    fn failed_text_or_binary_save_cancels_a_waiting_quit_even_when_the_buffer_is_clean() {
+        for binary in [false, true] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_file();
+            let doc = app.documents.active_mut().unwrap();
+            doc.acknowledge_save("original.txt".into(), "".into(), "rev".into());
+            doc.saving = true;
+            let id = doc.id;
+            native_close(&mut app, &ctx);
+            assert!(app.exit.waiting());
+            assert!(app.dialog == Dialog::TerminalExit);
+
+            let job = if binary {
+                Job::SaveBinary {
+                    id,
+                    bytes: Arc::new(Vec::new()),
+                    _lease: Arc::new(
+                        Arc::new(crate::images::Budget::default())
+                            .reserve_source(0)
+                            .unwrap(),
+                    ),
+                }
+            } else {
+                Job::Save {
+                    id,
+                    text: String::new(),
+                }
+            };
+            app.workers
+                .workspace(&ctx)
+                .send(WorkspaceEvent::Done {
+                    job,
+                    result: Box::new(Err("Save failed: permission denied".into())),
+                })
+                .unwrap();
+            app.poll(&ctx);
+            assert!(!app.exit.waiting());
+            assert!(app.dialog == Dialog::None);
+            assert!(!app.advance_exit(&ctx));
+            assert!(!app.exit.closing());
+            assert!(app.notice.as_ref().unwrap().0.contains("permission denied"));
+        }
     }
 
     #[test]

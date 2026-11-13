@@ -1054,6 +1054,18 @@ Style regressions use `cargo test --lib navigation`: preset validation/isolation
 
 Source edits preceding a navigation prefix or global shortcut stay ahead of that command in the bounded replay queue. `app::input` verifies that batched source edits reach disk before Save completes, tab/new/close commands preserve following input under the destination keymap, and replay requires acknowledgement from the matching native source widget. A deferred native Ctrl+X clipboard event retains its recognized prefix modifiers even after Ctrl is released. The Rust regression batches Emacs mark/kill/yank, replacement and Save into one input frame; the native fixture also batches the Emacs edit sequence when `RODE_TEST_SLOW_UI=1`. Buffer fingerprints and save acknowledgements distinguish editing failures from disk-write failures, and failed native runs retain the fixture documents and UI snapshot.
 
+Input/lifecycle interaction regressions run source routing, native TextEdit and the
+close guard in desktop frame order. They inject a single native close alongside
+Standard/Emacs/Vim typing, edits on both sides of a document handoff, and queued
+Save followed by a newer edit. Assertions require accepted text to remain with its
+destination, submitted saves to reach disk, and quit to wait or re-enter the dirty
+guard as appropriate. Exit-controller tests also require acknowledgement of a clean
+save in flight and forbid cleanup retries from approving newer discard versions.
+File-reply regressions inject failed text and binary saves while a clean buffer's
+quit is waiting; the error must remain visible and cancel automatic exit.
+These checks use isolated temporary files and native events, without timing-based
+success or fixed widget coordinates.
+
 ## Interface scaling checks
 
 `cargo test --lib interface_scale` simulates 1x/2x monitor DPI, validates saved scale independently of stale framework state, rejects malformed settings and preserves dirty buffers, editor font size and themes. `cargo test --test persistence` checks explicit resets from stale windows without reverting another window's font choice. Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 3000x2000x24" python3 scripts/test-scale-ui.py` for real native font/GUI separation, measured menu resizing, percentage presets applied only after pointer release, 5% Smaller/Larger actions, Ctrl+0, dirty-buffer preservation and restart at forced X11 1x/2x DPI. The isolated X display should provide at least 3000×2000 physical pixels for the 2x window; screenshots/logs go to `target/scale-ui/`. Actual display-server DPI detection on other computers still depends on their OS/monitor configuration.

@@ -109,7 +109,7 @@ impl EditorApp {
                 let source_height = if peek_height > 0. { (ui.available_height() - peek_height).max(40.) } else { f32::INFINITY };
                 let queued_focus = self.take_editor_focus(ui, ctx);
                 let shortcut_style=self.navigation.bindings.style();
-                if shortcut_style!=navigation::Style::Standard {ui.label(palette.tag(self.input.editing.label(shortcut_style)));}
+                if shortcut_style!=navigation::Style::Standard {ui.label(palette.tag(self.input.label(shortcut_style)));}
                 let source_stale=self.debug_source_stale(self.documents.active().unwrap());
                 if source_stale {ui.colored_label(palette.accent,"Source changed since debugging started; execution locations may be stale. Restart debugging to use these changes.");}
                 let debug_line=self.debug_line().filter(|(p,_)|self.documents[self.documents.active_index()].path.as_deref()==Some(*p)).filter(|_|!source_stale).map(|(_,line)|line);
@@ -121,7 +121,7 @@ impl EditorApp {
                 let git_gutter = &self.git_gutter;
                 let input=&mut self.input;
                 let doc = self.documents.active_mut().unwrap();
-                input.editing.bind(doc.id,shortcut_style);
+                input.bind_source(doc.id,shortcut_style);
                 let id = egui::Id::new(("document", doc.id));
                 let jump_requested = doc.selection.is_some();
                 let jump_cursor = doc.selection.map(|(_, end)| end);

@@ -28,6 +28,42 @@ impl Pane {
         egui::Id::new(("pane-focus", self.index()))
     }
 }
+/// Immutable command recognition facts shared with source admission.
+#[derive(Clone, Copy)]
+pub(super) struct InputRules<'a> {
+    bindings: &'a bindings::Bindings,
+    leader: bool,
+}
+impl InputRules<'_> {
+    pub fn prefix(&self) -> bindings::Chord {
+        self.bindings.prefix(false)
+    }
+    pub fn without_prefix(self) -> Self {
+        Self {
+            leader: false,
+            ..self
+        }
+    }
+    /// Identify navigation commands before source edits are handed to TextEdit.
+    pub(super) fn command_event(&self, event: &egui::Event, modifiers: egui::Modifiers) -> bool {
+        let prefix = self.prefix();
+        match event {
+            egui::Event::Key {
+                key,
+                modifiers,
+                pressed: true,
+                ..
+            } => {
+                prefix.matches(*key, *modifiers, false)
+                    || self.leader
+                    || self.bindings.action(*key, *modifiers, false).is_some()
+            }
+            egui::Event::Cut => prefix.key == Key::X && modifiers.matches_exact(prefix.modifiers),
+            _ => false,
+        }
+    }
+}
+
 /// Per-window focus intent, measured pane rectangles and shortcut-style state.
 /// Layout measurements are rebuilt each frame; remembered focus survives asynchronous opens.
 pub(super) struct State {
@@ -97,22 +133,11 @@ impl State {
     pub(super) fn cancel_input(&mut self) {
         self.leader = None;
     }
-    /// Identify navigation commands before source edits are handed to TextEdit.
-    pub(super) fn command_event(&self, event: &egui::Event, modifiers: egui::Modifiers) -> bool {
-        let prefix = self.bindings.prefix(false);
-        match event {
-            egui::Event::Key {
-                key,
-                modifiers,
-                pressed: true,
-                ..
-            } => {
-                prefix.matches(*key, *modifiers, false)
-                    || self.leader.is_some()
-                    || self.bindings.action(*key, *modifiers, false).is_some()
-            }
-            egui::Event::Cut => prefix.key == Key::X && modifiers.matches_exact(prefix.modifiers),
-            _ => false,
+    /// Source routing sees bindings and prefix intent, never pane layout or focus caches.
+    pub(super) fn input_rules(&self) -> InputRules<'_> {
+        InputRules {
+            bindings: &self.bindings,
+            leader: self.leader.is_some(),
         }
     }
     /// Consume only command events, before TextEdit and the PTY see them. In
@@ -240,7 +265,7 @@ impl EditorApp {
     pub(super) fn navigate(&mut self, action: NavAction, ctx: &egui::Context) {
         use NavAction::*;
         self.navigation.used = true;
-        self.input.editing.cancel_sequence();
+        self.input.cancel_sequence();
         match action {
             Left | Right | Up | Down => {
                 let current = self.navigation.active;

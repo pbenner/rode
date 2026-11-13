@@ -6,7 +6,9 @@
 //! to one document, style and viewport and never crosses a modal or focus barrier.
 use super::*;
 use navigation::Style;
-use std::collections::VecDeque;
+mod control;
+pub(super) use control::Replay;
+pub(super) use control::{Context, Router, Scope};
 
 /// Share tab recognition between source admission and shortcuts in other widgets.
 fn tab_shortcut(ctx: &egui::Context) -> Option<isize> {
@@ -48,253 +50,25 @@ impl DocumentShortcut {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Scope {
-    pub document: u64,
-    pub style: navigation::Style,
-    viewport: egui::ViewportId,
-}
-impl Scope {
-    pub fn new(ctx: &egui::Context, document: u64, style: navigation::Style) -> Self {
-        Self {
-            document,
-            style,
-            viewport: ctx.viewport_id(),
-        }
-    }
-    fn focused(self, ctx: &egui::Context) -> bool {
-        self.viewport == ctx.viewport_id()
-            && ctx.memory(|m| m.has_focus(egui::Id::new(("document", self.document))))
-    }
-}
-
-#[derive(Default)]
-pub(super) struct Router {
-    pub editing: navigation::editing::State,
-    pub queue: Replay,
-}
-
-/// Bounded native events waiting for an acknowledged source application boundary.
-#[derive(Default)]
-pub(super) struct Replay {
-    scope: Option<Scope>,
-    events: VecDeque<egui::Event>,
-    bytes: usize,
-    applied: bool,
-    notice: Option<String>,
-}
-impl Replay {
-    pub fn acknowledge(&mut self, ctx: &egui::Context, id: u64) {
-        if self
-            .scope
-            .is_some_and(|s| s.document == id && s.viewport == ctx.viewport_id())
-        {
-            self.applied = true;
-        }
-    }
-    pub fn pending(&self) -> bool {
-        !self.events.is_empty()
-    }
-    pub fn bind(&mut self, scope: Scope) {
-        if self.scope != Some(scope) {
-            self.clear();
-            self.scope = Some(scope);
-        }
-    }
-    fn clear(&mut self) {
-        self.events.clear();
-        self.bytes = 0;
-        self.applied = false;
-    }
-    pub fn defer(&mut self, event: egui::Event) {
-        let bytes = match &event {
-            egui::Event::Text(s) | egui::Event::Paste(s) => s.len(),
-            egui::Event::Ime(egui::ImeEvent::Preedit(s) | egui::ImeEvent::Commit(s)) => s.len(),
-            _ => 0,
-        };
-        if self.events.len() < 512 && self.bytes.saturating_add(bytes) <= 8 * 1024 * 1024 {
-            self.events.push_back(event);
-            self.bytes += bytes;
-            self.applied = false;
-        } else {
-            self.notice = Some(
-                "Queued keyboard input exceeded the editor limit; remaining input was discarded."
-                    .into(),
-            );
-        }
-    }
-    pub fn replay(&mut self, ctx: &egui::Context, scope: Option<Scope>) {
-        // A detached tool window cannot consume or cancel the root editor's queue.
-        if self.scope.is_some_and(|s| s.viewport != ctx.viewport_id()) {
-            return;
-        }
-        if self.scope != scope || !scope.is_some_and(|s| s.focused(ctx)) {
-            self.clear();
-            self.scope = scope;
-            return;
-        }
-        if !self.pending() {
-            return;
-        }
-        if !self.applied {
-            for event in ctx.input_mut(|i| std::mem::take(&mut i.events)) {
-                self.defer(event);
-            }
-            ctx.request_repaint();
-            return;
-        }
-        ctx.input_mut(|i| {
-            let mut events: Vec<_> = self.events.drain(..).collect();
-            events.append(&mut i.events);
-            i.events = events;
-        });
-        self.bytes = 0;
-        self.applied = false;
-    }
-}
-impl Router {
-    /// Only this native widget can acknowledge edits for the queued document.
-    pub fn after_source(
-        &mut self,
-        ui: &mut egui::Ui,
-        id: u64,
-        output: &mut egui::text_edit::TextEditOutput,
-        text: &str,
-        palette: theme::Palette,
-    ) {
-        self.editing.after_source(ui, id, output, text, palette);
-        self.queue.acknowledge(ui.ctx(), id);
-    }
-    /// Fence commands behind earlier native edits/cursor movement. Translation may
-    /// add its own replay events before this tail is appended by the adapter.
-    fn fence(
-        &mut self,
-        ctx: &egui::Context,
-        scope: Scope,
-        navigation: &navigation::State,
-    ) -> Vec<egui::Event> {
-        self.queue.bind(scope);
-        ctx.input_mut(|i| {
-            let prefix = navigation.bindings.prefix(false);
-            let cut_modifiers = i
-                .events
-                .iter()
-                .find_map(|event| match event {
-                    egui::Event::Key { key, modifiers, .. } if *key == prefix.key => {
-                        Some(*modifiers)
-                    }
-                    _ => None,
-                })
-                .unwrap_or(i.modifiers);
-            let extension_prefix = Command::Extensions.shortcut().filter(|binding| {
-                let modifiers = i
-                    .events
-                    .iter()
-                    .find_map(|event| match event {
-                        egui::Event::Key { key, modifiers, .. } if *key == binding.logical_key => {
-                            Some(*modifiers)
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or(i.modifiers);
-                modifiers.matches_exact(binding.modifiers)
-            });
-            let mut source_input = false;
-            let mut cut = None;
-            for (index, event) in i.events.iter().enumerate() {
-                let navigation_command = navigation.command_event(event, cut_modifiers);
-                let global_command = (extension_prefix.is_some()
-                    && matches!(event, egui::Event::Cut))
-                    || matches!(event, egui::Event::Key {key, modifiers, pressed: true, ..}
-                    if modifiers.ctrl || modifiers.alt || modifiers.command || matches!(key,
-                        Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 |
-                        Key::F7 | Key::F8 | Key::F9 | Key::F10 | Key::F11 | Key::F12));
-                if source_input && (navigation_command || global_command) {
-                    cut = Some(index);
-                    break;
-                }
-                source_input |= !navigation_command
-                    && matches!(
-                        event,
-                        egui::Event::Key { pressed: true, .. }
-                            | egui::Event::Text(_)
-                            | egui::Event::Paste(_)
-                            | egui::Event::Cut
-                            | egui::Event::Copy
-                            | egui::Event::Ime(_)
-                    );
-            }
-            let Some(index) = cut else {
-                return Vec::new();
-            };
-            let mut tail = i.events.split_off(index);
-            // Native Cut has no modifiers. Capture the recognized Emacs prefix
-            // before the physical Ctrl release can change a later frame.
-            let clipboard_prefix = extension_prefix
-                .map(|b| (b.logical_key, b.modifiers))
-                .or_else(|| {
-                    (prefix.key == Key::X && cut_modifiers.matches_exact(prefix.modifiers))
-                        .then_some((prefix.key, prefix.modifiers))
-                });
-            if let Some((key, modifiers)) = clipboard_prefix {
-                for event in &mut tail {
-                    if matches!(event, egui::Event::Cut) {
-                        *event = egui::Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers,
-                        };
-                    }
-                }
-            }
-            tail
-        })
-    }
-}
-
 impl EditorApp {
     fn source_input_scope(&self, ctx: &egui::Context) -> Option<Scope> {
         (ctx.viewport_id() == egui::ViewportId::ROOT && self.editing_allowed(ctx))
             .then(|| {
-                self.styled_source()
-                    .map(|(id, _)| Scope::new(ctx, id, self.navigation.bindings.style()))
+                self.documents
+                    .active_source()
+                    .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()))
             })
             .flatten()
             .filter(|s| s.focused(ctx))
     }
 
-    /// A command may replace the document or focus before layout. Remaining source
-    /// events from that batch have no authority to edit the new target.
-    fn reject_changed_input_context(
-        &mut self,
-        ctx: &egui::Context,
-        scope: Option<Scope>,
-        pane: navigation::Pane,
-    ) -> bool {
-        if scope.is_none()
-            || (self.source_input_scope(ctx) == scope && self.navigation.active == pane)
-        {
-            return false;
+    fn input_context(&self, ctx: &egui::Context) -> Context {
+        Context {
+            source: self.source_input_scope(ctx),
+            pane: self.navigation.active,
         }
-        self.input.queue.clear();
-        self.input.editing.cancel_sequence();
-        ctx.input_mut(|i| {
-            i.events.retain(|e| {
-                !matches!(
-                    e,
-                    egui::Event::Key { .. }
-                        | egui::Event::Text(_)
-                        | egui::Event::Paste(_)
-                        | egui::Event::Cut
-                        | egui::Event::Copy
-                        | egui::Event::Ime(_)
-                )
-            })
-        });
-        true
     }
+
     /// Route global editor actions after honoring modal barriers and native terminal focus.
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.pending.is_some()
@@ -376,21 +150,18 @@ impl EditorApp {
     }
     /// One production entry point for source replay, navigation, editing and global commands.
     pub(super) fn route_input(&mut self, ctx: &egui::Context) {
-        // Source editing lives in the root viewport; tool windows retain native form/PTY input.
-        let scope = self.source_input_scope(ctx);
-        let pane = self.navigation.active;
-        if ctx.viewport_id() == egui::ViewportId::ROOT && self.input.queue.scope != scope {
+        let context = self.input_context(ctx);
+        let frame = self
+            .input
+            .begin(ctx, context, self.navigation.input_rules());
+        if frame.resets_prefix() {
             self.navigation.cancel_input();
         }
-        self.input.queue.replay(ctx, scope);
-        let tail = scope
-            .map(|s| self.input.fence(ctx, s, &self.navigation))
-            .unwrap_or_default();
         self.navigation_shortcuts(ctx);
-        if self.reject_changed_input_context(ctx, scope, pane) {
+        if !self.input.accepts(ctx, &frame, self.input_context(ctx)) {
             return;
         }
-        if scope.is_some()
+        if context.source.is_some()
             && let Some(command) = DocumentShortcut::take(ctx, self.navigation.bindings.style())
         {
             // Earlier source operations have already crossed the native edit
@@ -405,42 +176,34 @@ impl EditorApp {
                     }
                 }
             }
-            self.input.editing.cancel_context();
-            self.input.queue.clear();
-            let remaining = ctx.input_mut(|i| std::mem::take(&mut i.events));
-            if self.editing_allowed(ctx)
-                && let Some((id, _)) = self.styled_source()
-            {
-                let next = Scope::new(ctx, id, self.navigation.bindings.style());
-                self.input.queue.bind(next);
-                for event in remaining.into_iter().chain(tail) {
-                    self.input.queue.defer(event);
-                }
-            }
+            let next = self
+                .editing_allowed(ctx)
+                .then(|| self.documents.active_source())
+                .flatten()
+                .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()));
+            self.input.handoff(ctx, frame, next);
             self.finish_input(ctx);
             return;
         }
         if ctx.viewport_id() == egui::ViewportId::ROOT {
             self.editing_shortcuts(ctx);
         }
-        if self.reject_changed_input_context(ctx, scope, pane) {
+        if !self.input.accepts(ctx, &frame, self.input_context(ctx)) {
             return;
         }
         self.shortcuts(ctx);
-        if self.reject_changed_input_context(ctx, scope, pane) {
+        if !self.input.accepts(ctx, &frame, self.input_context(ctx)) {
             return;
         }
-        for event in tail {
-            self.input.queue.defer(event);
-        }
+        self.input.finish(frame);
         self.finish_input(ctx);
     }
 
     fn finish_input(&mut self, ctx: &egui::Context) {
-        if self.input.queue.pending() {
+        if self.input.pending() {
             ctx.request_repaint();
         }
-        if let Some(notice) = self.input.queue.notice.take() {
+        if let Some(notice) = self.input.take_notice() {
             self.notify(notice, true);
         }
     }
@@ -463,7 +226,7 @@ impl EditorApp {
     }
     /// Navigate the configured source search in either direction using character cursor offsets.
     pub(in crate::app) fn style_find_match(&mut self, reverse: bool, ctx: &egui::Context) {
-        if self.styled_source().is_none() || self.find.is_empty() {
+        if self.documents.active_source().is_none() || self.find.is_empty() {
             return;
         }
         let Some(doc) = self.documents.active_mut() else {
@@ -503,19 +266,6 @@ impl EditorApp {
             self.focus_editor(ctx);
         }
     }
-    pub(in crate::app) fn styled_source(&self) -> Option<(u64, &str)> {
-        let doc = self.documents.active()?;
-        if doc.image.is_some()
-            || doc.pdf.is_some()
-            || doc.hex.is_some()
-            || doc.notebook.as_ref().is_some_and(|v| !v.source_mode())
-            || doc.markdown.as_ref().is_some_and(|v| v.showing)
-            || doc.marp.as_ref().is_some_and(|v| v.showing)
-        {
-            return None;
-        }
-        Some((doc.id, &doc.text))
-    }
     pub(in crate::app) fn editing_allowed(&self, ctx: &egui::Context) -> bool {
         ctx.input(|i| i.focused)
             && self.dialog == Dialog::None
@@ -527,53 +277,16 @@ impl EditorApp {
     /// Translate supported Standard/Emacs/Vim input into the existing source edit/undo path;
     /// modal barriers, terminal focus and unsupported document modes keep their normal input.
     pub(in crate::app) fn editing_shortcuts(&mut self, ctx: &egui::Context) {
-        let style = self.navigation.bindings.style();
-        if !self.editing_allowed(ctx) {
-            self.input.editing.cancel_context();
-            return;
-        }
-        let Some((id, _)) = self.styled_source() else {
-            self.input.editing.cancel_context();
-            return;
-        };
-        let target = egui::Id::new(("document", id));
-        let escape_reclaim = style == Style::Vim
-            && ctx.input(|i| i.key_pressed(Key::Escape))
-            && ctx.memory(|m| m.had_focus_last_frame(target) && m.focused().is_none());
-        if escape_reclaim {
-            ctx.memory_mut(|m| m.request_focus(target));
-        }
-        let keyboard = ctx.input(|i| {
-            i.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Text(_)
-                        | egui::Event::Paste(_)
-                        | egui::Event::Cut
-                        | egui::Event::Copy
-                        | egui::Event::Ime(_)
-                        | egui::Event::Key { pressed: true, .. }
-                )
-            })
-        });
-        if !ctx.memory(|m| m.has_focus(target)) {
-            self.input.editing.cancel_context();
-            return;
-        }
-        if !keyboard {
-            return;
-        }
-        let text = &self.documents.active().unwrap().text;
-        for action in self.input.editing.route(
+        let actions = self.input.translate_source(
             ctx,
-            input::Scope::new(ctx, id, style),
-            text,
-            self.documents[self.documents.active_index()].display_path(),
-            &mut self.input.queue,
-        ) {
+            self.documents.active_source(),
+            self.navigation.bindings.style(),
+            self.editing_allowed(ctx),
+        );
+        for action in actions {
             self.navigate(action, ctx);
         }
-        if let Some(message) = self.input.editing.take_notice() {
+        if let Some(message) = self.input.take_notice() {
             self.notify(message, true);
         }
     }

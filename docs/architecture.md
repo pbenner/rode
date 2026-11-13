@@ -53,6 +53,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
 | `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
+| `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
 | `src/app/explorer/` | Project-scoped directory cache, flattened rows, keyboard selection and acknowledged mutation effects |
@@ -315,10 +316,25 @@ quit because losing an acknowledgement is not proof of completed cleanup. The
 existing dirty-buffer and encrypted-project guards run before requesting exit.
 Accepted discard decisions record document versions. If a worker delivers newer
 unsaved edits during cleanup, exit returns to the shared guard; an unchanged
-discard decision is not prompted again.
+discard decision is not prompted again. Documents publish a dirty-version/save
+snapshot; the exit controller returns explicit wait, close, recheck or cleanup-retry
+decisions. A ready snapshot cannot bypass another cleanup operation started by its owner.
+Native close is admitted after source rendering and retains its intent while input
+replay is pending. It opens the quit guard only once those edits have reached their
+destination, so a modal cannot block the edits it is meant to protect.
+An admitted text/binary save failure cancels a waiting exit even if the buffer
+was already clean; a failed Save As must remain visible for recovery.
 
-`app/input.rs` owns source replay and the production routing entry point for both
-root and detached windows. `navigation` owns pane focus/bindings and emits typed
+`app/input.rs` adapts the production routing entry point for both root and detached
+windows. Its private `input/control.rs` controller owns replay and keymap state;
+adapters cannot mutate its queue or interpreter directly. Each frame receives a
+source/pane context and a navigation command-rules projection, rather than the
+navigation owner with its layout/focus caches. A frame token retains the ordered
+command tail until completion or an explicit document handoff. The document owner
+publishes only eligible source ID, text and display path for interpretation, keeping
+preview selection policy out of input routing.
+
+`navigation` owns pane focus/bindings and emits typed
 navigation actions; its editing interpreter translates keymaps into native
 TextEdit events without accessing `EditorApp`. Global commands use the existing
 typed command dispatcher. The adapter applies those actions through domain guards.

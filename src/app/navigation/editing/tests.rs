@@ -254,14 +254,14 @@ fn notebook_json_source_uses_source_keys_while_structured_cells_keep_native_inpu
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_notebook();
-    assert!(app.styled_source().is_none());
+    assert!(app.documents.active_source().is_none());
     app.toggle_notebook_source(&ctx);
-    assert!(app.styled_source().is_some());
+    assert!(app.documents.active_source().is_some());
     app.toggle_notebook_source(&ctx);
     let until = Instant::now() + Duration::from_secs(2);
-    while app.styled_source().is_some() && Instant::now() < until {
+    while app.documents.active_source().is_some() && Instant::now() < until {
         std::thread::sleep(Duration::from_millis(1));
         app.poll(&ctx);
     }
-    assert!(app.styled_source().is_none());
+    assert!(app.documents.active_source().is_none());
 }

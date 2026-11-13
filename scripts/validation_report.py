@@ -95,7 +95,11 @@ def artifact_identity(root, environment, test_binaries):
 
 
 def toolchain(environment):
-    """Capture bounded version probes for explicit test tools; do not install or print credentials."""
+    """Capture bounded versions, using stderr only for tools without a stdout version.
+
+    Maintenance/update warnings on stderr do not identify a different toolchain.
+    Stderr-only version commands such as OpenSSH still retain their identity.
+    """
     commands = {
         "python": [sys.executable, "--version"],
         "rustc": ["rustc", "-Vv"],
@@ -135,7 +139,7 @@ def toolchain(environment):
             results[name] = dict(
                 command=command,
                 exit_code=result.returncode,
-                version=(result.stdout + result.stderr).strip()[:2000],
+                version=(result.stdout.strip() or result.stderr.strip())[:2000],
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             results[name] = dict(command=command, unavailable=str(error))
