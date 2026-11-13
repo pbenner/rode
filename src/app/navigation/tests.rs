@@ -219,3 +219,76 @@ fn emacs_prefix_handles_native_cut_events_and_saves_without_consuming_shell_cut(
         },
     );
 }
+
+#[test]
+fn batched_emacs_edits_finish_before_the_native_save_prefix() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_file();
+    app.documents[0].text = "alpha beta\ngamma delta\n".into();
+    app.navigation.bindings.select_style(Style::Emacs);
+    let frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
+        let modifiers = if events.iter().any(|event| matches!(event, egui::Event::Cut)) {
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND
+        } else {
+            egui::Modifiers::NONE
+        };
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000., 700.),
+                )),
+                events,
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| {
+                app.replay_style_input(ctx);
+                app.navigation_shortcuts(ctx);
+                app.editing_shortcuts(ctx);
+                app.editor(ctx);
+            },
+        );
+    };
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![]);
+    let key = |key, pressed| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+    };
+    let mut events: Vec<_> = [
+        Key::A,
+        Key::Space,
+        Key::F,
+        Key::F,
+        Key::W,
+        Key::Y,
+        Key::A,
+        Key::K,
+        Key::Y,
+        Key::A,
+        Key::D,
+    ]
+    .into_iter()
+    .map(|k| key(k, true))
+    .collect();
+    events.extend([
+        egui::Event::Text("A".into()),
+        egui::Event::Cut,
+        key(Key::S, true),
+    ]);
+    frame(&mut app, events);
+    for _ in 0..20 {
+        frame(&mut app, vec![]);
+    }
+    assert_eq!(app.documents[0].text, "Alpha beta\ngamma delta\n");
+    assert!(
+        matches!(app.dialog, Dialog::Save(_)),
+        "The save prefix must still open Save As"
+    );
+}

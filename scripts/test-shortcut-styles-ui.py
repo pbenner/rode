@@ -17,12 +17,16 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     close_window,
+    delayed_input,
     fixture_directory,
     fixture_environment,
     key,
+    read_preferences,
     screenshot,
+    stop_process,
     text,
     wait_for_effect,
+    write_python_launcher,
 )
 
 wait_for = partial(wait_for_effect, timeout=12)
@@ -51,13 +55,13 @@ def run():
             tools = base / "ssh-tools"
             tools.mkdir()
             wrapper = tools / "ssh"
-            wrapper.write_text(
-                "#!/usr/bin/python3\nimport os,sys\n"
+            write_python_launcher(
+                wrapper,
+                "import os,sys\n"
                 + "binary="
                 + repr(binary)
-                + "\nos.execv(binary,[binary]+['-T' if a=='-tt' else a for a in sys.argv[1:]])\n"
+                + "\nos.execv(binary,[binary]+['-T' if a=='-tt' else a for a in sys.argv[1:]])\n",
             )
-            wrapper.chmod(0o755)
             env["PATH"] = str(tools) + os.pathsep + os.environ["PATH"]
             args += [
                 "--ssh",
@@ -85,7 +89,9 @@ def run():
                 ui.open_file("main.txt")
 
                 def saved(expected, message):
+                    ui.source(expected)
                     key("s", ("Control_L",))
+                    ui.control("source-editor-saved")
                     wait_for(lambda: source.read_text() == expected, message)
 
                 original = "alpha beta\ngamma delta\n"
@@ -135,22 +141,29 @@ def run():
                     "Ctrl+/ did not uncomment the selection",
                 )
                 key("w", ("Control_L",))
+                ui.document(source)
 
                 command("Keyboard style: Emacs")
-                key("a", ("Control_L",))
-                key("space", ("Control_L",))
-                key("f", ("Control_L",))
-                key("f", ("Control_L",))
-                key("w", ("Control_L",))
-                key("y", ("Control_L",))
-                key("a", ("Control_L",))
-                key("k", ("Control_L",))
-                key("y", ("Control_L",))
-                key("a", ("Control_L",))
-                key("d", ("Control_L",))
-                text("A")
+                ui.document(source)
+                # Stress runs deliver the complete editing sequence together.
+                # The following prefix must remain behind these pending edits.
+                with delayed_input(process):
+                    key("a", ("Control_L",))
+                    key("space", ("Control_L",))
+                    key("f", ("Control_L",))
+                    key("f", ("Control_L",))
+                    key("w", ("Control_L",))
+                    key("y", ("Control_L",))
+                    key("a", ("Control_L",))
+                    key("k", ("Control_L",))
+                    key("y", ("Control_L",))
+                    key("a", ("Control_L",))
+                    key("d", ("Control_L",))
+                    text("A")
                 # Actual X11 sends Cut for Ctrl+X, rather than Key::X.
                 prefix("s", ctrl=True)
+                ui.source("Alpha beta\ngamma delta\n")
+                ui.control("source-editor-saved")
                 wait_for(
                     lambda: source.read_text() == "Alpha beta\ngamma delta\n",
                     "Emacs editing / Ctrl+X Ctrl+S failed",
@@ -228,10 +241,7 @@ def run():
                 key("Escape")
                 preferences = base / "data/rode/app.ron"
                 wait_for(
-                    lambda: (
-                        preferences.exists()
-                        and '"keyboard.style": "vim"' in preferences.read_text()
-                    ),
+                    lambda: read_preferences(preferences).get("keyboard.style") == "vim",
                     "Style was not saved immediately",
                 )
                 command("Keyboard style: Standard")
@@ -248,13 +258,18 @@ def run():
                     "Native Standard/Emacs/Vim editing, indentation, line actions, clipboard prefix, operators, undo/redo, pane navigation, shell keys, safe saves, and style persistence passed."
                 )
         except Exception:
-            if window and process and process.poll() is None:
-                screenshot(window, "failure.png")
+            try:
+                for path in [source, other, comments, Path(env["RODE_UI_TEST_STATE"])]:
+                    if path.exists():
+                        shutil.copyfile(path, ARTIFACTS / ("failure-" + path.name))
+                if window and process and process.poll() is None:
+                    screenshot(window, "failure.png")
+            except Exception as error:
+                print(f"Could not retain shortcut failure diagnostics: {error}")
             raise
         finally:
-            if process and process.poll() is None:
-                process.kill()
-                process.wait()
+            if process:
+                stop_process(process)
 
 
 if __name__ == "__main__":

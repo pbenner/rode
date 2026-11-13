@@ -39,6 +39,9 @@ pub(super) struct State {
     /// Focus requests target a native host so another tool window cannot consume them.
     pending_viewport: egui::ViewportId,
     leader: Option<Instant>,
+    // Commands following source input must join the source replay queue after
+    // the editor has translated that input, preserving order across frames.
+    source_tail: Vec<egui::Event>,
     pub zoom: Option<Pane>,
     pub widths: [Option<f32>; 2],
     rects: [Option<egui::Rect>; 5],
@@ -57,6 +60,7 @@ impl State {
             pending: None,
             pending_viewport: egui::ViewportId::ROOT,
             leader: None,
+            source_tail: Vec::new(),
             zoom: None,
             widths: [None; 2],
             rects: [None; 5],
@@ -107,10 +111,35 @@ impl State {
         let mut actions = vec![];
         let terminal_focus = Terminal::focused(ctx);
         let prefix = self.bindings.prefix(terminal_focus);
+        let source_focus = self.editing.has_focus(ctx);
+        self.source_tail.clear();
         ctx.input_mut(|input| {
             let cut_prefix=prefix.key==Key::X && (input.modifiers.matches_exact(prefix.modifiers)||input.events.iter().any(|event|matches!(event,egui::Event::Key {key:Key::X,modifiers,..} if modifiers.matches_exact(prefix.modifiers))));
             let mut swallow_text = self.leader.is_some();
-            input.events.retain(|event| match event {
+            let mut source_input = false;
+            let mut defer_tail = false;
+            input.events.retain(|event| {
+                let command = match event {
+                    egui::Event::Key { key, modifiers, pressed: true, .. } =>
+                        prefix.matches(*key, *modifiers, false)
+                            || self.leader.is_some()
+                            || self.bindings.action(*key, *modifiers, false).is_some(),
+                    egui::Event::Cut => cut_prefix && !terminal_focus,
+                    _ => false,
+                };
+                if defer_tail || (source_focus && source_input && command) {
+                    defer_tail = true;
+                    // Cut carries no modifiers. Preserve the already recognized
+                    // prefix even if Ctrl is released before this tail replays.
+                    self.source_tail.push(if command && matches!(event, egui::Event::Cut) {
+                        egui::Event::Key {
+                            key: prefix.key, physical_key: None, pressed: true,
+                            repeat: false, modifiers: prefix.modifiers,
+                        }
+                    } else { event.clone() });
+                    return false;
+                }
+                let retain = match event {
                 egui::Event::Key {
                     key,
                     modifiers,
@@ -157,6 +186,15 @@ impl State {
                 | egui::Event::Cut
                 | egui::Event::Paste(_) => !swallow_text,
                 _ => true,
+                };
+                source_input |= retain && matches!(event,
+                    egui::Event::Key { pressed: true, .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Cut
+                    | egui::Event::Copy
+                    | egui::Event::Ime(_));
+                retain
             });
         });
         if self.leader.is_some() {

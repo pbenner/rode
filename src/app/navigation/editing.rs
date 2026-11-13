@@ -61,6 +61,12 @@ pub(in crate::app) struct State {
     pub(super) notice: Option<String>,
 }
 impl State {
+    /// Whether queued source commands still belong to the focused text editor.
+    pub(super) fn has_focus(&self, ctx: &egui::Context) -> bool {
+        self.doc
+            .is_some_and(|id| ctx.memory(|m| m.has_focus(egui::Id::new(("document", id)))))
+    }
+
     /// Drop a partial operator/count/command when context or input permission changes.
     pub(in crate::app) fn cancel_sequence(&mut self) {
         self.count = 0;
@@ -730,6 +736,7 @@ impl EditorApp {
     /// Translate supported Standard/Emacs/Vim input into the existing source edit/undo path;
     /// modal barriers, terminal focus and unsupported document modes keep their normal input.
     pub(in crate::app) fn editing_shortcuts(&mut self, ctx: &egui::Context) {
+        let navigation_tail = std::mem::take(&mut self.navigation.source_tail);
         let style = self.navigation.bindings.style();
         if !self.editing_allowed(ctx) {
             self.navigation.editing.composing = false;
@@ -777,6 +784,14 @@ impl EditorApp {
             self.documents[self.documents.active_index()].display_path(),
         ) {
             self.navigate(action, ctx);
+        }
+        // Translation may defer several earlier edits. Append navigation only
+        // after those edits; replay applies the existing focus/style guards.
+        for event in navigation_tail {
+            self.navigation.editing.defer(event);
+        }
+        if !self.navigation.editing.deferred.is_empty() {
+            ctx.request_repaint();
         }
         if let Some(message) = self.navigation.editing.notice.take() {
             self.notify(message, true);
