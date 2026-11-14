@@ -1093,11 +1093,11 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
     app.tunnels.generation = Some(app.workers.generation());
     app.tunnels.available = vec![observed_tunnel(Status::Connected)];
     app.tunnels.observation = Some(Ok(()));
-    app.vaults.locking = true;
+    app.vaults.set_locking_fixture(true);
     app.tunnel_tick(&ctx);
     assert!(app.tunnels.background.is_none() && app.tunnels.pending.is_none());
     assert!(app.tunnels.observation.is_none());
-    app.vaults.locking = false;
+    app.vaults.set_locking_fixture(false);
     app.workspace.as_mut().unwrap().connected = false;
     app.tunnel_tick(&ctx);
     assert!(app.tunnels.background.is_none() && app.tunnels.pending.is_none());

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native workspace replacement, tool-window docking and live-state preservation."""
 
+import contextlib
 import ctypes
 import json
 import os
@@ -217,7 +218,14 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             key("Escape")
             request_close(child)
             wait(lambda: tools_window() is None, "Closing tools did not dock them back")
+            # Keep a real error notification over the docked chat. Its centre
+            # can cover the composer even though the input remains usable.
+            # The click harness must find exposed input, not dismiss the error.
+            ui.open_file("missing-docking-notification-fixture.txt", expect_error=True)
+            key("a", ("Control_L", "Shift_L"))
             send("after docking", window)
+            ui.control("notice-dismiss")
+            ui.dismiss_notice()
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
             assert sum(call.get("method") == "turn/start" for call in calls()) == 4
             activate("workspace-detach")
@@ -405,6 +413,9 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
                 "Workspace switching, sidebar and individual tab windows, disabled placeholders, retained chat/code and the same live shell passed."
             )
         except Exception:
+            if process.poll() is None:
+                with contextlib.suppress(Exception):
+                    screenshot(window, "workspace-failure.png")
             for snapshot in base.glob(state_path.name + "*"):
                 shutil.copy2(snapshot, ARTIFACTS / snapshot.name)
             rpc = project / "agent-rpc.jsonl"

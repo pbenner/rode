@@ -16,7 +16,7 @@ impl State {
         self.current(doc)?.hunks.get(index)?;
         Some(Request {
             key: self.key.clone()?,
-            version: doc.edit_version,
+            version: doc.version(),
             index,
             baseline: self.baseline.as_ref()?.text.clone(),
         })
@@ -24,7 +24,7 @@ impl State {
 
     /// Reject edits, document switches, renames and baseline refreshes since the click.
     fn replacement(&self, doc: &Document, request: &Request) -> Option<(Range<usize>, String)> {
-        if doc.edit_version != request.version
+        if doc.version() != request.version
             || self.key.as_ref() != Some(&request.key)
             || !Arc::ptr_eq(&self.baseline.as_ref()?.text, &request.baseline)
         {
@@ -86,9 +86,7 @@ impl EditorApp {
         state.set_undoer(undo);
         state.cursor.set_char_range(Some(cursor));
         state.store(ctx, id);
-        doc.edit_version = doc.edit_version.wrapping_add(1);
-        doc.modified = doc.path.is_none() || doc.text != doc.saved_text;
-        doc.lines = doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
+        doc.source_changed();
         doc.selection = Some((point, point));
         doc.last_cursor = point;
         doc.cursor = (row, 1);

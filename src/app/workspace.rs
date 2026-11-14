@@ -1,6 +1,8 @@
 //! Ordered project teardown. Domain owners release views/work before transports;
 //! persistent services and acknowledged host-cleanup guards keep their own lifetimes.
 use super::*;
+mod connection;
+pub(super) use connection::ConnectionId;
 
 mod control;
 pub(super) use control::{Controller, PreparationId, Prepared};
@@ -228,16 +230,7 @@ impl EditorApp {
         self.git_gutter.reset();
         self.terminal = None;
         self.session_context_reset();
-        for client in [
-            self.vaults.active.take(),
-            self.vaults.staged.take(),
-            self.vaults.pending.take(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            self.vaults.release(client);
-        }
+        self.vaults.release_project();
         self.documents.reset_context(retention);
         self.explorer_state.reset();
         self.file_browser.reset();

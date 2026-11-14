@@ -102,7 +102,7 @@ impl EditorApp {
         let versions = self
             .documents
             .iter()
-            .map(|doc| (doc.id, doc.edit_version))
+            .map(|doc| (doc.id, doc.version()))
             .collect();
         self.latex.token = self.latex.token.wrapping_add(1);
         let token = self.latex.token;
@@ -155,7 +155,7 @@ impl EditorApp {
                 // Compilation uses disk sources. Never overwrite buffers or
                 // apply build diagnostics to edits made after the build began.
                 for doc in &self.documents {
-                    if versions.contains(&(doc.id, doc.edit_version))
+                    if versions.contains(&(doc.id, doc.version()))
                         && crate::latex::is_source(doc.path.as_deref())
                     {
                         let items = reply
@@ -165,7 +165,7 @@ impl EditorApp {
                             .map(|issue| issue.diagnostic.clone())
                             .collect();
                         self.workbench
-                            .set_build_issues(doc.id, doc.edit_version, items);
+                            .set_build_issues(doc.id, doc.version(), items);
                     }
                 }
                 let pdf = reply.pdf.clone();
@@ -441,7 +441,7 @@ mod tests {
         app.documents[0].path = Some(root_path(&app).join("main.tex").to_string_lossy().into());
         app.documents[0].text = "saved".into();
         app.documents[0].saved_text = "saved".into();
-        app.documents[0].modified = false;
+        app.documents[0].set_dirty_fixture(false);
         (app, ctx)
     }
     fn root_path(app: &EditorApp) -> PathBuf {
@@ -452,7 +452,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut app, ctx) = app(root.path());
         app.documents[0].text = "keep unsaved LaTeX".into();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.build_latex(true, &ctx);
         assert!(!app.latex.busy);
         assert_eq!(app.documents[0].text, "keep unsaved LaTeX");
@@ -467,9 +467,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (mut app, ctx) = app(root.path());
         let id = app.documents[0].id;
-        app.documents[0].edit_version = 2;
+        app.documents[0].set_version_fixture(2);
         app.documents[0].text = "new edits".into();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.latex.token = 1;
         app.latex.busy = true;
         app.latex.last_pdf = Some("previous.pdf".into());

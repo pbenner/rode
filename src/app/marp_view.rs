@@ -85,9 +85,7 @@ impl EditorApp {
         self.new_file();
         let doc = self.documents.active_mut().unwrap();
         doc.text = marp::TEMPLATE.into();
-        doc.modified = true;
-        doc.edit_version = doc.edit_version.wrapping_add(1);
-        doc.lines = doc.text.lines().count();
+        doc.source_changed();
         doc.marp = Some(View::default());
     }
     /// Switch a Markdown document between source and slide view, preserving its source buffer.
@@ -124,13 +122,14 @@ impl EditorApp {
     pub(super) fn marp_tick(&mut self) {
         let active = self.documents.active_index();
         for (index, doc) in self.documents.iter_mut().enumerate() {
+            let version = doc.version();
             if let Some(view) = &mut doc.marp
                 && (index != active
                     || !view.showing
                     || view
                         .attempted
                         .as_ref()
-                        .is_some_and(|(version, _, _)| *version != doc.edit_version))
+                        .is_some_and(|(attempted, _, _)| *attempted != version))
                 && (view.busy || view.pdf.as_ref().is_some_and(|pdf| pdf.image.loading))
             {
                 view.stop_render();
@@ -229,7 +228,7 @@ impl EditorApp {
                     .attempted
                     .as_ref()
                     .is_some_and(|(version, used, source)| {
-                        *version == doc.edit_version && used == settings && source == &path
+                        *version == doc.version() && used == settings && source == &path
                     })
         });
         if needs_render {
@@ -339,7 +338,7 @@ impl EditorApp {
         if self
             .documents
             .iter()
-            .any(|doc| doc.id == id && doc.recovery.is_some())
+            .any(|doc| doc.id == id && doc.is_recovery())
         {
             self.notify(
                 "Reconnect or Save As this disconnected presentation before using Marp.",
@@ -374,6 +373,7 @@ impl EditorApp {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;
         };
+        let version = doc.version();
         let view = doc.marp.get_or_insert_with(View::default);
         let exporting = destination.is_some();
         if (exporting && view.exporting) || (!exporting && view.busy) {
@@ -399,7 +399,7 @@ impl EditorApp {
             view.token = view.token.wrapping_add(1);
             view.cancel = Arc::new(AtomicBool::new(false));
             view.busy = true;
-            view.attempted = Some((doc.edit_version, settings.clone(), path.clone()));
+            view.attempted = Some((version, settings.clone(), path.clone()));
             (view.token, view.cancel.clone())
         };
         view.error.clear();
@@ -412,7 +412,6 @@ impl EditorApp {
             destination,
         };
         let page = view.pdf.as_ref().map_or(1, |pdf| pdf.page);
-        let version = doc.edit_version;
         let plan = self.workspace.as_ref().map(|w| w.plan.clone());
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
         let gate = self.marp_gate.clone();
@@ -480,6 +479,7 @@ impl EditorApp {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;
         };
+        let current_version = doc.version();
         let Some(view) = &mut doc.marp else {
             return;
         };
@@ -493,7 +493,7 @@ impl EditorApp {
                 return;
             }
             view.busy = false;
-            if doc.edit_version != version {
+            if current_version != version {
                 return;
             }
         }
@@ -516,7 +516,7 @@ impl EditorApp {
                 let message = format!(
                     "Exported {}{}",
                     path,
-                    if doc.edit_version != version {
+                    if current_version != version {
                         " (submitted snapshot; buffer has newer edits)"
                     } else {
                         ""
@@ -551,7 +551,7 @@ impl EditorApp {
         let Some((source, cancel, token)) = pdf.begin_page(page, entry) else {
             return;
         };
-        let version = doc.edit_version;
+        let version = doc.version();
         let replies = self.workers.workspace(ctx);
         let budget = self.image_budget.clone();
         let limit = ctx.input(|i| i.max_texture_side);
@@ -583,7 +583,7 @@ impl EditorApp {
         let Some(doc) = self
             .documents
             .iter_mut()
-            .find(|doc| doc.id == id && doc.edit_version == version)
+            .find(|doc| doc.id == id && doc.version() == version)
         else {
             return;
         };
@@ -647,7 +647,7 @@ mod tests {
         app.new_marp();
         let doc = app.documents.active_mut().unwrap();
         let id = doc.id;
-        let version = doc.edit_version;
+        let version = doc.version();
         let view = doc.marp.as_mut().unwrap();
         view.busy = true;
         view.exporting = true;
@@ -672,7 +672,7 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_marp();
         let doc = app.documents.active_mut().unwrap();
-        let version = doc.edit_version;
+        let version = doc.version();
         let view = doc.marp.as_mut().unwrap();
         view.showing = true;
         view.attempted = Some((version, Settings::default(), "deck.md".into()));

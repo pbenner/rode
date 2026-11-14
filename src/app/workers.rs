@@ -106,7 +106,7 @@ impl EditorApp {
                 Job::Open(_) | Job::Save { .. } | Job::SaveBinary { .. }
             );
         if file_operation_pending
-            || self.vaults.locking
+            || self.vaults.locking()
             || (!raw
                 && (self.workspace.as_ref().is_some_and(|w| !w.ready)
                     || (self.workspace.is_none() && self.workspace.preparing())))

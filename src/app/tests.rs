@@ -106,7 +106,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     // A late startup result must not discard a buffer edited while it was loading.
     app.new_file();
     app.documents[0].text = "keep these edits".into();
-    app.documents[0].modified = true;
+    app.documents[0].set_dirty_fixture(true);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.workspace.preparing() || app.documents.has_pending_opens() {
         app.poll(&ctx);
@@ -128,8 +128,8 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     assert_eq!(doc.path.as_deref(), path.to_str());
     assert_eq!(doc.text, "standalone contents\n");
     doc.text.push_str("edited\n");
-    doc.modified = true;
-    doc.edit_version += 1;
+    doc.set_dirty_fixture(true);
+    doc.advance_version_fixture();
     app.save_active(&ctx, false);
     while app.documents[app.documents.active_index()].saving {
         app.poll(&ctx);
@@ -148,8 +148,11 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
         .unwrap()
         .text
         .push_str("unsaved edit\n");
-    app.documents.active_mut().unwrap().modified = true;
-    app.documents.active_mut().unwrap().edit_version += 1;
+    app.documents.active_mut().unwrap().set_dirty_fixture(true);
+    app.documents
+        .active_mut()
+        .unwrap()
+        .advance_version_fixture();
     app.save_active(&ctx, false);
     while app.documents[app.documents.active_index()].saving {
         app.poll(&ctx);
@@ -274,8 +277,8 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             assert!(!doc.dirty());
             assert_eq!(app.workbench.surface, workbench::Surface::Editor);
             doc.text.push_str("edited\n");
-            doc.modified = true;
-            doc.edit_version += 1;
+            doc.set_dirty_fixture(true);
+            doc.advance_version_fixture();
             app.save_active(&ctx, false);
             while app.documents[app.documents.active_index()].saving {
                 app.poll(&ctx);
@@ -558,8 +561,8 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     doc.path = Some("/scratch/researcher/project/main.rs".into());
     doc.revision = Some("remote revision".into());
     doc.text = "unsaved remote edits".into();
-    doc.modified = true;
-    doc.edit_version = 3;
+    doc.set_dirty_fixture(true);
+    doc.set_version_fixture(3);
     doc.selection = Some((2, 5));
     let generation = app.workers.generation();
     let project_token = app.workspace.preparation_identity();
@@ -577,7 +580,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     assert!(app.project_picker.token > folder_token);
     assert_eq!(app.documents[0].text, "unsaved remote edits");
     assert!(app.documents[0].dirty());
-    assert_eq!(app.documents[0].edit_version, 3);
+    assert_eq!(app.documents[0].version(), 3);
     assert_eq!(app.documents[0].selection, Some((2, 5)));
     assert!(app.documents[0].path.is_none());
     assert!(app.documents[0].revision.is_none());
@@ -917,33 +920,24 @@ fn syntax_selection_saves_only_its_own_preference_and_restores_independently() {
 
 #[test]
 fn save_acknowledgement_keeps_edits_typed_during_save() {
-    let mut document = Document {
-        recovery: None,
-        markdown: None,
-        marp: None,
-        image: None,
-        pdf: None,
-        hex: None,
-        notebook: None,
-        id: 1,
-        path: Some("file.rs".into()),
-        text: "newer edits".into(),
-        saved_text: "original".into(),
-        revision: Some("old".into()),
-        saving: true,
-        modified: true,
-        edit_version: 0,
-        last_cursor: usize::MAX,
-        cursor: (1, 1),
-        selection: None,
-        lines: 1,
-    };
+    let mut documents = documents::Documents::default();
+    documents.new_file();
+    let document = documents.active_mut().unwrap();
+    document.text = "original".into();
+    document.acknowledge_save("file.rs".into(), "original".into(), "old".into());
+    document.text = "submitted edits".into();
+    document.source_changed();
+    document.saving = true;
+    document.text = "newer edits".into();
+    document.source_changed();
+    let version = document.version();
     document.acknowledge_save(
         "file.rs".into(),
         "submitted edits".into(),
         "new revision".into(),
     );
     assert!(document.dirty());
+    assert_eq!(document.version(), version);
     assert!(!document.saving);
     assert_eq!(document.text, "newer edits");
     assert_eq!(document.revision.as_deref(), Some("new revision"));

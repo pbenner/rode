@@ -171,7 +171,7 @@ impl Tunnels {
 }
 impl EditorApp {
     fn tunnel_status_blocked(&self) -> Option<&'static str> {
-        if self.vaults.locking {
+        if self.vaults.locking() {
             return Some("Encrypted project is locking. Tunnel status checks are paused.");
         }
         let workspace = self.workspace.as_ref().filter(|w| w.remote.is_some())?;

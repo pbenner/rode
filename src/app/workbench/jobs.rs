@@ -120,7 +120,7 @@ impl EditorApp {
     }
     /// Require a prepared, connected project and no encrypted-project lock in progress.
     pub(in crate::app) fn project_ready(&self) -> bool {
-        !self.vaults.locking
+        !self.vaults.locking()
             && self
                 .workspace
                 .as_ref()
@@ -128,7 +128,7 @@ impl EditorApp {
     }
     /// Allow local host sampling without a project; SSH sampling requires its connection.
     pub(super) fn monitor_ready(&self) -> bool {
-        !self.vaults.locking
+        !self.vaults.locking()
             && self
                 .workspace
                 .as_ref()
@@ -218,13 +218,13 @@ impl EditorApp {
             let observed = &mut self.workbench.code_tools.observed;
             if observed
                 .as_ref()
-                .is_none_or(|(id, version, _)| *id != doc.id || *version != doc.edit_version)
+                .is_none_or(|(id, version, _)| *id != doc.id || *version != doc.version())
             {
-                *observed = Some((doc.id, doc.edit_version, Instant::now()));
+                *observed = Some((doc.id, doc.version(), Instant::now()));
             }
             let (_, _, since) = observed.as_ref().unwrap();
             if self.workbench.code_tools.checked.get(&doc.id)
-                != Some(&(doc.edit_version, self.workbench.epoch))
+                != Some(&(doc.version(), self.workbench.epoch))
                 && !self.workbench.code_tools.checking.contains(&doc.id)
                 && !doc.saving
             {
@@ -395,28 +395,26 @@ impl EditorApp {
                 let fresh = self
                     .documents
                     .iter()
-                    .any(|d| d.id == id && d.edit_version == version)
+                    .any(|d| d.id == id && d.version() == version)
                     && epoch == self.workbench.epoch;
                 match result {
                     Ok(project::Response::Analysis(analysis)) if fresh => {
                         if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
                             if doc.text != analysis.text {
                                 doc.text = analysis.text.clone();
-                                doc.edit_version = doc.edit_version.wrapping_add(1);
-                                doc.modified = doc.path.is_none() || doc.text != doc.saved_text;
-                                doc.lines = doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
+                                doc.source_changed();
                             }
                             self.workbench.code_tools.issues.insert(
                                 id,
                                 Issues {
-                                    version: doc.edit_version,
+                                    version: doc.version(),
                                     items: analysis.diagnostics,
                                 },
                             );
                             self.workbench
                                 .code_tools
                                 .checked
-                                .insert(id, (doc.edit_version, epoch));
+                                .insert(id, (doc.version(), epoch));
                         }
                         text_to_save = analysis.text;
                         self.workbench.code_tools.tool_error.clear();
@@ -482,7 +480,7 @@ impl EditorApp {
             .documents
             .iter()
             .filter(|d| !d.dirty() && !d.saving && !d.preview_loading())
-            .filter_map(|d| d.path.clone().map(|p| (p, d.id, d.edit_version)))
+            .filter_map(|d| d.path.clone().map(|p| (p, d.id, d.version())))
             .collect();
         for (path, id, version) in jobs {
             if self

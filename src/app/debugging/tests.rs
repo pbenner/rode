@@ -13,7 +13,7 @@ fn source_guards_and_panel_do_not_start_a_process() {
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.new_file();
     app.documents[0].text = "keep this unsaved source".into();
-    app.documents[0].modified = true;
+    app.documents[0].set_dirty_fixture(true);
     app.start_debugger(&ctx);
     assert!(app.debugger.client.is_none());
     assert!(app.documents[0].dirty());

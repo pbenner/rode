@@ -418,8 +418,8 @@ fn format_save_result_cannot_replace_newer_edits_or_publish_stale_diagnostics() 
     document.path = Some(path.to_str().unwrap().into());
     document.saved_text = "value=0\n".into();
     document.text = "value=2\n".into();
-    document.modified = true;
-    document.edit_version = 2;
+    document.set_dirty_fixture(true);
+    document.set_version_fixture(2);
     document.saving = true;
     app.handle_tool(
         ToolJob::Analyze {
@@ -482,11 +482,11 @@ fn fresh_formatter_result_updates_buffer_and_diagnostics_without_saving_it() {
         &ctx,
     );
     assert_eq!(app.documents[0].text, "value = 1\n");
-    assert_eq!(app.documents[0].edit_version, 1);
+    assert_eq!(app.documents[0].version(), 1);
     assert!(app.documents[0].dirty());
     assert_eq!(app.document_issues(&app.documents[0]).len(), 1);
     assert!(!root.path().join("main.py").exists());
-    app.documents[0].edit_version += 1;
+    app.documents[0].advance_version_fixture();
     assert!(app.document_issues(&app.documents[0]).is_empty());
 }
 #[test]

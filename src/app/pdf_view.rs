@@ -302,7 +302,7 @@ impl EditorApp {
         let Some((source, cancel, token)) = view.begin_page(page, entry) else {
             return;
         };
-        let version = doc.edit_version;
+        let version = doc.version();
         let budget = self.image_budget.clone();
         let replies = self.workers.workspace(ctx);
         let texture_limit = ctx.input(|input| input.max_texture_side);
@@ -334,7 +334,7 @@ impl EditorApp {
         let Some(doc) = self
             .documents
             .iter_mut()
-            .find(|doc| doc.id == id && doc.edit_version == version)
+            .find(|doc| doc.id == id && doc.version() == version)
         else {
             return;
         };
@@ -362,8 +362,7 @@ impl EditorApp {
         view.invalidate();
         view.cancel = Arc::new(AtomicBool::new(false));
         view.image.loading = true;
-        doc.edit_version = doc.edit_version.wrapping_add(1);
-        let version = doc.edit_version;
+        let version = doc.begin_preview_reload();
         self.dispatch(
             Request::ReadBinary { path },
             Job::Reload { id, version },
@@ -425,7 +424,7 @@ mod tests {
         app.new_file();
         let doc = &mut app.documents[0];
         doc.path = Some(path.to_string_lossy().into());
-        doc.modified = false;
+        doc.set_dirty_fixture(false);
         doc.pdf = Some(PdfView::new(loaded));
         let id = doc.id;
         app.save_active(&ctx, false);

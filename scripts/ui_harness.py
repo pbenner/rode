@@ -211,15 +211,17 @@ def wait_for_button(
     hovered=False,
     enabled=True,
 ):
-    """Wait for an enabled, visible registered control and resolve its current physical centre.
+    """Wait for a registered control and resolve a usable point in its current bounds.
 
     RODE_UI_TEST_STATE opts the application into atomic, read-only layout snapshots.
     Input still goes through XTest; metadata cannot activate a control or start work.
     Optional focus/edit revision guards wait for dependent input to be processed,
     including when one busy native frame outlasts several keyboard shortcuts.
     after_pass also waits for cursor/selection changes that do not edit the buffer.
-    hovered moves the pointer and requires the native hit test to accept it before
-    returning. Follow moving controls without retrying any activating input.
+    hovered probes bounded interior points and requires the native pointer and hit
+    test to acknowledge one before returning. This handles a notification covering
+    an input's centre without dismissing it or clicking through an overlay. Follow
+    moving controls without retrying any activating input.
     enabled=False resolves an explicitly disabled placeholder for negative-input tests.
     """
     if hovered and not enabled:
@@ -228,6 +230,8 @@ def wait_for_button(
     last = "No layout snapshot received"
     pointer = None
     pointer_pass = None
+    geometry = None
+    candidate = 0
     while time.monotonic() < deadline:
         assert_running(process, log_path)
         try:
@@ -256,20 +260,56 @@ def wait_for_button(
                     break
                 left, top, right, bottom = button["rect"]
                 if right > left and bottom > top:
-                    point = (
-                        round(x + (left + right) * scale / 2),
-                        round(y + (top + bottom) * scale / 2),
+                    current_geometry = (x, y, scale, left, top, right, bottom)
+                    if geometry != current_geometry:
+                        geometry = current_geometry
+                        candidate = 0
+                        pointer = None
+                    # Prefer the centre, then sample the exposed interior of a
+                    # partially covered control. Deduplicate tiny physical targets.
+                    points = list(
+                        dict.fromkeys(
+                            (
+                                round(x + (left + (right - left) * horizontal) * scale),
+                                round(y + (top + (bottom - top) * vertical) * scale),
+                            )
+                            for horizontal, vertical in (
+                                (0.5, 0.5),
+                                (0.25, 0.5),
+                                (0.75, 0.5),
+                                (0.5, 0.25),
+                                (0.5, 0.75),
+                                (0.25, 0.25),
+                                (0.75, 0.25),
+                                (0.25, 0.75),
+                                (0.75, 0.75),
+                            )
+                        )
                     )
+                    point = points[candidate]
                     if hovered:
                         if point != pointer:
                             move_pointer(*point)
                             pointer = point
                             pointer_pass = state["pass"]
-                        if (
-                            state["pass"] <= pointer_pass
-                            or not button["enabled"]
-                            or not button.get("hovered", False)
-                        ):
+                        if state["pass"] <= pointer_pass or not button["enabled"]:
+                            break
+                        # New snapshots acknowledge the actual native motion,
+                        # rather than an unrelated repaint after the XTest request.
+                        # Older supplied binaries retain the pass/hover guard.
+                        if "pointer" in state:
+                            native = state["pointer"]
+                            if native is None or any(
+                                abs(actual - (origin + logical * scale)) > 1
+                                for actual, origin, logical in zip(point, (x, y), native)
+                            ):
+                                break
+                        if not button.get("hovered", False):
+                            if candidate + 1 < len(points):
+                                candidate += 1
+                                pointer = points[candidate]
+                                move_pointer(*pointer)
+                                pointer_pass = state["pass"]
                             break
                     return point
         time.sleep(0.05)

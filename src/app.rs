@@ -193,7 +193,6 @@ pub struct EditorApp {
     sandbox_presets: sandbox_presets::State,
     startup_restore: Option<bool>,
     last_window_title: String,
-    last_ssh: Option<Profile>,
     show_terminal: bool,
     show_explorer: bool,
     show_hidden: bool,
@@ -315,7 +314,6 @@ impl EditorApp {
             sandbox_presets: sandbox_presets::State::load(storage, &mut warnings),
             startup_restore: None,
             last_window_title: String::new(),
-            last_ssh: None,
             show_terminal: false,
             show_explorer: true,
             show_hidden: false,
@@ -477,89 +475,11 @@ impl EditorApp {
         self.project_picker.needs_load = true;
     }
 
-    /// Start authenticated SSH preparation for a captured profile after ownership guards;
-    /// reconnect preserves only recovery state belonging to the matching connection.
-    fn connect(&mut self, profile: Profile, ctx: &egui::Context, reconnect: bool) {
-        if (self.vaults.active.is_some() && !self.vaults.lost)
-            || (self.vaults.cleanup_pending() && !reconnect)
-        {
-            self.notify(
-                "Lock the encrypted project before replacing its SSH connection.",
-                true,
-            );
-            return;
-        }
-        self.startup_restore = None;
-        let remote = match Remote::new(profile.clone()) {
-            Ok(remote) => remote,
-            Err(error) => {
-                self.notify(error.to_string(), true);
-                return;
-            }
-        };
-        if reconnect {
-            self.leave_debugger();
-            self.stop_latex();
-            self.workspace.cancel_connection();
-            self.terminal = None;
-            self.release_workspace_transport();
-            self.workers.invalidate_workspace();
-            self.workbench.reset_monitor();
-            self.explorer_state.loading.clear();
-            self.documents.reconnecting();
-        } else {
-            self.reset_workspace(workspace::LeaveReason::ProjectChanged);
-        }
-        self.workspace.connecting(
-            remote.clone(),
-            profile.root.clone(),
-            profile.sandbox.clone(),
-        );
-        match Terminal::remote(ctx, &remote) {
-            Ok(terminal) => {
-                let alive = terminal.alive.clone();
-                self.ssh_master = Some(terminal);
-                self.show_terminal = true;
-                self.terminal_intent();
-                self.status = "Connecting · complete any prompts in the terminal".into();
-                let cancel = self.workspace.begin_connection();
-                let replies = self.workers.workspace(ctx);
-                let vault_work = self.vaults.work();
-                std::thread::spawn(move || {
-                    let _vault_work = vault_work;
-                    let start = Instant::now();
-                    let result = loop {
-                        if cancel.load(Ordering::Acquire) {
-                            return;
-                        }
-                        if !alive.load(Ordering::Acquire) {
-                            break Err("SSH login failed.".into());
-                        }
-                        if remote.connected() {
-                            break Ok(());
-                        }
-                        if start.elapsed() > Duration::from_secs(300) {
-                            break Err(
-                                "SSH login timed out after five minutes. Reconnect to try again."
-                                    .into(),
-                            );
-                        }
-                        std::thread::sleep(Duration::from_millis(200));
-                    };
-                    let _ = replies.send(WorkspaceEvent::Connected { result });
-                });
-                Terminal::focus(ctx);
-            }
-            Err(error) => {
-                self.ssh_failed(format!("{error:#}"), ctx);
-            }
-        }
-    }
-
     /// Switch exclusive dialog ownership, resetting the relevant picker/form state
     /// and recording which native viewport must receive modal input.
     fn set_dialog(&mut self, dialog: Dialog) {
-        if self.dialog == Dialog::Encrypted && dialog != Dialog::Encrypted && !self.vaults.locking {
+        if self.dialog == Dialog::Encrypted && dialog != Dialog::Encrypted && !self.vaults.locking()
+        {
             self.cancel_encrypted_dialog();
         }
         if dialog == Dialog::Connect {
@@ -605,9 +525,8 @@ impl EditorApp {
                 .find(|d| d.id == id)
                 .and_then(|d| {
                     d.path.clone().or_else(|| {
-                        d.recovery
-                            .as_ref()
-                            .map(|r| self.join_root(ssh::display_name(&r.path)))
+                        d.recovery_path()
+                            .map(|path| self.join_root(ssh::display_name(path)))
                     })
                 })
                 .unwrap_or_else(|| {
@@ -718,7 +637,7 @@ impl EditorApp {
             && self
                 .documents
                 .iter()
-                .any(|doc| doc.id == id && doc.recovery.is_some())
+                .any(|doc| doc.id == id && doc.is_recovery())
         {
             self.notify("This buffer is disconnected. Use Save As for a local copy, or reconnect to its SSH project.",true);
             return;

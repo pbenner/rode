@@ -192,9 +192,7 @@ impl View {
             Ok(text) => {
                 if text != doc.text {
                     doc.text = text;
-                    doc.modified = doc.text != doc.saved_text;
-                    doc.edit_version = doc.edit_version.wrapping_add(1);
-                    doc.lines = doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
+                    doc.source_changed();
                 }
                 true
             }
@@ -342,7 +340,7 @@ impl EditorApp {
         let book = Notebook::default();
         let doc = self.documents.active_mut().unwrap();
         doc.text = book.serialize().expect("small new notebook");
-        doc.lines = doc.text.lines().count();
+        doc.source_changed();
         doc.notebook = Some(View::new(
             book,
             self.markdown_images.clone(),
@@ -390,7 +388,7 @@ impl EditorApp {
         }
         let doc = self.documents.active().unwrap();
         let id = doc.id;
-        let version = doc.edit_version;
+        let version = doc.version();
         let text = doc.text.clone();
         let replies = self.workers.workspace(ctx);
         let vault_work = self.vaults.work();
@@ -419,7 +417,7 @@ impl EditorApp {
         let Some(doc) = self
             .documents
             .iter_mut()
-            .find(|d| d.id == id && d.edit_version == version)
+            .find(|d| d.id == id && d.version() == version)
         else {
             return;
         };
@@ -457,7 +455,7 @@ impl EditorApp {
         let Some(doc) = self.documents.active_mut() else {
             return;
         };
-        if doc.recovery.is_some() {
+        if doc.is_recovery() {
             self.notify(
                 "Reconnect or Save As this disconnected notebook before running it.",
                 true,
@@ -495,8 +493,7 @@ impl EditorApp {
                 match view.book.serialize() {
                     Ok(text) => {
                         doc.text = text;
-                        doc.modified = true;
-                        doc.edit_version += 1;
+                        doc.source_changed();
                     }
                     Err(error) => {
                         view.error = error.to_string();
@@ -505,6 +502,7 @@ impl EditorApp {
                 }
             }
         }
+        let view = doc.notebook.as_mut().unwrap();
         if !all
             && let Some(index) = index
             && view.book.cells[index].kind() != "code"
@@ -817,9 +815,7 @@ impl EditorApp {
         }
         let plan = self.workspace.as_ref().map(|w| w.plan.clone());
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
-        let disconnected = self.documents[self.documents.active_index()]
-            .recovery
-            .is_some();
+        let disconnected = self.documents[self.documents.active_index()].is_recovery();
         let budget = self.image_budget.clone();
         let tx = view.tx.clone();
         let ctx = ctx.clone();

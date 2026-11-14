@@ -4,7 +4,9 @@
 //! candidate can be prepared while the current project's replies remain valid.
 //! Prepared data awaiting an unsaved-buffer decision stays here, not in a UI
 //! action that could outlive a superseding request.
+use super::ConnectionId;
 use crate::app::Workspace;
+use crate::ssh::{Profile, Remote};
 use crate::{files::Response, sandbox};
 use std::sync::{
     Arc,
@@ -44,6 +46,7 @@ pub(in crate::app) struct Controller {
     serial: u64,
     candidate: Candidate,
     connection_cancel: Arc<AtomicBool>,
+    previous_connection: Option<Profile>,
 }
 
 impl Controller {
@@ -56,6 +59,52 @@ impl Controller {
     }
     pub fn is_some(&self) -> bool {
         self.active.is_some()
+    }
+
+    /// Resume only the remembered host/project after every document has been unbound.
+    pub fn can_resume(&self, profile: &Profile, all_unbound: bool) -> bool {
+        self.active.is_none()
+            && all_unbound
+            && self.previous_connection.as_ref().is_some_and(|last| {
+                ConnectionId::for_profile(last) == ConnectionId::for_profile(profile)
+            })
+    }
+
+    /// Reconnect an active matching host or its explicit disconnected recovery record.
+    pub fn can_reconnect(&self, profile: &Profile, all_unbound: bool) -> bool {
+        self.active
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+            .is_some_and(|remote| {
+                ConnectionId::for_profile(&remote.profile) == ConnectionId::for_profile(profile)
+            })
+            || self.can_resume(profile, all_unbound)
+    }
+
+    pub fn reconnect_profile(&self) -> Option<&Profile> {
+        self.active
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+            .map(|remote| &remote.profile)
+            .or(self.previous_connection.as_ref())
+    }
+
+    /// Capture recovery identity before views and the owned transport are released.
+    pub fn remember_disconnect(&mut self) -> Option<ConnectionId> {
+        let profile = &self.active.as_ref()?.remote.as_ref()?.profile;
+        let identity = ConnectionId::for_profile(profile);
+        self.previous_connection = Some(profile.clone());
+        Some(identity)
+    }
+
+    /// Only a connected, prepared host supplies identity for restoring file bindings.
+    pub fn restoration_binding(&self) -> Option<(&Remote, ConnectionId)> {
+        let workspace = self
+            .active
+            .as_ref()
+            .filter(|workspace| workspace.connected && workspace.ready)?;
+        let remote = workspace.remote.as_ref()?;
+        Some((remote, ConnectionId::for_profile(&remote.profile)))
     }
 
     /// Publish only an already validated project; UI defaults never authorize access.
@@ -255,6 +304,55 @@ impl Drop for Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_identity_waits_for_unbinding_and_restoration_requires_preparation() {
+        let mut state = Controller::default();
+        state.set_fixture(Some(crate::app::tests::remote_workspace()));
+        let original = state.reconnect_profile().unwrap().clone();
+        assert!(state.can_reconnect(&original, false));
+        let identity = state.remember_disconnect().unwrap();
+        state.release_transport();
+        assert!(!state.can_resume(&original, false));
+        assert!(state.can_resume(&original, true));
+        let mut renamed = original.clone();
+        renamed.name = "Another display label".into();
+        renamed.sandbox.enabled = !renamed.sandbox.enabled;
+        assert!(state.can_resume(&renamed, true));
+        for field in ["host", "user", "port", "identity", "config", "jump", "root"] {
+            let mut changed = original.clone();
+            match field {
+                "host" => changed.host.push_str(".other"),
+                "user" => changed.user.push_str("other"),
+                "port" => changed.port.push('1'),
+                "identity" => changed.identity.push_str("other"),
+                "config" => changed.config.push_str("other"),
+                "jump" => changed.jump.push_str("other"),
+                "root" => changed.root.push_str("/other"),
+                _ => unreachable!(),
+            }
+            assert!(!state.can_resume(&changed, true), "{field}");
+        }
+        let workspace = crate::app::tests::remote_workspace();
+        let remote = workspace.remote.unwrap();
+        state.connecting(
+            remote.clone(),
+            original.root.clone(),
+            original.sandbox.clone(),
+        );
+        assert!(state.restoration_binding().is_none());
+        state.connected();
+        assert!(state.restoration_binding().is_none());
+        state.activate(
+            original.root.clone(),
+            Some(remote),
+            workspace.plan,
+            original.sandbox,
+        );
+        assert_eq!(state.restoration_binding().unwrap().1, identity);
+        state.suspend_project();
+        assert!(state.restoration_binding().is_none());
+    }
 
     fn prepared(path: &str) -> Prepared {
         Prepared {

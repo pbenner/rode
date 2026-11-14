@@ -199,7 +199,7 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
     let text = book.serialize().unwrap();
     app.documents[0].text = text.clone();
     app.documents[0].saved_text = text.clone();
-    app.documents[0].modified = false;
+    app.documents[0].set_dirty_fixture(false);
     app.documents[0].notebook = Some(View::new(
         book,
         app.markdown_images.clone(),
@@ -262,7 +262,7 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
         app.markdown_images.clone(),
         app.notebook_shutdowns.clone(),
     );
-    app.documents[0].modified = false;
+    app.documents[0].set_dirty_fixture(false);
     let target = crate::slurm::Target {
         id: "4242".into(),
         name: "expired".into(),
@@ -380,5 +380,5 @@ fn unchanged_notebook_reload_keeps_view_state_and_source_identity() {
     doc.notebook.as_mut().unwrap().error = "retained view state".into();
     doc.reload(response, &images, &shutdowns);
     assert_eq!(doc.notebook.as_ref().unwrap().error, "retained view state");
-    assert_eq!(doc.edit_version, 0);
+    assert_eq!(doc.version(), 0);
 }

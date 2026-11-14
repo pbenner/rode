@@ -547,10 +547,7 @@ impl EditorApp {
     }
     /// Prepare and render the active source snapshot, dispatching bounded linked-image reads as needed.
     pub(super) fn markdown_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        if self.documents[self.documents.active_index()]
-            .recovery
-            .is_some()
-        {
+        if self.documents[self.documents.active_index()].is_recovery() {
             return false;
         }
         let markdown_enabled = self.feature(crate::extensions::Feature::Markdown);
@@ -565,6 +562,7 @@ impl EditorApp {
             return false;
         }
         let dirty = doc.dirty();
+        let version = doc.version();
         let preview = doc
             .markdown
             .get_or_insert_with(|| Preview::new(self.markdown_images.clone()));
@@ -632,7 +630,7 @@ impl EditorApp {
         }
         let path = doc.path.clone().unwrap_or(untitled_path);
         let id = doc.id;
-        let requests = preview.prepare(doc.edit_version, &path, &doc.text);
+        let requests = preview.prepare(version, &path, &doc.text);
         let token = preview.token;
         let cancelled = preview.cancelled.clone();
         let focus = self.take_editor_focus(ui, ctx).is_some() || !was_showing;
@@ -834,8 +832,8 @@ mod tests {
         doc.revision = Some(files::digest(b"# Original\n"));
         doc.saved_text = "# Original\n".into();
         doc.text = "# Unsaved heading\n\n**Bold body** and `inline code`.\n\n- [x] Done\n\n| Name | Value |\n| --- | --- |\n| item | 42 |\n".into();
-        doc.modified = true;
-        doc.edit_version = 1;
+        doc.set_dirty_fixture(true);
+        doc.set_version_fixture(1);
         doc.cursor = (2, 3);
         let source = doc.text.clone();
         app.toggle_markdown(&ctx);

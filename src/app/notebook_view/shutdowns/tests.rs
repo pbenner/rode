@@ -305,7 +305,7 @@ fn notebook_shutdown_probe() {
             doc.text.clone(),
             crate::files::digest(doc.text.as_bytes()),
         );
-        let version = doc.edit_version;
+        let version = doc.version();
         let uid = doc.notebook.as_ref().unwrap().book.cells[0].uid;
         doc.notebook.as_mut().unwrap().kernel = Some(kernel);
         app.reload_clean_documents(&ctx);
@@ -338,7 +338,7 @@ fn notebook_shutdown_probe() {
         let view = doc.notebook.as_ref().unwrap();
         assert_eq!(view.native_id(), Some(host.id.as_str()));
         assert_eq!(view.book.cells[0].uid, uid);
-        assert_eq!(doc.edit_version, version);
+        assert_eq!(doc.version(), version);
         assert_eq!(view.kernel.as_ref().unwrap().persistent(), persistent);
         assert!(
             host.infos()
@@ -360,7 +360,7 @@ fn notebook_shutdown_probe() {
         let doc = &app.documents[0];
         app.notebook_parsed(
             doc.id,
-            doc.edit_version,
+            doc.version(),
             Ok(Notebook::parse(&doc.text).unwrap()),
             &ctx,
         );

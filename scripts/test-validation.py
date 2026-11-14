@@ -11,10 +11,73 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ci
+import test_capabilities
 import validate
 import validation_report
 from fixture_support import temporary_root
 from test_capabilities import skip
+
+
+class CapabilityProbeTests(unittest.TestCase):
+    def test_landlock_probe_requires_the_requested_active_backend_and_uses_private_paths(self):
+        for active, backend, expected in [
+            (True, "landlock", True),
+            (False, "landlock", False),
+            (True, "bwrap", False),
+        ]:
+            with tempfile.TemporaryDirectory(prefix="capability path ") as directory:
+                environment = {
+                    "RODE_TEST_SESSION_HELPER": "/fixture/helper with spaces",
+                    "RODE_TEST_TMPDIR": directory,
+                }
+                result = subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=json.dumps(
+                        {
+                            "project": {
+                                "active": active,
+                                "backend": backend,
+                                "reason": "fixture reason",
+                            }
+                        }
+                    ),
+                    stderr="",
+                )
+                with patch.object(test_capabilities.subprocess, "run", return_value=result) as run:
+                    available, _ = test_capabilities.landlock_probe(environment)
+                self.assertEqual(available, expected)
+                self.assertEqual(
+                    run.call_args.args[0],
+                    [environment["RODE_TEST_SESSION_HELPER"], "--file-helper"],
+                )
+                request = json.loads(run.call_args.kwargs["input"])
+                self.assertEqual(request["sandbox"]["backend"], "landlock")
+                path = Path(request["path"])
+                self.assertEqual(path.parent, Path(directory).resolve())
+                self.assertFalse(
+                    path.exists(), "Probe fixtures must be removed after the helper exits"
+                )
+
+    def test_landlock_probe_rejects_missing_malformed_and_failed_helpers(self):
+        self.assertFalse(test_capabilities.landlock_probe({})[0])
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "RODE_TEST_SESSION_HELPER": "/fixture/helper",
+                "RODE_TEST_TMPDIR": directory,
+            }
+            for stdout in ("invalid JSON", "null", "[]", '{"project": []}'):
+                result = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+                with patch.object(test_capabilities.subprocess, "run", return_value=result):
+                    self.assertFalse(test_capabilities.landlock_probe(environment)[0])
+            for error in (
+                PermissionError("helper denied"),
+                subprocess.TimeoutExpired("helper", 15),
+            ):
+                with patch.object(test_capabilities.subprocess, "run", side_effect=error):
+                    available, reason = test_capabilities.landlock_probe(environment)
+                self.assertFalse(available)
+                self.assertTrue(reason)
 
 
 class ValidationTests(unittest.TestCase):
@@ -137,6 +200,50 @@ class ValidationTests(unittest.TestCase):
             self.assertIn("jupyter", report["reason"])
             self.assertEqual(report["completed"], [])
             self.assertTrue(report["planned"])
+
+    def test_enforcement_lanes_require_only_their_own_backend(self):
+        for suite, capability, other in (
+            ("landlock", "landlock", "bwrap"),
+            ("sandbox", "bwrap", "landlock"),
+        ):
+            for available in (True, False):
+                with tempfile.TemporaryDirectory() as directory:
+                    with (
+                        patch.dict(
+                            os.environ,
+                            RODE_CI_RESULTS_DIR=directory,
+                            RODE_TEST_REQUIRE_LANDLOCK="1",
+                            RODE_TEST_REQUIRE_SANDBOX="1",
+                            RODE_TEST_REQUIRED_CAPABILITIES="bwrap,landlock",
+                        ),
+                        patch.object(ci.os, "access", return_value=True),
+                        patch.object(
+                            ci,
+                            "inventory",
+                            return_value={
+                                capability: {"available": available, "detail": "fixture"},
+                                other: {"available": False, "detail": "Other backend denied"},
+                            },
+                        ),
+                        patch.object(ci, "measure") as run,
+                    ):
+                        environment = ci.suite_environment(suite)
+                        self.assertEqual(environment["RODE_TEST_REQUIRED_CAPABILITIES"], capability)
+                        if capability == "landlock":
+                            self.assertEqual(environment["RODE_TEST_REQUIRE_LANDLOCK"], "1")
+                        else:
+                            self.assertNotIn("RODE_TEST_REQUIRE_LANDLOCK", environment)
+                        if available:
+                            ci.run_suite(suite)
+                            self.assertEqual(run.call_count, len(ci.SUITES[suite]))
+                        else:
+                            with self.assertRaisesRegex(
+                                SystemExit, "Missing required suite capabilities: " + capability
+                            ):
+                                ci.run_suite(suite)
+                            run.assert_not_called()
+                    report = json.loads((Path(directory) / suite / "suite.json").read_text())
+                    self.assertEqual(report["status"], "passed" if available else "blocked")
 
     def test_missing_bundle_records_blocked_suite_and_replaces_an_older_success(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -306,10 +413,14 @@ class ValidationTests(unittest.TestCase):
                 normal = ci.suite_environment("workspace")
                 runtime = ci.suite_environment("runtimes")
                 sandbox = ci.suite_environment("sandbox")
+                landlock = ci.suite_environment("landlock")
             self.assertNotIn("RODE_TEST_REQUIRE_LANDLOCK", normal)
             self.assertEqual(runtime["RODE_TEST_REQUIRED_CAPABILITIES"], "jupyter,debugpy,lldb")
             self.assertNotIn("RODE_TEST_REQUIRE_SANDBOX", runtime)
-            self.assertEqual(sandbox["RODE_TEST_REQUIRE_LANDLOCK"], "1")
+            self.assertNotIn("RODE_TEST_REQUIRE_LANDLOCK", sandbox)
+            self.assertEqual(sandbox["RODE_TEST_REQUIRED_CAPABILITIES"], "bwrap")
+            self.assertEqual(landlock["RODE_TEST_REQUIRE_LANDLOCK"], "1")
+            self.assertEqual(landlock["RODE_TEST_REQUIRED_CAPABILITIES"], "landlock")
 
     def test_helper_snapshot_is_safe_even_when_cargo_used_a_permissive_umask(self):
         with tempfile.TemporaryDirectory() as directory:

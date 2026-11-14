@@ -101,7 +101,7 @@ impl State {
                 });
                 let body_height = ui.available_height().min(height).max(1.);
                 let response = ui
-                    .push_id(("git-peek", doc.id, doc.edit_version, index), |ui| {
+                    .push_id(("git-peek", doc.id, doc.version(), index), |ui| {
                         diff_view::show(ui, &hunk.patch, palette, body_height)
                     })
                     .inner;

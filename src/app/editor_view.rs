@@ -16,7 +16,7 @@ impl EditorApp {
         if !self.navigation.visible(navigation::Pane::Editor) {
             return;
         }
-        if self.vaults.locking {
+        if self.vaults.locking() {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.spinner();
                 ui.label("Locking encrypted project…");
@@ -62,7 +62,7 @@ impl EditorApp {
                             ui_probe::value(ui, "active-document", &response, path);
                         }
                     });
-                if self.documents[self.documents.active_index()].recovery.is_some() {
+                if self.documents[self.documents.active_index()].is_recovery() {
                     let doc = self.documents.active().unwrap();
                     let message = if doc.is_preview() && doc.notebook.is_none() {
                         "Disconnected SSH preview · Reconnect to reload its source."
@@ -166,7 +166,7 @@ impl EditorApp {
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.horizontal_top(|ui| {
-                            let digits=doc.lines.max(1).ilog10()+1;
+                            let digits=doc.line_count().max(1).ilog10()+1;
                             let digit_width=ui.fonts_mut(|f|f.glyph_width(&FontId::monospace(font_size),'0'));
                             let gutter_width=46.0+(digits as f32*digit_width).max(24.0);
                             let (gutter, _) = ui.allocate_exact_size(
@@ -334,9 +334,7 @@ impl EditorApp {
                                 }
                             }
                             if output.response.changed() {
-                                doc.edit_version = doc.edit_version.wrapping_add(1);
-                                doc.modified = doc.path.is_none() || doc.text != doc.saved_text;
-                                doc.lines = doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
+                                doc.source_changed();
                             }
                             if !doc.saving && !doc.dirty() {
                                 ui_probe::button(ui, "source-editor-saved", &output.response);
@@ -460,13 +458,11 @@ impl EditorApp {
         if replace && let Some(doc) = self.documents.active_mut() {
             let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
             if !matches.is_empty() {
-                doc.edit_version = doc.edit_version.wrapping_add(1);
+                for (start, end) in matches.iter().rev() {
+                    doc.text.replace_range(*start..*end, &self.replacement);
+                }
+                doc.source_changed();
             }
-            for (start, end) in matches.iter().rev() {
-                doc.text.replace_range(*start..*end, &self.replacement);
-            }
-            doc.lines = doc.text.bytes().filter(|b| *b == b'\n').count() + 1;
-            doc.modified = doc.path.is_none() || doc.text != doc.saved_text;
             self.status = format!("Replaced {} occurrences", matches.len());
         }
         if next {

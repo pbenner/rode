@@ -192,7 +192,7 @@ impl EditorApp {
                 Request::ReadHex { path },
                 Job::Reload {
                     id: doc.id,
-                    version: doc.edit_version,
+                    version: doc.version(),
                 },
                 ctx,
             );
@@ -271,6 +271,7 @@ impl EditorApp {
             && !egui::Popup::is_any_open(ctx);
         let doc = self.documents.active_mut().unwrap();
         let id = doc.id;
+        let dirty = doc.dirty();
         let mut focus_grid = focus;
         let view = doc.hex.as_mut().unwrap();
         let initial_version = view.version;
@@ -293,7 +294,7 @@ impl EditorApp {
             if view.worker.is_none() && view.analysis_serial > 0 {
                 ui_probe::button(ui, "hex-analysis-ready", &ready);
             }
-            if !doc.modified && !doc.saving {
+            if !dirty && !doc.saving {
                 ui_probe::button(ui, "hex-saved", &ready);
             }
             for (mode, name) in [
@@ -344,7 +345,7 @@ impl EditorApp {
                 view.analyze(ctx);
             }
             if ui
-                .add_enabled(!doc.modified && !doc.saving, egui::Button::new("Reload"))
+                .add_enabled(!dirty && !doc.saving, egui::Button::new("Reload"))
                 .clicked()
             {
                 reload = true;
@@ -778,8 +779,8 @@ impl EditorApp {
         if initial_version != view.version {
             // Keyboard edits happen after the grid/header were rendered.
             ctx.request_repaint();
-            doc.modified = view.buffer.dirty();
-            doc.edit_version = doc.edit_version.wrapping_add(1);
+            let dirty = view.buffer.dirty();
+            doc.binary_changed(dirty);
         }
         if reload {
             self.open_hex_reload(id, ctx);
@@ -794,7 +795,7 @@ impl EditorApp {
                 Request::ReadHex { path: path.clone() },
                 Job::Reload {
                     id,
-                    version: doc.edit_version,
+                    version: doc.version(),
                 },
                 ctx,
             );
@@ -944,7 +945,7 @@ mod tests {
         view.buffer.patch(64 * 1024 * 1024 - 1, vec![1]).unwrap();
         view.version = 1;
         app.documents[0].hex = Some(view);
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         let mut sample = vec![];
         for i in 0..130 {
             let started = Instant::now();
@@ -1077,7 +1078,7 @@ mod tests {
         hex.buffer.patch(1, vec![9]).unwrap();
         let submitted = hex.buffer.bytes().clone();
         hex.buffer.patch(2, vec![8]).unwrap();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.workers
             .workspace(&ctx)
             .send(WorkspaceEvent::Done {

@@ -24,6 +24,7 @@ pub(super) enum Barrier {
     Locking,
     Cleanup,
     MustLock,
+    Recovery,
 }
 /// Vault exit policy stays with the lease owner; the adapter executes these effects.
 pub(super) enum QuitPolicy {
@@ -32,7 +33,8 @@ pub(super) enum QuitPolicy {
     Lock,
     RecoveryRequired,
 }
-/// A disconnected active lease must survive ordinary project-view teardown.
+/// A lease held across project-view teardown stays opaque to other components.
+#[must_use = "Return retained encrypted leases to the vault owner after teardown"]
 pub(super) struct RetainedLease(Option<Client>);
 impl Barrier {
     pub fn message(self) -> &'static str {
@@ -43,6 +45,7 @@ impl Barrier {
                 "Finish locking the encrypted project before switching projects or hosts."
             }
             Self::MustLock => "Lock the encrypted project before switching projects or hosts.",
+            Self::Recovery => "Unlock the encrypted project again before reopening its files.",
         }
     }
 }
@@ -55,26 +58,50 @@ impl Drop for Work {
 /// Staged/active verified mount leases and lock-form state. Closing leases and
 /// work counters remain window-owned until normal unmount is acknowledged.
 pub(super) struct State {
-    pub active: Option<Client>,
-    pub pending: Option<Client>,
-    pub staged: Option<Client>,
+    active: Option<Client>,
+    pending: Option<Client>,
+    staged: Option<Client>,
     closing: Vec<(Client, bool)>,
-    pub needs_lock: bool,
-    pub locking: bool,
+    needs_lock: bool,
+    locking: bool,
     lock_sent: bool,
     quit_after_lock: bool,
-    pub lost: bool,
-    pub released: bool,
+    lost: bool,
+    released: bool,
     work: Arc<AtomicUsize>,
-    pub settings: vault::Settings,
+    settings: vault::Settings,
     password: String,
     confirmation: String,
     create: bool,
     remote: bool,
     options: sandbox::Options,
-    pub message: String,
+    message: String,
 }
 impl State {
+    /// Present locking state without exposing mutation of the lease lifecycle.
+    pub(super) fn locking(&self) -> bool {
+        self.locking
+    }
+    /// Retire every project lease exactly once; captured work still delays release.
+    pub(super) fn release_project(&mut self) {
+        for client in [self.active.take(), self.staged.take(), self.pending.take()]
+            .into_iter()
+            .flatten()
+        {
+            self.release(client);
+        }
+    }
+    pub(super) fn reconnected(&mut self) {
+        self.message = "SSH reconnected. Unlock the encrypted project to restore file access; unsaved buffers are preserved.".into();
+    }
+    #[cfg(test)]
+    pub(super) fn set_cleanup_required_fixture(&mut self, required: bool) {
+        self.needs_lock = required;
+    }
+    #[cfg(test)]
+    pub(super) fn set_locking_fixture(&mut self, locking: bool) {
+        self.locking = locking;
+    }
     pub(super) fn quit_policy(&self) -> QuitPolicy {
         if self.active.is_some() && self.lost && self.released {
             QuitPolicy::ClearLostProject
@@ -108,8 +135,8 @@ impl State {
                 .as_ref()
                 .is_some_and(|client| client.matches(root, Some(remote)))
     }
-    pub(super) fn activate_project(&mut self, client: Option<Client>) {
-        self.active = client;
+    pub(super) fn activate_project(&mut self, client: RetainedLease) {
+        self.active = client.0;
         self.lost = false;
         self.released = false;
     }
@@ -131,6 +158,13 @@ impl State {
         }
         if self.cleanup_pending() {
             return Barrier::Cleanup;
+        }
+        if matches!(transition, Transition::Project(..))
+            && self.lost
+            && self.active.is_some()
+            && self.staged.is_none()
+        {
+            return Barrier::Recovery;
         }
         let leaves = match transition {
             Transition::Stay => false,
@@ -168,8 +202,8 @@ impl State {
         self.needs_lock || !self.closing.is_empty()
     }
     /// Transfer a staged or active lease only when its root and host match the project being prepared.
-    pub(super) fn take_project(&mut self, root: &str, remote: Option<&Remote>) -> Option<Client> {
-        if self
+    pub(super) fn take_project(&mut self, root: &str, remote: Option<&Remote>) -> RetainedLease {
+        let client = if self
             .staged
             .as_ref()
             .is_some_and(|client| client.matches(root, remote))
@@ -183,7 +217,8 @@ impl State {
             self.active.take()
         } else {
             None
-        }
+        };
+        RetainedLease(client)
     }
 }
 impl EditorApp {
@@ -770,7 +805,7 @@ mod tests {
         });
         app.vaults.active = Some(client);
         app.new_file();
-        app.documents[0].modified = false;
+        app.documents[0].set_dirty_fixture(false);
         (app, ctx)
     }
     fn fixture_client(code: String) -> Client {
@@ -796,6 +831,124 @@ mod tests {
             remote: None,
             finished: false,
         }
+    }
+    #[test]
+    fn lost_leases_cannot_reactivate_through_folder_open_or_a_late_preparation() {
+        for prepared in [false, true] {
+            let project = tempfile::tempdir().unwrap();
+            let root = project.path().to_string_lossy().into_owned();
+            let (mut app, ctx) = active(true);
+            app.vaults
+                .active
+                .as_mut()
+                .unwrap()
+                .info
+                .as_mut()
+                .unwrap()
+                .mountpoint = root.clone();
+            app.workspace.activate(
+                root.clone(),
+                None,
+                sandbox::Plan {
+                    root: root.clone(),
+                    ..Default::default()
+                },
+                Default::default(),
+            );
+            let action = if prepared {
+                let response = files::local(&Request::Prepare {
+                    path: root.clone(),
+                    sandbox: Default::default(),
+                })
+                .unwrap();
+                let id = app.workspace.begin_preparation();
+                assert!(app.workspace.finish_preparation(id));
+                app.workspace.hold_prepared(
+                    id,
+                    workspace::Prepared {
+                        response,
+                        remote: false,
+                        options: Default::default(),
+                        open_file: None,
+                        keep_buffers: true,
+                        approved_documents: app.documents.versions(),
+                    },
+                );
+                Action::PreparedProject { id }
+            } else {
+                Action::Project {
+                    path: root.clone(),
+                    remote: false,
+                    options: Default::default(),
+                }
+            };
+            app.vaults.lost = true;
+            app.workspace.suspend_project();
+            app.guarded(action, &ctx);
+            assert!(
+                !app.workspace.preparing(),
+                "An unknown lease must not admit project preparation"
+            );
+            assert!(
+                !app.workspace.as_ref().unwrap().ready,
+                "A late plaintext preparation must not restore encrypted access"
+            );
+            assert!(app.vaults.lost);
+            assert!(app.pending.is_none());
+            assert!(app.notice.as_ref().unwrap().0.contains("Unlock"));
+            // An explicit unlock is allowed to stage a newly verified lease.
+            let (mut unlocked, _) = active(true);
+            let mut lease = unlocked.vaults.active.take().unwrap();
+            lease.info.as_mut().unwrap().mountpoint = root.clone();
+            app.vaults.staged = Some(lease);
+            assert_eq!(
+                app.vaults.admission(Transition::Project(&root, None)),
+                Barrier::None
+            );
+        }
+    }
+    #[test]
+    fn project_release_retires_every_lease_once_and_waits_for_captured_work() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let client = || {
+            let reply = serde_json::json!({"kind":"closed", "info":{"cipherdir":"/cipher","mountpoint":"/plain"}, "locked":true,"message":"Locked"});
+            let mut client = fixture_client(format!(
+                "import sys\nfor line in sys.stdin:\n print({},flush=True)\n break\n",
+                serde_json::to_string(&reply.to_string()).unwrap()
+            ));
+            client.info = Some(vault::Info {
+                cipherdir: "/cipher".into(),
+                mountpoint: "/plain".into(),
+            });
+            client
+        };
+        app.vaults.active = Some(client());
+        app.vaults.pending = Some(client());
+        app.vaults.staged = Some(client());
+        let work = app.vaults.work();
+        app.vaults.release_project();
+        app.vaults.release_project();
+        assert!(
+            app.vaults.active.is_none()
+                && app.vaults.pending.is_none()
+                && app.vaults.staged.is_none()
+        );
+        assert_eq!(app.vaults.closing.len(), 3);
+        app.poll_vaults(&ctx);
+        assert!(app.vaults.closing.iter().all(|(_, sent)| !sent));
+        drop(work);
+        let until = Instant::now() + Duration::from_secs(5);
+        while !app.vaults.closing.is_empty() {
+            assert!(
+                Instant::now() < until,
+                "Lease releases were not acknowledged"
+            );
+            app.poll_vaults(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!app.vaults.cleanup_pending());
     }
     #[test]
     fn staged_lease_survives_nonmodal_input_wait_and_releases_after_cancellation() {
@@ -956,7 +1109,7 @@ mod tests {
     fn unexpected_host_cleanup_preserves_dirty_buffers() {
         let (mut app, ctx) = active(true);
         app.documents[0].text = "do not discard on network loss".into();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.vaults
             .active
             .as_ref()
@@ -991,7 +1144,7 @@ mod tests {
         app.workspace.set_fixture(Some(workspace));
         app.documents[0].path = Some("/plain/main.rs".into());
         app.documents[0].text = "unsaved encrypted source".into();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.detach_ssh(&ctx);
         assert!(app.workspace.is_none());
         assert!(app.vaults.active.is_some());
@@ -1028,7 +1181,7 @@ mod tests {
     fn lock_and_exit_keep_unsaved_change_protection() {
         let (mut app, ctx) = active(true);
         app.documents[0].text = "unsaved".into();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.guarded(Action::LockEncrypted, &ctx);
         assert!(matches!(app.pending.as_ref(), Some(Action::LockEncrypted)));
         assert!(!app.vaults.locking);

@@ -74,7 +74,7 @@ impl EditorApp {
         if self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending()
-            || self.vaults.locking
+            || self.vaults.locking()
         {
             return;
         }
@@ -269,7 +269,7 @@ impl EditorApp {
             && self.dialog == Dialog::None
             && !self.pending.modal()
             && !self.workbench_modal()
-            && !self.vaults.locking
+            && !self.vaults.locking()
             && !egui::Popup::is_any_open(ctx)
     }
     /// Translate supported Standard/Emacs/Vim input into the existing source edit/undo path;

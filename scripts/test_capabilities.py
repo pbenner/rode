@@ -48,6 +48,45 @@ def probe(command, environment):
         return False, str(error)
 
 
+def landlock_probe(environment):
+    """Ask the supplied host helper to prepare an actual private Landlock policy."""
+    helper = environment.get("RODE_TEST_SESSION_HELPER")
+    if not helper:
+        return False, "Set RODE_TEST_SESSION_HELPER to the built host helper"
+    try:
+        temporary = Path(
+            environment.get("RODE_TEST_TMPDIR")
+            or environment.get("TMPDIR")
+            or tempfile.gettempdir()
+        ).resolve(strict=True)
+        with tempfile.TemporaryDirectory(prefix="ll-probe-", dir=temporary) as directory:
+            request = {
+                "op": "prepare",
+                "path": str(Path(directory).resolve()),
+                "sandbox": {"enabled": True, "backend": "landlock"},
+            }
+            result = subprocess.run(
+                [helper, "--file-helper"],
+                input=json.dumps(request),
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode:
+                return False, (result.stderr or result.stdout).strip()[-1500:]
+            response = json.loads(result.stdout)
+            if not isinstance(response, dict) or not isinstance(response.get("project"), dict):
+                return False, "No Landlock preparation result returned"
+            plan = response["project"]
+            available = plan.get("active") is True and plan.get("backend") == "landlock"
+            return available, str(plan.get("reason") or "No active Landlock policy returned")[
+                -1500:
+            ]
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        return False, str(error)
+
+
 def inventory(environment=None):
     """Report availability separately from proof that a feature's tests ran."""
     env = os.environ if environment is None else environment
@@ -105,6 +144,8 @@ def inventory(environment=None):
         [*launcher, "--unshare-all", "--ro-bind", "/", "/", "--", "/bin/true"], env
     )
     record("bwrap", available, detail or "Unprivileged namespace probe passed")
+    available, detail = landlock_probe(env)
+    record("landlock", available, detail)
     record(
         "fuse",
         os.access("/dev/fuse", os.R_OK | os.W_OK),

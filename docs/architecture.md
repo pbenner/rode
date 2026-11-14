@@ -302,6 +302,13 @@ preparation, activation, environment replacement, suspension and transport relea
 use explicit operations; production callers cannot mutate readiness or candidate
 identities directly. Preparing a replacement leaves the active project usable.
 
+The workspace controller also retains the previous SSH profile and owns reconnect
+eligibility. Documents receive an opaque connection identity instead of rebuilding
+host keys. Restoration requires the controller's connected, prepared binding;
+matching remembered metadata alone never grants file access. Connection startup
+lives in `app/connections.rs` and asks the vault owner for the same admission
+policy used by guarded transitions.
+
 Preparation identities are opaque and independent of inbox generations. A reply
 must finish the matching preparation exactly once before changing UI state. A
 prepared candidate waiting for a dirty-buffer decision remains in the controller;
@@ -386,12 +393,27 @@ tab preserves the selected ID, closing the selected tab chooses its neighbor,
 and clearing a workspace never resets the ID allocator. Canonical read replies
 select an existing bound buffer rather than replacing its unsaved edits.
 
+Document revisions, cached dirty state, line counts and recovery records are
+private. Native edits, formatting, find/replace, notebook serialization and Git
+hunk reverts publish accepted source changes through one operation. Binary edits
+publish their own dirty state; decoder reloads advance reply identity without
+making the document dirty. Text/binary save acknowledgements bind only the
+submitted snapshot, preserving newer edits. Synthetic fixture setters exist only
+in test builds.
+
 The document owner also unbinds host paths/revisions into recovery metadata and
 restores them only for a matching ready connection and verified encrypted lease.
 Explicit disconnect and reconnect wait for saves, including Save As; forced disconnect cancels
 the wait and invalidates late replies. Recovery paths authorize no file operation.
 Vault admission, quit disposition and disconnected lease retention stay with the
 vault owner rather than being reconstructed by the application coordinator.
+Lease slots and lock flags are private. Teardown retires all project leases
+through the vault owner, which delays release until captured work finishes.
+Transfers across project teardown use opaque retained leases; adapters cannot
+extract or drop their underlying clients independently.
+An unknown/lost encrypted lease cannot be reactivated by opening the same folder
+or admitting an older project-preparation reply. Explicit unlock must stage a
+newly verified lease before the project can become ready again.
 
 The untitled and loaded factories share cursor/save defaults. Loading and
 reloading use one view/source replacement path, with an explicit unchanged-

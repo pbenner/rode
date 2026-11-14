@@ -407,6 +407,56 @@ class ButtonReadinessTests(unittest.TestCase):
             self.assertEqual(self.move.call_args_list, [call(190, 245), call(220, 275)])
             click.assert_called_once_with(220, 275, button=1)
 
+    def test_partially_covered_input_uses_an_exposed_point_before_clicking_once(self):
+        covered = dict(self.state, buttons=[dict(self.state["buttons"][0], hovered=False)])
+        self.read.side_effect = [
+            json.dumps({**covered, "pointer": [0, 0]}),
+            json.dumps({**covered, "pass": 11, "pointer": [60, 30]}),
+            json.dumps({**self.state, "pass": 12, "pointer": [35, 30]}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            self.assertEqual(self.move.call_args_list, [call(190, 245), call(152, 245)])
+            click.assert_called_once_with(152, 245, button=1)
+
+    def test_native_pointer_must_acknowledge_the_requested_point_before_accepting_hover(self):
+        stale = {**self.state, "pointer": [0, 0]}
+        self.read.side_effect = [
+            json.dumps(stale),
+            json.dumps({**stale, "pass": 11}),
+            json.dumps({**self.state, "pass": 12, "pointer": [60, 30]}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click.side_effect = lambda *_, **__: self.assertEqual(self.read.call_count, 3)
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            self.move.assert_called_once_with(190, 245)
+            click.assert_called_once_with(190, 245, button=1)
+
+    def test_fully_covered_control_exhausts_bounded_probes_without_clicking_through(self):
+        self.read.return_value = json.dumps(
+            dict(self.state, buttons=[dict(self.state["buttons"][0], hovered=False)])
+        )
+
+        def acknowledge_motion(x, y):
+            state = json.loads(self.read.return_value)
+            state.update(pointer=[(x - 100) / 1.5, (y - 200) / 1.5])
+            state["pass"] += 1
+            self.read.return_value = json.dumps(state)
+
+        self.move.side_effect = acknowledge_motion
+        with (
+            patch("ui_harness.focus_window"),
+            patch("ui_harness.click") as click,
+            patch("ui_harness.time.monotonic", side_effect=[0, *([0] * 12), 21]),
+            self.assertRaisesRegex(AssertionError, "Install Codex"),
+        ):
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+        self.assertEqual(self.move.call_count, 9)
+        for motion in self.move.call_args_list:
+            x, y = motion.args
+            self.assertTrue(115 < x < 265 and 230 < y < 260, motion)
+        click.assert_not_called()
+
     def test_context_menu_waits_for_the_row_after_it_moves_before_right_clicking_once(self):
         waiting = dict(self.state, buttons=[dict(self.state["buttons"][0], hovered=False)])
         moved = dict(self.state, buttons=[dict(self.state["buttons"][0], rect=[30, 40, 130, 60])])

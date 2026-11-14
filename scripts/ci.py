@@ -25,7 +25,7 @@ from test_capabilities import inventory, read_skip_records
 
 ROOT = Path(__file__).resolve().parent.parent
 FAST = ["workspace", "agents", "terminals", "ssh"]
-EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox"]
+EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox", "landlock"]
 TEST_BINARIES = {
     "files",
     "runtimes",
@@ -284,10 +284,18 @@ SUITES = {
         rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("files", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("sandbox", RODE_TEST_REQUIRE_SANDBOX="1"),
+        rust("agents"),
+        rust("background_agents"),
+        rust("sessions"),
+    ],
+    # Namespace denial must not suppress independent Landlock enforcement coverage.
+    "landlock": [
         rust("landlock"),
         rust("agents"),
         rust("background_agents"),
         rust("sessions"),
+        ui("git-gutter", RODE_TEST_SANDBOX_BACKEND="landlock", RODE_TEST_REQUIRE_LANDLOCK="1"),
+        ui("execution-modes", RODE_TEST_SANDBOX_BACKEND="landlock", RODE_TEST_REQUIRE_LANDLOCK="1"),
     ],
     # Small independent cases plus one complete workbench journey. Repeated
     # stress runs need not repeat every document format and external runtime.
@@ -529,8 +537,10 @@ def suite_environment(name):
     if name in ("runtimes", "remote-runtimes"):
         env["RODE_TEST_REQUIRED_CAPABILITIES"] = "jupyter,debugpy,lldb"
     if name == "sandbox":
+        env["RODE_TEST_REQUIRED_CAPABILITIES"] = "bwrap"
+    if name == "landlock":
         env["RODE_TEST_REQUIRE_LANDLOCK"] = "1"
-        env["RODE_TEST_REQUIRED_CAPABILITIES"] = "bwrap,landlock"
+        env["RODE_TEST_REQUIRED_CAPABILITIES"] = "landlock"
     required = ["RODE_TEST_BINARY", "RODE_TEST_SESSION_HELPER"]
     if name in {
         "documents",

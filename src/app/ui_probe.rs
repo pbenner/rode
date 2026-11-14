@@ -1,6 +1,6 @@
 //! Opt-in, read-only geometry for native UI fixtures. Normal startup installs no
 //! hooks or file I/O. Fixtures still use real X11 input and observe real effects;
-//! this reports controls' geometry, focus and edit revisions, plus opaque IDs in
+//! this reports controls' geometry, focus, native pointer and edit revisions, plus opaque IDs in
 //! the open session manager and the current SSH endpoint, never chat or document text.
 use eframe::egui::{self, Id};
 use serde::Serialize;
@@ -103,6 +103,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "pass": ctx.cumulative_pass_nr(),
                 "pixels_per_point": ctx.pixels_per_point(),
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
+                "pointer": ctx.pointer_hover_pos().map(|pos| [pos.x, pos.y]),
                 "buttons": buttons,
                 "session_ids": session_ids,
                 "ssh_master_socket": ssh_master_socket,

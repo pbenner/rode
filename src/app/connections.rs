@@ -6,19 +6,86 @@
 //! host/project after preparation; recovery metadata alone never authorizes a save.
 use super::*;
 
-fn connection_key(profile: &Profile) -> String {
-    serde_json::to_string(&(
-        &profile.host,
-        &profile.user,
-        &profile.port,
-        &profile.identity,
-        &profile.config,
-        &profile.jump,
-        &profile.root,
-    ))
-    .expect("SSH profile strings serialize")
-}
 impl EditorApp {
+    /// Start authenticated SSH preparation for a captured profile after ownership guards;
+    /// reconnect preserves only recovery state belonging to the matching connection.
+    pub(super) fn connect(&mut self, profile: Profile, ctx: &egui::Context, reconnect: bool) {
+        let barrier = self.vaults.admission(if reconnect {
+            vaults::Transition::RecoveryConnection
+        } else {
+            vaults::Transition::Connection
+        });
+        if barrier != vaults::Barrier::None {
+            self.notify(barrier.message(), true);
+            return;
+        }
+        self.startup_restore = None;
+        let remote = match Remote::new(profile.clone()) {
+            Ok(remote) => remote,
+            Err(error) => {
+                self.notify(error.to_string(), true);
+                return;
+            }
+        };
+        if reconnect {
+            self.leave_debugger();
+            self.stop_latex();
+            self.workspace.cancel_connection();
+            self.terminal = None;
+            self.release_workspace_transport();
+            self.workers.invalidate_workspace();
+            self.workbench.reset_monitor();
+            self.explorer_state.loading.clear();
+            self.documents.reconnecting();
+        } else {
+            self.reset_workspace(workspace::LeaveReason::ProjectChanged);
+        }
+        self.workspace.connecting(
+            remote.clone(),
+            profile.root.clone(),
+            profile.sandbox.clone(),
+        );
+        match Terminal::remote(ctx, &remote) {
+            Ok(terminal) => {
+                let alive = terminal.alive.clone();
+                self.ssh_master = Some(terminal);
+                self.show_terminal = true;
+                self.terminal_intent();
+                self.status = "Connecting · complete any prompts in the terminal".into();
+                let cancel = self.workspace.begin_connection();
+                let replies = self.workers.workspace(ctx);
+                let vault_work = self.vaults.work();
+                std::thread::spawn(move || {
+                    let _vault_work = vault_work;
+                    let start = Instant::now();
+                    let result = loop {
+                        if cancel.load(Ordering::Acquire) {
+                            return;
+                        }
+                        if !alive.load(Ordering::Acquire) {
+                            break Err("SSH login failed.".into());
+                        }
+                        if remote.connected() {
+                            break Ok(());
+                        }
+                        if start.elapsed() > Duration::from_secs(300) {
+                            break Err(
+                                "SSH login timed out after five minutes. Reconnect to try again."
+                                    .into(),
+                            );
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
+                    };
+                    let _ = replies.send(WorkspaceEvent::Connected { result });
+                });
+                Terminal::focus(ctx);
+            }
+            Err(error) => {
+                self.ssh_failed(format!("{error:#}"), ctx);
+            }
+        }
+    }
+
     /// Await saves/file/lifetime acknowledgements before explicit disconnect; encrypted
     /// leases retain their lock guard. Forced transport loss uses detach_ssh directly.
     pub(super) fn disconnect_ssh(&mut self, ctx: &egui::Context) {
@@ -34,7 +101,7 @@ impl EditorApp {
                     let restore = self.startup_restore.take();
                     if self.vaults.recovery_required() {
                         self.encrypted_dialog();
-                        self.vaults.message = "SSH reconnected. Unlock the encrypted project to restore file access; unsaved buffers are preserved.".into();
+                        self.vaults.reconnected();
                     } else {
                         self.prepare_project(root, options, true, true, restore, ctx);
                     }
@@ -73,30 +140,18 @@ impl EditorApp {
     /// Allow recovery binding only when all tabs are unbound and the explicit profile matches
     /// the previous connection/project identity.
     pub(super) fn can_resume_ssh(&self, profile: &Profile) -> bool {
-        self.workspace.is_none()
-            && self.documents.all_unbound()
-            && self
-                .last_ssh
-                .as_ref()
-                .is_some_and(|last| connection_key(last) == connection_key(profile))
+        self.workspace
+            .can_resume(profile, self.documents.all_unbound())
     }
     /// Retaining bindings requires the current host identity or its matching recovery record.
     pub(super) fn can_reconnect_ssh(&self, profile: &Profile) -> bool {
         self.workspace
-            .as_ref()
-            .and_then(|workspace| workspace.remote.as_ref())
-            .is_some_and(|remote| connection_key(&remote.profile) == connection_key(profile))
-            || self.can_resume_ssh(profile)
+            .can_reconnect(profile, self.documents.all_unbound())
     }
     /// Reconnect the selected/last profile, using common dirty-buffer guards when local
     /// state cannot safely be treated as recovery for that same connection.
     pub(super) fn reconnect_ssh(&mut self, ctx: &egui::Context) {
-        let profile = self
-            .workspace
-            .as_ref()
-            .and_then(|w| w.remote.as_ref())
-            .map(|r| r.profile.clone())
-            .or_else(|| self.last_ssh.clone());
+        let profile = self.workspace.reconnect_profile().cloned();
         if let Some(profile) = profile {
             if self.can_reconnect_ssh(&profile) {
                 self.guarded(Action::Reconnect(Box::new(profile)), ctx);
@@ -111,13 +166,11 @@ impl EditorApp {
     /// Unbind remote paths before invalidating host work and dropping transport ownership;
     /// retain buffers and recovery metadata for Save As or an explicit matching reconnect.
     pub(super) fn detach_ssh(&mut self, ctx: &egui::Context) {
-        let Some(remote) = self.workspace.as_ref().and_then(|w| w.remote.clone()) else {
+        let Some(connection) = self.workspace.remember_disconnect() else {
             return;
         };
-        let connection = connection_key(&remote.profile);
-        let encrypted = self.vaults.has_active();
-        self.documents.detach_connection(&connection, encrypted);
-        self.last_ssh = Some(remote.profile.clone());
+        self.documents
+            .detach_connection(&connection, self.vaults.has_active());
         self.workspace.cancel_connection();
         self.startup_restore = None;
         // Drop views before the master; persistent services retain their own jobs.
@@ -139,15 +192,9 @@ impl EditorApp {
     }
     /// Restore bound paths/revisions only for recovery records matching the prepared connection identity.
     pub(super) fn restore_ssh_buffers(&mut self) {
-        let Some(remote) = self
-            .workspace
-            .as_ref()
-            .filter(|w| w.connected && w.ready)
-            .and_then(|w| w.remote.as_ref())
-        else {
+        let Some((remote, connection)) = self.workspace.restoration_binding() else {
             return;
         };
-        let connection = connection_key(&remote.profile);
         let encrypted_ready = self
             .vaults
             .can_restore_bindings(&remote.profile.root, remote);
@@ -249,7 +296,7 @@ mod tests {
         doc.path = Some("/scratch/researcher/project/main.rs".into());
         doc.revision = Some("original remote revision".into());
         doc.text = "retained edits".into();
-        doc.edit_version = 7;
+        doc.set_version_fixture(7);
         (app, ctx)
     }
 
@@ -390,7 +437,7 @@ mod tests {
         assert_eq!(app.documents[0].text, "retained edits");
         // Opening a local file without a project must also prevent its path
         // from being rebound to the last SSH host during reconnect.
-        assert!(!app.can_resume_ssh(app.last_ssh.as_ref().unwrap()));
+        assert!(!app.can_resume_ssh(app.workspace.reconnect_profile().unwrap()));
         app.reconnect_ssh(&ctx);
         assert!(matches!(app.pending.as_ref(), Some(Action::Remote(_))));
         assert!(app.workspace.is_none());
@@ -531,9 +578,9 @@ mod tests {
         finish_files(&mut app, &ctx);
         assert_eq!(std::fs::read_to_string(&copy).unwrap(), "retained edits");
         assert_eq!(app.documents[0].path.as_deref(), Some(copy.as_str()));
-        assert!(app.documents[0].recovery.is_none());
+        assert!(!app.documents[0].is_recovery());
         assert!(!app.documents[0].dirty());
-        assert!(!app.can_resume_ssh(app.last_ssh.as_ref().unwrap()));
+        assert!(!app.can_resume_ssh(app.workspace.reconnect_profile().unwrap()));
     }
 
     #[test]
@@ -541,7 +588,7 @@ mod tests {
         let (mut app, ctx) = remote_buffer();
         let mut workspace = remembered_workspace(&app);
         app.disconnect_ssh(&ctx);
-        assert!(app.can_resume_ssh(app.last_ssh.as_ref().unwrap()));
+        assert!(app.can_resume_ssh(app.workspace.reconnect_profile().unwrap()));
         let original_host = workspace.remote.as_ref().unwrap().profile.host.clone();
         workspace.remote.as_mut().unwrap().profile.host = "different-host".into();
         app.workspace.set_fixture(Some(workspace));
@@ -585,10 +632,10 @@ mod tests {
             Some("/scratch/researcher/project/main.rs")
         );
         assert_eq!(doc.revision.as_deref(), Some("original remote revision"));
-        assert!(doc.recovery.is_none());
+        assert!(!doc.is_recovery());
         assert_eq!(doc.text, "retained edits");
         assert!(doc.dirty());
-        assert_eq!(doc.edit_version, 7);
+        assert_eq!(doc.version(), 7);
     }
 
     #[test]
@@ -596,13 +643,13 @@ mod tests {
         let (mut app, ctx) = remote_buffer();
         let workspace = remembered_workspace(&app);
         app.documents.detach_connection(
-            &connection_key(&workspace.remote.as_ref().unwrap().profile),
+            &workspace::ConnectionId::for_profile(&workspace.remote.as_ref().unwrap().profile),
             true,
         );
         app.disconnect_ssh(&ctx);
         app.workspace.set_fixture(Some(workspace));
         app.restore_ssh_buffers();
         assert!(app.documents[0].path.is_none());
-        assert!(app.documents[0].recovery.is_some());
+        assert!(app.documents[0].is_recovery());
     }
 }

@@ -153,11 +153,11 @@ pub(in crate::app) mod tests {
         );
         app.documents.clear();
         app.cancel_guarded_action();
-        app.vaults.needs_lock = true;
+        app.vaults.set_cleanup_required_fixture(true);
         native_close(&mut app, &ctx);
         assert!(!app.exit.closing());
         assert!(app.notice.as_ref().unwrap().0.contains("encrypted"));
-        app.vaults.needs_lock = false;
+        app.vaults.set_cleanup_required_fixture(false);
         native_close(&mut app, &ctx);
         assert!(app.exit.closing());
     }
@@ -275,7 +275,7 @@ pub(in crate::app) mod tests {
         assert!(!app.exit.closing());
         assert!(app.pending.is_some());
         app.documents[1].acknowledge_save("two.txt".into(), "".into(), "rev".into());
-        app.vaults.needs_lock = true;
+        app.vaults.set_cleanup_required_fixture(true);
         let output = native_close(&mut app, &ctx);
         assert!(!app.exit.closing());
         assert!(app.notice.as_ref().unwrap().0.contains("encrypted"));

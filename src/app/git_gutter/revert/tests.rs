@@ -73,7 +73,7 @@ fn editor(old: &str, current: &str) -> (Repo, EditorApp, egui::Context) {
     app.new_file();
     let doc = app.documents.active_mut().unwrap();
     doc.text = current.into();
-    doc.lines = current.bytes().filter(|b| *b == b'\n').count() + 1;
+    doc.source_changed();
     doc.acknowledge_save(
         format!("{}/source.rs", repo.root()),
         current.into(),
@@ -84,11 +84,11 @@ fn editor(old: &str, current: &str) -> (Repo, EditorApp, egui::Context) {
             id: doc.id,
             path: doc.path.clone().unwrap(),
         },
-        doc.edit_version,
+        doc.version(),
         Instant::now(),
     );
     app.git_gutter.baseline = repo.snapshot("source.rs", None).0;
-    app.git_gutter.rendered = Some((doc.edit_version, diff::compare(old, current).unwrap()));
+    app.git_gutter.rendered = Some((doc.version(), diff::compare(old, current).unwrap()));
     (repo, app, ctx)
 }
 
@@ -117,13 +117,13 @@ fn revert_is_a_native_undo_step_and_preserves_disk_saved_baseline_and_other_hunk
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     let request = app.git_gutter.revert_request(&app.documents[0], 0).unwrap();
-    let version = app.documents[0].edit_version;
+    let version = app.documents[0].version();
     app.revert_git_change(request, &ctx);
     assert_eq!(app.documents[0].text, after);
     assert_eq!(app.documents[0].saved_text, before);
     assert!(app.documents[0].dirty());
-    assert_eq!(app.documents[0].edit_version, version + 1);
-    assert_eq!(app.documents[0].lines, 5);
+    assert_eq!(app.documents[0].version(), version + 1);
+    assert_eq!(app.documents[0].line_count(), 5);
     assert_eq!(app.documents[0].cursor, (2, 1));
     assert_eq!(app.documents[0].selection, Some((2, 2)));
     assert_eq!(
@@ -174,7 +174,7 @@ fn an_old_revert_cannot_modify_a_new_edit_path_document_or_baseline() {
         match invalidation {
             "edit" => {
                 app.documents[0].text = "later edit\n".into();
-                app.documents[0].edit_version += 1;
+                app.documents[0].advance_version_fixture();
             }
             "rename" => app.documents[0].path = Some("renamed.rs".into()),
             "document" => {
@@ -186,7 +186,7 @@ fn an_old_revert_cannot_modify_a_new_edit_path_document_or_baseline() {
                 repo.git(&["commit", "-qm", "New baseline"]);
                 app.git_gutter.baseline = repo.snapshot("source.rs", None).0;
                 app.git_gutter.rendered = Some((
-                    app.documents[0].edit_version,
+                    app.documents[0].version(),
                     diff::compare("latest commit\n", "new\n").unwrap(),
                 ));
             }

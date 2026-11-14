@@ -648,7 +648,7 @@ fn a_deleted_files_retained_editor_blocks_reusing_its_path() {
     app.new_file();
     app.documents[0].path = Some(path.to_string_lossy().into_owned());
     app.documents[0].text = "retained unsaved contents".into();
-    app.documents[0].modified = true;
+    app.documents[0].set_dirty_fixture(true);
     app.explorer_form(Kind::File, entry(&root, true));
     app.explorer_state.input = "retained.txt".into();
     let _ = ctx.run(

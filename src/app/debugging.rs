@@ -78,7 +78,7 @@ impl State {
         {
             u64::MAX
         } else {
-            doc.edit_version
+            doc.version()
         }
     }
 }
@@ -249,11 +249,8 @@ impl EditorApp {
                 self.debugger.verify_sources = false;
                 self.debugger.client = Some(client);
                 self.debugger.serial += 1;
-                self.debugger.versions = self
-                    .documents
-                    .iter()
-                    .map(|d| (d.id, d.edit_version))
-                    .collect();
+                self.debugger.versions =
+                    self.documents.iter().map(|d| (d.id, d.version())).collect();
             }
             Err(e) => self.notify(format!("Cannot start debugger: {e:#}"), true),
         }
@@ -365,7 +362,7 @@ impl EditorApp {
                     .debugger
                     .versions
                     .get(&doc.id)
-                    .is_some_and(|v| *v != doc.edit_version))
+                    .is_some_and(|v| *v != doc.version()))
     }
     /// Include retired cleanup flags and the current controller's pending stop in lifecycle guards.
     pub(super) fn debugger_stopping(&self) -> bool {
@@ -640,8 +637,8 @@ mod source_tests {
             doc.path = Some("/project/main.py".into());
             doc.saved_text = original.into();
             doc.text = current.into();
-            doc.edit_version = 1;
-            doc.modified = current != original;
+            doc.set_version_fixture(1);
+            doc.set_dirty_fixture(current != original);
             app.debugger.verify_sources = true;
             app.debugger.source_digests.insert(
                 "/project/main.py".into(),
@@ -672,7 +669,7 @@ mod source_tests {
         app.new_file();
         app.documents[0].path = Some("/project/later.py".into());
         app.documents[0].text = "value = 1\n".into();
-        app.documents[0].edit_version = 7;
+        app.documents[0].set_version_fixture(7);
         app.debugger.verify_sources = true;
         assert_eq!(app.debugger.source_version(&app.documents[0]), u64::MAX);
         app.debugger.source_digests.insert(

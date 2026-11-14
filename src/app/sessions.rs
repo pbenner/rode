@@ -1196,7 +1196,7 @@ impl EditorApp {
         let project = self.session_plan();
         let ready = !self.session_busy()
             && !self.workspace.preparing()
-            && !self.vaults.locking
+            && !self.vaults.locking()
             && self
                 .workspace
                 .as_ref()

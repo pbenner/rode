@@ -397,7 +397,7 @@ impl EditorApp {
         if save.is_some() {
             doc.saving = true;
         }
-        let version = doc.edit_version;
+        let version = doc.version();
         let original = doc.text.clone();
         let check = crate::languages::detect(Some(&path)).is_some_and(|l| l.check);
         self.workbench.code_tools.checking.insert(id);
@@ -489,7 +489,7 @@ impl EditorApp {
             .code_tools
             .issues
             .get(&doc.id)
-            .filter(|i| i.version == doc.edit_version)
+            .filter(|i| i.version == doc.version())
             .map(|i| i.items.clone())
             .unwrap_or_default()
     }
@@ -528,7 +528,7 @@ mod tests {
             "x".repeat(rode_host_core::files::MAX_TOOL_BYTES as usize + 1)
         );
         app.documents[0].text = text.clone();
-        app.documents[0].modified = true;
+        app.documents[0].set_dirty_fixture(true);
         app.save_document(id, path.clone(), false, &ctx);
         assert!(
             app.workbench.code_tools.checking.is_empty(),
@@ -556,11 +556,11 @@ mod tests {
         // The worker must return its exact submitted snapshot even if the
         // editable document changes before its acknowledgement is processed.
         app.documents[0].text.push('\n');
-        app.documents[0].modified = true;
-        app.documents[0].edit_version += 1;
+        app.documents[0].set_dirty_fixture(true);
+        app.documents[0].advance_version_fixture();
         app.save_document(id, path.clone(), false, &ctx);
         app.documents[0].text.push('\n');
-        app.documents[0].edit_version += 1;
+        app.documents[0].advance_version_fixture();
         wait(&mut app);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{text}\n"));
         assert_eq!(app.documents[0].saved_text, format!("{text}\n"));

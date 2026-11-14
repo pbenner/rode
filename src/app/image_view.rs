@@ -272,8 +272,7 @@ impl EditorApp {
             return;
         };
         image.loading = true;
-        doc.edit_version = doc.edit_version.wrapping_add(1);
-        let version = doc.edit_version;
+        let version = doc.begin_preview_reload();
         self.dispatch(
             Request::ReadImage { path },
             Job::Reload { id, version },
@@ -387,7 +386,7 @@ mod tests {
         let mut app = opened(&ctx);
         let budget = app.image_budget.clone();
         let id = app.documents[0].id;
-        app.documents[0].edit_version = 5;
+        app.documents[0].set_version_fixture(5);
         app.documents[0].image.as_mut().unwrap().loading = true;
         for (version, width) in [(4, 2), (5, 8)] {
             app.workers
@@ -407,7 +406,7 @@ mod tests {
         assert_eq!(app.documents[0].image.as_ref().unwrap().original, [8, 4]);
         assert_eq!(budget.used(), 8 * 4 * 4);
         assert!(!app.documents[0].dirty());
-        let version = app.documents[0].edit_version;
+        let version = app.documents[0].version();
         app.documents[0].image.as_mut().unwrap().loading = true;
         app.workers
             .workspace(&ctx)

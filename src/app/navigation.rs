@@ -251,7 +251,7 @@ impl EditorApp {
             || self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending()
-            || self.vaults.locking
+            || self.vaults.locking()
             || egui::Popup::is_any_open(ctx)
         {
             self.navigation.leader = None;

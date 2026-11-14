@@ -19,7 +19,7 @@ impl EditorApp {
                 if !self
                     .documents
                     .iter()
-                    .any(|doc| doc.id == *id && doc.edit_version == *version) =>
+                    .any(|doc| doc.id == *id && doc.version() == *version) =>
             {
                 return;
             }
@@ -52,7 +52,7 @@ impl EditorApp {
                 if let Some(doc) = self
                     .documents
                     .iter_mut()
-                    .find(|doc| doc.id == *id && doc.edit_version == *version)
+                    .find(|doc| doc.id == *id && doc.version() == *version)
                 {
                     if let Some(image) = &mut doc.image {
                         image.loading = false;
@@ -113,7 +113,7 @@ impl EditorApp {
                     if let Some(doc) = self
                         .documents
                         .iter_mut()
-                        .find(|d| d.id == id && d.edit_version == version && !d.dirty())
+                        .find(|d| d.id == id && d.version() == version && !d.dirty())
                     {
                         doc.reload(response, &self.markdown_images, &self.notebook_shutdowns);
                     }
@@ -169,14 +169,7 @@ impl EditorApp {
                 }
                 Job::SaveBinary { id, bytes, .. } => {
                     if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                        if let Some(hex) = &mut doc.hex {
-                            hex.buffer.acknowledge(bytes);
-                            doc.modified = hex.buffer.dirty();
-                        }
-                        doc.path = Some(response.path);
-                        doc.recovery = None;
-                        doc.revision = Some(response.revision);
-                        doc.saving = false;
+                        doc.acknowledge_binary_save(response.path, bytes, response.revision);
                         self.status = format!("Saved {}", doc.name());
                     }
                 }

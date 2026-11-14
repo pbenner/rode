@@ -145,7 +145,7 @@ impl State {
         }
         self.rendered
             .as_ref()
-            .filter(|(version, _)| *version == doc.edit_version)
+            .filter(|(version, _)| *version == doc.version())
             .map(|(_, changes)| changes)
     }
 
@@ -189,10 +189,9 @@ impl EditorApp {
         let eligible = self.project_ready()
             && self.feature(crate::extensions::Feature::Git)
             && self.navigation.visible(navigation::Pane::Editor);
-        let doc = self
-            .documents
-            .active()
-            .filter(|d| !d.is_preview() && d.text.len() <= MAX_BYTES && d.lines <= MAX_LINES);
+        let doc = self.documents.active().filter(|d| {
+            !d.is_preview() && d.text.len() <= MAX_BYTES && d.line_count() <= MAX_LINES
+        });
         let key = eligible.then_some(doc).flatten().and_then(|d| {
             let path = d.path.as_ref()?;
             repository::location(&self.workspace.as_ref()?.root, path)?;
@@ -209,14 +208,14 @@ impl EditorApp {
         };
         let doc = doc.unwrap();
         let now = Instant::now();
-        self.git_gutter.select(key.clone(), doc.edit_version, now);
+        self.git_gutter.select(key.clone(), doc.version(), now);
         let delay = if self.git_gutter.pending.is_some() {
             REFRESH
         } else if self
             .git_gutter
             .rendered
             .as_ref()
-            .is_some_and(|(v, _)| *v == doc.edit_version)
+            .is_some_and(|(v, _)| *v == doc.version())
         {
             self.git_gutter
                 .refreshed
@@ -236,7 +235,7 @@ impl EditorApp {
         let cancel = self.git_gutter.cancel.clone();
         let baseline = self.git_gutter.baseline.clone();
         let text = doc.text.clone();
-        let version = doc.edit_version;
+        let version = doc.version();
         let workspace = self.workspace.as_ref().unwrap();
         let root = workspace.root.clone();
         let remote = workspace.remote.clone();

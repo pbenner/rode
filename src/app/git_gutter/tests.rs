@@ -98,9 +98,9 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
         path: doc.path.clone().unwrap(),
     };
     let mut state = State::default();
-    state.select(key.clone(), doc.edit_version, Instant::now());
+    state.select(key.clone(), doc.version(), Instant::now());
     let comparison = diff::compare("old\n", "current\n").unwrap();
-    state.rendered = Some((doc.edit_version, comparison.clone()));
+    state.rendered = Some((doc.version(), comparison.clone()));
     assert!(matches!(
         state.toggle_peek(doc, 0),
         Some(PeekAction::Navigate(1))
@@ -111,7 +111,7 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     state.pending = Some(1);
     state.complete(Completed {
         token: 1,
-        version: doc.edit_version,
+        version: doc.version(),
         refreshed: true,
         baseline: None,
         changes: comparison.clone(),
@@ -127,7 +127,7 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     state.pending = Some(2);
     state.complete(Completed {
         token: 1,
-        version: doc.edit_version,
+        version: doc.version(),
         refreshed: true,
         baseline: None,
         changes: Changes::default(),
@@ -139,19 +139,19 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     );
     state.complete(Completed {
         token: 2,
-        version: doc.edit_version,
+        version: doc.version(),
         refreshed: true,
         baseline: None,
         changes: Changes::default(),
     });
     assert_eq!(state.peek, None);
-    state.rendered = Some((doc.edit_version, comparison));
+    state.rendered = Some((doc.version(), comparison));
     let _ = state.toggle_peek(doc, 0);
-    doc.edit_version += 1;
+    doc.advance_version_fixture();
     assert_eq!(state.peek_height(doc, 500.), 0.);
-    state.select(key, doc.edit_version, Instant::now());
+    state.select(key, doc.version(), Instant::now());
     assert_eq!(state.peek, None);
-    state.rendered.as_mut().unwrap().0 = doc.edit_version;
+    state.rendered.as_mut().unwrap().0 = doc.version();
     let _ = state.toggle_peek(doc, 0);
     doc.path = None;
     assert_eq!(state.peek_height(doc, 500.), 0.);
@@ -506,9 +506,9 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
             .count()
     };
     assert_eq!(paint_count(doc), 1);
-    doc.edit_version = 1;
+    doc.set_version_fixture(1);
     assert_eq!(paint_count(doc), 0);
-    doc.edit_version = 0;
+    doc.set_version_fixture(0);
     doc.path = Some("/project/renamed.rs".into());
     assert_eq!(paint_count(doc), 0);
     doc.path = None;
@@ -554,14 +554,14 @@ fn editor_markers_align_with_rendered_rows_throughout_long_files() {
                 .collect();
             let doc = app.documents.active_mut().unwrap();
             doc.text = source.clone();
-            doc.lines = 241;
+            doc.source_changed();
             doc.path = Some("/project/source.rs".into());
             app.git_gutter.key = Some(Key {
                 id: doc.id,
                 path: doc.path.clone().unwrap(),
             });
             app.git_gutter.rendered = Some((
-                doc.edit_version,
+                doc.version(),
                 Changes {
                     markers: [0, 64, 199]
                         .into_iter()
@@ -693,7 +693,7 @@ fn empty_source_keeps_line_one_and_its_deletion_marker_visible() {
             path: doc.path.clone().unwrap(),
         });
         app.git_gutter.rendered = Some((
-            doc.edit_version,
+            doc.version(),
             Changes {
                 markers: vec![Marker {
                     line: 0,

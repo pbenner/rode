@@ -26,10 +26,10 @@ impl Changes {
 }
 
 /// Former host bindings are display/reconnect metadata, never file-I/O authority.
-pub(super) struct Recovery {
-    pub path: String,
+struct Recovery {
+    path: String,
     revision: Option<String>,
-    connection: String,
+    connection: workspace::ConnectionId,
     encrypted: bool,
 }
 
@@ -48,7 +48,7 @@ pub struct Document {
     /// Writable/readable path bound to the active project host, or `None` for unsaved/recovery
     /// buffers.
     pub path: Option<String>,
-    pub(super) recovery: Option<Recovery>,
+    recovery: Option<Recovery>,
     /// Current source text; structured/preview documents use their dedicated state where
     /// applicable.
     pub text: String,
@@ -59,19 +59,74 @@ pub struct Document {
     /// Whether a source/binary save request is in flight.
     pub saving: bool,
     /// Cached dirty state, including structured notebook or binary edits.
-    pub(super) modified: bool,
+    modified: bool,
     /// Source identity for worker results; acknowledging a save does not advance it.
-    pub(super) edit_version: u64,
+    edit_version: u64,
     /// Last native source cursor position in characters; `usize::MAX` forces initial recomputation.
     pub(super) last_cursor: usize,
     /// Displayed one-based source line and character column.
     pub cursor: (usize, usize),
     /// Requested native selection as zero-based character offsets.
     pub(super) selection: Option<(usize, usize)>,
-    pub(super) lines: usize,
+    lines: usize,
 }
 
 impl Document {
+    pub(super) fn version(&self) -> u64 {
+        self.edit_version
+    }
+    pub(super) fn line_count(&self) -> usize {
+        self.lines
+    }
+    pub(super) fn is_recovery(&self) -> bool {
+        self.recovery.is_some()
+    }
+    /// Non-authorizing former path for recovery labels and Save As suggestions.
+    pub(super) fn recovery_path(&self) -> Option<&str> {
+        self.recovery
+            .as_ref()
+            .map(|recovery| recovery.path.as_str())
+    }
+    /// Complete one accepted source mutation, including programmatic edits and undo.
+    /// Save acknowledgements retain this version so later edits cannot be overwritten.
+    pub(super) fn source_changed(&mut self) {
+        self.edit_version = self.edit_version.wrapping_add(1);
+        self.modified = self.path.is_none() || self.text != self.saved_text;
+        self.lines = self.text.bytes().filter(|b| *b == b'\n').count() + 1;
+    }
+    /// Binary edits publish their own dirty state but share source reply invalidation.
+    pub(super) fn binary_changed(&mut self, dirty: bool) {
+        self.edit_version = self.edit_version.wrapping_add(1);
+        self.modified = dirty;
+    }
+    /// A new decoder request invalidates earlier replies without making a file dirty.
+    pub(super) fn begin_preview_reload(&mut self) -> u64 {
+        self.edit_version = self.edit_version.wrapping_add(1);
+        self.edit_version
+    }
+    /// A successful rename changes host identity and invalidates source-derived previews.
+    pub(super) fn renamed(&mut self, path: String) {
+        self.path = Some(path);
+        self.edit_version = self.edit_version.wrapping_add(1);
+        if let Some(preview) = &mut self.markdown {
+            preview.invalidate();
+        }
+        if let Some(view) = &mut self.marp {
+            view.invalidate();
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn set_version_fixture(&mut self, version: u64) {
+        self.edit_version = version;
+    }
+    #[cfg(test)]
+    pub(super) fn advance_version_fixture(&mut self) {
+        self.edit_version = self.edit_version.wrapping_add(1);
+    }
+    #[cfg(test)]
+    pub(super) fn set_dirty_fixture(&mut self, dirty: bool) {
+        self.modified = dirty;
+    }
     /// Identify specialized documents whose bytes/source use a dedicated editor or preview path.
     pub(super) fn is_preview(&self) -> bool {
         self.image.is_some() || self.pdf.is_some() || self.hex.is_some() || self.notebook.is_some()
@@ -88,12 +143,28 @@ impl Document {
     /// Acknowledge the submitted text snapshot, updating path/revision while preserving newer
     /// unsaved edits.
     pub fn acknowledge_save(&mut self, path: String, text: String, revision: String) {
+        self.saved_text = text;
+        self.modified = self.text != self.saved_text;
+        self.acknowledge_binding(path, revision);
+    }
+    /// Acknowledge exactly the submitted bytes while preserving later binary edits.
+    pub(super) fn acknowledge_binary_save(
+        &mut self,
+        path: String,
+        bytes: Arc<Vec<u8>>,
+        revision: String,
+    ) {
+        if let Some(hex) = &mut self.hex {
+            hex.buffer.acknowledge(bytes);
+            self.modified = hex.buffer.dirty();
+        }
+        self.acknowledge_binding(path, revision);
+    }
+    fn acknowledge_binding(&mut self, path: String, revision: String) {
         self.path = Some(path);
         self.recovery = None;
-        self.saved_text = text;
         self.revision = Some(revision);
         self.saving = false;
-        self.modified = self.text != self.saved_text;
     }
     /// Recovery paths describe retained tabs; only `path` authorizes file I/O.
     pub(super) fn display_path(&self) -> Option<&str> {
@@ -260,13 +331,17 @@ impl Default for Documents {
 
 impl Documents {
     /// Forced host loss unbinds every path before transport release or generation changes.
-    pub(super) fn detach_connection(&mut self, connection: &str, encrypted: bool) {
+    pub(super) fn detach_connection(
+        &mut self,
+        connection: &workspace::ConnectionId,
+        encrypted: bool,
+    ) {
         for doc in &mut self.items {
             if let Some(path) = doc.path.take() {
                 doc.recovery = Some(Recovery {
                     path,
                     revision: doc.revision.take(),
-                    connection: connection.into(),
+                    connection: connection.clone(),
                     encrypted,
                 });
             }
@@ -279,10 +354,14 @@ impl Documents {
         self.items.iter().all(|doc| doc.path.is_none())
     }
     /// Only a ready matching host and, when required, a recovered encrypted lease can rebind.
-    pub(super) fn restore_connection(&mut self, connection: &str, encrypted_ready: bool) {
+    pub(super) fn restore_connection(
+        &mut self,
+        connection: &workspace::ConnectionId,
+        encrypted_ready: bool,
+    ) {
         for doc in &mut self.items {
             if doc.recovery.as_ref().is_some_and(|origin| {
-                origin.connection == connection && (!origin.encrypted || encrypted_ready)
+                &origin.connection == connection && (!origin.encrypted || encrypted_ready)
             }) {
                 let origin = doc.recovery.take().unwrap();
                 doc.path = Some(origin.path);

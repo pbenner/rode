@@ -357,14 +357,7 @@ impl EditorApp {
                     .as_deref()
                     .and_then(|path| renamed(path, &entry, &destination))
                 {
-                    doc.path = Some(path);
-                    doc.edit_version = doc.edit_version.wrapping_add(1);
-                    if let Some(preview) = &mut doc.markdown {
-                        preview.invalidate();
-                    }
-                    if let Some(view) = &mut doc.marp {
-                        view.invalidate();
-                    }
+                    doc.renamed(path);
                 }
             }
         }

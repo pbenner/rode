@@ -160,7 +160,7 @@ impl EditorApp {
             });
         if response.should_close()
             && !(self.dialog == Dialog::TerminalExit && self.exit_pending())
-            && !self.vaults.locking
+            && !self.vaults.locking()
         {
             self.dialog = Dialog::None;
         }
