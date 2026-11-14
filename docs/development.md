@@ -1066,6 +1066,19 @@ quit is waiting; the error must remain visible and cancel automatic exit.
 These checks use isolated temporary files and native events, without timing-based
 success or fixed widget coordinates.
 
+`app::transitions` additionally exercises menu Close/Quit before native source
+rendering, nonmodal waits across tab handoffs, obsolete discard/cancel callbacks,
+project requests during clean saves, late edits and failed lifetime replies during
+project preparation, preparation superseded by quit, and explicit/forced SSH loss
+during Save As, and reconnect during a save that later fails. Explorer regression coverage injects a failed mutation while a
+project change waits. These tests use the real admission and worker-generation
+paths, with explicit acknowledgement checkpoints rather than sleeps for success.
+Prepared-reply regressions also retain the requesting window's modal ownership.
+A deterministic invalid debugger terminal frame verifies that a protocol error
+cancels a waiting project change before a later acknowledgement can start it.
+Vault coverage retains a staged lease across nonmodal input admission and checks
+that cancelling the action schedules its release.
+
 ## Interface scaling checks
 
 `cargo test --lib interface_scale` simulates 1x/2x monitor DPI, validates saved scale independently of stale framework state, rejects malformed settings and preserves dirty buffers, editor font size and themes. `cargo test --test persistence` checks explicit resets from stale windows without reverting another window's font choice. Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 3000x2000x24" python3 scripts/test-scale-ui.py` for real native font/GUI separation, measured menu resizing, percentage presets applied only after pointer release, 5% Smaller/Larger actions, Ctrl+0, dirty-buffer preservation and restart at forced X11 1x/2x DPI. The isolated X display should provide at least 3000×2000 physical pixels for the 2x window; screenshots/logs go to `target/scale-ui/`. Actual display-server DPI detection on other computers still depends on their OS/monitor configuration.

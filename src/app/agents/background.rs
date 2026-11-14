@@ -141,7 +141,7 @@ impl EditorApp {
                 _ => self.agents.running.error = "Unexpected background-agent service reply".into(),
             }
             if mutating && !self.agents.running.error.is_empty() {
-                self.abort_exit(self.agents.running.error.clone(), ctx);
+                self.abort_lifecycle(self.agents.running.error.clone(), ctx);
             }
         }
         if self.agents.running.mutating {

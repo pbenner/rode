@@ -370,7 +370,7 @@ impl EditorApp {
         }
         self.status = effects.status;
         if let Some(error) = effects.error {
-            self.notify(error, true);
+            self.abort_lifecycle(error, ctx);
         }
         self.file_browser.invalidate_rows();
         for path in effects.refresh {
@@ -417,7 +417,7 @@ impl EditorApp {
                     let ready = self.project_ready()
                         && !self.explorer_state.busy
                         && self.dialog == Dialog::None
-                        && self.pending.is_none()
+                        && !self.pending.modal()
                         && !egui::Popup::is_any_open(ctx)
                         && ui.memory(|memory| memory.allows_interaction(ui.layer_id()));
                     let refresh = ui

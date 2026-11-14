@@ -221,7 +221,7 @@ pub(super) fn paint(
                 Sense::click(),
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(format!("{label} · Click to show change"));
+            .on_hover_text(format!("{label} · Click to view or revert this change"));
         ui_probe::button(
             ui,
             &format!("git-change-{name}:{}", marker.line + 1),

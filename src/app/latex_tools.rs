@@ -305,7 +305,7 @@ impl EditorApp {
         }
         if !self.latex.output_open
             || self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
         {
             return;

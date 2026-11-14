@@ -31,7 +31,7 @@ impl EditorApp {
             .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome.is_decorated() { 8 } else { 0 }))
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
-                if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.is_some() { ui.disable(); }
+                if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() { ui.disable(); }
                 self.pane_ui(ui,navigation::Pane::Editor);
                 if ui.available_height() <= 1.0 {
                     return;
@@ -386,6 +386,7 @@ impl EditorApp {
                 }
             }
             Some(git_gutter::PeekAction::Close) => self.focus_editor(ctx),
+            Some(git_gutter::PeekAction::Revert(request)) => self.revert_git_change(request, ctx),
             None => {}
         }
         if let Some((path, line)) = breakpoint_toggle {

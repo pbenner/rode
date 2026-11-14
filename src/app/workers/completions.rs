@@ -46,9 +46,7 @@ impl EditorApp {
                 self.documents.finish_open(path);
             }
             Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
-                if let Some(doc) = self.documents.iter_mut().find(|d| d.id == *id) {
-                    doc.saving = false;
-                }
+                self.documents.finish_save(*id);
             }
             Job::Reload { id, version } => {
                 if let Some(doc) = self
@@ -87,7 +85,7 @@ impl EditorApp {
         match result {
             Err(error) => {
                 if matches!(&job, Job::Save { .. } | Job::SaveBinary { .. }) {
-                    self.abort_exit(error, ctx);
+                    self.abort_lifecycle(error, ctx);
                 } else if let Job::AgentAttachment { token, .. } = job {
                     self.agents.files.finish(token, Err(error));
                 } else if matches!(job, Job::Browse { .. }) {
@@ -130,32 +128,18 @@ impl EditorApp {
                     open_file,
                     ..
                 } => {
-                    let new_edits = self
-                        .documents
-                        .iter()
-                        .filter(|d| d.dirty())
-                        .any(|d| !documents_at_start.contains(&(d.id, d.edit_version)));
-                    if !keep_buffers && new_edits {
-                        self.workspace.hold_prepared(
-                            token,
-                            workspace::Prepared {
-                                response,
-                                remote,
-                                options,
-                                open_file,
-                            },
-                        );
-                        self.pending = Some(Action::PreparedProject { id: token });
-                    } else {
-                        self.commit_project(
+                    self.workspace.hold_prepared(
+                        token,
+                        workspace::Prepared {
                             response,
                             remote,
                             options,
-                            keep_buffers,
                             open_file,
-                            ctx,
-                        );
-                    }
+                            keep_buffers,
+                            approved_documents: documents_at_start,
+                        },
+                    );
+                    self.guarded(Action::PreparedProject { id: token }, ctx);
                 }
                 Job::BrowseFiles { .. } => self.file_browser.loaded(response),
                 Job::Browse { options, .. } => {

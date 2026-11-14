@@ -49,6 +49,8 @@ mod input;
 mod latex_tools;
 mod layout;
 mod lifecycle;
+mod transitions;
+use transitions::Action;
 mod markdown;
 mod marp_view;
 mod menus;
@@ -130,23 +132,6 @@ struct Workspace {
 
 pub use documents::Document;
 
-#[derive(Clone)]
-/// Operations routed through common dirty-buffer/encrypted-project guards before changing
-/// ownership or discarding state.
-enum Action {
-    PreparedProject {
-        id: workspace::PreparationId,
-    },
-    Project {
-        path: String,
-        remote: bool,
-        options: sandbox::Options,
-    },
-    Remote(Box<Profile>),
-    CloseTab(u64),
-    Quit,
-    LockEncrypted,
-}
 #[derive(PartialEq)]
 /// Exclusive native modal/picker intent; payloads retain the originating document identity.
 enum Dialog {
@@ -220,7 +205,7 @@ pub struct EditorApp {
     dialog_input: String,
     marp_overwrite: bool,
     connection_profiles: saved_connections::State,
-    pending: Option<Action>,
+    pending: transitions::Controller,
     exit: lifecycle::Exit,
     notice: Option<(String, bool, Instant)>,
     status: String,
@@ -342,7 +327,7 @@ impl EditorApp {
             dialog_input: String::new(),
             marp_overwrite: false,
             connection_profiles: saved_connections::State::new(),
-            pending: None,
+            pending: Default::default(),
             exit: Default::default(),
             notice: None,
             status: "Ready".into(),
@@ -427,166 +412,6 @@ impl EditorApp {
     }
 
     /// Validate/probe a candidate asynchronously while retaining the current working project.
-    /// Capture document versions so a late candidate cannot discard edits made during
-    /// preparation. Explorer mutations and preparation are mutually exclusive so a
-    /// candidate cannot replace a file operation's captured workspace.
-    fn prepare_project(
-        &mut self,
-        path: String,
-        options: sandbox::Options,
-        remote: bool,
-        keep_buffers: bool,
-        restore_saved: Option<bool>,
-        ctx: &egui::Context,
-    ) {
-        if self.explorer_state.busy {
-            self.notify(
-                "Wait for the file operation to finish before preparing another project or policy.",
-                false,
-            );
-            return;
-        }
-        if remote
-            && self
-                .workspace
-                .as_ref()
-                .is_none_or(|w| w.remote.is_none() || !w.connected)
-        {
-            self.notify(
-                "SSH is offline. Reconnect before opening a remote project.",
-                true,
-            );
-            return;
-        }
-        if let Err(error) = options.validate() {
-            self.notify(error.to_string(), true);
-            return;
-        }
-        let token = self.workspace.begin_preparation();
-        self.status = if remote {
-            "Opening SSH project…"
-        } else {
-            "Opening local project…"
-        }
-        .into();
-        self.dispatch(
-            Request::Prepare {
-                path,
-                sandbox: if restore_saved.is_some() {
-                    Default::default()
-                } else {
-                    options.clone()
-                },
-            },
-            Job::Prepare {
-                remote,
-                options,
-                keep_buffers,
-                token,
-                documents_at_start: self
-                    .documents
-                    .iter()
-                    .map(|d| (d.id, d.edit_version))
-                    .collect(),
-                restore_saved,
-                open_file: None,
-            },
-            ctx,
-        );
-    }
-
-    /// Install an accepted prepared context after common guards pass. Invalidate old
-    /// services/generations before starting commands for the new host and policy.
-    /// A startup file is opened through the ordinary reader only after this commit.
-    fn commit_project(
-        &mut self,
-        response: Response,
-        remote: bool,
-        options: sandbox::Options,
-        keep_buffers: bool,
-        open_file: Option<String>,
-        ctx: &egui::Context,
-    ) {
-        let Some(plan) = response.project else {
-            self.notify("Host returned an invalid project description.", true);
-            return;
-        };
-        let opening_connection = remote && self.workspace.as_ref().is_some_and(|w| !w.ready);
-        let connection = if remote {
-            self.workspace.as_ref().and_then(|w| w.remote.clone())
-        } else {
-            None
-        };
-        if remote && connection.is_none() {
-            self.notify("SSH connection ended before the project was opened.", true);
-            return;
-        }
-        let settings_draft = keep_buffers
-            .then(|| self.settings_draft_for(&response.path, remote))
-            .flatten();
-        let encrypted = self
-            .vaults
-            .take_project(&response.path, connection.as_ref());
-        if remote || (keep_buffers && self.workspace.as_ref().is_some_and(|w| w.remote.is_none())) {
-            self.clear_project(
-                documents::Retention::from(keep_buffers),
-                if keep_buffers {
-                    workspace::LeaveReason::PolicyChanged
-                } else {
-                    workspace::LeaveReason::ProjectChanged
-                },
-            );
-        } else {
-            self.reset_workspace(workspace::LeaveReason::ProjectChanged);
-        }
-        let connection = connection.map(|mut r| {
-            r.profile.root = response.path.clone();
-            r.profile.sandbox = options.clone();
-            self.connection_profiles.adopt(r.profile.clone());
-            r
-        });
-        self.workspace.activate(
-            response.path.clone(),
-            connection,
-            plan.clone(),
-            options.clone(),
-        );
-        self.vaults.active = encrypted;
-        self.vaults.lost = false;
-        self.vaults.released = false;
-        if remote {
-            self.restore_ssh_buffers();
-        }
-        self.explorer_state.expanded.insert(response.path.clone());
-        self.explorer_state
-            .directories
-            .insert(response.path, response.entries);
-        self.explorer_state.tree_dirty = true;
-        self.load_project_tools(ctx);
-        if let Some(draft) = settings_draft {
-            self.restore_settings_draft(draft);
-        }
-        self.status = format!(
-            "{} project · {}",
-            if remote { "SSH" } else { "Local" },
-            plan.label()
-        );
-        if plan.requested && !plan.active {
-            self.notify(plan.reason.clone(), false);
-        }
-        self.show_terminal |= remote || options.enabled;
-        if let Some(path) = open_file {
-            self.open_file(path, ctx);
-        } else if self.show_terminal {
-            self.start_project_terminal(ctx);
-        }
-        if opening_connection {
-            self.show_explorer = false;
-            self.reveal_panel(Panel::Agent, ctx);
-            self.agents.focus = true;
-        }
-    }
-
     /// Request the default nonpersistent native terminal after project preparation.
     fn start_project_terminal(&mut self, ctx: &egui::Context) {
         self.new_terminal(ctx);
@@ -728,154 +553,6 @@ impl EditorApp {
             Err(error) => {
                 self.ssh_failed(format!("{error:#}"), ctx);
             }
-        }
-    }
-
-    /// Defer an ownership-changing action when source edits or encrypted-project work require
-    /// an explicit decision; route accepted actions through the same lifecycle path.
-    fn guarded(&mut self, action: Action, ctx: &egui::Context) {
-        if self.explorer_state.busy {
-            self.notify(
-                "Wait for the file operation to finish before closing or changing projects.",
-                false,
-            );
-            return;
-        }
-        if matches!(
-            action,
-            Action::Project { .. } | Action::Remote(_) | Action::PreparedProject { .. }
-        ) && self.runtime_work_pending()
-        {
-            self.notify("Wait for runtime startup or submitted state changes to be acknowledged before switching projects.",false);
-            return;
-        }
-        if self.vaults.locking {
-            return;
-        }
-        if self.vaults.cleanup_pending()
-            && matches!(
-                action,
-                Action::Project { .. } | Action::Remote(_) | Action::PreparedProject { .. }
-            )
-        {
-            self.notify(
-                "Finish locking the encrypted project before switching projects or hosts.",
-                true,
-            );
-            return;
-        }
-        if let Some(client) = &self.vaults.active {
-            let leaves_project = match &action {
-                Action::Remote(_) => true,
-                Action::Project { path, remote, .. } => !client.matches(
-                    path,
-                    self.workspace
-                        .as_ref()
-                        .filter(|w| w.remote.is_some() == *remote)
-                        .and_then(|w| w.remote.as_ref()),
-                ),
-                Action::PreparedProject { id } => {
-                    self.workspace.prepared(*id).is_some_and(|prepared| {
-                        !client.matches(
-                            &prepared.response.path,
-                            self.workspace
-                                .as_ref()
-                                .filter(|w| w.remote.is_some() == prepared.remote)
-                                .and_then(|w| w.remote.as_ref()),
-                        )
-                    })
-                }
-                _ => false,
-            };
-            if leaves_project && self.vaults.staged.is_none() {
-                self.notify(
-                    "Lock the encrypted project before switching projects or hosts.",
-                    true,
-                );
-                return;
-            }
-        }
-        if let Action::Remote(profile) = &action
-            && self.can_resume_ssh(profile)
-        {
-            self.perform(action, ctx);
-            return;
-        }
-        let dirty = match action {
-            Action::CloseTab(id) => self.documents.iter().any(|d| d.id == id && d.dirty()),
-            _ => self.documents.iter().any(Document::dirty),
-        };
-        if dirty {
-            self.dialog_viewport = ctx.viewport_id();
-            self.pending = Some(action);
-        } else {
-            self.perform(action, ctx);
-        }
-    }
-
-    /// Execute an action already accepted by the shared guards; callers must not bypass
-    /// dirty-buffer, encrypted-mount or runtime-lifetime checks to reach this method.
-    fn perform(&mut self, action: Action, ctx: &egui::Context) {
-        match action {
-            Action::PreparedProject { id } => {
-                if let Some(prepared) = self.workspace.take_prepared(id) {
-                    self.commit_project(
-                        prepared.response,
-                        prepared.remote,
-                        prepared.options,
-                        false,
-                        prepared.open_file,
-                        ctx,
-                    );
-                }
-            }
-            Action::Project {
-                path,
-                remote,
-                options,
-            } => self.prepare_project(path, options, remote, false, None, ctx),
-            Action::Remote(profile) => {
-                let resume = self.can_resume_ssh(&profile);
-                self.connect(*profile, ctx, resume);
-            }
-            Action::CloseTab(id) => {
-                if self.documents.iter().any(|doc| {
-                    doc.id == id
-                        && doc
-                            .notebook
-                            .as_ref()
-                            .is_some_and(|view| view.lifetime_pending())
-                }) {
-                    self.notify("Wait for kernel startup or submitted work to be acknowledged before closing this notebook.",false);
-                    return;
-                }
-                if self.documents.close(id).is_some() {
-                    self.focus_editor(ctx);
-                }
-            }
-
-            Action::Quit => {
-                if self.vaults.active.is_some() && self.vaults.lost && self.vaults.released {
-                    self.clear_project(
-                        documents::Retention::Discard,
-                        workspace::LeaveReason::ProjectChanged,
-                    );
-                    self.request_exit(ctx);
-                } else if self.vaults.active.is_some() {
-                    self.lock_encrypted(true, ctx);
-                } else if self.vaults.pending.is_some()
-                    || self.vaults.staged.is_some()
-                    || self.vaults.cleanup_pending()
-                {
-                    self.notify(
-                        "Finish encrypted-project unlocking or locking before exiting. Use Open encrypted project → Lock existing mount to resolve an unlocked mount.",
-                        true,
-                    );
-                } else {
-                    self.request_exit(ctx);
-                }
-            }
-            Action::LockEncrypted => self.lock_encrypted(false, ctx),
         }
     }
 
@@ -1148,7 +825,7 @@ impl eframe::App for EditorApp {
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
         self.route_input(ctx);
-        if (self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal())
+        if (self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal())
             && Terminal::focused(ctx)
         {
             ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));

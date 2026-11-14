@@ -88,6 +88,11 @@ pub(super) struct Sessions {
     allocation_error: String,
 }
 impl Sessions {
+    #[cfg(test)]
+    pub(in crate::app) fn persistence_pending_fixture(&mut self, pending: bool) {
+        self.persistence_pending = pending;
+    }
+
     /// Creation and persistence mutations must be acknowledged before leaving this window.
     pub(super) fn lifetime_pending(&self) -> bool {
         self.starting || self.persistence_pending
@@ -670,19 +675,12 @@ impl EditorApp {
             Ok(response) => response,
             Err(error) => {
                 if matches!(job, Job::Slurm | Job::Release) {
-                    self.sessions.slurm_error = error;
+                    self.sessions.slurm_error = error.clone();
                 } else {
                     self.sessions.error = error.clone();
                     self.sessions.queued.clear();
-                    self.notify(error, true);
                 }
-                if matches!(job, Job::Persistence) && self.exit.waiting() {
-                    self.exit.cancel();
-                    self.dialog = Dialog::None;
-                    self.focus_editor(ctx);
-                } else {
-                    self.advance_exit(ctx);
-                }
+                self.abort_lifecycle(error, ctx);
                 return;
             }
         };

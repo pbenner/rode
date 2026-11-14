@@ -8,7 +8,7 @@ use super::*;
 use navigation::Style;
 mod control;
 pub(super) use control::Replay;
-pub(super) use control::{Context, Router, Scope};
+pub(super) use control::{Context, Frame, Router, Scope};
 
 /// Share tab recognition between source admission and shortcuts in other widgets.
 fn tab_shortcut(ctx: &egui::Context) -> Option<isize> {
@@ -71,7 +71,7 @@ impl EditorApp {
 
     /// Route global editor actions after honoring modal barriers and native terminal focus.
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.pending.is_some()
+        if self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending()
             || self.vaults.locking
@@ -171,9 +171,7 @@ impl EditorApp {
                 DocumentShortcut::Cycle(direction) => self.cycle_tab(direction, ctx),
                 DocumentShortcut::New => self.execute_command(Command::New, ctx),
                 DocumentShortcut::Close => {
-                    if let Some(id) = self.documents.selected_id() {
-                        self.guarded(Action::CloseTab(id), ctx);
-                    }
+                    self.guarded_source_close(&frame, ctx);
                 }
             }
             let next = self
@@ -269,7 +267,7 @@ impl EditorApp {
     pub(in crate::app) fn editing_allowed(&self, ctx: &egui::Context) -> bool {
         ctx.input(|i| i.focused)
             && self.dialog == Dialog::None
-            && self.pending.is_none()
+            && !self.pending.modal()
             && !self.workbench_modal()
             && !self.vaults.locking
             && !egui::Popup::is_any_open(ctx)

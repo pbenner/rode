@@ -13,14 +13,27 @@ impl EditorApp {
     pub(super) fn exit_pending(&self) -> bool {
         self.exit.waiting()
     }
-    /// Cancel a waiting exit and retain its failure as a visible notice instead of silently closing.
-    pub(super) fn abort_exit(&mut self, error: String, ctx: &egui::Context) {
+    /// Cancel actions waiting on failed acknowledgements and retain the error as a visible notice.
+    pub(super) fn abort_lifecycle(&mut self, error: String, ctx: &egui::Context) {
+        if self.pending.waiting_for_ack() {
+            self.cancel_guarded_action();
+            self.focus_editor(ctx);
+        }
         if self.exit.waiting() {
             self.exit.cancel();
             self.dialog = Dialog::None;
             self.focus_editor(ctx);
         }
         self.notify(error, true);
+    }
+    /// Runtime views retain ordinary errors locally; a new error must also stop any
+    /// ownership transition that is waiting on submitted work or cleanup.
+    pub(super) fn report_runtime_failure(&mut self, error: Option<String>, ctx: &egui::Context) {
+        if (self.exit_pending() || self.pending.waiting_for_ack())
+            && let Some(error) = error
+        {
+            self.abort_lifecycle(error, ctx);
+        }
     }
     /// Include pending terminal/runtime creation, lifetime changes and cleanup in the exit barrier.
     pub(super) fn runtime_work_pending(&self) -> bool {
@@ -38,7 +51,7 @@ impl EditorApp {
         }
         self.cancel_agent_installation();
         let readiness = self.exit_readiness();
-        match self.exit.request(readiness, self.documents.exit_snapshot()) {
+        match self.exit.request(readiness, self.documents.changes()) {
             exit::Decision::Close => self.final_quit(ctx),
             exit::Decision::Wait => self.set_dialog(Dialog::TerminalExit),
         }
@@ -61,7 +74,7 @@ impl EditorApp {
         }
         match self
             .exit
-            .advance(self.exit_readiness(), self.documents.exit_snapshot())
+            .advance(self.exit_readiness(), self.documents.changes())
         {
             exit::Progress::Idle => return false,
             exit::Progress::RecheckDocuments => {
@@ -92,28 +105,15 @@ impl EditorApp {
             return;
         }
         let requested = ctx.input(|input| input.viewport().close_requested());
-        // A clean buffer does not imply that encrypted mounts, startup work
-        // or a debugger may be abandoned. Only the guarded quit closes us.
         if requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.dialog != Dialog::TerminalExit
+                && !matches!(self.pending.as_ref(), Some(Action::Quit))
+            {
+                self.guarded(Action::Quit, ctx);
+            }
         }
-        let ready = self.exit.native_request(requested, self.input.pending());
-        if self.input.pending() {
-            ctx.request_repaint();
-            return;
-        }
-        // A save can reach disk before its acknowledgement reaches the UI. If
-        // close arrived in between, finish the original request once every
-        // buffer is clean. Failed saves and edits made during saving retain
-        // the dirty-buffer guard; encrypted/runtime guards still run below.
-        if matches!(self.pending, Some(Action::Quit)) && self.documents.exit_snapshot().settled() {
-            self.pending = None;
-            self.guarded(Action::Quit, ctx);
-            return;
-        }
-        if ready && self.dialog != Dialog::TerminalExit {
-            self.guarded(Action::Quit, ctx);
-        }
+        self.advance_guarded_action(ctx);
     }
 }
 
@@ -144,7 +144,7 @@ pub(in crate::app) mod tests {
         app.new_file();
         let output = native_close(&mut app, &ctx);
         assert!(!app.exit.closing());
-        assert!(matches!(app.pending, Some(Action::Quit)));
+        assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
         assert!(
             output.viewport_output[&egui::ViewportId::ROOT]
                 .commands
@@ -152,7 +152,7 @@ pub(in crate::app) mod tests {
                 .any(|command| matches!(command, egui::ViewportCommand::CancelClose))
         );
         app.documents.clear();
-        app.pending = None;
+        app.cancel_guarded_action();
         app.vaults.needs_lock = true;
         native_close(&mut app, &ctx);
         assert!(!app.exit.closing());
@@ -172,7 +172,7 @@ pub(in crate::app) mod tests {
         app.documents[0].saving = true;
         native_close(&mut app, &ctx);
         assert!(!app.exit.closing());
-        assert!(matches!(app.pending, Some(Action::Quit)));
+        assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
 
         app.documents[0].acknowledge_save("saved.txt".into(), "submitted".into(), "rev".into());
         let _ = ctx.run(Default::default(), |ctx| app.handle_close_request(ctx));
@@ -192,8 +192,8 @@ pub(in crate::app) mod tests {
             doc.saving = true;
             let id = doc.id;
             native_close(&mut app, &ctx);
-            assert!(app.exit.waiting());
-            assert!(app.dialog == Dialog::TerminalExit);
+            assert!(app.pending.waiting_for_save());
+            assert!(!app.exit.waiting());
 
             let job = if binary {
                 Job::SaveBinary {
@@ -248,7 +248,7 @@ pub(in crate::app) mod tests {
                     );
                 }
                 _ => {
-                    app.pending = None; // Keep editing while the save completes.
+                    app.cancel_guarded_action(); // Keep editing while the save completes.
                     app.documents[0].acknowledge_save(
                         "saved.txt".into(),
                         "submitted".into(),

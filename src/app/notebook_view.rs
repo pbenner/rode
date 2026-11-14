@@ -604,7 +604,7 @@ impl EditorApp {
     /// only to matching cell versions, serialize accepted changes and report cleanup failures.
     pub(super) fn poll_notebooks(&mut self, ctx: &egui::Context) {
         for error in self.notebook_shutdowns.poll() {
-            self.abort_exit(error, ctx);
+            self.abort_lifecycle(error, ctx);
         }
         if self.notebook_shutdowns.pending() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -809,11 +809,7 @@ impl EditorApp {
             }
             doc.notebook = Some(view);
         }
-        if self.exit_pending()
-            && let Some(error) = failure
-        {
-            self.abort_exit(error, ctx);
-        }
+        self.report_runtime_failure(failure, ctx);
     }
     fn notebook_picture_jobs(&self, view: &View, jobs: Vec<PictureJob>, ctx: &egui::Context) {
         if jobs.is_empty() {

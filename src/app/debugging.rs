@@ -429,9 +429,9 @@ impl EditorApp {
         if client.phase == Phase::Starting || client.pending() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
-        if self.exit_pending() && !client.error.is_empty() && client.error != previous_error {
-            self.abort_exit(client.error.clone(), ctx);
-        }
+        let failure = (!client.error.is_empty() && client.error != previous_error)
+            .then(|| client.error.clone());
+        self.report_runtime_failure(failure, ctx);
         self.debugger.client = Some(client);
     }
     /// Render cached inspection/configuration state, then apply returned actions after UI borrows end.

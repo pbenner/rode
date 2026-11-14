@@ -6,23 +6,29 @@
 use super::*;
 
 impl EditorApp {
-    /// Cancel only the guarded candidate that the visible decision belongs to.
-    fn cancel_guarded_action(&mut self) {
-        if let Some(Action::PreparedProject { id }) = self.pending.take() {
-            self.workspace.cancel_prepared(id);
-        }
-    }
     /// Render the exclusive current dialog and common dirty-buffer confirmation on its owning viewport.
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if ctx.viewport_id() != self.dialog_viewport {
             return;
         }
         let palette = self.themes.active().palette;
-        if let Some(action) = self.pending.clone() {
+        if let Some((decision, waiting)) = self.pending.presentation() {
             let modal = egui::Modal::new(egui::Id::new("unsaved"))
                 .frame(layout::dialog_frame(&ctx.style(), palette))
                 .show(ctx, |ui| {
                     ui.set_width(400_f32.min((ctx.content_rect().width() - 64.).max(1.)));
+                    if let Some(reason) = waiting {
+                        ui.heading("Finishing submitted work");
+                        ui.spinner();
+                        ui.label(reason.message());
+                        let cancel = ui.button("Keep editing");
+                        ui_probe::button(ui, "guard-keep-editing", &cancel);
+                        if cancel.clicked() {
+                            self.cancel_guarded_decision(decision);
+                            self.focus_editor(ctx);
+                        }
+                        return;
+                    }
                     ui.heading("Keep your changes?");
                     ui.add_space(8.0);
                     ui.label(
@@ -33,20 +39,19 @@ impl EditorApp {
                         let keep = palette.primary(ui, "Keep editing");
                         ui_probe::button(ui, "guard-keep-editing", &keep);
                         if keep.clicked() {
-                            self.cancel_guarded_action();
+                            self.cancel_guarded_decision(decision);
                             self.focus_editor(ctx);
                         }
                         let discard =
                             ui.button(RichText::new("Discard changes").color(palette.error));
                         ui_probe::button(ui, "guard-discard", &discard);
                         if discard.clicked() {
-                            self.pending = None;
-                            self.perform(action, ctx);
+                            self.discard_guarded_action(decision, ctx);
                         }
                     });
                 });
             if modal.should_close() {
-                self.cancel_guarded_action();
+                self.cancel_guarded_decision(decision);
                 self.focus_editor(ctx);
             }
             return;

@@ -295,7 +295,7 @@ impl EditorApp {
 
     /// Block input when an application modal belongs to another native viewport.
     pub(in crate::app) fn foreign_modal(&self, ctx: &egui::Context) -> bool {
-        let owner = if self.dialog != Dialog::None || self.pending.is_some() {
+        let owner = if self.dialog != Dialog::None || self.pending.modal() {
             Some(self.dialog_viewport)
         } else if self.workbench_modal() {
             Some(self.tool_viewport(ToolTab::Panel(Panel::Git)))
@@ -585,7 +585,7 @@ impl EditorApp {
     /// Apply the same modal input boundary in whole-sidebar and individual-tab windows.
     fn detached_shortcuts(&mut self, ctx: &egui::Context) {
         self.route_input(ctx);
-        if self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal() {
+        if self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal() {
             ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("terminal-input")));
         }
     }

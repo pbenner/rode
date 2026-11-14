@@ -11,16 +11,26 @@ pub(super) struct Source<'a> {
     pub path: Option<&'a str>,
 }
 
-/// Save/dirty facts used by exit coordination without borrowing mutable buffers.
-#[derive(Default)]
-pub(super) struct ExitSnapshot {
+/// Versioned dirty/save facts shared by transition and exit admission.
+#[derive(Default, Clone)]
+pub(super) struct Changes {
     pub dirty_versions: Vec<(u64, u64)>,
     pub saving: bool,
 }
-impl ExitSnapshot {
-    pub fn settled(&self) -> bool {
-        self.dirty_versions.is_empty() && !self.saving
+impl Changes {
+    pub fn unapproved(&self, versions: &[(u64, u64)]) -> bool {
+        self.dirty_versions
+            .iter()
+            .any(|version| !versions.contains(version))
     }
+}
+
+/// Former host bindings are display/reconnect metadata, never file-I/O authority.
+pub(super) struct Recovery {
+    pub path: String,
+    revision: Option<String>,
+    connection: String,
+    encrypted: bool,
 }
 
 /// One stable tab identity and editable source/save baseline, with optional specialized
@@ -38,7 +48,7 @@ pub struct Document {
     /// Writable/readable path bound to the active project host, or `None` for unsaved/recovery
     /// buffers.
     pub path: Option<String>,
-    pub(super) recovery: Option<connections::Recovery>,
+    pub(super) recovery: Option<Recovery>,
     /// Current source text; structured/preview documents use their dedicated state where
     /// applicable.
     pub text: String,
@@ -249,6 +259,42 @@ impl Default for Documents {
 }
 
 impl Documents {
+    /// Forced host loss unbinds every path before transport release or generation changes.
+    pub(super) fn detach_connection(&mut self, connection: &str, encrypted: bool) {
+        for doc in &mut self.items {
+            if let Some(path) = doc.path.take() {
+                doc.recovery = Some(Recovery {
+                    path,
+                    revision: doc.revision.take(),
+                    connection: connection.into(),
+                    encrypted,
+                });
+            }
+            if let Some(image) = &mut doc.image {
+                image.loading = false;
+            }
+        }
+    }
+    pub(super) fn all_unbound(&self) -> bool {
+        self.items.iter().all(|doc| doc.path.is_none())
+    }
+    /// Only a ready matching host and, when required, a recovered encrypted lease can rebind.
+    pub(super) fn restore_connection(&mut self, connection: &str, encrypted_ready: bool) {
+        for doc in &mut self.items {
+            if doc.recovery.as_ref().is_some_and(|origin| {
+                origin.connection == connection && (!origin.encrypted || encrypted_ready)
+            }) {
+                let origin = doc.recovery.take().unwrap();
+                doc.path = Some(origin.path);
+                doc.revision = origin.revision;
+            }
+        }
+    }
+    pub(super) fn finish_save(&mut self, id: u64) {
+        if let Some(doc) = self.items.iter_mut().find(|doc| doc.id == id) {
+            doc.saving = false;
+        }
+    }
     pub(super) fn active_source(&self) -> Option<Source<'_>> {
         let doc = self.active()?;
         if doc.image.is_some()
@@ -266,16 +312,35 @@ impl Documents {
             path: doc.display_path(),
         })
     }
-    pub(super) fn exit_snapshot(&self) -> ExitSnapshot {
-        ExitSnapshot {
+    pub(super) fn changes(&self) -> Changes {
+        self.changes_for(None)
+    }
+    pub(super) fn changes_for(&self, document: Option<u64>) -> Changes {
+        Changes {
             dirty_versions: self
                 .items
                 .iter()
-                .filter(|doc| doc.dirty())
+                .filter(|doc| document.is_none_or(|id| id == doc.id) && doc.dirty())
                 .map(|doc| (doc.id, doc.edit_version))
                 .collect(),
-            saving: self.items.iter().any(|doc| doc.saving),
+            saving: self
+                .items
+                .iter()
+                .any(|doc| document.is_none_or(|id| id == doc.id) && doc.saving),
         }
+    }
+    pub(super) fn versions(&self) -> Vec<(u64, u64)> {
+        self.items
+            .iter()
+            .map(|doc| (doc.id, doc.edit_version))
+            .collect()
+    }
+    pub(super) fn notebook_pending(&self, id: u64) -> bool {
+        self.items
+            .iter()
+            .find(|doc| doc.id == id)
+            .and_then(|doc| doc.notebook.as_ref())
+            .is_some_and(|view| view.lifetime_pending())
     }
 
     pub(super) fn active_index(&self) -> usize {

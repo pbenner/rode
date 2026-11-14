@@ -131,9 +131,7 @@ impl EditorApp {
                     self.documents.finish_open(path);
                 }
                 Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
-                    if let Some(doc) = self.documents.iter_mut().find(|d| d.id == *id) {
-                        doc.saving = false;
-                    }
+                    self.documents.finish_save(*id);
                 }
                 _ => {}
             }

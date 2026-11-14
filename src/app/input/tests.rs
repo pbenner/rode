@@ -59,7 +59,7 @@ fn same_frame_source_input_reaches_the_dirty_guard_before_native_close() {
         let output = input_and_close(&mut app, &ctx, vec![egui::Event::Text(text.into())], true);
         assert_eq!(app.documents[0].text, "accepted edit", "{style:?}");
         assert!(app.documents[0].dirty());
-        assert!(matches!(app.pending, Some(Action::Quit)));
+        assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
         assert!(!app.exit.closing());
         let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
         assert!(
@@ -101,7 +101,7 @@ fn native_close_preserves_edits_on_both_sides_of_a_queued_document_handoff() {
     );
     assert!(app.input.pending());
     assert!(
-        app.pending.is_none(),
+        !app.pending.modal(),
         "A quit modal must not prevent source replay"
     );
     for _ in 0..8 {
@@ -114,7 +114,7 @@ fn native_close_preserves_edits_on_both_sides_of_a_queued_document_handoff() {
     assert_eq!(app.documents[1].text, "before");
     assert!(!app.input.pending());
     assert!(
-        matches!(app.pending, Some(Action::Quit)),
+        matches!(app.pending.as_ref(), Some(Action::Quit)),
         "The single native close intent was lost"
     );
     assert!(!app.exit.closing());
@@ -146,7 +146,7 @@ fn native_close_waits_for_queued_saves_and_keeps_edits_newer_than_the_saved_snap
         }
         input_and_close(&mut app, &ctx, events, true);
         assert!(app.input.pending());
-        assert!(app.pending.is_none());
+        assert!(!app.pending.modal());
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.input.pending()
             || app.documents[0].saving

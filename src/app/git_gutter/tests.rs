@@ -159,11 +159,11 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     assert_eq!(state.peek, None);
 }
 
-struct Repo {
+pub(super) struct Repo {
     directory: tempfile::TempDir,
 }
 impl Repo {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let repo = Self { directory };
         repo.git(&["init", "-q"]);
@@ -171,10 +171,10 @@ impl Repo {
         repo.git(&["config", "user.email", "fixture@example.invalid"]);
         repo
     }
-    fn root(&self) -> &str {
+    pub(super) fn root(&self) -> &str {
         self.directory.path().to_str().unwrap()
     }
-    fn git(&self, args: &[&str]) {
+    pub(super) fn git(&self, args: &[&str]) {
         let output = Command::new("git")
             .arg("-C")
             .arg(self.root())
@@ -192,7 +192,7 @@ impl Repo {
     fn baseline(&self, name: &str) -> Option<Arc<str>> {
         self.snapshot(name, None).0.map(|baseline| baseline.text)
     }
-    fn snapshot(
+    pub(super) fn snapshot(
         &self,
         name: &str,
         previous: Option<&repository::Baseline>,
@@ -220,7 +220,7 @@ impl Repo {
         );
         (result, calls)
     }
-    fn write(&self, name: &str, text: &str) {
+    pub(super) fn write(&self, name: &str, text: &str) {
         let path = self.directory.path().join(name);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();

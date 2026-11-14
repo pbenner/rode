@@ -31,7 +31,7 @@ impl EditorApp {
             || self.explorer_state.tree_rows.is_empty()
             || egui::Popup::is_any_open(ctx)
             || self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
         {
             return;

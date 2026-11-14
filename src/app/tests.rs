@@ -488,15 +488,16 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
         .unwrap();
     app.poll(&ctx);
     assert!(matches!(
-        &app.pending,
+        app.pending.as_ref(),
         Some(Action::PreparedProject { id }) if app.workspace.prepared(*id).and_then(|p| p.open_file.as_deref()) == file.to_str()
     ));
     assert_eq!(app.documents[0].text, "typed during slow project opening");
     assert!(app.workspace.is_none());
     // Superseding work invalidates the old confirmation without discarding the buffer.
-    let obsolete = app.pending.take().unwrap();
+    let obsolete = app.pending.as_ref().unwrap().clone();
+    app.cancel_guarded_action();
     let current = app.workspace.begin_preparation();
-    app.perform(obsolete, &ctx);
+    app.perform_fixture(obsolete, &ctx);
     assert!(app.workspace.preparing());
     assert!(app.workspace.prepared(preparation).is_none());
     assert!(app.workspace.is_none());

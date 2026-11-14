@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Git markers and read-only change peeks, including unsaved text and host policy."""
+"""Git change inspection and undoable hunk reverts, including unsaved text and host policy."""
 
 import json
 import os
@@ -140,9 +140,48 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             assert git("diff", "--cached", "--binary") == staged_index
             ui.resize(850, 560)
             ui.control("git-peek-close")
+            ui.control("git-peek-revert")
             ui.value("git-peek-patch", modified_patch)
             screenshot(window, "change-preview-compact.png")
             ui.resize(1380, 900)
+            ui.click("git-peek-close")
+
+            def revert_block(marker, restored, remaining):
+                ui.click(marker)
+                ui.click("git-peek-revert")
+                ui.source(restored)
+                ui.control("source-editor", focused=True)
+                ui.control("source-editor-modified")
+                ui.absent("git-peek-diff")
+                markers(remaining)
+                assert path.read_text() == staged, "Revert wrote the file without Save"
+                assert git("diff", "--cached", "--binary") == staged_index
+                key("z", ("Control_L",))
+                ui.source(staged)
+                ui.control("source-editor-saved")
+                key("y", ("Control_L",))
+                ui.source(restored)
+                key("z", ("Control_L",))
+                ui.source(staged)
+                markers(["git-change-modified:2", "git-change-deleted:4", "git-change-added:5"])
+
+            revert_block(
+                "git-change-modified:2",
+                "one\nold\nkeep\nlast\nextra\n",
+                ["git-change-deleted:4", "git-change-added:5"],
+            )
+            revert_block(
+                "git-change-deleted:4",
+                "one\nchanged\nkeep\ndelete\nlast\nextra\n",
+                ["git-change-modified:2", "git-change-added:6"],
+            )
+            revert_block(
+                "git-change-added:5",
+                "one\nchanged\nkeep\nlast\n",
+                ["git-change-modified:2", "git-change-deleted:4"],
+            )
+            ui.click("git-change-modified:2")
+            ui.value("git-peek-patch", modified_patch)
             ui.click("git-peek-next")
             ui.value("git-peek-patch", deleted_patch)
             ui.control("source-editor-cursor:4:1", focused=True)
@@ -179,6 +218,15 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             assert path.read_text() == staged, "Gutter computation wrote the unsaved buffer"
             ui.click("git-change-added:5")
             ui.value("git-peek-patch", "@@ -5,0 +5,2 @@\n+extra\n+unsaved\n")
+            ui.click("git-peek-revert")
+            ui.source("one\nchanged\nkeep\nlast\n")
+            ui.control("source-editor", focused=True)
+            assert path.read_text() == staged
+            assert git("diff", "--cached", "--binary") == staged_index
+            key("z", ("Control_L",))
+            ui.source("one\nchanged\nkeep\nlast\nextra\nunsaved\n")
+            markers(["git-change-modified:2", "git-change-deleted:4", "git-change-added:5"])
+            ui.click("git-change-added:5")
             ui.click("git-peek-close")
             ui.control("source-editor", focused=True)
             key("z", ("Control_L",))
@@ -195,6 +243,12 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             markers(["git-change-deleted:1"])
             ui.click("git-change-deleted:1")
             ui.value("git-peek-patch", "@@ -1,1 +0,0 @@\n-removed line\n")
+            ui.click("git-peek-revert")
+            ui.source("removed line\n")
+            ui.control("source-editor", focused=True)
+            assert (root / "empty.txt").read_text() == ""
+            key("z", ("Control_L",))
+            ui.source("")
             ui.open_file(root / "long.rs")
             ui.absent("git-peek-diff")
             markers(["git-change-modified:1", "git-change-modified:36"])
@@ -219,6 +273,12 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             markers(["git-change-added:1"])
             ui.click("git-change-added:1")
             ui.value("git-peek-patch", "@@ -0,0 +1,1 @@\n+untracked\n")
+            ui.click("git-peek-revert")
+            ui.source("")
+            ui.control("source-editor", focused=True)
+            assert (root / "new.txt").read_text() == "untracked\n"
+            key("z", ("Control_L",))
+            ui.source("untracked\n")
             ui.open_file(root / "ignored.txt")
             ui.absent("git-peek-diff")
             ui.control("source-git-unavailable")
@@ -235,7 +295,7 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             close_window(window, process)
             window = None
             print(
-                "Git gutter: read-only previews, change navigation, staged/unsaved edits, undo, commit, untracked/ignored and missing repository passed."
+                "Git gutter: change previews, isolated hunk reverts, native undo/redo, unchanged files/index, staged/unsaved edits, commit, untracked/ignored and missing repository passed."
             )
         except Exception:
             if window is not None and process.poll() is None:

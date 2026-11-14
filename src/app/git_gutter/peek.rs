@@ -1,5 +1,5 @@
-//! A read-only change inspector inside the source editor. All content comes from
-//! the admitted diff snapshot; opening or navigating a peek performs no host I/O.
+//! A change inspector inside the source editor. The comparison stays read-only;
+//! an explicit revert edits only the buffer using the admitted diff snapshot.
 use super::*;
 
 impl State {
@@ -60,6 +60,7 @@ impl State {
         }
         let mut next = index;
         let mut close = false;
+        let mut revert = false;
         let hunk = &changes.hunks[index];
         egui::Frame::new()
             .fill(palette.raised)
@@ -82,6 +83,11 @@ impl State {
                     if following.clicked() {
                         next = (index + 1) % changes.hunks.len();
                     }
+                    let restore = ui
+                        .add_enabled(self.baseline.is_some(), egui::Button::new("Revert change"))
+                        .on_hover_text("Restore this block from the last commit in the editor. Save to update the file. Undo restores your change.");
+                    ui_probe::button(ui, "git-peek-revert", &restore);
+                    revert = restore.clicked();
                     let dismiss = ui.button("Close");
                     ui_probe::button(ui, "git-peek-close", &dismiss);
                     close = dismiss.clicked();
@@ -105,6 +111,8 @@ impl State {
         if close {
             self.peek = None;
             Some(PeekAction::Close)
+        } else if revert {
+            self.revert_request(doc, index).map(PeekAction::Revert)
         } else if next != index {
             let row = changes.hunks[next].new.start + 1;
             self.peek = Some(next);

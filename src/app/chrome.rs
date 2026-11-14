@@ -307,7 +307,7 @@ impl EditorApp {
     /// Request source-editor focus for the active document, including a later frame
     /// when a closing modal still blocks the editor layer.
     pub(super) fn focus_editor(&mut self, ctx: &egui::Context) {
-        if self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal() {
+        if self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal() {
             return;
         }
         self.editor_intent();
@@ -329,7 +329,7 @@ impl EditorApp {
     pub(super) fn take_editor_focus(&mut self, ui: &egui::Ui, ctx: &egui::Context) -> Option<u64> {
         self.tabs.focus?;
         if self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
             || egui::Popup::is_any_open(ctx)
         {
@@ -807,7 +807,7 @@ mod tests {
             before
         );
         app.guarded(Action::CloseTab(ids[0]), &ctx);
-        assert!(matches!(app.pending,Some(Action::CloseTab(id)) if id == ids[0]));
+        assert!(matches!(app.pending.as_ref(),Some(Action::CloseTab(id)) if *id == ids[0]));
         assert_eq!(app.documents.len(), 3);
     }
 

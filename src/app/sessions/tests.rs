@@ -162,7 +162,7 @@ fn edits_received_while_exit_waits_for_cleanup_still_require_a_dirty_buffer_deci
         }
         app.sessions.persistence_pending = true;
         if approved_discard {
-            app.perform(Action::Quit, &ctx); // Explicit Discard in the shared dirty-buffer guard.
+            app.perform_fixture(Action::Quit, &ctx); // Explicit Discard in the shared dirty-buffer guard.
         } else {
             app.guarded(Action::Quit, &ctx);
         }
@@ -179,10 +179,10 @@ fn edits_received_while_exit_waits_for_cleanup_still_require_a_dirty_buffer_deci
         assert_eq!(app.exit.closing(), !later_edit);
         assert!(!app.exit_pending());
         if later_edit {
-            assert!(matches!(app.pending, Some(Action::Quit)));
+            assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
             assert_eq!(app.documents[0].text, "late worker edit");
             // Keep editing cancels this quit; an idle tick cannot restart it.
-            app.pending = None;
+            app.cancel_guarded_action();
             app.session_tick(&ctx);
             assert!(!app.exit.closing());
         }
@@ -218,7 +218,7 @@ fn quit_still_guards_unsaved_source_before_any_terminal_cleanup() {
     app.documents[0].text = "keep these edits".into();
     app.documents[0].modified = true;
     app.guarded(Action::Quit, &ctx);
-    assert!(matches!(app.pending, Some(Action::Quit)));
+    assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
     assert!(!app.exit.closing());
     assert!(!app.exit.waiting());
     assert_eq!(app.documents[0].text, "keep these edits");

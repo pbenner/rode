@@ -248,7 +248,7 @@ impl EditorApp {
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused)
             || self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending()
             || self.vaults.locking
@@ -532,7 +532,7 @@ impl EditorApp {
             ui_probe::button(ui, &format!("pane-maximized-{pane:?}"), &host);
         }
         let blocked = self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
             || egui::Popup::is_any_open(&ctx);
         if !blocked
@@ -607,7 +607,7 @@ impl EditorApp {
     /// Resolve deferred focus using this frame's measured panes and owning viewport.
     pub(super) fn navigation_finish(&mut self, ctx: &egui::Context) {
         let modal = self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending();
         if self.navigation.modal && !modal {

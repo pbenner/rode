@@ -354,7 +354,7 @@ fn notebook_shutdown_probe() {
     assert!(app.runtime_work_pending());
     blocked.wait();
     if case == "close_tab" {
-        app.perform(crate::app::Action::CloseTab(app.documents[0].id), &ctx);
+        app.perform_fixture(crate::app::Action::CloseTab(app.documents[0].id), &ctx);
         assert!(app.documents.is_empty());
     } else {
         let doc = &app.documents[0];

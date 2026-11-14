@@ -18,6 +18,14 @@ anything. It closes when the buffer, file or comparison changes, so an old hunk
 cannot be mistaken for current code.
 Previews above 1 MiB display a truncation notice.
 
+Choose **Revert change** in the preview to restore just that block from the last
+commit. This removes added lines, restores deleted lines, or replaces modified
+lines while preserving changes elsewhere in the buffer. This edits only the
+buffer. Use **Save** to write the result if it differs from the saved file.
+Git's staging area is unchanged.
+Use ordinary **Undo** / **Redo** to undo or repeat the revert. For a new file,
+reverting its added block clears the buffer without deleting the file.
+
 Markers compare the current buffer with the file in `HEAD`, including staged and
 unsaved edits. New, non-ignored files show added lines; ignored files and files
 outside a repository have no markers. Committing changes updates the baseline

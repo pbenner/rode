@@ -286,7 +286,7 @@ impl EditorApp {
         }
         self.agents.retired.retain(Chat::work_pending);
         if let Some(error) = retirement_error {
-            self.abort_exit(error, ctx);
+            self.abort_lifecycle(error, ctx);
         }
         let was_busy = self.agents.chat.busy;
         self.agents.chat.poll();
@@ -305,7 +305,7 @@ impl EditorApp {
             }
         }
         if let Some(error) = self.agents.chat.take_persistence_error() {
-            self.abort_exit(error, ctx);
+            self.abort_lifecycle(error, ctx);
         }
         if self.agents.attaching
             && let Some(config) = self.agents.chat.attached_config().cloned()
@@ -478,7 +478,7 @@ impl EditorApp {
             .as_ref()
             .is_some_and(|w| !w.ready || (w.remote.is_some() && !w.connected));
         let unsaved = self.documents.iter().filter(|d| d.dirty()).count();
-        let modal = self.dialog != Dialog::None || self.pending.is_some() || self.workbench_modal();
+        let modal = self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal();
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         // A parent may retain a larger minimum width after a resize. Size all
         // chat controls against the visible panel rather than that stale width.
@@ -1120,7 +1120,7 @@ impl EditorApp {
             || self.agents.runtime.installing()
             || self.exit.closing()
             || self.dialog != Dialog::None
-            || self.pending.is_some()
+            || self.pending.modal()
             || self.workbench_modal()
             || !self.feature(crate::extensions::Feature::Agents)
             || self

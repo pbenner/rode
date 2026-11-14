@@ -241,7 +241,7 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(|view| view.focus);
         let keyboard = self.dialog == Dialog::None
-            && self.pending.is_none()
+            && !self.pending.modal()
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
         let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
@@ -635,7 +635,7 @@ mod tests {
         assert!(app.dialog_input.ends_with("untitled.marp.md"));
         app.dialog = Dialog::None;
         app.guarded(Action::Quit, &ctx);
-        assert!(matches!(app.pending, Some(Action::Quit)));
+        assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
         assert!(!app.exit.closing());
     }
 

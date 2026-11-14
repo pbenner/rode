@@ -39,7 +39,7 @@ fn worker_flood_yields_to_close_and_delivers_every_batch_in_order() {
         app.connection_profiles.profiles[0].name,
         (MAX_EVENTS_PER_FRAME - 1).to_string()
     );
-    assert!(matches!(app.pending, Some(Action::Quit)));
+    assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
     assert!(!app.exit.closing());
     assert!(
         output.viewport_output[&egui::ViewportId::ROOT]

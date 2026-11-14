@@ -26,6 +26,8 @@ pub(in crate::app) struct Prepared {
     pub remote: bool,
     pub options: sandbox::Options,
     pub open_file: Option<String>,
+    pub keep_buffers: bool,
+    pub approved_documents: Vec<(u64, u64)>,
 }
 
 #[derive(Default)]
@@ -263,6 +265,8 @@ mod tests {
             remote: false,
             options: Default::default(),
             open_file: None,
+            keep_buffers: false,
+            approved_documents: Vec::new(),
         }
     }
 

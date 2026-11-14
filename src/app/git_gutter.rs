@@ -1,4 +1,4 @@
-//! Read-only Git decorations for the selected source buffer, relative to HEAD.
+//! Git decorations and change inspection for the selected source buffer, relative to HEAD.
 //!
 //! Git plumbing and bounded line diffs run on one worker per window. The captured
 //! project policy applies equally to local and SSH reads; the Git panel's explicit
@@ -10,6 +10,7 @@ use crate::sandbox::PlanExt as _;
 mod diff;
 mod peek;
 mod repository;
+mod revert;
 #[cfg(test)]
 mod tests;
 use diff::Changes;
@@ -51,6 +52,7 @@ pub(super) struct Completed {
 
 pub(super) enum PeekAction {
     Navigate(usize),
+    Revert(revert::Request),
     Close,
 }
 

@@ -43,6 +43,44 @@ fn closing_waits_for_debug_cleanup_then_completes_without_an_event() {
     app.session_tick(&ctx);
     assert!(app.exit.closing());
 }
+
+#[test]
+fn a_debugger_protocol_error_cancels_a_waiting_project_transition() {
+    let project = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    let (terminal, stream) = Terminal::stream(&ctx, "debug protocol fixture".into(), |_| {});
+    let key = "debug-protocol-fixture".to_string();
+    app.add_terminal_view(terminal, key.clone(), "Debug protocol fixture".into());
+    app.debugger.streams.insert(1, (key, stream));
+    let mut client = Client::default();
+    client.phase = Phase::Paused;
+    client.terminal_events.push_back(DebugEvent::Data {
+        id: 1,
+        data: "invalid base64!".into(),
+    });
+    app.debugger.client = Some(client);
+    app.sessions.persistence_pending_fixture(true);
+    app.guarded(
+        Action::Project {
+            path: project.path().to_string_lossy().into(),
+            remote: false,
+            options: Default::default(),
+        },
+        &ctx,
+    );
+    assert!(app.pending.modal());
+    app.poll_debugger(&ctx);
+    assert!(!app.debugger.client.as_ref().unwrap().error.is_empty());
+    app.sessions.persistence_pending_fixture(false);
+    app.advance_guarded_action(&ctx);
+    assert!(!app.workspace.preparing());
+    assert!(app.pending.is_none());
+    assert!(app.notice.as_ref().is_some_and(|(_, error, _)| *error));
+}
 /// Reproducible render-only profile, without a display or installed debugger.
 /// Explicitly ignored: reports timings rather than asserting machine speed.
 #[test]

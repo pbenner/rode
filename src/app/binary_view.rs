@@ -266,7 +266,7 @@ impl EditorApp {
         let focus = self.take_editor_focus(ui, ctx).is_some();
         let palette = self.themes.active().palette;
         let keyboard = self.dialog == Dialog::None
-            && self.pending.is_none()
+            && !self.pending.modal()
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
         let doc = self.documents.active_mut().unwrap();

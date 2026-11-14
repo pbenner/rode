@@ -41,6 +41,10 @@ pub(in crate::app) struct Frame {
     reset_prefix: bool,
 }
 impl Frame {
+    /// Source command admission has already fenced earlier edits behind a widget acknowledgement.
+    pub fn document(&self) -> Option<u64> {
+        self.context.source.map(|scope| scope.document)
+    }
     pub fn resets_prefix(&self) -> bool {
         self.reset_prefix
     }
@@ -50,6 +54,7 @@ impl Frame {
 pub(in crate::app) struct Router {
     editing: navigation::editing::State,
     queue: Replay,
+    rendered: Option<(Scope, u64)>,
 }
 
 /// Bounded native events waiting for an acknowledged source application boundary.
@@ -202,6 +207,26 @@ impl Router {
     pub fn pending(&self) -> bool {
         self.queue.pending()
     }
+    /// Menu/picker commands drawn before TextEdit must let this frame's edits apply first.
+    pub fn source_pending(&self, ctx: &egui::Context) -> bool {
+        self.pending()
+            || self.queue.scope.is_some_and(|scope| {
+                scope.focused(ctx)
+                    && self.rendered != Some((scope, ctx.cumulative_pass_nr()))
+                    && ctx.input(|input| {
+                        input.events.iter().any(|event| {
+                            matches!(
+                                event,
+                                egui::Event::Text(_)
+                                    | egui::Event::Paste(_)
+                                    | egui::Event::Cut
+                                    | egui::Event::Ime(_)
+                                    | egui::Event::Key { pressed: true, .. }
+                            )
+                        })
+                    })
+            })
+    }
     pub fn take_notice(&mut self) -> Option<String> {
         self.queue
             .notice
@@ -277,6 +302,13 @@ impl Router {
     ) {
         self.editing.after_source(ui, id, output, text, palette);
         self.queue.acknowledge(ui.ctx(), id);
+        if let Some(scope) = self
+            .queue
+            .scope
+            .filter(|scope| scope.document == id && scope.viewport == ui.ctx().viewport_id())
+        {
+            self.rendered = Some((scope, ui.ctx().cumulative_pass_nr()));
+        }
     }
     /// Fence commands behind earlier native edits/cursor movement. Translation may
     /// add its own replay events before this tail is appended by the adapter.

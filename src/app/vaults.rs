@@ -10,6 +10,42 @@ use std::sync::atomic::AtomicUsize;
 /// RAII count of captured operations that may still use the decrypted mount;
 /// dropping the last guard allows the lock sequence to proceed.
 pub(super) struct Work(Arc<AtomicUsize>);
+
+/// Requested ownership change, projected without giving the guard access to leases.
+pub(super) enum Transition<'a> {
+    Stay,
+    Project(&'a str, Option<&'a Remote>),
+    Connection,
+    RecoveryConnection,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Barrier {
+    None,
+    Locking,
+    Cleanup,
+    MustLock,
+}
+/// Vault exit policy stays with the lease owner; the adapter executes these effects.
+pub(super) enum QuitPolicy {
+    Close,
+    ClearLostProject,
+    Lock,
+    RecoveryRequired,
+}
+/// A disconnected active lease must survive ordinary project-view teardown.
+pub(super) struct RetainedLease(Option<Client>);
+impl Barrier {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Locking => "Wait for encrypted-project locking to finish.",
+            Self::Cleanup => {
+                "Finish locking the encrypted project before switching projects or hosts."
+            }
+            Self::MustLock => "Lock the encrypted project before switching projects or hosts.",
+        }
+    }
+}
 impl Drop for Work {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
@@ -39,6 +75,82 @@ pub(super) struct State {
     pub message: String,
 }
 impl State {
+    pub(super) fn quit_policy(&self) -> QuitPolicy {
+        if self.active.is_some() && self.lost && self.released {
+            QuitPolicy::ClearLostProject
+        } else if self.active.is_some() {
+            QuitPolicy::Lock
+        } else if self.pending.is_some() || self.staged.is_some() || self.cleanup_pending() {
+            QuitPolicy::RecoveryRequired
+        } else {
+            QuitPolicy::Close
+        }
+    }
+    pub(super) fn has_active(&self) -> bool {
+        self.active.is_some()
+    }
+    pub(super) fn recovery_required(&self) -> bool {
+        self.lost && self.active.is_some()
+    }
+    pub(super) fn retain_for_disconnect(&mut self) -> RetainedLease {
+        RetainedLease(self.active.take())
+    }
+    pub(super) fn disconnected(&mut self, retained: RetainedLease) {
+        if let Some(client) = retained.0 {
+            self.active = Some(client);
+            self.lost = true;
+        }
+    }
+    pub(super) fn can_restore_bindings(&self, root: &str, remote: &Remote) -> bool {
+        !self.lost
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|client| client.matches(root, Some(remote)))
+    }
+    pub(super) fn activate_project(&mut self, client: Option<Client>) {
+        self.active = client;
+        self.lost = false;
+        self.released = false;
+    }
+    pub(super) fn admission(&self, transition: Transition<'_>) -> Barrier {
+        if self.locking {
+            return Barrier::Locking;
+        }
+        if matches!(transition, Transition::RecoveryConnection) {
+            return if self.active.is_some() && !self.lost {
+                Barrier::MustLock
+            } else if self.pending.is_some() || self.staged.is_some() {
+                Barrier::Cleanup
+            } else {
+                Barrier::None
+            };
+        }
+        if matches!(transition, Transition::Stay) {
+            return Barrier::None;
+        }
+        if self.cleanup_pending() {
+            return Barrier::Cleanup;
+        }
+        let leaves = match transition {
+            Transition::Stay => false,
+            Transition::Connection => {
+                self.active.is_some() || self.pending.is_some() || self.staged.is_some()
+            }
+            Transition::RecoveryConnection => unreachable!("handled above"),
+            Transition::Project(path, remote) => {
+                self.active
+                    .as_ref()
+                    .is_some_and(|client| !client.matches(path, remote))
+                    && self.staged.is_none()
+            }
+        };
+        if leaves {
+            Barrier::MustLock
+        } else {
+            Barrier::None
+        }
+    }
     /// Retain decrypted-mount work ownership before spawning a background operation.
     pub(super) fn work(&self) -> Work {
         self.work.fetch_add(1, Ordering::AcqRel);
@@ -465,7 +577,7 @@ impl EditorApp {
             self.notify(self.vaults.message.clone(), true);
         }
         if !self.workspace.preparing()
-            && self.pending.is_none()
+            && self.pending.as_ref().is_none()
             && let Some(client) = self.vaults.staged.take()
         {
             self.vaults.release(client);
@@ -686,6 +798,63 @@ mod tests {
         }
     }
     #[test]
+    fn staged_lease_survives_nonmodal_input_wait_and_releases_after_cancellation() {
+        let project = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        app.documents[0].acknowledge_save("source.txt".into(), "".into(), "revision".into());
+        let input = |events| egui::RawInput {
+            events,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000., 700.),
+            )),
+            ..Default::default()
+        };
+        for _ in 0..2 {
+            let _ = ctx.run(input(vec![]), |ctx| {
+                app.route_input(ctx);
+                app.editor(ctx);
+            });
+        }
+        app.vaults.staged = Some(fixture_client(
+            "import sys\nfor line in sys.stdin: pass\n".into(),
+        ));
+        let mut request = Some(Action::Project {
+            path: project.path().to_string_lossy().into(),
+            remote: false,
+            options: Default::default(),
+        });
+        let _ = ctx.run(
+            input(vec![egui::Event::Text("pending edit".into())]),
+            |ctx| {
+                app.route_input(ctx);
+                if let Some(action) = request.take() {
+                    app.guarded(action, ctx);
+                    assert!(app.pending.as_ref().is_some());
+                    assert!(!app.pending.modal());
+                    app.poll_vaults(ctx);
+                    assert!(
+                        app.vaults.staged.is_some(),
+                        "Input admission still owns the staged lease"
+                    );
+                    assert!(app.vaults.closing.is_empty());
+                }
+                app.editor(ctx);
+                app.handle_close_request(ctx);
+            },
+        );
+        assert_eq!(app.documents[0].text, "pending edit");
+        assert!(app.pending.modal());
+        assert!(app.vaults.staged.is_some());
+        app.cancel_guarded_action();
+        app.poll_vaults(&ctx);
+        assert!(app.vaults.staged.is_none());
+        assert_eq!(app.vaults.closing.len(), 1);
+    }
+    #[test]
     fn failed_unlock_preserves_cleanup_refusal_and_keeps_exit_guarded() {
         for locked in [true, false] {
             let ctx = egui::Context::default();
@@ -807,9 +976,9 @@ mod tests {
         assert!(!app.exit.closing());
         assert!(app.vaults.released);
         app.guarded(Action::Quit, &ctx);
-        assert!(matches!(app.pending, Some(Action::Quit)));
-        app.pending = None; // Explicitly discard through the existing guard.
-        app.perform(Action::Quit, &ctx);
+        assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
+        app.cancel_guarded_action(); // Explicitly discard through the existing guard.
+        app.perform_fixture(Action::Quit, &ctx);
         assert!(app.exit.closing());
     }
     #[test]
@@ -843,7 +1012,7 @@ mod tests {
         app.poll_vaults(&ctx);
         assert_eq!(app.vaults.closing.len(), 1);
         assert!(!app.vaults.closing[0].1);
-        app.perform(Action::Quit, &ctx);
+        app.perform_fixture(Action::Quit, &ctx);
         assert!(!app.exit.closing());
         drop(work);
         let until = Instant::now() + Duration::from_secs(5);
@@ -852,7 +1021,7 @@ mod tests {
             app.poll_vaults(&ctx);
             std::thread::sleep(Duration::from_millis(5));
         }
-        app.perform(Action::Quit, &ctx);
+        app.perform_fixture(Action::Quit, &ctx);
         assert!(app.exit.closing());
     }
     #[test]
@@ -861,11 +1030,11 @@ mod tests {
         app.documents[0].text = "unsaved".into();
         app.documents[0].modified = true;
         app.guarded(Action::LockEncrypted, &ctx);
-        assert!(matches!(app.pending, Some(Action::LockEncrypted)));
+        assert!(matches!(app.pending.as_ref(), Some(Action::LockEncrypted)));
         assert!(!app.vaults.locking);
-        app.pending = None;
+        app.cancel_guarded_action();
         app.guarded(Action::Quit, &ctx);
-        assert!(matches!(app.pending, Some(Action::Quit)));
+        assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
         assert!(!app.exit.closing() && !app.vaults.locking);
     }
     #[test]

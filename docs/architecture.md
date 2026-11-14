@@ -41,11 +41,11 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | Source | Responsibility |
 | --- | --- |
 | `src/main.rs`, `src/lib.rs` | CLI/helper dispatch, native startup, library entry points |
-| `src/app.rs`, `src/app/lifecycle.rs` | Selected workspace, guarded actions and native window lifecycle |
+| `src/app.rs`, `src/app/lifecycle.rs` | Desktop composition, native frame order and acknowledged window exit |
 | `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
-| `src/app/workspace.rs`, `src/app/connections.rs` | Ordered project teardown, window-owned transport release and disconnect/reconnect recovery |
+| `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
-| `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers and change peeks; document/version admission prevents stale previews |
+| `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers, change peeks and editor-only hunk reverts; document/version/baseline admission rejects stale changes |
 | `src/app/diff_view.rs` | Shared bounded, selectable, read-only unified diff renderer for the Git panel and source change peeks |
 | `src/app/frame.rs` | Application menus, connection banners, activity controls and pane entry views; routes through the existing lifecycle guards |
 | `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
@@ -54,6 +54,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
 | `src/app/navigation/` | Pane focus, validated shortcut presets and native source-editing modes |
 | `src/app/input.rs`, `src/app/input/control.rs` | Input adapter and private source replay/keymap owner; frame contexts and ordered document handoffs |
+| `src/app/transitions.rs`, `src/app/transitions/control.rs` | Ownership-transition effects and private intent/confirmation controller; source, file, save, runtime and vault admission |
 | `src/app/saved_connections/` | Connection form intents, catalogue reloads, submitted-form identity and serialized profile writes independent of workspace lifetime |
 | `src/app/project_dialog.rs` | Owned selected-host project discovery state, path/selection, request tokens and candidate sandbox options; emits browse/open/cancel intents |
 | `src/app/explorer/` | Project-scoped directory cache, flattened rows, keyboard selection and acknowledged mutation effects |
@@ -308,8 +309,31 @@ the confirmation carries only its identity. Superseded replies and confirmations
 cannot consume, cancel or replace a newer candidate. The inbox still owns reply
 generations; cancellation alone does not admit a completion.
 
-`app/lifecycle.rs` owns window exit intent, independently of terminal discovery
-caches. Its private exit controller aggregates domain readiness snapshots; it
+`app/transitions/control.rs` owns deferred close, quit, lock, project, connection
+and reconnect intents. Adapters provide document changes and resource-readiness
+snapshots; the controller has no `EditorApp`, UI or I/O access. Input waits are nonmodal so the
+native editor can acknowledge its batch. File/save/runtime waits retain the intent
+with a cancellable progress dialog. Dirty-buffer confirmations carry an opaque
+decision identity and exact versions. Discard rechecks both versions and current
+resource barriers; callbacks from older dialogs cannot approve or cancel a newer
+intent. The effect executor is private to the transition adapter.
+Nonmodal input waits still retain staged encrypted leases until preparation takes
+ownership or the pending action is cancelled.
+Preparation completions retain the existing modal viewport instead of adopting
+the root viewport that polls worker replies. Runtime-view errors use the same
+failure admission for project/connection waits and exit cleanup.
+
+Prepared projects return through that same admission path, retaining the original
+approved document versions while waiting for later saves or lifetime operations.
+Quit/disconnect/lock and replacement connections supersede earlier preparation.
+A preparation reply cannot replace another active ownership decision. Admitted
+save, file-operation or lifetime failures cancel a waiting action; a missing or
+failed acknowledgement is never successful completion. Forced context teardown
+also cancels pending decisions before invalidating worker generations.
+
+`app/lifecycle.rs` handles native close and acknowledged exit cleanup, independently
+of terminal discovery caches. Native close submits the same transition intent as
+menu Quit. Its private exit controller aggregates domain readiness snapshots; it
 never takes ownership of processes, runtime shutdowns or encrypted leases. Cleanup
 errors cancel automatic exit. A forced workspace change also cancels a waiting
 quit because losing an acknowledgement is not proof of completed cleanup. The
@@ -319,8 +343,8 @@ unsaved edits during cleanup, exit returns to the shared guard; an unchanged
 discard decision is not prompted again. Documents publish a dirty-version/save
 snapshot; the exit controller returns explicit wait, close, recheck or cleanup-retry
 decisions. A ready snapshot cannot bypass another cleanup operation started by its owner.
-Native close is admitted after source rendering and retains its intent while input
-replay is pending. It opens the quit guard only once those edits have reached their
+Native close is admitted after source rendering; the transition owner retains its
+intent while input replay is pending. It opens a modal only once edits reach their
 destination, so a modal cannot block the edits it is meant to protect.
 An admitted text/binary save failure cancels a waiting exit even if the buffer
 was already clean; a failed Save As must remain visible for recovery.
@@ -347,6 +371,9 @@ native clipboard prefixes. Modal, document, style and focus changes invalidate
 replay. Explicit tab, new-file and clean-close shortcuts finish earlier edits on the old
 document, then admit following input only after the destination editor establishes its
 focus and cursor state. Unrelated context changes discard the old source batch.
+An explicit source Close shortcut supplies its opaque routing frame as proof that
+earlier edits were acknowledged, allowing following input to reach the next tab.
+Other menu/picker ownership actions must wait for the current native edit batch.
 Detached tools cannot acknowledge or drain the root source queue. Native
 TextEdit undo/IME handling and terminal/form input remain at their widget boundary.
 
@@ -358,6 +385,13 @@ closing, reordering and selection go through the collection. Closing an inactive
 tab preserves the selected ID, closing the selected tab chooses its neighbor,
 and clearing a workspace never resets the ID allocator. Canonical read replies
 select an existing bound buffer rather than replacing its unsaved edits.
+
+The document owner also unbinds host paths/revisions into recovery metadata and
+restores them only for a matching ready connection and verified encrypted lease.
+Explicit disconnect and reconnect wait for saves, including Save As; forced disconnect cancels
+the wait and invalidates late replies. Recovery paths authorize no file operation.
+Vault admission, quit disposition and disconnected lease retention stay with the
+vault owner rather than being reconstructed by the application coordinator.
 
 The untitled and loaded factories share cursor/save defaults. Loading and
 reloading use one view/source replacement path, with an explicit unchanged-

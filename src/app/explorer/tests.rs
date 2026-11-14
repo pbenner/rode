@@ -14,6 +14,45 @@ fn entry(path: &str, dir: bool) -> Entry {
 struct Policies(String);
 
 #[test]
+fn a_failed_file_operation_cancels_a_project_wait_without_discarding_buffers() {
+    let directory = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_file();
+    app.documents[0].text = "preserve this source".into();
+    app.explorer_state.busy = true;
+    app.guarded(
+        Action::Project {
+            path: directory.path().to_string_lossy().into(),
+            remote: false,
+            options: Default::default(),
+        },
+        &ctx,
+    );
+    assert!(app.pending.modal());
+    app.finish_explorer(
+        Change {
+            kind: Kind::Delete,
+            entry: entry(&directory.path().join("entry.txt").to_string_lossy(), false),
+        },
+        Err("file operation refused".into()),
+        &ctx,
+    );
+    app.advance_guarded_action(&ctx);
+    assert!(app.pending.is_none());
+    assert!(!app.workspace.preparing());
+    assert_eq!(app.documents[0].text, "preserve this source");
+    assert!(
+        app.notice
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("file operation refused")
+    );
+}
+
+#[test]
 fn folder_disclosure_uses_vector_icons_and_aligned_filename_labels() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -197,7 +236,7 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
                 },
             );
             assert!(
-                matches!(&app.pending, Some(Action::Project { path: selected, remote: selected_remote, options }) if selected == path && *selected_remote == remote && options == &chosen)
+                matches!(app.pending.as_ref(), Some(Action::Project { path: selected, remote: selected_remote, options }) if selected == path && *selected_remote == remote && options == &chosen)
             );
             assert_eq!(app.workspace.preparation_identity(), token);
             assert_eq!(app.workspace.as_ref().unwrap().root, "/project");
