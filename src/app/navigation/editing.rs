@@ -63,6 +63,7 @@ impl State {
         self.composing = false;
         self.cancel_sequence();
     }
+    /// Consume one keymap input-budget or rejected-edit notice for the application to display.
     pub(in crate::app) fn take_notice(&mut self) -> Option<String> {
         self.notice.take()
     }
@@ -73,6 +74,7 @@ impl State {
         self.g = false;
         self.command = None;
     }
+    /// Status label for the selected style and the current Vim mode/count prefix.
     pub fn label(&self, style: Style) -> String {
         if style != self.style {
             return style.name().into();
@@ -169,6 +171,8 @@ impl State {
         self.checkpoint_after = true;
         true
     }
+    /// Translate style-specific keys into native TextEdit events and pane actions for one source
+    /// scope. Cursor motions use character offsets; queued edits wait for widget acknowledgement.
     pub fn route(
         &mut self,
         ctx: &egui::Context,
@@ -526,6 +530,8 @@ impl State {
         }
         false
     }
+    /// Reconcile cursor normalization, selection and undo checkpoints after TextEdit applied the
+    /// translated input. Paint mode feedback without editing a different document.
     pub fn after_source(
         &mut self,
         ui: &mut egui::Ui,

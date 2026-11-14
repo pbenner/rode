@@ -51,6 +51,8 @@ impl Inbox {
         self.generation += 1;
     }
 
+    /// Capture the current workspace generation and UI wake handle before starting a project-bound
+    /// worker.
     pub(in crate::app) fn workspace(&self, ctx: &egui::Context) -> WorkspaceSender {
         WorkspaceSender {
             generation: self.generation,
@@ -59,6 +61,8 @@ impl Inbox {
         }
     }
 
+    /// Capture a window-lifetime reply endpoint for profile writes, independent of workspace
+    /// generations.
     pub(in crate::app) fn profiles(&self, ctx: &egui::Context) -> ProfileSender {
         ProfileSender {
             tx: self.tx.clone(),
@@ -81,11 +85,15 @@ impl Inbox {
         }
     }
 
+    /// Test-only destructive emptiness probe: a present message is consumed. Production polling
+    /// must use the admission methods instead.
     #[cfg(test)]
     pub(in crate::app) fn is_empty(&self) -> bool {
         self.rx.try_recv().is_err()
     }
 
+    /// Wait for one test reply and admit it against the generation current at receipt; propagate
+    /// channel timeout/disconnect errors.
     #[cfg(test)]
     pub(in crate::app) fn receive_timeout(
         &self,
@@ -112,6 +120,8 @@ impl Inbox {
     }
 }
 
+/// Cloneable workspace reply capability. Its private generation is fixed when captured and cannot
+/// be chosen by a domain producer.
 #[derive(Clone)]
 pub(in crate::app) struct WorkspaceSender {
     generation: u64,
@@ -133,6 +143,8 @@ impl WorkspaceSender {
     }
 }
 
+/// Cloneable profile reply capability whose results survive project changes. The receiving profile
+/// controller serializes writes and checks the submitted form identity before updating its baseline.
 #[derive(Clone)]
 pub(in crate::app) struct ProfileSender {
     tx: mpsc::Sender<Envelope>,

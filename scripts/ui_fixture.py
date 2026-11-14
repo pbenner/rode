@@ -25,6 +25,11 @@ from ui_harness import (
 
 
 def project_args(project, *, remote=False, sandbox=False):
+    """Build a local or fixture-SSH launch command with explicit theme and sandbox choice.
+
+    Remote launches require RODE_TEST_SSH_CONFIG and its rode-test alias;
+    the project path is interpreted on the selected host.
+    """
     args = [str(BINARY), "--theme", "carbon"]
     if remote:
         args += [

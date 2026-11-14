@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 pub(super) const MAX_PROJECTS: usize = 128;
 const MAX_BYTES: usize = 192 * 1024;
 
+/// Saved project location and requested policy, independent of live connection/session ownership.
+/// SSH entries retain profile metadata rather than credentials or sockets.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Project {
@@ -20,6 +22,8 @@ pub(super) enum Project {
     },
 }
 
+/// Display name plus a bounded, validated project location. The map key is derived from location
+/// identity, not this label.
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Bookmark {
     pub name: String,
@@ -44,12 +48,14 @@ fn connection(profile: &Profile) -> serde_json::Value {
 }
 
 impl Project {
+    /// Project path on its selected host; remote paths are not desktop filesystem paths.
     pub fn root(&self) -> &str {
         match self {
             Self::Local { root, .. } => root,
             Self::Ssh { profile } => &profile.root,
         }
     }
+    /// Human-readable local/SSH host label without opening a connection.
     pub fn host(&self) -> String {
         match self {
             Self::Local { .. } => "Local".into(),
@@ -64,6 +70,8 @@ impl Project {
         };
         format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
     }
+    /// Compare the authentication/transport identity relevant to reopening a saved host,
+    /// independent of label, root and sandbox draft.
     pub fn same_connection(a: &Profile, b: &Profile) -> bool {
         connection(a) == connection(b)
     }
@@ -89,6 +97,7 @@ impl Project {
     }
 }
 
+/// Validate a nonblank bookmark label bounded to 120 UTF-8 bytes without control characters.
 pub(super) fn validate_name(name: &str) -> Result<()> {
     ensure!(
         !name.trim().is_empty() && name.len() <= 120 && !name.chars().any(char::is_control),
@@ -97,6 +106,8 @@ pub(super) fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Decode bounded saved locations and validate every label, project policy and derived map key.
+/// Missing settings produce an empty catalogue; malformed data returns an error.
 pub(super) fn decode(raw: Option<&serde_json::Value>) -> Result<BTreeMap<String, Bookmark>> {
     let Some(raw) = raw else {
         return Ok(BTreeMap::new());
@@ -122,6 +133,8 @@ pub(super) fn decode(raw: Option<&serde_json::Value>) -> Result<BTreeMap<String,
     Ok(projects)
 }
 
+/// Window-owned decoded bookmark cache and rename draft. It tracks stored raw data so unchanged
+/// frames perform no repeated parsing or connection work.
 #[derive(Default)]
 pub(in crate::app) struct State {
     loaded: bool,
@@ -132,6 +145,8 @@ pub(in crate::app) struct State {
     pub(super) rename_focus: bool,
 }
 impl State {
+    /// Reload only changed raw settings, clearing invalid catalogue data and obsolete rename drafts
+    /// while retaining a visible decoding error.
     pub(super) fn sync(&mut self, raw: Option<&serde_json::Value>) {
         if self.loaded && self.raw.as_ref() == raw {
             return;

@@ -2,42 +2,67 @@
 //!
 //! Views retain their widget/replay state. This coordinator owns operations that
 //! change a document's presentation or native host; workers never borrow a view.
+//! Collection starts before root polling and ends after all native callbacks.
+//! Queued operations commit only after ordered source input has been acknowledged.
+//! Native source shortcut handoffs keep their own widget acknowledgement boundary.
 use super::*;
 use std::collections::VecDeque;
 
 const MAX_PENDING: usize = 512;
 
+/// A source location captured by an asynchronous navigation request. Rows and character columns are
+/// one-based; the version must still match when selection is applied.
 pub(super) struct Position {
+    /// One-based logical source row, independent of visual wrapping.
     pub row: usize,
+    /// One-based Unicode character column, not a UTF-8 byte or display-cell offset.
     pub column: usize,
+    /// Source version that must still match when navigation is applied.
     pub version: u64,
 }
 
+/// Initial document content selected at admission time. Notebook and presentation factories create
+/// buffers without starting a kernel or renderer.
 pub(super) enum Template {
+    /// An empty source buffer.
     Source,
+    /// A notebook buffer without a running kernel.
     Notebook,
+    /// The bundled presentation template without a running renderer.
     Presentation,
 }
 
+/// An editor mutation applied at the shared frame boundary. Document IDs retain buffer identity;
+/// viewport IDs name presentation owners rather than separate applications.
 pub(super) enum Operation {
+    /// Reveal an existing document; a position additionally requires its captured version.
     Select {
+        /// Stable buffer identity, independent of tab order or owner viewport.
         document: u64,
         position: Option<Position>,
     },
+    /// Install an admitted read reply after earlier native edits have completed.
     Opened {
+        /// Submitted read key used to release or redirect its pending-open marker.
         path: String,
+        /// Original destination, used only if no redirected pending-open owner remains.
         viewport: egui::ViewportId,
         response: Box<Response>,
     },
+    /// Transfer the existing buffer to another tab group without copying its state.
     Move {
         document: u64,
+        /// Existing editor host, or `None` to allocate a new native editor window.
         destination: Option<egui::ViewportId>,
     },
+    /// Allocate an empty editor window without creating project services.
     NewWindow,
+    /// Create a buffer in the requested editor, falling back to the root if it has closed.
     Create {
         viewport: egui::ViewportId,
         template: Template,
     },
+    /// Return a closing child window's tabs and pending reads to the root editor.
     Return(egui::ViewportId),
 }
 
@@ -47,12 +72,18 @@ impl Operation {
     }
 }
 
+/// UI-thread owner of the bounded FIFO and input-collection barrier. Entries capture the workspace
+/// generation; creating or returning a window remains valid across project replacement.
 #[derive(Default)]
 pub(super) struct Coordinator {
+    /// True until every native viewport has published its frame input.
     collecting: bool,
+    /// At most 512 generation/operation pairs; repeated returns for one viewport coalesce.
     pending: VecDeque<(u64, Operation)>,
 }
 impl Coordinator {
+    /// Whether native callbacks are still publishing this frame’s input. Ownership transitions must
+    /// wait until collection ends.
     pub(super) fn collecting(&self) -> bool {
         self.collecting
     }
@@ -84,6 +115,8 @@ impl EditorApp {
         }
     }
 
+    /// Enter the collection phase before polling workers or rendering any native viewport. Pair
+    /// with `finish_editor_frame` after every viewport has published input.
     pub(super) fn begin_editor_frame(&mut self) {
         self.editor_operations.collecting = true;
     }
@@ -95,6 +128,9 @@ impl EditorApp {
         self.advance_guarded_action(ctx);
     }
 
+    /// Queue while native input is being collected or replayed; otherwise execute immediately.
+    /// Saturation reports an error and clears the pending-read marker for a rejected open
+    /// completion.
     pub(super) fn submit_editor_operation(&mut self, operation: Operation, ctx: &egui::Context) {
         if self.editor_operations.collecting() || self.editor_input_pending(ctx) {
             if let Err(operation) = self
@@ -115,6 +151,8 @@ impl EditorApp {
         }
     }
 
+    /// Drain admitted operations only after every editor input queue is empty. Discard
+    /// project-bound entries from older generations before advancing guarded transitions.
     pub(super) fn apply_editor_operations(&mut self, ctx: &egui::Context) {
         if self.editor_operations.collecting() {
             return;

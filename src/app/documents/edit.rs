@@ -11,6 +11,8 @@ pub(in crate::app) struct Edit<'a> {
     changed: bool,
 }
 impl<'a> Edit<'a> {
+    /// Begin a scoped source edit; Drop publishes metadata if any operation mutated the text.
+    /// A mutation followed by its inverse still advances the source version once.
     pub(super) fn new(document: &'a mut Document) -> Self {
         Self {
             document,
@@ -75,9 +77,12 @@ pub(super) struct BinaryEdit<'a> {
     revision: u64,
 }
 impl<'a> BinaryEdit<'a> {
+    /// Capture the binary view’s current edit revision so Drop can publish real byte changes once.
     pub(super) fn new(document: &'a mut Document, revision: u64) -> Self {
         Self { document, revision }
     }
+    /// Borrow the captured binary view only inside this closure. The view must still exist; its
+    /// final revision determines whether document metadata advances.
     pub(super) fn apply<R>(
         &mut self,
         edit: impl FnOnce(&mut super::binary_view::HexView) -> R,

@@ -3,6 +3,7 @@
 //! execution mode applies to repository and global writes alike.
 use super::*;
 
+/// Select repository-local or user-global Git identity configuration explicitly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::app) enum Scope {
     #[default]
@@ -24,6 +25,7 @@ impl Scope {
     }
 }
 
+/// Describe the identity read or write being acknowledged, including any chained email update.
 #[derive(Clone, Debug)]
 pub(in crate::app) enum Job {
     Load,

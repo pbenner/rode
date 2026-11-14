@@ -257,9 +257,13 @@ impl Drop for Entry {
 #[derive(Default)]
 pub(crate) struct Store(Mutex<BTreeMap<String, Entry>>);
 impl Store {
+    /// Whether retained tunnel workers keep the service alive, including workers reconnecting or
+    /// requiring user attention.
     pub fn live(&self) -> bool {
         !self.0.lock().unwrap().is_empty()
     }
+    /// Snapshot retained tunnel status while keeping worker and cancellation ownership inside the
+    /// store.
     pub fn list(&self) -> Vec<Info> {
         self.0
             .lock()
@@ -268,9 +272,13 @@ impl Store {
             .map(|e| e.info.lock().unwrap().clone())
             .collect()
     }
+    /// Remove and cancel only the named tunnel; dropping its entry joins its worker before
+    /// returning.
     pub fn stop(&self, id: &str) {
         self.0.lock().unwrap().remove(id);
     }
+    /// Validate and start/replace a bounded tunnel worker. Reuse an identical live specification,
+    /// and reject conflicting listeners or exhausted capacity before replacement.
     pub fn start(&self, id: String, spec: Spec) -> Result<Info> {
         ensure!(crate::valid_id(&id), "Invalid tunnel identity");
         spec.validate()?;

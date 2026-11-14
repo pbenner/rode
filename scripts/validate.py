@@ -23,10 +23,16 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def publish_tests(logfile):
+    """Publish Cargo's reported test executables into the repository CI runner directory."""
     ci.publish_tests(logfile, ROOT / "target/ci/tests")
 
 
 def environment():
+    """Capture explicit tool overrides and defaults for the validation run.
+
+    Remove inherited enforcement requirements: each strict suite declares its
+    own required capabilities without changing unrelated suites' coverage.
+    """
     env = dict(os.environ)
     for key in (
         "RODE_TEST_REQUIRE_SANDBOX",
@@ -50,6 +56,11 @@ def publish_helper():
 
 
 def main(arguments=None):
+    """Run selected validation phases and retain failures plus source/toolchain identities.
+
+    Preflight reports capabilities without building or testing. Normal runs
+    attempt each selected suite and keep earlier failures across repetitions.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", action="append", choices=ci.FAST + ci.EXTENDED + ["reliability"])
     parser.add_argument(

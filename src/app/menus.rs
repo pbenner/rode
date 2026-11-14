@@ -47,6 +47,7 @@ fn top(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) -> egui:
     response
 }
 
+/// Render a themed bounded submenu using the shared native menu style and scroll behavior.
 pub(super) fn submenu(ui: &mut egui::Ui, icon: Icon, label: &str, add: impl FnOnce(&mut egui::Ui)) {
     icons::submenu(ui, icon, label, |ui| contents(ui, 260., add));
 }
@@ -86,6 +87,8 @@ fn check(ui: &mut egui::Ui, label: &str, shortcut: &str, selected: bool) -> bool
 }
 
 impl EditorApp {
+    /// Render the common File/View/Code/Debug menus and register menu focus without duplicating
+    /// command behavior.
     pub(super) fn menus(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let file = top(ui, "File", |ui| self.file_menu(ui, ctx));
         self.navigation_menu(&file);

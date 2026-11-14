@@ -259,6 +259,9 @@ fn endpoint(value: &str) -> Result<(Option<String>, String, Option<u16>)> {
 }
 
 impl Config {
+    /// Resolve one target or jump endpoint using the supported SSH configuration subset and
+    /// explicit profile overrides. Validate effective connection values before connecting;
+    /// target-only forwarding overrides do not leak into jumps.
     pub fn resolve(
         profile: &super::super::Profile,
         destination: &str,
@@ -453,6 +456,8 @@ impl Config {
                 .min(86400),
         })
     }
+    /// Known-hosts lookup token, honoring HostKeyAlias and bracketed nondefault ports. This
+    /// identifies trust records rather than a project or transport lease.
     pub fn host_token(&self) -> String {
         let host = if self.host_key_alias.is_empty() {
             &self.host

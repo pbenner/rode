@@ -28,6 +28,8 @@ enum Artwork {
 }
 
 impl MessageLayout {
+    /// Whether this rendered message includes table geometry requiring the selectable table-aware
+    /// layout path.
     pub fn has_tables(&self) -> bool {
         !self.tables.is_empty()
     }

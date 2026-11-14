@@ -23,6 +23,9 @@ fn unhex(value: &str) -> Result<[u8; 16]> {
     Ok(bytes)
 }
 impl X11 {
+    /// Prepare desktop X11 authorization and a per-connection substituted cookie. Missing or empty
+    /// DISPLAY quietly disables forwarding; authorization failures emit a diagnostic and leave SSH
+    /// usable.
     pub fn prepare(config: &config::Config) -> Result<Option<Self>> {
         let Ok(display) = std::env::var("DISPLAY") else {
             return Ok(None);
@@ -107,9 +110,13 @@ impl X11 {
             }
         }
     }
+    /// Hexadecimal fake cookie sent in the forwarding request; the desktop’s real cookie never
+    /// enters that request.
     pub fn fake_hex(&self) -> String {
         self.fake.iter().map(|b| format!("{b:02x}")).collect()
     }
+    /// Authenticate an incoming X11 handshake against the fake cookie and expiry, substitute local
+    /// authorization, then relay it to the desktop display. Invalid/expired handshakes fail closed.
     pub async fn forward<S: AsyncRead + AsyncWrite + Unpin>(&self, mut remote: S) -> Result<()> {
         ensure!(
             self.expires

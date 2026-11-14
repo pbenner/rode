@@ -2,6 +2,10 @@
 use super::*;
 
 impl EditorApp {
+    /// Apply an admitted file-job reply using its operation identity and captured document
+    /// versions.
+    /// The inbox has already checked workspace generation; opening a buffer is deferred to the
+    /// editor coordinator.
     pub(super) fn file_completed(
         &mut self,
         job: Job,

@@ -72,6 +72,7 @@ impl History {
         }
     }
 
+    /// Borrow retained prompt text in chronological order for the controller's history projection.
     pub fn texts(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|entry| entry.text.as_str())
     }

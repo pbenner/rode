@@ -70,6 +70,7 @@ impl EditorApp {
             .on_hover_text(format!("Manage SSH tunnels on {host}.\n{details}"))
     }
 
+    /// Render tunnel configuration and route user actions to the existing tunnel manager.
     pub(in crate::app) fn tunnels_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let top = ui.cursor().top();

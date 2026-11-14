@@ -45,6 +45,7 @@ impl ToolTab {
         }
     }
 
+    /// Map a tool tab to the pane that owns its keyboard focus.
     pub(in crate::app) fn pane(self) -> navigation::Pane {
         match self {
             Self::Terminal => navigation::Pane::Terminal,
@@ -74,6 +75,7 @@ impl EditorApp {
         egui::ViewportId::from_hash_of("rode-project-tools")
     }
 
+    /// Report whether this tab has its own presentation viewport.
     pub(in crate::app) fn tab_detached(&self, tab: ToolTab) -> bool {
         self.workbench.floating_tabs.contains(&tab)
     }
@@ -89,6 +91,7 @@ impl EditorApp {
         }
     }
 
+    /// Resolve a detached tab by its stable viewport identity, independent of dock selection.
     pub(in crate::app) fn floating_tab(&self, viewport: egui::ViewportId) -> Option<ToolTab> {
         self.workbench
             .floating_tabs
@@ -111,6 +114,7 @@ impl EditorApp {
             || (self.tools_visible() && self.workbench.panel == Some(panel))
     }
 
+    /// Report terminal visibility across the docked, combined and individual tool hosts.
     pub(in crate::app) fn terminal_any_visible(&self) -> bool {
         self.tab_detached(ToolTab::Terminal) || self.terminal_visible()
     }
@@ -195,6 +199,9 @@ impl EditorApp {
         self.editor_intent_in(self.documents.viewport());
     }
 
+    /// Record editor focus intent for a particular viewport and reveal its source surface.
+    /// Child editor windows retain their own zoom; root tool state is changed only for the root
+    /// host.
     pub(in crate::app) fn editor_intent_in(&mut self, viewport: egui::ViewportId) {
         if viewport == egui::ViewportId::ROOT && !self.workbench.detached {
             self.remember_tool_tab();
@@ -303,6 +310,8 @@ impl EditorApp {
             && (self.workbench.detached || self.navigation.visible(navigation::Pane::Terminal))
     }
 
+    /// Report whether a shared tools or terminal surface is visible, rather than whether work is
+    /// alive.
     pub(in crate::app) fn tool_surface(&self) -> bool {
         self.tools_visible() || self.terminal_visible()
     }

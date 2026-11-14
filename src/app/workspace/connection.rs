@@ -2,6 +2,8 @@
 use crate::ssh::Profile;
 use std::sync::Arc;
 
+/// Comparable host/project configuration captured for disconnect recovery matching.
+/// This is metadata, not proof of authentication or a grant of file-I/O authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::app) struct ConnectionId(Arc<str>);
 impl ConnectionId {

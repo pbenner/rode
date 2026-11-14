@@ -38,6 +38,16 @@ Open `target/doc/rode/index.html` for desktop/editor services, `target/doc/rode_
 
 The architecture guide's [operation reference](architecture.md#following-an-operation-through-the-code) traces the UI, worker and host-controller entry points for common changes. Internal Rust contracts appear in the private-item API build; the remaining interpreter/Jupyter adapter docstrings cover their protocol callbacks, byte limits and EOF/cleanup ownership. The [units and identity reference](architecture.md#units-identities-and-absence) explains coordinate conversions, version checks and the difference between queued work and acknowledged completion. Build/CI/publication helpers also document their command entry points; test functions describe behavior through their names and adjacent assertions.
 
+Document contracts at the module that owns them, including internal interfaces
+between desktop domains. State which host or viewport a request targets, which
+identity and version admit its reply, and whether a method queues work, polls it
+or waits for acknowledged cleanup. For positions and ranges, name the units,
+index origin and end-bound convention. Distinguish display/recovery paths from
+paths bound to an authenticated, prepared host. Record rejection, cancellation,
+capacity and stale-result behavior where callers must handle it. Keep the
+architecture guide aligned when ownership or operation ordering changes; explain
+the invariant in code instead of repeating each implementation step in comments.
+
 Large desktop regression suites are adjacent to their implementations: `src/app/tests.rs`, `src/app/agents/tests.rs`, `src/app/workbench/tests.rs`, `src/app/sessions/tests.rs`, and `src/app/notebook_view/tests.rs`. Moving tests into these files preserves their module paths, so existing `cargo test` filters continue to work. Add behavior regressions to the owning domain instead of growing the application coordinator.
 
 Collection invariants live in `src/app/documents/tests.rs`; bounded polling and

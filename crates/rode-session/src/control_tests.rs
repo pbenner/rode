@@ -1,3 +1,5 @@
+//! Control-socket regressions for private-directory ownership, authentication and replacement.
+
 use super::*;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::PermissionsExt;

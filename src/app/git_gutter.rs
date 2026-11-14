@@ -42,6 +42,8 @@ pub(super) struct State {
     peek: Option<usize>,
 }
 
+/// One diff worker’s captured request token, source version, baseline and paired marker/hunk
+/// result.
 pub(super) struct Completed {
     token: u64,
     version: u64,
@@ -50,6 +52,8 @@ pub(super) struct Completed {
     changes: Changes,
 }
 
+/// Intent returned from the change peek; navigation and editor-only reversion are applied by their
+/// owners after rendering.
 pub(super) enum PeekAction {
     Navigate(usize),
     Revert(revert::Request),
@@ -71,6 +75,8 @@ impl Drop for State {
 }
 
 impl State {
+    /// Cancel and invalidate cached work without releasing the worker concurrency slot before the
+    /// worker exits.
     pub(super) fn reset(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.cancel = Arc::new(AtomicBool::new(false));
@@ -115,6 +121,9 @@ impl State {
         (refresh || self.rendered.as_ref().is_none_or(|(v, _)| *v != version)).then_some(refresh)
     }
 
+    /// Admit only the currently pending token and retain its source version for paint-time
+    /// validation. Changed results close obsolete peeks rather than moving old markers onto new
+    /// text.
     pub(super) fn complete(&mut self, result: Completed) {
         if self.pending != Some(result.token) {
             return;

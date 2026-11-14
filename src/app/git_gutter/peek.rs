@@ -32,6 +32,8 @@ impl State {
         (available * 0.45).min(260.).min((available - 80.).max(0.))
     }
 
+    /// Render the selected current hunk and return navigation/revert/close intent. Missing or
+    /// obsolete source/baseline state makes the peek disappear.
     pub(in crate::app) fn peek_ui(
         &mut self,
         ui: &mut egui::Ui,

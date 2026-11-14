@@ -76,6 +76,8 @@ impl Drop for View {
 }
 
 impl EditorApp {
+    /// Test setup adapter creating a presentation immediately in the current view. Production
+    /// creation goes through the shared frame coordinator.
     #[cfg(test)]
     pub(super) fn new_marp(&mut self) {
         if self.new_marp_in(self.documents.viewport()).is_some() {

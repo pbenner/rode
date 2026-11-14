@@ -2,6 +2,8 @@
 use super::*;
 use std::{fmt::Write as _, ops::Range};
 
+/// Semantic line decoration relative to the captured Git baseline, including deletion boundaries
+/// between current lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
     Added,
@@ -9,10 +11,14 @@ pub(super) enum Kind {
     Deleted,
 }
 
+/// Zero-based source-line span to decorate; deletion markers address a boundary before `line`
+/// rather than an existing removed row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Marker {
     /// Zero-based line; deletions sit at the boundary before this line.
     pub line: usize,
+    /// Current lines for additions/modifications, or removed baseline lines for a deletion.
+    /// Deleted lines are summarized at one boundary, not painted over this many current rows.
     pub count: usize,
     pub kind: Kind,
 }
@@ -21,9 +27,13 @@ pub(super) struct Marker {
 /// Split replacement markers share this same preview, including final-newline state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Hunk {
+    /// Half-open index range into the paired `Changes::markers` vector.
     pub markers: Range<usize>,
+    /// Zero-based, half-open line range in the normalized HEAD snapshot.
     pub old: Range<usize>,
+    /// Zero-based, half-open line range in the normalized current source snapshot.
     pub new: Range<usize>,
+    /// Unified patch for this operation, retaining missing-final-newline information.
     pub patch: String,
 }
 
@@ -133,6 +143,8 @@ pub(super) fn compare(old: &str, new: &str) -> Option<Changes> {
     Some(changes)
 }
 
+/// Paint clipped markers using actual placed source rows and return the clicked marker index.
+/// Logical line numbers are zero-based and never inferred from font height.
 pub(super) fn paint(
     ui: &mut egui::Ui,
     markers: &[Marker],

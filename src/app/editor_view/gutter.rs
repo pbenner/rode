@@ -6,6 +6,8 @@
 //! share these actual positions, including after scrolling or changing DPI.
 use super::*;
 
+/// Placed unwrapped source rows in logical-point coordinates, shared by line numbers, breakpoints
+/// and Git decorations.
 #[derive(Clone, Copy)]
 pub(in crate::app) struct Rows<'a> {
     galley: &'a egui::Galley,
@@ -13,14 +15,18 @@ pub(in crate::app) struct Rows<'a> {
 }
 
 impl<'a> Rows<'a> {
+    /// Pair a galley with its actual editor placement origin; font-size estimates must not
+    /// substitute for these row positions.
     pub(in crate::app) fn new(galley: &'a egui::Galley, origin: egui::Pos2) -> Self {
         Self { galley, origin }
     }
 
+    /// Full placed text bounds in the same logical-point coordinate system as the gutter clip.
     pub(in crate::app) fn bounds(self) -> egui::Rect {
         self.galley.rect.translate(self.origin.to_vec2())
     }
 
+    /// Placed bounds of a zero-based source line, or `None` beyond the rendered source rows.
     pub(in crate::app) fn line(self, line: usize) -> Option<egui::Rect> {
         self.galley
             .rows
@@ -41,6 +47,8 @@ impl<'a> Rows<'a> {
         first..last
     }
 
+    /// Bounds spanning a starting zero-based line and a row count, clamped at EOF. The start must
+    /// name an existing row.
     pub(in crate::app) fn span(self, line: usize, count: usize) -> Option<egui::Rect> {
         let first = self.line(line)?;
         let last = self.line(

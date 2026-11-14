@@ -1,6 +1,8 @@
 //! Bounded, selectable, read-only unified diffs shared by Git views and editor peeks.
 use super::*;
 
+/// Render a bounded, selectable read-only unified diff with themed additions/deletions and
+/// independent scrolling; the source/index is never mutated here.
 pub(super) fn show(
     ui: &mut egui::Ui,
     text: &str,

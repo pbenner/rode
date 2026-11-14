@@ -211,6 +211,8 @@ impl PdfView {
         }
         (response.reload, page.map(|page| (page, entry)))
     }
+    /// Reserve a page raster request and return its immutable PDF source, cancellation flag and
+    /// admission token. An already-current or loading page starts no second worker.
     pub fn begin_page(
         &mut self,
         page: usize,
@@ -226,6 +228,9 @@ impl PdfView {
         self.entry = entry;
         Some((self.source.clone(), self.cancel.clone(), self.token))
     }
+    /// Apply only the current page request token, replacing pixels and restoring requested scroll
+    /// placement on success. A matching failure restores the prior page choice and returns its
+    /// diagnostic.
     pub fn complete_page(
         &mut self,
         token: u64,

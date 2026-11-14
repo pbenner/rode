@@ -285,6 +285,8 @@ impl EditorApp {
             self.focus_editor(ctx);
         }
     }
+    /// Whether the current native host accepts source-style editing at all: it must own focus and
+    /// have no dialog, guarded modal, workbench modal, vault lock or popup barrier.
     pub(in crate::app) fn editing_allowed(&self, ctx: &egui::Context) -> bool {
         ctx.input(|i| i.focused)
             && self.dialog == Dialog::None

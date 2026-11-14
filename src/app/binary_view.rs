@@ -68,6 +68,8 @@ pub(super) struct SaveContents {
     pub lease: Arc<crate::images::Lease>,
 }
 impl HexView {
+    /// Retain immutable bytes and their memory-accounting lease for an asynchronous save, so view
+    /// replacement cannot release the submitted snapshot early.
     pub(super) fn save_snapshot(&self) -> SaveContents {
         SaveContents {
             bytes: self.buffer.bytes().clone(),

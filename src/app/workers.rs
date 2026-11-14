@@ -384,6 +384,10 @@ impl EditorApp {
         self.open_file_in(path, self.command_editor(ctx), ctx);
     }
 
+    /// Focus an already-open document in its owner, or dispatch one read for the requested
+    /// viewport.
+    /// The completion enters the editor coordinator after native input; it never clones a live
+    /// buffer.
     pub(super) fn open_file_in(
         &mut self,
         path: String,

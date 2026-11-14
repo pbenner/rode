@@ -31,6 +31,8 @@ impl TerminalMode {
         );
         Ok(Self(Some(original)))
     }
+    /// Enter raw stdin terminal mode for the interactive SSH owner and restore the previous mode
+    /// when this guard drops. Non-TTY input needs no terminal mutation.
     pub fn raw() -> Result<Self> {
         Self::change(true, false)
     }

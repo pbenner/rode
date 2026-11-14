@@ -2,6 +2,8 @@
 //! Dispatch uses the existing guarded app/domain operations; input guards stay with callers.
 use super::super::*;
 
+/// Typed application action shared by menus, keyboard shortcuts and the palette. Labels select
+/// presentation, while this enum selects behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) enum Command {
     New,
@@ -68,6 +70,8 @@ pub(in crate::app) enum Command {
     DebugOut,
 }
 
+/// Presentation metadata for one action: shared icon, menu label and optional distinct palette
+/// label.
 pub(in crate::app) struct Definition {
     pub label: &'static str,
     pub palette_label: &'static str,
@@ -167,6 +171,7 @@ impl Command {
         Self::Panel(Panel::Agent),
         Self::Panel(Panel::Debug),
     ];
+    /// Return shared command presentation metadata without executing or enabling the action.
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
             Self::NewEditorWindow => Definition::new("New editor window", Icon::Files),
@@ -309,6 +314,8 @@ impl Command {
         }
     }
 
+    /// Default application shortcut, when one exists. Editor-style translation and modal admission
+    /// still belong to input routing.
     pub(in crate::app) fn shortcut(self) -> Option<egui::KeyboardShortcut> {
         let (modifiers, key) = match self {
             Self::New => (egui::Modifiers::COMMAND, Key::N),
@@ -344,6 +351,8 @@ impl Command {
         Some(egui::KeyboardShortcut::new(modifiers, key))
     }
 
+    /// Consume this command’s shortcut from the current native input, including the special
+    /// extension-shortcut compatibility path.
     pub(in crate::app) fn consume(self, ctx: &egui::Context) -> bool {
         if self == Self::Extensions {
             return consume_extensions_shortcut(ctx);
@@ -354,6 +363,7 @@ impl Command {
 }
 
 impl EditorApp {
+    /// Human-readable shortcut after applying the active editor style’s hint conventions.
     pub(in crate::app) fn command_hint(&self, command: Command) -> String {
         let hint = command
             .shortcut()
@@ -362,6 +372,8 @@ impl EditorApp {
         self.editing_hint(&hint).to_owned()
     }
 
+    /// Effective selected state for an action in the calling viewport; Explorer visibility/zoom is
+    /// local to that editor host.
     pub(in crate::app) fn command_selected(&self, command: Command, ctx: &egui::Context) -> bool {
         match command {
             Command::Panel(panel) => self.panel_visible(panel),
@@ -376,6 +388,8 @@ impl EditorApp {
         }
     }
 
+    /// Consume and dispatch one command only when its shortcut is present. Callers retain
+    /// responsibility for input/modal admission.
     pub(in crate::app) fn consume_command(
         &mut self,
         command: Command,
@@ -389,6 +403,8 @@ impl EditorApp {
         }
     }
 
+    /// Dispatch a typed UI intent through its domain owner. Structural document creation and
+    /// window/tab mutations use the shared input-ordered coordinator.
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
             Command::New => self.submit_editor_operation(

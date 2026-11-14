@@ -18,6 +18,8 @@ pub(super) enum Transition<'a> {
     Connection,
     RecoveryConnection,
 }
+/// Lease-owner admission result for a proposed project/host transition. A nonempty barrier prevents
+/// the adapter from changing file-I/O authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Barrier {
     None,
@@ -37,6 +39,8 @@ pub(super) enum QuitPolicy {
 #[must_use = "Return retained encrypted leases to the vault owner after teardown"]
 pub(super) struct RetainedLease(Option<Client>);
 impl Barrier {
+    /// User-facing explanation of a denied or delayed transition; an absent barrier has an empty
+    /// message.
     pub fn message(self) -> &'static str {
         match self {
             Self::None => "",
@@ -91,17 +95,23 @@ impl State {
             self.release(client);
         }
     }
+    /// Present reconnect recovery guidance without rebinding files or assuming that the encrypted
+    /// mount has been recovered.
     pub(super) fn reconnected(&mut self) {
         self.message = "SSH reconnected. Unlock the encrypted project to restore file access; unsaved buffers are preserved.".into();
     }
+    /// Set synthetic pending-cleanup state for lifecycle admission tests.
     #[cfg(test)]
     pub(super) fn set_cleanup_required_fixture(&mut self, required: bool) {
         self.needs_lock = required;
     }
+    /// Set synthetic locking state for lifecycle admission tests.
     #[cfg(test)]
     pub(super) fn set_locking_fixture(&mut self, locking: bool) {
         self.locking = locking;
     }
+    /// Project the next quit action from active, lost and cleanup lease state. Unacknowledged
+    /// cleanup cannot be reported as a closed mount.
     pub(super) fn quit_policy(&self) -> QuitPolicy {
         if self.active.is_some() && self.lost && self.released {
             QuitPolicy::ClearLostProject
@@ -113,21 +123,29 @@ impl State {
             QuitPolicy::Close
         }
     }
+    /// Whether an active encrypted lease is retained, including a disconnected recovery lease.
     pub(super) fn has_active(&self) -> bool {
         self.active.is_some()
     }
+    /// Whether an active lease was lost with its connection and requires explicit unlock recovery.
     pub(super) fn recovery_required(&self) -> bool {
         self.lost && self.active.is_some()
     }
+    /// Move the active lease into an opaque handoff before project-view teardown. The caller must
+    /// return it to this owner afterward.
     pub(super) fn retain_for_disconnect(&mut self) -> RetainedLease {
         RetainedLease(self.active.take())
     }
+    /// Restore a retained lease as lost-connection recovery state without granting access through
+    /// its old binding.
     pub(super) fn disconnected(&mut self, retained: RetainedLease) {
         if let Some(client) = retained.0 {
             self.active = Some(client);
             self.lost = true;
         }
     }
+    /// Whether a verified, non-lost lease matches both the requested root and authenticated remote
+    /// context.
     pub(super) fn can_restore_bindings(&self, root: &str, remote: &Remote) -> bool {
         !self.lost
             && self
@@ -135,11 +153,15 @@ impl State {
                 .as_ref()
                 .is_some_and(|client| client.matches(root, Some(remote)))
     }
+    /// Adopt a verified staged lease as the active project authority and clear lost/released
+    /// recovery markers.
     pub(super) fn activate_project(&mut self, client: RetainedLease) {
         self.active = client.0;
         self.lost = false;
         self.released = false;
     }
+    /// Evaluate lease barriers without moving resources. Recovery reconnect may preserve lost
+    /// state, but project switches must honor lock and cleanup requirements.
     pub(super) fn admission(&self, transition: Transition<'_>) -> Barrier {
         if self.locking {
             return Barrier::Locking;

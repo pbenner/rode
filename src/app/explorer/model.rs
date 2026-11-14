@@ -34,6 +34,8 @@ impl Default for State {
     }
 }
 
+/// Acknowledged file-mutation effects for the application adapter: binding updates, refreshes,
+/// optional open and a lifecycle error.
 #[derive(Default)]
 pub(super) struct Effects {
     pub(super) rename: Option<(Entry, String)>,
@@ -79,6 +81,8 @@ pub(super) fn flatten_tree(
 }
 
 impl State {
+    /// Discard the project’s cached directories, expansion, selection and in-flight UI markers on
+    /// context replacement.
     pub(in crate::app) fn reset(&mut self) {
         *self = Self::default();
     }
@@ -88,12 +92,16 @@ impl State {
         (!self.busy && self.loading.insert(path.to_owned())).then_some(self.epoch)
     }
 
+    /// Cache an admitted listing under both requested and canonical paths and invalidate the
+    /// flattened row projection.
     pub(in crate::app) fn loaded(&mut self, path: String, response: Response) {
         self.directories.insert(path, response.entries.clone());
         self.directories.insert(response.path, response.entries);
         self.tree_dirty = true;
     }
 
+    /// Fence older directory replies with a new mutation epoch, clear loading markers and retain
+    /// busy state until the mutation is acknowledged.
     pub(super) fn begin_mutation(&mut self) {
         self.form = None;
         self.epoch = self.epoch.wrapping_add(1);
@@ -101,6 +109,8 @@ impl State {
         self.busy = true;
     }
 
+    /// Rebuild flattened visible rows only when dirty, using cached directories and the shared
+    /// expansion/hidden-file choices.
     pub(super) fn project(&mut self, root: &str, hidden: bool) {
         if self.tree_dirty {
             self.tree_rows.clear();
@@ -207,10 +217,13 @@ impl State {
     }
 }
 
+/// Whether a path is the entry itself or a component-boundary descendant of a directory entry.
 pub(super) fn within(path: &str, entry: &Entry) -> bool {
     path == entry.path || (entry.dir && std::path::Path::new(path).starts_with(&entry.path))
 }
 
+/// Rewrite an entry/descendant path after an acknowledged rename, preserving its relative suffix.
+/// Unrelated paths return `None`.
 pub(super) fn renamed(path: &str, entry: &Entry, destination: &str) -> Option<String> {
     if !within(path, entry) {
         return None;

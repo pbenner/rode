@@ -41,10 +41,13 @@ enum Intent {
 }
 
 impl State {
+    /// Invalidate pending discovery replies without replacing the visible form draft.
     pub(super) fn invalidate(&mut self) {
         self.token = self.token.wrapping_add(1);
     }
 
+    /// Clear host/path/listing state and advance its token, preserving the last sandbox draft for
+    /// related encrypted-project controls.
     pub(super) fn reset(&mut self) {
         let token = self.token.wrapping_add(1);
         // Encrypted-project controls inherit the last access draft. Invalidating
@@ -57,6 +60,8 @@ impl State {
         };
     }
 
+    /// Initialize a selected-host project form with its own path, policy identity and sandbox
+    /// draft, then request discovery.
     pub(super) fn open(
         &mut self,
         remote: bool,
@@ -72,6 +77,8 @@ impl State {
         self.needs_load = true;
     }
 
+    /// Begin one directory browse and capture its host, path, token and current sandbox options for
+    /// worker dispatch.
     pub(super) fn begin(&mut self, path: String) -> Browse {
         self.path = path.clone();
         self.token = self.token.wrapping_add(1);
@@ -85,10 +92,13 @@ impl State {
         }
     }
 
+    /// Whether a discovery reply still belongs to both the current request and visible path.
     pub(super) fn matches(&self, token: u64, path: &str) -> bool {
         self.token == token && self.path == path
     }
 
+    /// Install an admitted canonical directory listing. Restore saved sandbox options only while
+    /// the user has not changed the submitted draft.
     pub(super) fn loaded(
         &mut self,
         response: Response,

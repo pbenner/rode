@@ -28,6 +28,11 @@ def stop_group(process):
 
 
 def main(argv=None):
+    """Run a command on a private Xvfb display and propagate its exit status.
+
+    Ignore inherited desktop display credentials. Missing display tools fail
+    explicitly; signal handling and cleanup cover the owned process group.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--screen", default="1600x1100x24", help="Xvfb WIDTHxHEIGHTxDEPTH")
     parser.add_argument("command", nargs=argparse.REMAINDER)

@@ -73,6 +73,7 @@ impl Library {
     }
 }
 impl Tunnels {
+    /// Restore saved tunnel specifications from application storage, retaining load warnings.
     pub(in crate::app) fn load(
         storage: Option<&dyn eframe::Storage>,
         warnings: &mut Vec<String>,
@@ -83,6 +84,8 @@ impl Tunnels {
         }
     }
 
+    /// Write saved tunnel preferences to application storage; running tunnel state is not
+    /// persisted.
     pub(in crate::app) fn store(&mut self, storage: &mut dyn eframe::Storage) {
         if self.saved.pending {
             storage.set_string(

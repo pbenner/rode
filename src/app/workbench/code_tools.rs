@@ -110,6 +110,8 @@ impl EditorApp {
         self.send_terminal_command(command, self.session_plan(), ctx);
     }
 
+    /// Queue a command with its captured project execution plan and validated environment exports.
+    /// Reveal the existing terminal host; execution remains with the terminal session owner.
     pub(in crate::app) fn send_terminal_command(
         &mut self,
         command: String,

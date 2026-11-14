@@ -67,6 +67,8 @@ impl State {
     pub fn history_len(&self) -> usize {
         self.history.len()
     }
+    /// Borrow the contiguous retained prompt history in recall order without exposing mutable sent
+    /// prompts.
     pub fn history(&self) -> impl Iterator<Item = &String> {
         self.history.iter()
     }
@@ -74,9 +76,12 @@ impl State {
     pub fn take_older_request(&mut self) -> bool {
         std::mem::take(&mut self.older_requested)
     }
+    /// Whether an older prompt-history page is still expected from the backend.
     pub fn waiting_older(&self) -> bool {
         self.waiting_older
     }
+    /// Clear the outstanding older-page request and its waiting marker without removing retained
+    /// recall drafts.
     pub fn finish_older(&mut self) {
         self.waiting_older = false;
         self.older_requested = false;

@@ -10,6 +10,8 @@ mod model;
 pub(super) use model::State;
 use model::{TreeRow, renamed};
 
+/// Stable panel-state ID for one editor and zoom mode. Root IDs preserve existing layout state;
+/// child IDs prevent width/scroll collisions.
 pub(super) fn panel_id(viewport: egui::ViewportId, zoom: bool) -> egui::Id {
     if viewport == egui::ViewportId::ROOT {
         egui::Id::new(if zoom { "explorer-zoom" } else { "explorer" })
@@ -70,6 +72,8 @@ impl EditorApp {
         }
     }
 
+    /// Change only the selected host’s Explorer preference and clear incompatible zoom. Tool
+    /// callers use root layout state.
     pub(super) fn set_explorer_visible(&mut self, viewport: egui::ViewportId, visible: bool) {
         if visible || self.pane_zoom(viewport) == Some(navigation::Pane::Explorer) {
             self.set_pane_zoom(viewport, None);
@@ -368,6 +372,8 @@ impl EditorApp {
         }
     }
 
+    /// Apply a completed captured file mutation through the Explorer model, then update document
+    /// bindings and schedule the returned host refresh/open effects.
     pub(super) fn finish_explorer(
         &mut self,
         change: Change,

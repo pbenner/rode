@@ -126,6 +126,8 @@ impl Runtime {
         self.available
     }
 
+    /// Render availability and explicit install/cancel/retry controls for the pinned runtime.
+    /// Drawing an unavailable state alone never starts a download.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,

@@ -225,14 +225,17 @@ pub(super) struct Workbench {
 }
 
 impl Workbench {
+    /// Return the applied sandbox preference for new Git operations.
     pub(super) fn git_sandbox(&self) -> bool {
         self.prefs.git_sandbox
     }
 
+    /// Return the applied sandbox preference for new terminal sessions.
     pub(super) fn terminal_sandbox(&self) -> bool {
         self.prefs.terminal_sandbox
     }
 
+    /// Apply the terminal sandbox choice to both preference copies and queue its storage update.
     pub(super) fn save_terminal_sandbox(&mut self, sandboxed: bool) {
         self.prefs.terminal_sandbox = sandboxed;
         self.draft.terminal_sandbox = sandboxed;

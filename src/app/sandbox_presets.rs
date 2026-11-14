@@ -9,6 +9,8 @@ use crate::sandbox::presets::{self, Presets};
 #[cfg(test)]
 mod tests;
 
+/// Window-owned reusable-policy catalogue, explicit pending-write marker and preserved load error.
+/// It grants no host access by itself.
 #[derive(Default)]
 pub(super) struct State {
     entries: Presets,
@@ -25,6 +27,8 @@ struct Draft {
 }
 
 impl State {
+    /// Load and validate saved presets, reporting malformed data while preserving it on disk until
+    /// an explicit valid edit.
     pub(super) fn load(storage: Option<&dyn eframe::Storage>, warnings: &mut Vec<String>) -> Self {
         let Some(text) = storage.and_then(|s| s.get_string(presets::STORAGE_KEY)) else {
             return Self::default();
@@ -70,6 +74,8 @@ impl State {
         Ok(())
     }
 
+    /// Render reusable-policy actions against this form’s sandbox draft. Loading changes the draft;
+    /// applying/opening/connecting still owns host policy activation.
     pub(super) fn ui(
         &mut self,
         ui: &mut egui::Ui,

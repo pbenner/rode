@@ -4,12 +4,19 @@ use pulldown_cmark::Alignment;
 
 const PADDING: f32 = 6.;
 
+/// One GFM row: a character cursor origin and UTF-8 byte ranges into the shared selectable message
+/// buffer.
 pub(super) struct Row {
+    /// Zero-based Unicode character offset used to address the selectable galley.
     character: usize,
+    /// Half-open UTF-8 byte ranges into the shared message text.
     pub cells: Vec<Range<usize>>,
 }
 
+/// Table cells and measured logical-point columns over a single text buffer. Padding and separators
+/// are presentation only and never enter copied text.
 pub(super) struct Table {
+    /// Half-open UTF-8 byte range containing this table in the selectable message text.
     pub range: Range<usize>,
     pub rows: Vec<Row>,
     alignments: Vec<Alignment>,
@@ -28,6 +35,7 @@ impl Table {
         }
     }
 
+    /// Start an empty table using the parser’s per-column alignment metadata.
     pub fn new(alignments: Vec<Alignment>) -> Self {
         Self {
             range: 0..0,
@@ -40,6 +48,8 @@ impl Table {
         }
     }
 
+    /// Begin a row at byte and character offsets into the same message snapshot. The first row also
+    /// establishes the table’s byte start.
     pub fn row(&mut self, byte: usize, character: usize) {
         if self.rows.is_empty() {
             self.range.start = byte;
@@ -50,6 +60,8 @@ impl Table {
         });
     }
 
+    /// Append a half-open UTF-8 byte range to the current row. A row must have been started and its
+    /// ranges must belong to the same message snapshot.
     pub fn cell(&mut self, bytes: Range<usize>) {
         self.rows.last_mut().unwrap().cells.push(bytes);
     }
@@ -189,6 +201,8 @@ impl Table {
         }
     }
 
+    /// Paint the prepared row/column rules against TextEdit’s placed galley, keeping the selectable
+    /// text and scroll geometry in one coordinate system.
     pub fn paint(
         &self,
         ui: &egui::Ui,

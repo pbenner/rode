@@ -54,6 +54,7 @@ impl EditorApp {
         self.profile_notice(result);
     }
 
+    /// Present a completed preference operation as either a confirmation or an error notice.
     pub(super) fn profile_notice(&mut self, result: Result<&'static str, String>) {
         match result {
             Ok(message) => self.notify(message, false),

@@ -9,18 +9,25 @@ pub(super) use edit::Edit;
 
 /// Source-only projection for keyboard interpretation; preview policy stays with documents.
 pub(super) struct Source<'a> {
+    /// Stable identity for edit and navigation admission.
     pub id: u64,
+    /// Borrowed source at the current widget boundary.
     pub text: &'a str,
+    /// Display/language hint, including recovery paths; never grants file-I/O authority.
     pub path: Option<&'a str>,
 }
 
 /// Versioned dirty/save facts shared by transition and exit admission.
 #[derive(Default, Clone)]
 pub(super) struct Changes {
+    /// Exact document/version pairs that a discard decision must approve.
     pub dirty_versions: Vec<(u64, u64)>,
+    /// Whether a save is pending within the same document filter as `dirty_versions`.
     pub saving: bool,
 }
 impl Changes {
+    /// Whether any currently dirty document/version pair lacks explicit discard approval. Approving
+    /// an older version never approves later edits.
     pub fn unapproved(&self, versions: &[(u64, u64)]) -> bool {
         self.dirty_versions
             .iter()
@@ -89,12 +96,16 @@ impl std::ops::Deref for Document {
 
 /// Exact source/version captured before an asynchronous analysis operation.
 pub(super) struct SourceSnapshot {
+    /// Owned text submitted for analysis.
     pub text: String,
+    /// Matching document source version required before applying its result.
     pub version: u64,
 }
 /// Exact submitted contents and the revision required at their destination.
 pub(super) struct SaveSnapshot<T> {
+    /// Immutable contents submitted to the host, independent of later buffer edits.
     pub contents: T,
+    /// Destination revision used for conflict detection, or `None` without a baseline.
     pub expected: Option<String>,
 }
 
@@ -126,6 +137,8 @@ impl Document {
             preview.prepare(self.edit_version, path, &self.content.text)
         })
     }
+    /// Revision guard for the destination: a new Save As path has no baseline, while writes to the
+    /// current binding retain its captured revision.
     pub(super) fn expected_revision(&self, path: &str, save_as: bool) -> Option<String> {
         if save_as && self.path.as_deref() != Some(path) {
             None
@@ -149,6 +162,8 @@ impl Document {
         self.content.saving = true;
         Some(snapshot)
     }
+    /// Capture immutable binary contents and destination revision, then mark the save in flight.
+    /// Return `None` for a duplicate save or non-binary document.
     pub(super) fn begin_binary_save(
         &mut self,
         path: &str,
@@ -181,17 +196,23 @@ impl Document {
     pub(super) fn fixture_content(&mut self) -> &mut Content {
         &mut self.content
     }
+    /// Refresh cached source metadata after a test directly mutates synthetic content.
     #[cfg(test)]
     pub(super) fn sync_source_fixture(&mut self) {
         self.source_changed();
     }
 
+    /// Monotonic edit identity used to reject stale analysis and navigation results. Save
+    /// acknowledgements do not advance it.
     pub(super) fn version(&self) -> u64 {
         self.edit_version
     }
+    /// Cached logical source-line count, maintained by scoped content edits.
     pub(super) fn line_count(&self) -> usize {
         self.lines
     }
+    /// Whether the document retains disconnected-host metadata rather than an authorizing file
+    /// binding.
     pub(super) fn is_recovery(&self) -> bool {
         self.recovery.is_some()
     }
@@ -229,14 +250,17 @@ impl Document {
             view.invalidate();
         }
     }
+    /// Install an explicit edit version for stale-reply regression fixtures.
     #[cfg(test)]
     pub(super) fn set_version_fixture(&mut self, version: u64) {
         self.edit_version = version;
     }
+    /// Advance only the synthetic edit identity when testing stale asynchronous work.
     #[cfg(test)]
     pub(super) fn advance_version_fixture(&mut self) {
         self.edit_version = self.edit_version.wrapping_add(1);
     }
+    /// Override dirty-cache state for transition fixtures without performing a source edit.
     #[cfg(test)]
     pub(super) fn set_dirty_fixture(&mut self, dirty: bool) {
         self.modified = dirty;
@@ -470,6 +494,8 @@ impl Documents {
             }
         }
     }
+    /// Whether every buffer lacks an authorizing host path, including untitled and
+    /// disconnected-recovery documents.
     pub(super) fn all_unbound(&self) -> bool {
         self.items.iter().all(|doc| doc.path.is_none())
     }
@@ -500,11 +526,15 @@ impl Documents {
         }
         Some(doc.version())
     }
+    /// Clear an existing document’s in-flight save flag, including after failure. This does not
+    /// acknowledge contents or change its saved baseline.
     pub(super) fn finish_save(&mut self, id: u64) {
         if let Some(doc) = self.items.iter_mut().find(|doc| doc.id == id) {
             doc.content.saving = false;
         }
     }
+    /// Project the selected buffer only when its current view accepts source editing. Structured
+    /// notebook cells, binary and rendered previews are excluded.
     pub(super) fn active_source(&self) -> Option<Source<'_>> {
         let doc = self.active()?;
         if doc.image.is_some()
@@ -522,9 +552,13 @@ impl Documents {
             path: doc.display_path(),
         })
     }
+    /// Dirty-version and save-pending facts across every editor host, used by project replacement
+    /// and quit guards.
     pub(super) fn changes(&self) -> Changes {
         self.changes_for(None)
     }
+    /// Project dirty versions and save-pending state for one optional document filter.
+    /// `None` covers all buffers; a specific ID restricts both facts to that document.
     pub(super) fn changes_for(&self, document: Option<u64>) -> Changes {
         Changes {
             dirty_versions: self
@@ -539,12 +573,16 @@ impl Documents {
                 .any(|doc| document.is_none_or(|id| id == doc.id) && doc.saving),
         }
     }
+    /// Current stable document/version pairs, suitable for capturing precise discard or recovery
+    /// decisions.
     pub(super) fn versions(&self) -> Vec<(u64, u64)> {
         self.items
             .iter()
             .map(|doc| (doc.id, doc.edit_version))
             .collect()
     }
+    /// Whether the addressed notebook still owns submitted work or an unacknowledged lifetime
+    /// change.
     pub(super) fn notebook_pending(&self, id: u64) -> bool {
         self.items
             .iter()
@@ -553,15 +591,20 @@ impl Documents {
             .is_some_and(|view| view.lifetime_pending())
     }
 
+    /// Current presentation context used by rendering convenience accessors; it does not transfer
+    /// document ownership.
     pub(super) fn viewport(&self) -> egui::ViewportId {
         self.viewport
     }
+    /// Set the presentation context without changing tab ownership or another viewport’s selection.
     pub(super) fn set_viewport(&mut self, viewport: egui::ViewportId) {
         self.viewport = viewport;
     }
+    /// Owning tab-group viewport for a live document ID; closed IDs return `None`.
     pub(super) fn owner(&self, id: u64) -> Option<egui::ViewportId> {
         self.owners.get(&id).copied()
     }
+    /// Whether a document belongs to the current presentation context.
     pub(super) fn in_viewport(&self, id: u64) -> bool {
         self.owner(id) == Some(self.viewport)
     }
@@ -592,6 +635,9 @@ impl Documents {
             })
             .collect()
     }
+    /// Index selected in the current presentation context, or `self.items.len()` without a
+    /// selection. This sentinel also equals zero for an empty collection; use `active` when
+    /// absence is possible.
     pub(super) fn active_index(&self) -> usize {
         self.selected_index_for(self.viewport)
             .unwrap_or(if self.items.is_empty() {
@@ -600,13 +646,16 @@ impl Documents {
                 self.items.len()
             })
     }
+    /// Selected document in the current presentation context, or `None` for an empty window.
     pub(super) fn active(&self) -> Option<&Document> {
         self.items.get(self.active_index())
     }
+    /// Mutably borrow the selected document’s owner API in the current presentation context.
     pub(super) fn active_mut(&mut self) -> Option<&mut Document> {
         let index = self.active_index();
         self.items.get_mut(index)
     }
+    /// Selected stable document ID in the current presentation context.
     pub(super) fn selected_id(&self) -> Option<u64> {
         self.selected_in(self.viewport)
     }
@@ -615,12 +664,16 @@ impl Documents {
         self.selected_index_for(viewport)
             .map(|index| self.items[index].id)
     }
+    /// Find a live buffer by stable ID regardless of which editor owns it.
     pub(super) fn by_id(&self, id: u64) -> Option<&Document> {
         self.items.iter().find(|doc| doc.id == id)
     }
+    /// Mutably address a live buffer by stable ID without changing selection or rendering context.
     pub(super) fn by_id_mut(&mut self, id: u64) -> Option<&mut Document> {
         self.items.iter_mut().find(|doc| doc.id == id)
     }
+    /// Select a live document in its existing owner’s tab group. Return false for a closed ID;
+    /// callers decide whether native focus should move.
     pub(super) fn select(&mut self, id: u64) -> bool {
         let Some(viewport) = self.owner(id) else {
             return false;
@@ -669,9 +722,12 @@ impl Documents {
         id
     }
 
+    /// Create and select an untitled buffer in the current presentation context.
     pub(super) fn new_file(&mut self) -> u64 {
         self.new_file_in(self.viewport)
     }
+    /// Allocate a stable buffer ID and select it in the named viewport without switching rendering
+    /// context.
     pub(super) fn new_file_in(&mut self, viewport: egui::ViewportId) -> u64 {
         let id = self.allocate_id();
         self.items.push(Document::untitled(id));
@@ -692,6 +748,8 @@ impl Documents {
         self.open_in(self.viewport, response, images, shutdowns)
     }
 
+    /// Install a host read into the named viewport, or select an existing canonical-path buffer
+    /// without replacing its edits. Return the live buffer ID.
     pub(super) fn open_in(
         &mut self,
         viewport: egui::ViewportId,
@@ -715,6 +773,8 @@ impl Documents {
         id
     }
 
+    /// Remove one buffer and choose an adjacent tab only in its owning group. Return the removed
+    /// document so its resources retain normal drop ownership.
     pub(super) fn close(&mut self, id: u64) -> Option<Document> {
         let index = self.items.iter().position(|doc| doc.id == id)?;
         let owner = self.owner(id)?;
@@ -743,6 +803,8 @@ impl Documents {
         Some(doc)
     }
 
+    /// Cycle selection within the current viewport, wrapping in either direction. Other windows’
+    /// selections are unchanged.
     pub(super) fn cycle(&mut self, direction: isize) {
         let indices: Vec<_> = self
             .items
@@ -772,6 +834,8 @@ impl Documents {
         true
     }
 
+    /// Drop all buffers, ownership, selections and pending reads while preserving the monotonic
+    /// document-ID allocator.
     pub(super) fn clear(&mut self) {
         self.items.clear();
         self.owners.clear();
@@ -779,6 +843,8 @@ impl Documents {
         self.opening.clear();
     }
 
+    /// Invalidate pending reads and save flags on a workspace change. Retained buffers keep
+    /// identities; discard mode clears the collection.
     pub(super) fn reset_context(&mut self, retention: Retention) {
         self.cancel_opens();
         if retention == Retention::Discard {
@@ -797,10 +863,13 @@ impl Documents {
         }
     }
 
+    /// Reserve a test read for the current presentation context; duplicate paths are rejected.
     #[cfg(test)]
     pub(super) fn begin_open(&mut self, path: String) -> bool {
         self.begin_open_in(path, self.viewport)
     }
+    /// Capture a new read’s destination viewport. Return false while that path already has a
+    /// pending read.
     pub(super) fn begin_open_in(&mut self, path: String, viewport: egui::ViewportId) -> bool {
         if self.opening.contains_key(&path) {
             return false;
@@ -808,18 +877,24 @@ impl Documents {
         self.opening.insert(path, viewport);
         true
     }
+    /// Remove a pending-read marker and return its current destination, which may have been
+    /// redirected by window return.
     pub(super) fn finish_open(&mut self, path: &str) -> Option<egui::ViewportId> {
         self.opening.remove(path)
     }
+    /// Inspect a pending read’s destination without consuming the marker.
     pub(super) fn open_destination(&self, path: &str) -> Option<egui::ViewportId> {
         self.opening.get(path).copied()
     }
+    /// Whether a path has a reserved read awaiting completion or admission.
     pub(super) fn is_opening(&self, path: &str) -> bool {
         self.opening.contains_key(path)
     }
+    /// Whether any reserved read is awaiting completion; Explorer mutations must wait for it.
     pub(super) fn has_pending_opens(&self) -> bool {
         !self.opening.is_empty()
     }
+    /// Forget all pending reads when their workspace context is invalidated.
     pub(super) fn cancel_opens(&mut self) {
         self.opening.clear();
     }

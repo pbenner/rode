@@ -46,6 +46,8 @@ impl State {
         self.cleanups.iter().any(|f| f.load(Ordering::Acquire))
             || self.client.as_ref().is_some_and(Client::is_stopping)
     }
+    /// Whether submitted debugger lifetime changes or retained cleanup work still prevent a guarded
+    /// ownership transition.
     pub(super) fn lifetime_pending(&self) -> bool {
         self.change_pending() || self.stopping()
     }

@@ -104,6 +104,8 @@ impl EditorApp {
             self.documents.changes_for(document),
         )
     }
+    /// Submit a potentially destructive action through the shared transition controller.
+    /// Invalidate conflicting preparation and release candidates rejected by an existing action.
     pub(in crate::app) fn guarded(&mut self, action: Action, ctx: &egui::Context) {
         if let Action::PreparedProject { .. } = &action {
             let busy = self.pending.as_ref().is_some_and(|pending| match pending {
@@ -164,6 +166,8 @@ impl EditorApp {
         self.dialog_viewport = owner;
         self.transition_effect(effect, ctx);
     }
+    /// Reevaluate the held action against current edits, worker acknowledgements and vault
+    /// admission.
     pub(in crate::app) fn advance_guarded_action(&mut self, ctx: &egui::Context) {
         let Some(action) = self.pending.as_ref() else {
             return;
@@ -172,6 +176,8 @@ impl EditorApp {
         let effect = self.pending.advance(policy, changes);
         self.transition_effect(effect, ctx);
     }
+    /// Apply discard approval only to the matching decision and revalidate current document
+    /// versions.
     pub(in crate::app) fn discard_guarded_action(
         &mut self,
         id: control::DecisionId,
@@ -201,11 +207,13 @@ impl EditorApp {
             self.workspace.cancel_prepared(id);
         }
     }
+    /// Cancel the held action and release any project candidate it owned.
     pub(in crate::app) fn cancel_guarded_action(&mut self) {
         if let Some(action) = self.pending.clear() {
             self.release_guarded_action(action);
         }
     }
+    /// Cancel only the matching decision, leaving a newer transition untouched.
     pub(in crate::app) fn cancel_guarded_decision(&mut self, id: control::DecisionId) {
         if let Some(action) = self.pending.cancel(id) {
             self.release_guarded_action(action);

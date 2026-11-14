@@ -169,6 +169,7 @@ pub(in crate::app) enum Style {
 }
 impl Style {
     pub const ALL: [Self; 3] = [Self::Standard, Self::Emacs, Self::Vim];
+    /// Human-readable name of a keyboard style, independent of its persisted key prefix.
     pub fn name(self) -> &'static str {
         match self {
             Self::Standard => "Standard",
@@ -248,6 +249,8 @@ impl std::ops::DerefMut for Bindings {
     }
 }
 impl Bindings {
+    /// Load each style’s validated bindings and restore the selected style. Invalid stored entries
+    /// fall back through profile validation.
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         let style = storage
             .and_then(|s| s.get_string("keyboard.style"))
@@ -260,14 +263,18 @@ impl Bindings {
             pending: false,
         }
     }
+    /// Currently applied style; the settings form may hold a different, unapplied draft.
     pub fn style(&self) -> Style {
         self.style
     }
+    /// Apply a validated style choice and mark its selection for persistence.
     pub fn select_style(&mut self, style: Style) {
         self.pending |= self.style != style;
         self.style = style;
         self.draft = style;
     }
+    /// Effective leader chord for the current input surface. Nonstandard editor styles retain
+    /// Ctrl+Space in terminals so shell editing is not remapped.
     pub fn prefix(&self, terminal: bool) -> Chord {
         if terminal && self.style != Style::Standard {
             Chord {
@@ -279,6 +286,7 @@ impl Bindings {
             self.leader
         }
     }
+    /// Display label for the effective leader on this input surface.
     pub fn prefix_label(&self, terminal: bool) -> &str {
         if terminal && self.style != Style::Standard {
             DEFAULT_LEADER
@@ -286,6 +294,8 @@ impl Bindings {
             self.hint()
         }
     }
+    /// Flush changed profile keys and the style selector without replacing unrelated window
+    /// preferences.
     pub fn store(&mut self, storage: &mut dyn eframe::Storage) {
         for profile in &mut self.profiles {
             profile.store(storage);
@@ -295,6 +305,7 @@ impl Bindings {
             storage.flush();
         }
     }
+    /// Render the style/profile draft and apply a style only after its profile validates.
     pub fn ui(&mut self, ui: &mut egui::Ui, focus: bool) {
         ui.horizontal(|ui| {
             ui.label("Shortcut style");
@@ -320,6 +331,8 @@ pub(in crate::app) struct Chord {
     pub leader: bool,
 }
 impl Chord {
+    /// Match an exact key, modifier set and leader phase; extra modifiers do not silently activate
+    /// a command.
     pub fn matches(&self, key: Key, modifiers: egui::Modifiers, leader: bool) -> bool {
         self.key == key && self.leader == leader && modifiers.matches_exact(self.modifiers)
     }
@@ -506,6 +519,7 @@ impl Profile {
         }
         Ok(())
     }
+    /// Resolve a compiled chord to its typed navigation action in the current leader phase.
     pub fn action(&self, key: Key, modifiers: egui::Modifiers, leader: bool) -> Option<Action> {
         self.entries
             .iter()
@@ -517,15 +531,19 @@ impl Profile {
             })
             .map(|entry| entry.action)
     }
+    /// Current profile’s configured leader label for status/help presentation.
     pub fn hint(&self) -> &str {
         &self.leader_value
     }
+    /// Iterate typed actions, human labels and configured chord text for the palette and shortcut
+    /// guide.
     pub fn commands(&self) -> impl Iterator<Item = (Action, &str, &str)> {
         self.entries
             .iter()
             .zip(ACTIONS)
             .map(|(entry, spec)| (entry.action, spec.2, entry.value.as_str()))
     }
+    /// Test projection of nonempty shortcut labels and their configured chord text.
     #[cfg(test)]
     pub fn help(&self) -> impl Iterator<Item = (&str, &str)> {
         self.entries
@@ -534,6 +552,8 @@ impl Profile {
             .filter(|(entry, _)| !entry.value.is_empty())
             .map(|(entry, spec)| (spec.2, entry.value.as_str()))
     }
+    /// Persist only edited scalar bindings and leader keys, preserving independent settings from
+    /// other windows.
     pub fn store(&mut self, storage: &mut dyn eframe::Storage) {
         let mut changed = false;
         if self.leader_pending {

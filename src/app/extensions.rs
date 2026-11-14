@@ -23,6 +23,8 @@ impl Extensions {
         self.cancel = Arc::new(AtomicBool::new(false));
     }
 
+    /// Invalidate project-scoped extension UI and requests when their captured workspace authority
+    /// is replaced.
     pub(super) fn reset_project(&mut self) {
         self.cancel_work();
         self.busy = false;

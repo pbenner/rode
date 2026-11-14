@@ -25,6 +25,8 @@ pub(super) struct State {
     selected: Option<String>,
 }
 impl State {
+    /// Reset picker state, advance its request token and request a fresh listing so late results
+    /// cannot repopulate the previous location.
     pub fn reset(&mut self) {
         let token = self.token.wrapping_add(1);
         *self = Self {
@@ -34,6 +36,8 @@ impl State {
             ..Default::default()
         };
     }
+    /// Install a matched canonical directory response and invalidate filtered rows. The caller must
+    /// admit its token/path before applying it.
     pub fn loaded(&mut self, response: files::Response) {
         self.directory = response.path;
         self.location.clone_from(&self.directory);
@@ -87,6 +91,8 @@ impl State {
                 .into();
         }
     }
+    /// Recompute filtered/suggested rows on the next render after directories or document bindings
+    /// change.
     pub fn invalidate_rows(&mut self) {
         self.dirty = true;
     }

@@ -4,17 +4,25 @@
 //! on the UI thread; they never create another application, transport or chat.
 use super::*;
 
+/// Presentation and input-replay state for one editor viewport. Buffers, directory listings,
+/// transports, chat and runtime ownership remain in the shared application.
 pub(super) struct View {
+    /// Tab-strip layout and focus state; the document collection owns buffers and tab groups.
     pub tabs: chrome::Tabs,
+    /// Ordered native input owned and acknowledged by this editor viewport.
     pub input: input::Router,
+    /// Versioned Git comparison and peek state for this editor's selection.
     pub git_gutter: git_gutter::State,
     pub show_find: bool,
     pub find: String,
     pub replacement: String,
     pub find_focus: bool,
     pub case_sensitive: bool,
+    /// Child-window sidebar visibility; root visibility is kept by the application layout.
     pub show_explorer: bool,
+    /// Requested child sidebar width in logical points, consumed when its panel is rendered.
     pub explorer_width: Option<f32>,
+    /// Child-window zoom choice; root pane zoom belongs to the navigation owner.
     pub pane_zoom: Option<navigation::Pane>,
 }
 impl Default for View {
@@ -41,10 +49,15 @@ struct Window {
     viewport: egui::ViewportId,
 }
 
+/// Registry of native editor hosts and parked presentation state. `current` is the temporary
+/// render/input context; `focused` is the remembered command destination.
 pub(super) struct Windows {
+    /// Editor whose presentation is currently installed in `EditorApp::editor`.
     current: egui::ViewportId,
+    /// Remembered editor destination for commands issued from tools or root menus.
     focused: egui::ViewportId,
     windows: Vec<Window>,
+    /// Presentation states temporarily outside the active render/input context.
     parked: HashMap<egui::ViewportId, View>,
     next: u64,
 }
@@ -60,6 +73,7 @@ impl Default for Windows {
     }
 }
 impl Windows {
+    /// Whether a viewport is the root editor or a still-registered native editor window.
     pub(super) fn contains(&self, viewport: egui::ViewportId) -> bool {
         viewport == egui::ViewportId::ROOT
             || self
@@ -70,6 +84,8 @@ impl Windows {
 }
 
 impl EditorApp {
+    /// Borrow a registered presentation without switching document/render context. An allocated
+    /// window may not yet have instantiated its default view.
     pub(super) fn editor_view(&self, viewport: egui::ViewportId) -> Option<&View> {
         if self.editors.current == viewport {
             Some(&self.editor)
@@ -107,6 +123,8 @@ impl EditorApp {
         self.documents.set_viewport(viewport);
     }
 
+    /// Temporarily enter an editor’s render/input context and restore the caller afterward.
+    /// Operational code should address documents and views by ID instead of using this scope.
     pub(super) fn in_editor<R>(
         &mut self,
         viewport: egui::ViewportId,
@@ -119,6 +137,8 @@ impl EditorApp {
         result
     }
 
+    /// Remember the editor command destination and cancel a navigation prefix when ownership of
+    /// native focus changes.
     pub(super) fn remember_editor_focus(&mut self, viewport: egui::ViewportId) {
         if self.editors.focused != viewport {
             self.navigation.cancel_input();
@@ -126,6 +146,7 @@ impl EditorApp {
         self.editors.focused = viewport;
     }
 
+    /// Last remembered editor host for commands initiated from the root menus or tool windows.
     pub(super) fn focused_editor(&self) -> egui::ViewportId {
         self.editors.focused
     }
@@ -141,6 +162,8 @@ impl EditorApp {
         );
     }
 
+    /// Reserve a monotonic native-window identity for viewport creation by the renderer.
+    /// No process or project service is started here.
     pub(super) fn allocate_editor_window(&mut self) -> egui::ViewportId {
         let number = self.editors.next;
         self.editors.next = number
@@ -151,10 +174,13 @@ impl EditorApp {
         viewport
     }
 
+    /// Request an empty editor window through the input-ordered operation coordinator.
     pub(super) fn new_editor_window(&mut self, ctx: &egui::Context) {
         self.submit_editor_operation(editor_operations::Operation::NewWindow, ctx);
     }
 
+    /// Whether accepted source input or an ordered command tail still needs a native widget
+    /// acknowledgement in any editor.
     pub(super) fn editor_input_pending(&self, ctx: &egui::Context) -> bool {
         self.editor.input.source_pending(ctx)
             || self
@@ -164,6 +190,7 @@ impl EditorApp {
                 .any(|view| view.input.pending())
     }
 
+    /// Submit a tab transfer after native input; `None` requests a newly allocated editor window.
     pub(super) fn move_editor_tab(
         &mut self,
         id: u64,
@@ -179,6 +206,8 @@ impl EditorApp {
         );
     }
 
+    /// Apply an admitted transfer, retaining buffer identity and undo state. Invalid
+    /// documents/destinations are ignored; pending input prevents transfer.
     pub(super) fn transfer_editor_tab(
         &mut self,
         id: u64,
@@ -212,6 +241,8 @@ impl EditorApp {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
+    /// Other registered editor hosts available in the tab context menu, excluding the document’s
+    /// current rendering host.
     pub(super) fn editor_tab_destinations(&self) -> Vec<(egui::ViewportId, String)> {
         std::iter::once((egui::ViewportId::ROOT, "Main window".into()))
             .chain(
@@ -224,6 +255,8 @@ impl EditorApp {
             .collect()
     }
 
+    /// Return tabs and pending reads to the root without discarding buffers. The coordinator must
+    /// drain input first; presentation/focus caches are then retired.
     pub(super) fn reattach_editor(&mut self, viewport: egui::ViewportId, ctx: &egui::Context) {
         self.documents.reattach(viewport);
         self.navigation.forget_viewport(viewport);
@@ -264,6 +297,8 @@ impl EditorApp {
         }
     }
 
+    /// Deliver an admitted Git result directly to its originating view cache. Results for an
+    /// already-closed editor are ignored.
     pub(super) fn complete_editor_gutter(
         &mut self,
         viewport: egui::ViewportId,
@@ -274,6 +309,8 @@ impl EditorApp {
         }
     }
 
+    /// Render registered editor-only viewports on the UI thread. Backends without native viewports
+    /// return their tabs to the root instead.
     pub(super) fn detached_editors(&mut self, ctx: &egui::Context) {
         for window in self.editors.windows.clone() {
             let viewport = window.viewport;

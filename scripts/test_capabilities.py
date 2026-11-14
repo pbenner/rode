@@ -39,6 +39,11 @@ def skip(capability, reason, *, test=None, environment=None):
 
 
 def probe(command, environment):
+    """Return availability and a diagnostic tail with a 15-second command deadline.
+
+    Startup errors and timeouts are unavailable results, not successful skips.
+    The caller decides whether its suite requires the capability.
+    """
     try:
         result = subprocess.run(
             command, env=environment, capture_output=True, text=True, timeout=15

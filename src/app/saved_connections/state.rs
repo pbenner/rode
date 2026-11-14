@@ -5,6 +5,9 @@
 //! baseline. Joining the writer at shutdown preserves acknowledged storage work.
 use super::*;
 
+/// Own the connection catalogue, editable form identity and at most one preference writer.
+/// Writes discard pending reload replies; save acknowledgements update only the matching form's
+/// baseline while replacing the shared catalogue.
 pub(in crate::app) struct State {
     pub(in crate::app) draft: Profile,
     pub(in crate::app) profiles: Vec<Profile>,
@@ -18,6 +21,7 @@ pub(in crate::app) struct State {
 }
 
 impl State {
+    /// Load the saved catalogue and SSH aliases with a fresh, unsaved connection draft.
     pub(in crate::app) fn new() -> Self {
         Self {
             draft: Profile::default(),
@@ -52,6 +56,8 @@ impl State {
         self.draft = profile;
     }
 
+    /// Start a background catalogue reload unless a reload or write is already pending.
+    /// The worker retains its vault work guard until the read finishes.
     pub(in crate::app) fn open(&mut self, vault_work: vaults::Work) {
         self.name_focus = false;
         if self.reload.is_some() || self.saving {
@@ -65,13 +71,16 @@ impl State {
         });
     }
 
+    /// Report a preference write awaiting acknowledgement, rather than whether the form is dirty.
     pub(in crate::app) fn saving(&self) -> bool {
         self.saving
     }
+    /// Report whether a background catalogue reload still has a pending receiver.
     pub(in crate::app) fn reloading(&self) -> bool {
         self.reload.is_some()
     }
 
+    /// Poll a reload without blocking; install a successful catalogue or return its failure notice.
     pub(in crate::app) fn poll_reload(&mut self) -> Option<String> {
         let receiver = self.reload.take()?;
         match receiver.try_recv() {
@@ -90,6 +99,8 @@ impl State {
         }
     }
 
+    /// Capture the draft and form identity for one serialized background save.
+    /// Discard any older reload so it cannot overwrite the resulting catalogue.
     pub(in crate::app) fn save(&mut self, replies: workers::ProfileSender) {
         if self.saving {
             return;
@@ -113,6 +124,7 @@ impl State {
         }));
     }
 
+    /// Serialize a catalogue removal or reorder behind the same writer used by form saves.
     pub(in crate::app) fn edit(&mut self, edit: ProfileListEdit, replies: workers::ProfileSender) {
         if self.saving {
             return;
@@ -132,6 +144,8 @@ impl State {
         }));
     }
 
+    /// Acknowledge a save, join its writer and replace the catalogue.
+    /// Update the form baseline only if the user still has the submitted form selected.
     pub(in crate::app) fn finish_save(
         &mut self,
         result: Result<Vec<Profile>, String>,
@@ -148,6 +162,7 @@ impl State {
         Ok("Connection profile saved. Passwords are never stored.")
     }
 
+    /// Acknowledge a catalogue edit and clear the baseline if its saved entry was removed.
     pub(in crate::app) fn finish_edit(
         &mut self,
         result: Result<Vec<Profile>, String>,
@@ -169,6 +184,8 @@ impl State {
         })
     }
 
+    /// Join the outstanding preference writer before releasing its owner.
+    /// This may block during shutdown; ordinary UI progress uses reply polling.
     pub(in crate::app) fn join_writer(&mut self) {
         if let Some(worker) = self.writer.take() {
             let _ = worker.join();

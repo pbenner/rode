@@ -168,6 +168,8 @@ impl Queue {
         self.recall.pop_front()
     }
 
+    /// Queue a text-only prompt through the same bounded validation and host-backed action path
+    /// used by prompts with attachments.
     #[cfg(test)]
     pub fn push(&mut self, text: String) -> anyhow::Result<()> {
         self.push_with_attachments(text, vec![])

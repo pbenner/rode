@@ -11,12 +11,16 @@ enum Phase {
     Closing,
 }
 
+/// Quit state and exact dirty versions whose discard was approved. Resource owners retain their
+/// processes and leases until cleanup is acknowledged.
 #[derive(Default)]
 pub(in crate::app) struct Exit {
     phase: Phase,
     approved_discard: Vec<(u64, u64)>,
 }
 
+/// Initial adapter effect after quit guards: wait for acknowledgements or accept native window
+/// closure.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Decision {
     Wait,
@@ -41,18 +45,23 @@ pub(in crate::app) struct Readiness {
     pub installation: bool,
 }
 impl Readiness {
+    /// Whether any terminal, runtime, notebook or debugger owner still has pending lifetime work.
     pub fn runtime_pending(&self) -> bool {
         self.terminals || self.runtimes || self.notebooks || self.debugger
     }
+    /// Whether runtime work or an installation acknowledgement still blocks normal window exit.
     pub fn pending(&self) -> bool {
         self.runtime_pending() || self.installation
     }
 }
 
 impl Exit {
+    /// Whether quit has been accepted but cleanup/save acknowledgements still prevent native
+    /// closure.
     pub fn waiting(&self) -> bool {
         matches!(self.phase, Phase::Waiting)
     }
+    /// Whether the native close has already been accepted; later failures cannot reopen this state.
     pub fn closing(&self) -> bool {
         matches!(self.phase, Phase::Closing)
     }

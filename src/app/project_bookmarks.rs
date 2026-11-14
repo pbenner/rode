@@ -108,6 +108,8 @@ impl EditorApp {
         Ok(())
     }
 
+    /// Toggle the current validated project location in saved preferences; untitled/disconnected
+    /// state cannot become a live-session bookmark.
     pub(super) fn toggle_project_bookmark(&mut self) {
         if !self.feature(FEATURE) {
             self.notify("Enable Project bookmarks in View → Extensions.", false);
@@ -185,6 +187,8 @@ impl EditorApp {
         }
     }
 
+    /// Render the current project’s bookmark toggle using the same stored catalogue and mutation
+    /// path as the sidebar list.
     pub(super) fn project_bookmark_button(&mut self, ui: &mut egui::Ui) {
         if !self.feature(FEATURE) {
             return;
@@ -232,6 +236,8 @@ impl EditorApp {
         }
     }
 
+    /// Render saved local/SSH locations and their management actions in Explorer. Reopening uses
+    /// normal guarded project/connection transitions.
     pub(super) fn project_bookmarks_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if !self.feature(FEATURE) {
             return;

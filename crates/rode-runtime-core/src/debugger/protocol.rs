@@ -1006,12 +1006,16 @@ mod tests;
 
 mod reference_map {
     use super::*;
+    /// Serialize integer debugger-reference keys as ordered key/value pairs, avoiding JSON
+    /// object-key coercion in retained protocol snapshots.
     pub fn serialize<S: serde::Serializer>(
         map: &BTreeMap<i64, Vec<Value>>,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         map.iter().collect::<Vec<_>>().serialize(serializer)
     }
+    /// Restore integer-keyed reference entries from their serialized key/value pairs; malformed
+    /// entries fail deserialization.
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<BTreeMap<i64, Vec<Value>>, D::Error> {

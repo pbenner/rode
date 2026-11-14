@@ -13,22 +13,33 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+/// Opaque candidate identity, separate from the workspace reply generation. Authentication and
+/// candidate preparation do not by themselves replace the active project.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) struct PreparationId(u64);
 
 impl PreparationId {
+    /// Construct an arbitrary candidate identity for stale-confirmation tests.
     #[cfg(test)]
     pub(in crate::app) fn fixture(value: u64) -> Self {
         Self(value)
     }
 }
 
+/// Prepared project result retained while guard approval is pending. Captured dirty versions and
+/// file-open intent travel with the candidate.
 pub(in crate::app) struct Prepared {
+    /// Checked preparation result, not yet committed as active project authority.
     pub response: Response,
+    /// Whether this candidate uses the authenticated remote host.
     pub remote: bool,
+    /// Sandbox options captured with the preparation request.
     pub options: sandbox::Options,
+    /// Optional file to open only after the candidate is committed.
     pub open_file: Option<String>,
+    /// Preserve existing buffers when reconfiguring the current project.
     pub keep_buffers: bool,
+    /// Document/version pairs captured at preparation start to detect edits made while waiting.
     pub approved_documents: Vec<(u64, u64)>,
 }
 
@@ -40,6 +51,8 @@ enum Candidate {
     Ready(PreparationId, Box<Prepared>),
 }
 
+/// Owner of active workspace authority, one candidate and connection cancellation. Dropping it
+/// cancels the owned connection attempt.
 #[derive(Default)]
 pub(in crate::app) struct Controller {
     active: Option<Workspace>,
@@ -54,9 +67,11 @@ impl Controller {
     pub fn as_ref(&self) -> Option<&Workspace> {
         self.active.as_ref()
     }
+    /// Whether no active or connecting workspace context is retained.
     pub fn is_none(&self) -> bool {
         self.active.is_none()
     }
+    /// Whether an active or connecting context exists; readiness must still be checked separately.
     pub fn is_some(&self) -> bool {
         self.active.is_some()
     }
@@ -81,6 +96,8 @@ impl Controller {
             || self.can_resume(profile, all_unbound)
     }
 
+    /// Profile for an active remote host, falling back to the remembered disconnected host for
+    /// explicit recovery.
     pub fn reconnect_profile(&self) -> Option<&Profile> {
         self.active
             .as_ref()
@@ -152,6 +169,8 @@ impl Controller {
         Some((workspace.root.clone(), workspace.sandbox_options.clone()))
     }
 
+    /// Withdraw project readiness while retaining its transport and other context for recovery or
+    /// re-preparation.
     pub fn suspend_project(&mut self) {
         if let Some(workspace) = &mut self.active {
             workspace.ready = false;
@@ -183,6 +202,8 @@ impl Controller {
         false
     }
 
+    /// Replace the active plan’s environment settings without changing its host or prepared project
+    /// identity.
     pub fn set_environment(&mut self, settings: crate::environment::Settings) {
         if let Some(workspace) = &mut self.active {
             workspace.plan.environment = settings;
@@ -195,14 +216,18 @@ impl Controller {
         self.active.take().and_then(|workspace| workspace.remote)
     }
 
+    /// Install synthetic workspace authority directly in coordinator tests.
     #[cfg(test)]
     pub(in crate::app) fn set_fixture(&mut self, workspace: Option<Workspace>) {
         self.active = workspace;
     }
+    /// Test-only mutable access to committed context; production uses typed controller operations.
     #[cfg(test)]
     pub(in crate::app) fn as_mut(&mut self) -> Option<&mut Workspace> {
         self.active.as_mut()
     }
+    /// Remove synthetic context directly in teardown tests, bypassing production transport-release
+    /// ordering.
     #[cfg(test)]
     pub(in crate::app) fn take_fixture(&mut self) -> Option<Workspace> {
         self.active.take()
@@ -223,6 +248,7 @@ impl Controller {
         id
     }
 
+    /// Whether a candidate read/preparation is still awaiting its matching completion.
     pub fn preparing(&self) -> bool {
         matches!(self.candidate, Candidate::Loading(_))
     }
@@ -246,6 +272,7 @@ impl Controller {
         self.candidate = Candidate::Ready(id, Box::new(prepared));
     }
 
+    /// Borrow a completed candidate only when its identity matches the current held result.
     pub fn prepared(&self, id: PreparationId) -> Option<&Prepared> {
         match &self.candidate {
             Candidate::Ready(current, prepared) if *current == id => Some(prepared),
@@ -262,12 +289,16 @@ impl Controller {
         Some(*prepared)
     }
 
+    /// Cancel a held candidate only for its matching decision identity; obsolete callbacks do
+    /// nothing.
     pub fn cancel_prepared(&mut self, id: PreparationId) {
         if self.prepared(id).is_some() {
             self.cancel_preparation();
         }
     }
 
+    /// Invalidate all candidate identities and drop prepared data while retaining active workspace
+    /// authority.
     pub fn cancel_preparation(&mut self) {
         self.advance();
         self.candidate = Candidate::Idle;
@@ -280,15 +311,19 @@ impl Controller {
         self.connection_cancel.clone()
     }
 
+    /// Signal cancellation to the current connection worker; the worker retains responsibility for
+    /// process cleanup.
     pub fn cancel_connection(&self) {
         self.connection_cancel.store(true, Ordering::Release);
     }
 
+    /// Expose the current candidate serial for stale-result regression tests.
     #[cfg(test)]
     pub(in crate::app) fn preparation_identity(&self) -> PreparationId {
         PreparationId(self.serial)
     }
 
+    /// Clone the current cancellation flag for connection-ownership regression tests.
     #[cfg(test)]
     pub(in crate::app) fn connection_cancellation(&self) -> Arc<AtomicBool> {
         self.connection_cancel.clone()

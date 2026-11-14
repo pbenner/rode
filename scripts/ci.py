@@ -376,6 +376,7 @@ def rust_failure_output(logfile, limit=12000):
 
 
 def results_root():
+    """Select the explicit result directory or the repository's default target directory."""
     return Path(os.environ.get("RODE_CI_RESULTS_DIR", ROOT / "target/ci-results"))
 
 

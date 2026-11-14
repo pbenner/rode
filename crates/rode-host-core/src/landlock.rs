@@ -389,6 +389,9 @@ mod linux {
         Ok(())
     }
 
+    /// Dedicated single-threaded helper entry point: validate policy, prepare rules and enter
+    /// Landlock before launching the requested command. Unsupported architectures, capabilities or
+    /// grants return errors rather than executing without enforcement.
     pub fn launch(arguments: &[String]) -> Result<()> {
         ensure!(
             cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) && usize::BITS == 64,

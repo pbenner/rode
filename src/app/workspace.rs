@@ -19,6 +19,7 @@ pub(super) enum LeaveReason {
 }
 
 impl LeaveReason {
+    /// Return the user-facing explanation for releasing workspace resources.
     pub fn message(self) -> &'static str {
         match self {
             Self::VaultLock => "Locking encrypted project",
@@ -26,11 +27,14 @@ impl LeaveReason {
             _ => "Workspace changed",
         }
     }
+    /// Require persistent work to stop when locking a vault.
+    /// Other departures retain explicitly persistent services according to their domain policy.
     pub fn stops_persistent_work(self) -> bool {
         self == Self::VaultLock
     }
 }
 
+/// Choose whether invalidating project preparation also closes and clears its picker.
 pub(super) enum PickerReset {
     Invalidate,
     Close,
@@ -255,6 +259,7 @@ impl EditorApp {
         }
     }
 
+    /// Cancel pending project preparation and invalidate or reset the associated picker.
     pub(super) fn invalidate_project_candidate(&mut self, picker: PickerReset) {
         self.workspace.cancel_preparation();
         match picker {

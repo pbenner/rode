@@ -31,6 +31,8 @@ impl std::ops::DerefMut for Chat {
     }
 }
 impl Chat {
+    /// Build a synthetic chat whose selected response style differs from the applied turn style,
+    /// for view/admission tests.
     #[cfg(test)]
     pub(crate) fn test_style_view(
         selected: super::Personality,

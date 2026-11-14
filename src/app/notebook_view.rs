@@ -326,6 +326,8 @@ impl EditorApp {
         self.focus_document(self.documents[index].id, ctx);
         Ok(())
     }
+    /// Test setup adapter creating a notebook immediately in the current view. Production creation
+    /// waits for native input through the frame coordinator.
     #[cfg(test)]
     pub(super) fn new_notebook(&mut self) {
         if self.new_notebook_in(self.documents.viewport()).is_some() {

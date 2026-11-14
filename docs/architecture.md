@@ -43,6 +43,8 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/main.rs`, `src/lib.rs` | CLI/helper dispatch, native startup, library entry points |
 | `src/app.rs`, `src/app/lifecycle.rs` | Desktop composition, native frame order and acknowledged window exit |
 | `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
+| `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
+| `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
 | `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers, change peeks and editor-only hunk reverts; document/version/baseline admission rejects stale changes |
@@ -414,6 +416,16 @@ replay; positions also retain their source version. Returning a window redirects
 pending reads before the corresponding completion is installed. Source shortcut
 handoffs and saves retain their widget acknowledgement boundary so later typing
 cannot enter an earlier save snapshot.
+
+The coordinator retains at most 512 queued operations. A saturated submission
+reports a notice and releases the pending-read marker for a rejected open reply;
+repeated returns for the same viewport coalesce. Project-bound operations carry
+the worker generation and are discarded after project replacement. Creating an
+empty window and returning a window remain valid across that replacement because
+they change presentation ownership. A new notebook or presentation creates its
+buffer without starting a kernel or renderer. Native source shortcuts retain
+their explicit widget acknowledgement boundary; other ownership changes wait
+for every editor's source queue to drain.
 
 All windows share the existing project, worker inbox, chat, debugger, sessions,
 SSH connection and encrypted workspace owners. Only the root frame polls those

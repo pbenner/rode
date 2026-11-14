@@ -99,6 +99,9 @@ impl Transaction {
             }
         }
     }
+    /// Commit or abort the Git-owned transaction, require its explicit acknowledgement and wait for
+    /// child exit. I/O, protocol and exit-timeout failures propagate while Drop retains cleanup
+    /// responsibility.
     pub fn finish(mut self, commit: bool) -> Result<()> {
         let operation = if commit { "commit" } else { "abort" };
         self.send(&format!("{operation}\n"))?;

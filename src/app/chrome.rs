@@ -332,6 +332,9 @@ impl EditorApp {
         }
     }
 
+    /// Request source focus in an explicit registered editor without changing the rendering
+    /// context. Modal barriers reject the request; tab focus and native host focus retain their own
+    /// IDs.
     pub(super) fn focus_editor_in(&mut self, viewport: egui::ViewportId, ctx: &egui::Context) {
         if self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal() {
             return;

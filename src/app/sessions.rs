@@ -88,6 +88,7 @@ pub(super) struct Sessions {
     allocation_error: String,
 }
 impl Sessions {
+    /// Inject persistence acknowledgement state for lifecycle fixtures without starting a worker.
     #[cfg(test)]
     pub(in crate::app) fn persistence_pending_fixture(&mut self, pending: bool) {
         self.persistence_pending = pending;
@@ -97,6 +98,7 @@ impl Sessions {
     pub(super) fn lifetime_pending(&self) -> bool {
         self.starting || self.persistence_pending
     }
+    /// Report whether runtime cleanup still awaits acknowledgement from its background owner.
     pub(super) fn runtime_shutdown_pending(&self) -> bool {
         self.runtimes.shutdown_pending()
     }
@@ -155,6 +157,9 @@ impl EditorApp {
                 .iter()
                 .any(|slot| slot.terminal.is_alive())
     }
+    /// Capture the active project sandbox plan, or the default plan rooted at the current
+    /// directory.
+    /// Terminal sandbox selection is applied separately when constructing a terminal request.
     pub(in crate::app) fn session_plan(&self) -> sandbox::Plan {
         self.workspace
             .as_ref()

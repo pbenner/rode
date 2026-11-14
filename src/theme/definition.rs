@@ -213,6 +213,9 @@ fn resolve(id: &str, definitions: &[(&str, &str)], chain: &mut Vec<String>) -> R
 }
 
 impl Theme {
+    /// Build syntax colors from semantic overrides or retain the original scope rules when none
+    /// exist.
+    /// An explicit semantic palette starts a fresh scope map so inherited rules cannot override it.
     pub(super) fn syntax_theme(&self, original: &SyntaxTheme) -> SyntaxTheme {
         if self.syntax.is_empty() {
             let mut theme = original.clone();

@@ -12,6 +12,8 @@ pub(in crate::app) struct Request {
 }
 
 impl State {
+    /// Capture an editor-only hunk revert for the exact current source/baseline. Return `None` for
+    /// a stale document or missing hunk; later application revalidates the capture.
     pub(super) fn revert_request(&self, doc: &Document, index: usize) -> Option<Request> {
         self.current(doc)?.hunks.get(index)?;
         Some(Request {

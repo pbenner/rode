@@ -5,6 +5,8 @@ use eframe::egui;
 use navigation::Style;
 use std::collections::VecDeque;
 
+/// Identity of a native source-input stream: document, editor viewport and keyboard style. Replay
+/// cannot move between unequal scopes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) struct Scope {
     pub document: u64,
@@ -12,6 +14,7 @@ pub(in crate::app) struct Scope {
     viewport: egui::ViewportId,
 }
 impl Scope {
+    /// Capture a source stream’s document/style identity and current native viewport.
     pub fn new(ctx: &egui::Context, document: u64, style: navigation::Style) -> Self {
         Self {
             document,
@@ -19,6 +22,7 @@ impl Scope {
             viewport: ctx.viewport_id(),
         }
     }
+    /// Whether this stream’s viewport and document widget currently own native keyboard focus.
     pub(super) fn focused(self, ctx: &egui::Context) -> bool {
         self.viewport == ctx.viewport_id()
             && ctx.memory(|m| m.has_focus(egui::Id::new(("document", self.document))))
@@ -45,11 +49,14 @@ impl Frame {
     pub fn document(&self) -> Option<u64> {
         self.context.source.map(|scope| scope.document)
     }
+    /// Whether a source-context replacement requires discarding the previous leader-prefix intent.
     pub fn resets_prefix(&self) -> bool {
         self.reset_prefix
     }
 }
 
+/// Owner of keymap state, ordered replay and the last source-widget acknowledgement. The
+/// application supplies read-only admission facts.
 #[derive(Default)]
 pub(in crate::app) struct Router {
     editing: navigation::editing::State,
@@ -67,6 +74,8 @@ pub(in crate::app) struct Replay {
     notice: Option<String>,
 }
 impl Replay {
+    /// Acknowledge that the matching document widget rendered this source scope, allowing deferred
+    /// events to replay on a later pass.
     pub fn acknowledge(&mut self, ctx: &egui::Context, id: u64) {
         if self
             .scope
@@ -75,9 +84,12 @@ impl Replay {
             self.applied = true;
         }
     }
+    /// Whether deferred native events remain in this stream; an empty queue alone does not prove a
+    /// current widget acknowledgement.
     pub fn pending(&self) -> bool {
         !self.events.is_empty()
     }
+    /// Bind deferred events to a source scope, dropping any events belonging to a different scope.
     pub fn bind(&mut self, scope: Scope) {
         if self.scope != Some(scope) {
             self.clear();
@@ -89,6 +101,8 @@ impl Replay {
         self.bytes = 0;
         self.applied = false;
     }
+    /// Append a native event within the event-count and byte budgets. Overflow preserves earlier
+    /// events and records a user-visible notice.
     pub fn defer(&mut self, event: egui::Event) {
         let bytes = match &event {
             egui::Event::Text(s) | egui::Event::Paste(s) => s.len(),
@@ -106,6 +120,8 @@ impl Replay {
             );
         }
     }
+    /// Replay only into the same focused source after its earlier batch was acknowledged. Other
+    /// viewports cannot consume or cancel this queue.
     pub fn replay(&mut self, ctx: &egui::Context, scope: Option<Scope>) {
         // A tool viewport cannot consume or cancel another editor's queue.
         if self.scope.is_some_and(|s| s.viewport != ctx.viewport_id()) {
@@ -202,11 +218,14 @@ impl Router {
         }
     }
 
+    /// Return the accepted frame’s ordered command tail to replay after the source widget applies
+    /// the current batch.
     pub fn finish(&mut self, frame: Frame) {
         for event in frame.tail {
             self.queue.defer(event);
         }
     }
+    /// Whether keymap-generated replay or a deferred command tail still needs processing.
     pub fn pending(&self) -> bool {
         self.queue.pending()
     }
@@ -230,18 +249,22 @@ impl Router {
                     })
             })
     }
+    /// Consume one bounded-input warning from replay or keymap translation.
     pub fn take_notice(&mut self) -> Option<String> {
         self.queue
             .notice
             .take()
             .or_else(|| self.editing.take_notice())
     }
+    /// Cancel an incomplete keymap command sequence without transferring it to another source.
     pub fn cancel_sequence(&mut self) {
         self.editing.cancel_sequence();
     }
+    /// Mode/status label for the active keyboard style, including Vim’s current editing mode.
     pub fn label(&self, style: Style) -> String {
         self.editing.label(style)
     }
+    /// Bind keymap state to a document/style pair before source rendering.
     pub fn bind_source(&mut self, id: u64, style: Style) {
         self.editing.bind(id, style);
     }

@@ -24,9 +24,13 @@ impl Pane {
     fn index(self) -> usize {
         self as usize
     }
+    /// Root-window fallback focus ID for this logical pane. Native child panes must use `id_in` to
+    /// keep focus scoped to their host.
     pub fn id(self) -> egui::Id {
         egui::Id::new(("pane-focus", self.index()))
     }
+    /// Stable pane focus ID scoped to the native viewport; the root retains its existing ID for
+    /// persisted widget state.
     pub fn id_in(self, viewport: egui::ViewportId) -> egui::Id {
         if viewport == egui::ViewportId::ROOT {
             self.id()
@@ -42,9 +46,11 @@ pub(super) struct InputRules<'a> {
     leader: bool,
 }
 impl InputRules<'_> {
+    /// Effective source-editor leader chord from the active shortcut profile.
     pub fn prefix(&self) -> bindings::Chord {
         self.bindings.prefix(false)
     }
+    /// Copy recognition rules while dropping a prefix inherited from an obsolete source scope.
     pub fn without_prefix(self) -> Self {
         Self {
             leader: false,
@@ -92,6 +98,8 @@ pub(super) struct State {
     modal: bool,
 }
 impl State {
+    /// Restore validated shortcut profiles and initialize transient focus/layout state. No pane or
+    /// process is activated while loading.
     pub fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         Self {
             bindings: bindings::Bindings::load(storage),
@@ -111,14 +119,18 @@ impl State {
             modal: false,
         }
     }
+    /// Begin root layout measurements for this frame. Child viewport measurements remain available
+    /// until their own callbacks rebuild them.
     pub fn begin_layout(&mut self) {
         self.rects = [None; 5];
         self.viewports = [None; 5];
         self.begin_viewport_layout(egui::ViewportId::ROOT);
     }
+    /// Reset only one host’s pane measurements after routing its input against the previous layout.
     pub fn begin_viewport_layout(&mut self, viewport: egui::ViewportId) {
         self.native_rects.insert(viewport, [None; 5]);
     }
+    /// Release measured geometry and remembered widget focus when a native editor is removed.
     pub fn forget_viewport(&mut self, viewport: egui::ViewportId) {
         self.native_rects.remove(&viewport);
         self.remembered.remove(&viewport);
@@ -134,28 +146,36 @@ impl State {
             |rects| rects[pane.index()],
         )
     }
+    /// Last measured rectangle for the preferred host of a logical pane, in egui logical points.
     pub fn rect(&self, pane: Pane) -> Option<egui::Rect> {
         self.rects[pane.index()]
     }
+    /// Whether a root-layout pane is admitted by the current zoom selection.
     pub fn visible(&self, pane: Pane) -> bool {
         self.zoom.is_none_or(|zoom| zoom == pane)
     }
+    /// Request root editor focus and clear an incompatible root pane zoom. The application adapter
+    /// selects the actual document host separately.
     pub fn editor_intent(&mut self) {
         self.active = Pane::Editor;
         self.pending = Some(Pane::Editor);
         self.pending_viewport = egui::ViewportId::ROOT;
         self.zoom = self.zoom.filter(|p| *p == Pane::Editor);
     }
+    /// Record terminal focus intent and clear incompatible zoom without spawning a shell.
     pub fn terminal_intent(&mut self) {
         self.active = Pane::Terminal;
         self.pending = Some(Pane::Terminal);
         self.zoom = self.zoom.filter(|p| *p == Pane::Terminal);
     }
+    /// Defer widget focus to the named native host; another viewport must not consume this request.
     pub fn request_focus(&mut self, pane: Pane, viewport: egui::ViewportId) {
         self.active = pane;
         self.pending = Some(pane);
         self.pending_viewport = viewport;
     }
+    /// Whether asynchronous file completion may take editor focus without overriding a deliberately
+    /// selected tool pane.
     pub fn accepts_editor_focus(&self) -> bool {
         !self.used || self.active == Pane::Editor
     }
@@ -257,6 +277,7 @@ pub(super) struct List {
     pub navigated: bool,
 }
 impl List {
+    /// Consume unmodified list navigation keys and return a signed row delta plus Enter activation.
     pub fn keys(ctx: &egui::Context) -> (isize, bool) {
         ctx.input_mut(|i| {
             let delta = isize::from(i.consume_key(egui::Modifiers::NONE, Key::ArrowDown))
@@ -264,6 +285,8 @@ impl List {
             (delta, i.consume_key(egui::Modifiers::NONE, Key::Enter))
         })
     }
+    /// Reset on query changes and clamp the list cursor to loaded results. Return whether the query
+    /// or requested navigation changed.
     pub fn update(&mut self, query: &str, len: usize, delta: isize) -> bool {
         let changed = self.query != query;
         if changed {
@@ -281,6 +304,7 @@ impl List {
 }
 
 impl EditorApp {
+    /// Effective zoom for the named editor, using root layout state for root/tool callers.
     pub(super) fn pane_zoom(&self, viewport: egui::ViewportId) -> Option<Pane> {
         if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
             self.navigation.zoom
@@ -289,6 +313,8 @@ impl EditorApp {
         }
     }
 
+    /// Update one editor’s zoom without changing another editor’s layout; root/tool callers share
+    /// the root layout state.
     pub(super) fn set_pane_zoom(&mut self, viewport: egui::ViewportId, pane: Option<Pane>) {
         if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
             self.navigation.zoom = pane;
@@ -297,6 +323,7 @@ impl EditorApp {
         }
     }
 
+    /// Whether a pane is visible under its native editor host’s zoom choice.
     pub(super) fn pane_visible(&self, pane: Pane, viewport: egui::ViewportId) -> bool {
         self.pane_zoom(viewport).is_none_or(|zoom| zoom == pane)
     }

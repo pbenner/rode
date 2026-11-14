@@ -49,6 +49,8 @@ impl EditorApp {
         });
     }
 
+    /// Dispatch a Mise action to the selected project host with captured environment settings.
+    /// Ignore requests while an action is pending or the extension is disabled.
     pub(in crate::app) fn request_mise(
         &mut self,
         action: crate::mise::Action,

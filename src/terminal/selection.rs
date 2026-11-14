@@ -25,6 +25,8 @@ pub(super) struct Selection {
 }
 
 impl Selection {
+    /// Begin a drag at a zero-based viewport cell boundary and capture the displayed screen
+    /// snapshot.
     pub fn new(screen: &vt100::Screen, anchor: Point) -> Self {
         Self {
             anchor,
@@ -46,16 +48,20 @@ impl Selection {
             && self.contents == screen.contents()
     }
 
+    /// Return ordered start and exclusive end cell boundaries, regardless of drag direction.
     pub fn bounds(&self) -> (Point, Point) {
         (self.anchor.min(self.head), self.anchor.max(self.head))
     }
 
+    /// Extract selected text only while its screen snapshot remains valid and the range is
+    /// nonempty.
     pub fn text(&self, screen: &vt100::Screen) -> Option<String> {
         let (start, end) = self.bounds();
         (start != end && self.valid_for(screen))
             .then(|| screen.contents_between(start.row, start.col, end.row, end.col))
     }
 
+    /// Test membership in the half-open cell range; callers must check screen validity separately.
     pub fn contains(&self, row: u16, col: u16) -> bool {
         let point = Point { row, col };
         let (start, end) = self.bounds();

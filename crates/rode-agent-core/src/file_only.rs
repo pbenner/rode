@@ -36,6 +36,8 @@ pub(crate) struct Jobs {
     retired: Vec<Job>,
 }
 impl Jobs {
+    /// Start a bounded native tool worker with a process-specific reply target. Active and retiring
+    /// workers share the concurrency limit; spawn/limit errors leave no admitted job.
     pub fn start(
         &mut self,
         factory: Arc<dyn crate::Factory>,
@@ -74,6 +76,8 @@ impl Jobs {
         Ok(())
     }
 
+    /// Collect completed active replies without blocking. Cancelled workers are only reaped from
+    /// retirement; their late results are never delivered to another turn.
     pub fn poll(&mut self) -> Vec<(Target, std::result::Result<Value, String>)> {
         self.retired.retain(|job| !job.worker.is_finished());
         let mut ready = vec![];
@@ -99,6 +103,8 @@ impl Jobs {
         ready
     }
 
+    /// Signal cancellation for every active worker and return its reply targets. Retain the workers
+    /// until they finish, so cancellation is not mistaken for acknowledged cleanup.
     pub fn cancel(&mut self) -> Vec<Target> {
         let mut targets = vec![];
         for mut job in self.active.drain(..) {
@@ -109,9 +115,11 @@ impl Jobs {
         targets
     }
 
+    /// Whether active or retiring workers still prevent controller shutdown.
     pub fn pending(&self) -> bool {
         !self.active.is_empty() || self.stopping()
     }
+    /// Whether a worker still awaits exit after delivering its reply or receiving cancellation.
     pub fn stopping(&self) -> bool {
         self.retired.iter().any(|job| !job.worker.is_finished())
     }
