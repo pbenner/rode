@@ -245,7 +245,7 @@ fn opening_a_non_python_project_does_not_probe_python_and_disable_invalidates_to
     app.load_project_tools(&ctx);
     assert!(!app.workbench.python.env_busy);
     app.new_file();
-    app.documents[0].text = "keep dirty".into();
+    app.documents[0].fixture_content().text = "keep dirty".into();
     let cancel = app.extensions.cancel.clone();
     let epoch = app.workbench.epoch;
     app.set_extension(Feature::Monitor.id(), false);
@@ -415,12 +415,12 @@ fn format_save_result_cannot_replace_newer_edits_or_publish_stale_diagnostics() 
     app.new_file();
     let id = app.documents[0].id;
     let document = &mut app.documents[0];
-    document.path = Some(path.to_str().unwrap().into());
-    document.saved_text = "value=0\n".into();
-    document.text = "value=2\n".into();
+    document.fixture_content().path = Some(path.to_str().unwrap().into());
+    document.fixture_content().saved_text = "value=0\n".into();
+    document.fixture_content().text = "value=2\n".into();
     document.set_dirty_fixture(true);
     document.set_version_fixture(2);
-    document.saving = true;
+    document.fixture_content().saving = true;
     app.handle_tool(
         ToolJob::Analyze {
             tool: "test-tool".into(),
@@ -458,7 +458,7 @@ fn fresh_formatter_result_updates_buffer_and_diagnostics_without_saving_it() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
     app.new_file();
-    app.documents[0].text = "value=1\n".into();
+    app.documents[0].fixture_content().text = "value=1\n".into();
     let id = app.documents[0].id;
     app.handle_tool(
         ToolJob::Analyze {
@@ -497,7 +497,7 @@ fn applying_a_local_project_policy_keeps_unsaved_buffers() {
     app.workbench.draft.latex.program = "unfinished-tool".into();
     app.workbench.settings_section = SettingsSection::Sandbox;
     app.new_file();
-    app.documents[0].text = "keep unsaved work".into();
+    app.documents[0].fixture_content().text = "keep unsaved work".into();
     let id = app.documents[0].id;
     app.commit_project(
         files::Response {

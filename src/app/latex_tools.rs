@@ -438,9 +438,10 @@ mod tests {
             sandbox_options: Default::default(),
         }));
         app.new_file();
-        app.documents[0].path = Some(root_path(&app).join("main.tex").to_string_lossy().into());
-        app.documents[0].text = "saved".into();
-        app.documents[0].saved_text = "saved".into();
+        app.documents[0].fixture_content().path =
+            Some(root_path(&app).join("main.tex").to_string_lossy().into());
+        app.documents[0].fixture_content().text = "saved".into();
+        app.documents[0].fixture_content().saved_text = "saved".into();
         app.documents[0].set_dirty_fixture(false);
         (app, ctx)
     }
@@ -451,7 +452,7 @@ mod tests {
     fn latex_build_rejects_dirty_sources_without_starting_a_process() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, ctx) = app(root.path());
-        app.documents[0].text = "keep unsaved LaTeX".into();
+        app.documents[0].fixture_content().text = "keep unsaved LaTeX".into();
         app.documents[0].set_dirty_fixture(true);
         app.build_latex(true, &ctx);
         assert!(!app.latex.busy);
@@ -468,7 +469,7 @@ mod tests {
         let (mut app, ctx) = app(root.path());
         let id = app.documents[0].id;
         app.documents[0].set_version_fixture(2);
-        app.documents[0].text = "new edits".into();
+        app.documents[0].fixture_content().text = "new edits".into();
         app.documents[0].set_dirty_fixture(true);
         app.latex.token = 1;
         app.latex.busy = true;

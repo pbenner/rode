@@ -12,7 +12,7 @@ fn source_guards_and_panel_do_not_start_a_process() {
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.new_file();
-    app.documents[0].text = "keep this unsaved source".into();
+    app.documents[0].fixture_content().text = "keep this unsaved source".into();
     app.documents[0].set_dirty_fixture(true);
     app.start_debugger(&ctx);
     assert!(app.debugger.client.is_none());
@@ -171,7 +171,7 @@ fn delayed_source_navigation_waits_for_old_reads_and_cancels_on_resume() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].path = Some("/new.rs".into());
+    app.documents[0].fixture_content().path = Some("/new.rs".into());
     let selected = app.documents[0].id;
     app.new_file();
     let unchanged = app.documents.active_index();
@@ -213,9 +213,9 @@ fn focused_source_does_not_acknowledge_a_pending_step_destination() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
     let doc = app.documents.active_mut().unwrap();
-    doc.path = Some("/project/main.py".into());
-    doc.text = "first\nλ second\nthird\nfourth\n".into();
-    doc.saved_text = doc.text.clone();
+    doc.fixture_content().path = Some("/project/main.py".into());
+    doc.fixture_content().text = "first\nλ second\nthird\nfourth\n".into();
+    doc.fixture_content().saved_text = doc.text.clone();
     doc.selection = Some((0, 0));
     app.focus_editor(&ctx);
     let render = |app: &mut EditorApp| {

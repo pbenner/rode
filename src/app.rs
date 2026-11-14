@@ -665,17 +665,10 @@ impl EditorApp {
         let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) else {
             return;
         };
-        if doc.saving {
+        let Some(snapshot) = doc.begin_text_save(&path, save_as) else {
             return;
-        }
-        let expected = if save_as && doc.path.as_deref() != Some(&path) {
-            None
-        } else {
-            doc.revision.clone()
         };
-        let text = doc.text.clone();
-        doc.saving = true;
-        self.dispatch_text_save(id, path, text, expected, ctx);
+        self.dispatch_text_save(id, path, snapshot.contents, snapshot.expected, ctx);
     }
 
     /// Select or hide the terminal surface, lazily creating a shell only when none is owned or starting.

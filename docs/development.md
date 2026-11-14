@@ -364,6 +364,15 @@ Shared embedded Python feature adapters and JSON policy/catalogue data live in `
 
 `crates/rode-bwrap` builds pinned bubblewrap and libcap C sources into the native helper, using a dedicated `--bwrap-launch` process when the host lacks system `bwrap`. Linux builds need a C compiler and Linux UAPI headers; native static builds need `musl-tools` (or a configured target C compiler for cross builds). No system libcap development package or runtime download is required. Source provenance, update rules and licenses live with the crate. The missing-PATH sandbox regression requires actual bundled enforcement in the sandbox CI job; ordinary hosts also cover visible namespace-denial fallback and rejection of a broken system executable without retrying. Fingerprint tests cover bundled-helper relocation.
 
+Document source/save facts are read-only. Use `Document::edit_source` for native
+`TextBuffer` edits or batched UTF-8 byte-range replacements, and `set_source` for a
+complete source snapshot. The edit closure cannot retain mutable source; its
+scope updates version, dirty state and line count once, including on unwinding.
+Binary rendering uses `edit_binary`, backed by the byte buffer's own revision.
+Use owner-created save/analysis snapshots rather than setting save flags or
+reconstructing revision policy in a UI handler. Existing synthetic fixtures can
+use the test-only `fixture_content` helper; normal builds expose no mutable facts.
+
 ## CI tiers and timings
 
 The **Check** workflow runs on pull requests and pushes to `main`, avoiding duplicate branch-push and PR runs. New commits cancel superseded PR/main checks. Runners are pinned to Ubuntu 24.04, and routine Rust tests and the editor share the `ci` Cargo profile (development optimisation without debug information or release LTO). The editor, session daemon, static SSH helper and selected integration-test executables are built once and transferred together, preserving executable permissions.

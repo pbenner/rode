@@ -226,7 +226,7 @@ fn saved_connection_rename_selects_the_name_without_connecting_or_changing_the_h
         app.connection_profiles.profiles[1].name = "β Work cluster".into();
         let original = app.connection_profiles.profiles[1].clone();
         app.new_file();
-        app.documents[0].text = "unsaved source".into();
+        app.documents[0].fixture_content().text = "unsaved source".into();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("widgets.json");
         ui_probe::install_at(&ctx, path.clone());
@@ -351,7 +351,7 @@ fn saved_connection_results_preserve_drafts_and_prevent_stale_reload() {
         "A reload must not race an in-flight edit"
     );
     app.new_file();
-    app.documents[0].text = "unsaved source".into();
+    app.documents[0].fixture_content().text = "unsaved source".into();
     app.workers
         .profiles(&ctx)
         .send(ProfileEvent::Changed {

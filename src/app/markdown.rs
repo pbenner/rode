@@ -562,7 +562,8 @@ impl EditorApp {
             return false;
         }
         let dirty = doc.dirty();
-        let version = doc.version();
+        let path = doc.path.clone().unwrap_or(untitled_path);
+        let id = doc.id;
         let preview = doc
             .markdown
             .get_or_insert_with(|| Preview::new(self.markdown_images.clone()));
@@ -628,9 +629,8 @@ impl EditorApp {
         if reload {
             preview.invalidate();
         }
-        let path = doc.path.clone().unwrap_or(untitled_path);
-        let id = doc.id;
-        let requests = preview.prepare(version, &path, &doc.text);
+        let requests = doc.prepare_markdown(&path);
+        let preview = doc.markdown.as_ref().unwrap();
         let token = preview.token;
         let cancelled = preview.cancelled.clone();
         let focus = self.take_editor_focus(ui, ctx).is_some() || !was_showing;
@@ -828,10 +828,10 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
         let doc = &mut app.documents[0];
-        doc.path = Some(path.to_str().unwrap().into());
-        doc.revision = Some(files::digest(b"# Original\n"));
-        doc.saved_text = "# Original\n".into();
-        doc.text = "# Unsaved heading\n\n**Bold body** and `inline code`.\n\n- [x] Done\n\n| Name | Value |\n| --- | --- |\n| item | 42 |\n".into();
+        doc.fixture_content().path = Some(path.to_str().unwrap().into());
+        doc.fixture_content().revision = Some(files::digest(b"# Original\n"));
+        doc.fixture_content().saved_text = "# Original\n".into();
+        doc.fixture_content().text = "# Unsaved heading\n\n**Bold body** and `inline code`.\n\n- [x] Done\n\n| Name | Value |\n| --- | --- |\n| item | 42 |\n".into();
         doc.set_dirty_fixture(true);
         doc.set_version_fixture(1);
         doc.cursor = (2, 3);
@@ -863,7 +863,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].path = Some("/project/README.md".into());
+        app.documents[0].fixture_content().path = Some("/project/README.md".into());
         app.toggle_markdown(&ctx);
         let id = app.documents[0].id;
         let preview = app.documents[0].markdown.as_mut().unwrap();

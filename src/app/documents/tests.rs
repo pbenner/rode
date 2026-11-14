@@ -7,14 +7,14 @@ fn source_changes_keep_revisions_dirty_state_and_line_counts_consistent() {
     docs.new_file();
     let doc = docs.active_mut().unwrap();
     let original = "λ\r\nsecond\r\n";
-    doc.text = original.into();
+    doc.fixture_content().text = original.into();
     doc.acknowledge_save("source.rs".into(), original.into(), "saved".into());
-    doc.text = "λ\r\nchanged\r\nextra".into();
+    doc.fixture_content().text = "λ\r\nchanged\r\nextra".into();
     doc.source_changed();
     assert_eq!(doc.version(), 1);
     assert_eq!(doc.line_count(), 3);
     assert!(doc.dirty());
-    doc.text = original.into();
+    doc.fixture_content().text = original.into();
     doc.source_changed();
     assert_eq!(doc.version(), 2);
     assert_eq!(doc.line_count(), 3);
@@ -77,7 +77,7 @@ fn canonical_alias_replies_select_existing_edits_without_creating_another_identi
     assert_eq!(docs.active().unwrap().lines, 3);
     assert_eq!(docs.active().unwrap().cursor, (1, 1));
     assert!(!docs.active().unwrap().dirty());
-    docs.active_mut().unwrap().text = "unsaved newer text".into();
+    docs.active_mut().unwrap().fixture_content().text = "unsaved newer text".into();
     docs.active_mut().unwrap().set_dirty_fixture(true);
     let other = docs.new_file();
     assert_eq!(docs.open(response, &images, &shutdowns), id);

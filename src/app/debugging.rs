@@ -634,9 +634,9 @@ mod source_tests {
             let mut app = EditorApp::new(&cc, Startup::default());
             app.new_file();
             let doc = &mut app.documents[0];
-            doc.path = Some("/project/main.py".into());
-            doc.saved_text = original.into();
-            doc.text = current.into();
+            doc.fixture_content().path = Some("/project/main.py".into());
+            doc.fixture_content().saved_text = original.into();
+            doc.fixture_content().text = current.into();
             doc.set_version_fixture(1);
             doc.set_dirty_fixture(current != original);
             app.debugger.verify_sources = true;
@@ -667,8 +667,8 @@ mod source_tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].path = Some("/project/later.py".into());
-        app.documents[0].text = "value = 1\n".into();
+        app.documents[0].fixture_content().path = Some("/project/later.py".into());
+        app.documents[0].fixture_content().text = "value = 1\n".into();
         app.documents[0].set_version_fixture(7);
         app.debugger.verify_sources = true;
         assert_eq!(app.debugger.source_version(&app.documents[0]), u64::MAX);
@@ -678,7 +678,10 @@ mod source_tests {
         );
         assert_eq!(app.debugger.source_version(&app.documents[0]), 7);
         app.debugger.verify_sources = false;
-        app.documents[0].text.push_str("value += 1\n");
+        app.documents[0]
+            .fixture_content()
+            .text
+            .push_str("value += 1\n");
         assert_eq!(app.debugger.source_version(&app.documents[0]), 7);
     }
 }

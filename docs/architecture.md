@@ -393,13 +393,23 @@ tab preserves the selected ID, closing the selected tab chooses its neighbor,
 and clearing a workspace never resets the ID allocator. Canonical read replies
 select an existing bound buffer rather than replacing its unsaved edits.
 
-Document revisions, cached dirty state, line counts and recovery records are
-private. Native edits, formatting, find/replace, notebook serialization and Git
-hunk reverts publish accepted source changes through one operation. Binary edits
-publish their own dirty state; decoder reloads advance reply identity without
-making the document dirty. Text/binary save acknowledgements bind only the
-submitted snapshot, preserving newer edits. Synthetic fixture setters exist only
-in test builds.
+Documents expose source text, saved baselines, bindings, IDs and save flags as a
+read-only `Content` projection (`Deref` without `DerefMut`). Scoped edits own the
+mutable source and publish version, dirty state and line count before returning,
+including unwinding. Native egui editing and byte-range replacements use the same
+scope; complete formatter/notebook/template snapshots use `set_source`. Idle
+frames do not copy the source. Callers cannot mutate text and forget a separate
+metadata update.
+
+Byte buffers maintain their own revision. Binary edit scopes publish document
+metadata from that revision, independent of presentation caches. The binary
+renderer receives only its editable view and captured presentation facts rather
+than the application coordinator. Text and binary saves capture exact contents,
+destination revisions and retained byte-memory accounting through owner methods.
+Analysis snapshots capture source/version pairs; the document owner accepts tool
+replies only at their captured version while the workbench owner checks its epoch.
+Save acknowledgements preserve edits received after submission. Synthetic fixture
+setters exist only in test builds.
 
 The document owner also unbinds host paths/revisions into recovery metadata and
 restores them only for a matching ready connection and verified encrypted lease.

@@ -141,11 +141,11 @@ fn a_nonmodal_quit_intent_preserves_input_on_both_sides_of_a_document_handoff() 
 fn discard_decisions_are_bound_to_the_visible_versions_and_current_intent() {
     let (mut app, ctx) = fixture();
     let id = source(&mut app);
-    app.documents[0].text = "first edit".into();
+    app.documents[0].fixture_content().text = "first edit".into();
     app.documents[0].set_dirty_fixture(true);
     app.guarded(Action::CloseTab(id), &ctx);
     let (old, _) = app.pending.presentation().unwrap();
-    app.documents[0].text = "new worker edit".into();
+    app.documents[0].fixture_content().text = "new worker edit".into();
     app.documents[0].advance_version_fixture();
     app.discard_guarded_action(old, &ctx);
     let (current, _) = app.pending.presentation().unwrap();
@@ -164,7 +164,7 @@ fn a_clean_save_finishes_before_a_project_request_can_capture_its_workspace() {
     let project = tempfile::tempdir().unwrap();
     let (mut app, ctx) = fixture();
     let id = source(&mut app);
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     app.guarded(
         Action::Project {
             path: project.path().to_string_lossy().into(),
@@ -200,7 +200,7 @@ fn failed_save_cancels_a_project_intent_instead_of_invalidating_its_error() {
     let project = tempfile::tempdir().unwrap();
     let (mut app, ctx) = fixture();
     let id = source(&mut app);
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     app.guarded(
         Action::Project {
             path: project.path().to_string_lossy().into(),
@@ -235,7 +235,7 @@ fn prepared_projects_recheck_lifetime_work_and_edits_received_during_the_wait() 
     let token = prepared(&mut app, &ctx, project.path());
     assert!(app.workspace.prepared(token).is_some());
     assert!(app.workspace.is_none());
-    app.documents[0].text = "late edit".into();
+    app.documents[0].fixture_content().text = "late edit".into();
     app.documents[0].set_dirty_fixture(true);
     app.documents[0].advance_version_fixture();
     app.sessions.persistence_pending_fixture(false);
@@ -281,9 +281,9 @@ fn forced_disconnect_cancels_save_waits_and_rejects_late_acknowledgements() {
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     let id = source(&mut app);
-    app.documents[0].text = "keep this edit".into();
+    app.documents[0].fixture_content().text = "keep this edit".into();
     app.documents[0].set_dirty_fixture(true);
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     app.guarded(Action::Quit, &ctx);
     let (old, _) = app.pending.presentation().unwrap();
     let generation = app.workers.generation();
@@ -320,7 +320,7 @@ fn explicit_disconnect_waits_for_save_as_and_recovers_the_acknowledged_binding()
     let workspace = crate::app::tests::remote_workspace();
     app.workspace.set_fixture(Some(workspace));
     let id = source(&mut app);
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     app.disconnect_ssh(&ctx);
     assert!(app.pending.waiting_for_save());
     assert!(app.workspace.is_some());
@@ -362,7 +362,7 @@ fn a_project_reply_started_before_quit_cannot_supersede_its_save_barrier() {
     let (mut app, ctx) = fixture();
     source(&mut app);
     let token = app.workspace.begin_preparation();
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     app.guarded(Action::Quit, &ctx);
     let (decision, _) = app.pending.presentation().unwrap();
     let response = files::local(&Request::Prepare {
@@ -407,7 +407,7 @@ fn reconnect_does_not_replace_transport_or_buffers_before_a_save_acknowledgement
         .socket
         .clone();
     let id = source(&mut app);
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     let generation = app.workers.generation();
     app.reconnect_ssh(&ctx);
     assert!(matches!(app.pending.as_ref(), Some(Action::Reconnect(_))));
@@ -501,7 +501,7 @@ fn a_preparation_completion_cannot_replace_an_existing_discard_decision() {
     let (mut app, ctx) = fixture();
     let id = source(&mut app);
     let token = app.workspace.begin_preparation();
-    app.documents[0].text = "keep until confirmed".into();
+    app.documents[0].fixture_content().text = "keep until confirmed".into();
     app.documents[0].set_dirty_fixture(true);
     app.guarded(Action::CloseTab(id), &ctx);
     let decision = app.pending.presentation().unwrap().0;
@@ -541,7 +541,7 @@ fn prepared_discard_confirmation_keeps_the_requesting_windows_dialog_owner() {
     let versions = app.documents.versions();
     let owner = egui::ViewportId::from_hash_of("requesting-tools-window");
     app.dialog_viewport = owner;
-    app.documents[0].text = "edited during preparation".into();
+    app.documents[0].fixture_content().text = "edited during preparation".into();
     app.documents[0].set_dirty_fixture(true);
     app.documents[0].advance_version_fixture();
     let response = files::local(&Request::Prepare {

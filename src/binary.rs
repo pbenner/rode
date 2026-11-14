@@ -333,6 +333,7 @@ pub struct Buffer {
     redo: Vec<Patch>,
     history_bytes: usize,
     changed_bytes: usize,
+    revision: u64,
 }
 impl Buffer {
     /// Create a clean buffer from loaded bytes.
@@ -344,7 +345,12 @@ impl Buffer {
             redo: vec![],
             history_bytes: 0,
             changed_bytes: 0,
+            revision: 0,
         }
+    }
+    /// Source identity advances only for byte mutations, never save acknowledgements.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
     /// Borrow the current immutable snapshot; clone the Arc to retain it for a worker/save.
     /// Byte edits must use `patch`, `undo` or `redo` to keep dirty tracking consistent.
@@ -420,6 +426,7 @@ impl Buffer {
             .count();
         self.changed_bytes = self.changed_bytes - before + after;
         Arc::make_mut(&mut self.bytes)[offset..end].copy_from_slice(replacement);
+        self.revision = self.revision.wrapping_add(1);
     }
     /// Record the exact submitted snapshot as saved, preserving edits made while saving.
     /// A new baseline is compared once, rather than on every rendered frame.

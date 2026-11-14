@@ -350,10 +350,10 @@ impl EditorApp {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;
         };
-        let Some(view) = &mut doc.pdf else {
+        let Some(path) = doc.path.clone() else {
             return;
         };
-        let Some(path) = doc.path.clone() else {
+        let Some(view) = &mut doc.pdf else {
             return;
         };
         if view.image.loading {
@@ -423,7 +423,7 @@ mod tests {
         let loaded = pdf::load_bytes(bytes.to_vec(), 1, &budget, 128).unwrap();
         app.new_file();
         let doc = &mut app.documents[0];
-        doc.path = Some(path.to_string_lossy().into());
+        doc.fixture_content().path = Some(path.to_string_lossy().into());
         doc.set_dirty_fixture(false);
         doc.pdf = Some(PdfView::new(loaded));
         let id = doc.id;

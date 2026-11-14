@@ -302,11 +302,7 @@ impl EditorApp {
             // observe the saved version; formatting gets its own job.
             self.workbench.code_tools.checking.remove(&id);
         }
-        let expected = if save_as && doc.path.as_deref() != Some(path) {
-            None
-        } else {
-            doc.revision.clone()
-        };
+        let expected = doc.expected_revision(path, save_as);
         self.analyze_document(
             id,
             path.into(),
@@ -394,11 +390,11 @@ impl EditorApp {
             self.notify("Code tools accept buffers up to 8 MiB. This file remains editable and can be saved normally.", false);
             return;
         }
-        if save.is_some() {
-            doc.saving = true;
-        }
-        let version = doc.version();
-        let original = doc.text.clone();
+        let Some(snapshot) = doc.analysis_snapshot(save.is_some()) else {
+            return;
+        };
+        let version = snapshot.version;
+        let original = snapshot.text;
         let check = crate::languages::detect(Some(&path)).is_some_and(|l| l.check);
         self.workbench.code_tools.checking.insert(id);
         let request = if let Some(manifest) = external {
@@ -527,7 +523,7 @@ mod tests {
             "{{\"value\":\"{}\"}}",
             "x".repeat(rode_host_core::files::MAX_TOOL_BYTES as usize + 1)
         );
-        app.documents[0].text = text.clone();
+        app.documents[0].fixture_content().text = text.clone();
         app.documents[0].set_dirty_fixture(true);
         app.save_document(id, path.clone(), false, &ctx);
         assert!(
@@ -555,11 +551,11 @@ mod tests {
 
         // The worker must return its exact submitted snapshot even if the
         // editable document changes before its acknowledgement is processed.
-        app.documents[0].text.push('\n');
+        app.documents[0].fixture_content().text.push('\n');
         app.documents[0].set_dirty_fixture(true);
         app.documents[0].advance_version_fixture();
         app.save_document(id, path.clone(), false, &ctx);
-        app.documents[0].text.push('\n');
+        app.documents[0].fixture_content().text.push('\n');
         app.documents[0].advance_version_fixture();
         wait(&mut app);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{text}\n"));

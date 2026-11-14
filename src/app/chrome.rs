@@ -757,7 +757,7 @@ mod tests {
             "/project/🦀/main.rs",
         ] {
             app.new_file();
-            app.documents.last_mut().unwrap().path = Some(path.into());
+            app.documents.last_mut().unwrap().fixture_content().path = Some(path.into());
         }
         assert_eq!(
             tab_labels(&app.documents),
@@ -768,7 +768,7 @@ mod tests {
                 "main.rs"
             ]
         );
-        app.documents[1].path = Some("/project/worker/src/settings.py".into());
+        app.documents[1].fixture_content().path = Some("/project/worker/src/settings.py".into());
         assert_eq!(
             tab_labels(&app.documents),
             [
@@ -785,7 +785,7 @@ mod tests {
         let (mut app, ctx) = editor();
         for text in ["one", "two", "three"] {
             app.new_file();
-            app.documents.last_mut().unwrap().text = text.into();
+            app.documents.last_mut().unwrap().fixture_content().text = text.into();
         }
         let ids: Vec<_> = app.documents.iter().map(|d| d.id).collect();
         app.reorder_tab(ids[0], ids[1], true);
@@ -816,7 +816,7 @@ mod tests {
         let (mut app, ctx) = editor();
         for path in ["README.md", "api.toml", "worker.toml"] {
             app.new_file();
-            app.documents.last_mut().unwrap().path = Some(path.into());
+            app.documents.last_mut().unwrap().fixture_content().path = Some(path.into());
         }
         let ids: Vec<_> = app.documents.iter().map(|doc| doc.id).collect();
         fn frame(
@@ -923,7 +923,7 @@ mod tests {
         let (mut app, ctx) = editor();
         for index in 0..12 {
             app.new_file();
-            app.documents.last_mut().unwrap().path =
+            app.documents.last_mut().unwrap().fixture_content().path =
                 Some(format!("/project/a_very_long_file_name_{index}.txt"));
         }
         app.cycle_tab(1, &ctx);

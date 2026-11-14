@@ -20,7 +20,7 @@ fn a_failed_file_operation_cancels_a_project_wait_without_discarding_buffers() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "preserve this source".into();
+    app.documents[0].fixture_content().text = "preserve this source".into();
     app.explorer_state.busy = true;
     app.guarded(
         Action::Project {
@@ -168,7 +168,7 @@ fn selected_project_picker_preserves_host_policy_and_edits_until_confirmation() 
                 app.workbench = workbench::Workbench::load(Some(&storage));
             }
             app.new_file();
-            app.documents[0].text = "unsaved edits".into();
+            app.documents[0].fixture_content().text = "unsaved edits".into();
             let token = app.workspace.preparation_identity();
             let defaults = app.sandbox_defaults.clone();
             app.open_folder_dialog_at(path.into());
@@ -424,9 +424,9 @@ fn mutation_controls_follow_actual_policy_connection_and_pending_io() {
     assert!(!app.explorer_writable());
     app.documents.cancel_opens();
     app.new_file();
-    app.documents[0].saving = true;
+    app.documents[0].fixture_content().saving = true;
     assert!(!app.explorer_writable());
-    app.documents[0].saving = false;
+    app.documents[0].fixture_content().saving = false;
     app.workspace.as_mut().unwrap().connected = false;
     assert!(!app.explorer_writable());
 }
@@ -646,8 +646,8 @@ fn a_deleted_files_retained_editor_blocks_reusing_its_path() {
         sandbox_options: Default::default(),
     }));
     app.new_file();
-    app.documents[0].path = Some(path.to_string_lossy().into_owned());
-    app.documents[0].text = "retained unsaved contents".into();
+    app.documents[0].fixture_content().path = Some(path.to_string_lossy().into_owned());
+    app.documents[0].fixture_content().text = "retained unsaved contents".into();
     app.documents[0].set_dirty_fixture(true);
     app.explorer_form(Kind::File, entry(&root, true));
     app.explorer_state.input = "retained.txt".into();

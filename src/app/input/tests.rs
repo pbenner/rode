@@ -179,7 +179,7 @@ fn save_after_batched_source_edits_uses_the_text_applied_by_the_native_editor() 
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "original".into();
+        app.documents[0].fixture_content().text = "original".into();
         app.documents[0].acknowledge_save(
             path.to_string_lossy().into(),
             "original".into(),
@@ -283,9 +283,9 @@ fn a_tab_command_preserves_following_input_and_uses_the_destination_keymap() {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "first".into();
+        app.documents[0].fixture_content().text = "first".into();
         app.new_file();
-        app.documents[1].text = "second".into();
+        app.documents[1].fixture_content().text = "second".into();
         app.navigation.bindings.select_style(style);
         frame(&mut app, &ctx, vec![]);
         frame(&mut app, &ctx, vec![]);
@@ -323,7 +323,7 @@ fn new_and_clean_close_commands_preserve_following_source_input() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "original".into();
+    app.documents[0].fixture_content().text = "original".into();
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     frame(
@@ -359,9 +359,9 @@ fn source_edits_on_each_side_of_a_tab_switch_stay_with_their_document() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "first".into();
+    app.documents[0].fixture_content().text = "first".into();
     app.new_file();
-    app.documents[1].text = "second".into();
+    app.documents[1].fixture_content().text = "second".into();
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     frame(

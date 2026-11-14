@@ -13,7 +13,7 @@ fn workspace_banners_paint_the_full_background_and_pad_themed_controls() {
             ctx.set_zoom_factor(scale);
             if file_mode {
                 app.new_file();
-                app.documents[0].path = Some("/tmp/standalone.rs".into());
+                app.documents[0].fixture_content().path = Some("/tmp/standalone.rs".into());
             } else {
                 app.workspace.set_fixture(Some(remote_workspace()));
             }
@@ -105,7 +105,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     );
     // A late startup result must not discard a buffer edited while it was loading.
     app.new_file();
-    app.documents[0].text = "keep these edits".into();
+    app.documents[0].fixture_content().text = "keep these edits".into();
     app.documents[0].set_dirty_fixture(true);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.workspace.preparing() || app.documents.has_pending_opens() {
@@ -127,7 +127,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     let doc = app.documents.active_mut().unwrap();
     assert_eq!(doc.path.as_deref(), path.to_str());
     assert_eq!(doc.text, "standalone contents\n");
-    doc.text.push_str("edited\n");
+    doc.fixture_content().text.push_str("edited\n");
     doc.set_dirty_fixture(true);
     doc.advance_version_fixture();
     app.save_active(&ctx, false);
@@ -146,6 +146,7 @@ fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     app.documents
         .active_mut()
         .unwrap()
+        .fixture_content()
         .text
         .push_str("unsaved edit\n");
     app.documents.active_mut().unwrap().set_dirty_fixture(true);
@@ -276,7 +277,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             assert_eq!(doc.text, "startup contents\n");
             assert!(!doc.dirty());
             assert_eq!(app.workbench.surface, workbench::Surface::Editor);
-            doc.text.push_str("edited\n");
+            doc.fixture_content().text.push_str("edited\n");
             doc.set_dirty_fixture(true);
             doc.advance_version_fixture();
             app.save_active(&ctx, false);
@@ -465,7 +466,7 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
     let preparation = app.workspace.begin_preparation();
     // The request started with no buffers, but the user edited while waiting.
     app.new_file();
-    app.documents[0].text = "typed during slow project opening".into();
+    app.documents[0].fixture_content().text = "typed during slow project opening".into();
     let project = tempfile::tempdir().unwrap();
     let file = project.path().join("startup.txt");
     std::fs::write(&file, "open after confirmation").unwrap();
@@ -517,7 +518,7 @@ fn file_operations_wait_until_the_requested_project_environment_is_ready() {
     workspace.ready = false;
     app.workspace.set_fixture(Some(workspace));
     app.new_file();
-    app.documents[0].text = "keep edits".into();
+    app.documents[0].fixture_content().text = "keep edits".into();
     app.save_document(app.documents[0].id, "/not-written.rs".into(), true, &ctx);
     assert!(!app.documents[0].saving);
     assert_eq!(app.documents[0].text, "keep edits");
@@ -558,9 +559,9 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     std::fs::write(&remote.socket, "owned connection fixture").unwrap();
     app.new_file();
     let doc = &mut app.documents[0];
-    doc.path = Some("/scratch/researcher/project/main.rs".into());
-    doc.revision = Some("remote revision".into());
-    doc.text = "unsaved remote edits".into();
+    doc.fixture_content().path = Some("/scratch/researcher/project/main.rs".into());
+    doc.fixture_content().revision = Some("remote revision".into());
+    doc.fixture_content().text = "unsaved remote edits".into();
     doc.set_dirty_fixture(true);
     doc.set_version_fixture(3);
     doc.selection = Some((2, 5));
@@ -649,7 +650,7 @@ fn project_switch_still_protects_unsaved_buffers() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.workspace.set_fixture(Some(remote_workspace()));
     app.new_file();
-    app.documents[0].text = "unsaved remote edits".into();
+    app.documents[0].fixture_content().text = "unsaved remote edits".into();
     app.guarded(
         Action::Project {
             path: "/scratch/other".into(),
@@ -747,7 +748,7 @@ fn interface_scale_tracks_monitor_dpi_and_preserves_editor_state() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "unsaved work".into();
+    app.documents[0].fixture_content().text = "unsaved work".into();
     app.font_size = 19.;
     app.set_ui_scale(0.75, &ctx);
     let mut storage = MemoryStorage::default();
@@ -845,7 +846,7 @@ fn theme_choice_persists_without_touching_unsaved_edits_or_font_size() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "unsaved work".into();
+    app.documents[0].fixture_content().text = "unsaved work".into();
     app.font_size = 19.0;
     app.select_theme("carbon", &ctx);
     assert_eq!(app.documents.len(), 1);
@@ -875,7 +876,7 @@ fn syntax_selection_saves_only_its_own_preference_and_restores_independently() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "unsaved text".into();
+    app.documents[0].fixture_content().text = "unsaved text".into();
     app.font_size = 19.;
     let mut storage = MemoryStorage::default();
     storage.0.insert(theme::STORAGE_KEY.into(), "neon".into());
@@ -923,13 +924,13 @@ fn save_acknowledgement_keeps_edits_typed_during_save() {
     let mut documents = documents::Documents::default();
     documents.new_file();
     let document = documents.active_mut().unwrap();
-    document.text = "original".into();
+    document.fixture_content().text = "original".into();
     document.acknowledge_save("file.rs".into(), "original".into(), "old".into());
-    document.text = "submitted edits".into();
-    document.source_changed();
-    document.saving = true;
-    document.text = "newer edits".into();
-    document.source_changed();
+    document.fixture_content().text = "submitted edits".into();
+    document.sync_source_fixture();
+    document.fixture_content().saving = true;
+    document.fixture_content().text = "newer edits".into();
+    document.sync_source_fixture();
     let version = document.version();
     document.acknowledge_save(
         "file.rs".into(),

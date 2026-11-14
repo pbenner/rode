@@ -84,8 +84,7 @@ impl EditorApp {
         }
         self.new_file();
         let doc = self.documents.active_mut().unwrap();
-        doc.text = marp::TEMPLATE.into();
-        doc.source_changed();
+        doc.set_source(marp::TEMPLATE.into());
         doc.marp = Some(View::default());
     }
     /// Switch a Markdown document between source and slide view, preserving its source buffer.
@@ -373,18 +372,22 @@ impl EditorApp {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;
         };
-        let version = doc.version();
-        let view = doc.marp.get_or_insert_with(View::default);
         let exporting = destination.is_some();
-        if (exporting && view.exporting) || (!exporting && view.busy) {
+        if doc
+            .marp
+            .as_ref()
+            .is_some_and(|view| if exporting { view.exporting } else { view.busy })
+        {
             return;
         }
+        let version = doc.version();
         let path = doc.path.clone().unwrap_or_else(|| {
             std::path::Path::new(&root)
                 .join("untitled.marp.md")
                 .to_string_lossy()
                 .into()
         });
+        let view = doc.marp.get_or_insert_with(View::default);
         let settings = self.workbench.marp_settings().clone();
         if let Err(error) = settings.validate() {
             self.notify(error.to_string(), true);
@@ -403,6 +406,7 @@ impl EditorApp {
             (view.token, view.cancel.clone())
         };
         view.error.clear();
+        let page = view.pdf.as_ref().map_or(1, |pdf| pdf.page);
         let invocation = Invocation {
             root,
             path,
@@ -411,7 +415,6 @@ impl EditorApp {
             format,
             destination,
         };
-        let page = view.pdf.as_ref().map_or(1, |pdf| pdf.page);
         let plan = self.workspace.as_ref().map(|w| w.plan.clone());
         let remote = self.workspace.as_ref().and_then(|w| w.remote.clone());
         let gate = self.marp_gate.clone();
@@ -605,7 +608,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_marp();
-        app.documents[0].path = Some("/remote/slides.marp.md".into());
+        app.documents[0].fixture_content().path = Some("/remote/slides.marp.md".into());
         app.workspace
             .set_fixture(Some(crate::app::tests::remote_workspace()));
         app.detach_ssh(&ctx);

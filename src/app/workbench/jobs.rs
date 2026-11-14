@@ -392,30 +392,26 @@ impl EditorApp {
                     .checked
                     .insert(id, (version, epoch));
                 let mut text_to_save = original;
-                let fresh = self
-                    .documents
-                    .iter()
-                    .any(|d| d.id == id && d.version() == version)
-                    && epoch == self.workbench.epoch;
-                match result {
-                    Ok(project::Response::Analysis(analysis)) if fresh => {
-                        if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-                            if doc.text != analysis.text {
-                                doc.text = analysis.text.clone();
-                                doc.source_changed();
-                            }
-                            self.workbench.code_tools.issues.insert(
-                                id,
-                                Issues {
-                                    version: doc.version(),
-                                    items: analysis.diagnostics,
-                                },
-                            );
-                            self.workbench
-                                .code_tools
-                                .checked
-                                .insert(id, (doc.version(), epoch));
-                        }
+                let applied = match &result {
+                    Ok(project::Response::Analysis(analysis)) if epoch == self.workbench.epoch => {
+                        self.documents
+                            .apply_source_reply(id, version, &analysis.text)
+                    }
+                    _ => None,
+                };
+                match (result, applied) {
+                    (Ok(project::Response::Analysis(analysis)), Some(version)) => {
+                        self.workbench.code_tools.issues.insert(
+                            id,
+                            Issues {
+                                version,
+                                items: analysis.diagnostics,
+                            },
+                        );
+                        self.workbench
+                            .code_tools
+                            .checked
+                            .insert(id, (version, epoch));
                         text_to_save = analysis.text;
                         self.workbench.code_tools.tool_error.clear();
                         self.workbench.code_tools.unavailable_tools.remove(&tool);
@@ -429,12 +425,12 @@ impl EditorApp {
                             self.status = "Code tools completed".into();
                         }
                     }
-                    Ok(_) => {
+                    (Ok(_), _) => {
                         if manual {
                             self.notify("New edits arrived while the tool ran; its outdated result was skipped.", false);
                         }
                     }
-                    Err(error) => {
+                    (Err(error), _) => {
                         self.workbench.code_tools.tool_error = error.clone();
                         if error.contains("is unavailable") || error.contains("Cannot run") {
                             self.workbench

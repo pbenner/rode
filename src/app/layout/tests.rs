@@ -323,7 +323,7 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                 ] {
                     if scene == "binary" {
                         app.new_file();
-                        app.documents.active_mut().unwrap().hex =
+                        app.documents.active_mut().unwrap().fixture_content().hex =
                             Some(crate::app::binary_view::HexView::new(
                                 crate::binary::Loaded::decode("AAECAwQF", &app.image_budget)
                                     .unwrap(),
@@ -331,8 +331,8 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                     } else if scene == "markdown" {
                         app.new_file();
                         let doc = app.documents.active_mut().unwrap();
-                        doc.path = Some("preview.md".into());
-                        doc.text = "# Preview".into();
+                        doc.fixture_content().path = Some("preview.md".into());
+                        doc.fixture_content().text = "# Preview".into();
                         let mut preview =
                             crate::app::markdown::Preview::new(app.markdown_images.clone());
                         preview.showing = true;

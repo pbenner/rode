@@ -168,8 +168,8 @@ pub(in crate::app) mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "submitted".into();
-        app.documents[0].saving = true;
+        app.documents[0].fixture_content().text = "submitted".into();
+        app.documents[0].fixture_content().saving = true;
         native_close(&mut app, &ctx);
         assert!(!app.exit.closing());
         assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));
@@ -189,7 +189,7 @@ pub(in crate::app) mod tests {
             app.new_file();
             let doc = app.documents.active_mut().unwrap();
             doc.acknowledge_save("original.txt".into(), "".into(), "rev".into());
-            doc.saving = true;
+            doc.fixture_content().saving = true;
             let id = doc.id;
             native_close(&mut app, &ctx);
             assert!(app.pending.waiting_for_save());
@@ -234,13 +234,16 @@ pub(in crate::app) mod tests {
             let cc = eframe::CreationContext::_new_kittest(ctx.clone());
             let mut app = EditorApp::new(&cc, Startup::default());
             app.new_file();
-            app.documents[0].text = "submitted".into();
-            app.documents[0].saving = true;
+            app.documents[0].fixture_content().text = "submitted".into();
+            app.documents[0].fixture_content().saving = true;
             native_close(&mut app, &ctx);
             match outcome {
-                "failed" => app.documents[0].saving = false,
+                "failed" => app.documents[0].fixture_content().saving = false,
                 "new edits" => {
-                    app.documents[0].text.push_str(" and newer edits");
+                    app.documents[0]
+                        .fixture_content()
+                        .text
+                        .push_str(" and newer edits");
                     app.documents[0].acknowledge_save(
                         "saved.txt".into(),
                         "submitted".into(),

@@ -262,15 +262,15 @@ impl EditorApp {
         let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) else {
             return;
         };
+        let Some(path) = doc.path.clone() else {
+            return;
+        };
         let Some(image) = &mut doc.image else {
             return;
         };
         if image.loading {
             return;
         }
-        let Some(path) = doc.path.clone() else {
-            return;
-        };
         image.loading = true;
         let version = doc.begin_preview_reload();
         self.dispatch(

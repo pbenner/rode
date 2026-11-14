@@ -72,8 +72,8 @@ fn editor(old: &str, current: &str) -> (Repo, EditorApp, egui::Context) {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
     let doc = app.documents.active_mut().unwrap();
-    doc.text = current.into();
-    doc.source_changed();
+    doc.fixture_content().text = current.into();
+    doc.sync_source_fixture();
     doc.acknowledge_save(
         format!("{}/source.rs", repo.root()),
         current.into(),
@@ -173,10 +173,10 @@ fn an_old_revert_cannot_modify_a_new_edit_path_document_or_baseline() {
         let request = app.git_gutter.revert_request(&app.documents[0], 0).unwrap();
         match invalidation {
             "edit" => {
-                app.documents[0].text = "later edit\n".into();
+                app.documents[0].fixture_content().text = "later edit\n".into();
                 app.documents[0].advance_version_fixture();
             }
-            "rename" => app.documents[0].path = Some("renamed.rs".into()),
+            "rename" => app.documents[0].fixture_content().path = Some("renamed.rs".into()),
             "document" => {
                 app.new_file();
             }

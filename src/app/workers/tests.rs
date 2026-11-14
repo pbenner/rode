@@ -94,7 +94,7 @@ fn stale_context_opens_cannot_clear_new_pending_reads_or_replace_retained_buffer
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
     let retained = app.documents.selected_id().unwrap();
-    app.documents.active_mut().unwrap().text = "retained source".into();
+    app.documents.active_mut().unwrap().fixture_content().text = "retained source".into();
     let old_generation = app.workers.generation();
     app.documents.begin_open("current.txt".into());
     app.clear_project(
@@ -145,7 +145,7 @@ fn a_disconnect_during_a_batch_rejects_later_host_replies_but_keeps_global_compl
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.new_file();
     let id = app.documents.selected_id().unwrap();
-    app.documents.active_mut().unwrap().text = "unsaved source".into();
+    app.documents.active_mut().unwrap().fixture_content().text = "unsaved source".into();
     let generation = app.workers.generation();
     app.workers
         .workspace_at(&ctx, generation)

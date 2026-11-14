@@ -634,7 +634,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "unsaved source".into();
+        app.documents[0].fixture_content().text = "unsaved source".into();
         app.agents.chat.notice("retained conversation");
         app.toggle_panel(Panel::Agent, &ctx);
         app.detach_tab(ToolTab::Panel(Panel::Agent), &ctx);
@@ -775,7 +775,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "unsaved code".into();
+        app.documents[0].fixture_content().text = "unsaved code".into();
         render(&mut app, &ctx);
         let code = app.navigation.rect(navigation::Pane::Editor).unwrap();
         app.toggle_panel(Panel::Settings, &ctx);
@@ -890,7 +890,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "unsaved source".into();
+        app.documents[0].fixture_content().text = "unsaved source".into();
         app.agents.chat.notice("retained conversation");
         // The first sidebar opening selects Chat without starting a shell or model turn.
         assert!(app.workbench.last_tool.is_none());
@@ -1021,7 +1021,7 @@ mod tests {
                     let mut app = EditorApp::new(&cc, Startup::default());
                     app.themes.select(theme, &ctx).unwrap();
                     app.new_file();
-                    app.documents[0].text = "retained source".into();
+                    app.documents[0].fixture_content().text = "retained source".into();
                     let (input, received) = mpsc::channel();
                     let (terminal, _stream) =
                         Terminal::stream(&ctx, "Existing shell".into(), move |event| {

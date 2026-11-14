@@ -1,8 +1,11 @@
 //! Owns document creation, structural tab mutations, selection and pending reads.
 //!
-//! Views may edit buffers through a mutable slice, but cannot insert/remove tabs
-//! or change the selected index independently. IDs never reset on workspace changes.
+//! Source/save facts are read-only projections. Scoped source/byte edits publish
+//! their metadata before returning; views cannot mutate those facts independently.
+//! Structural tab ownership and selected IDs stay here across workspace changes.
 use super::*;
+mod edit;
+pub(super) use edit::Edit;
 
 /// Source-only projection for keyboard interpretation; preview policy stays with documents.
 pub(super) struct Source<'a> {
@@ -41,23 +44,9 @@ pub struct Document {
     pub(super) marp: Option<marp_view::View>,
     pub(super) image: Option<image_view::ImageView>,
     pub(super) pdf: Option<pdf_view::PdfView>,
-    pub(super) hex: Option<binary_view::HexView>,
     pub(super) notebook: Option<notebook_view::View>,
-    /// Stable runtime tab identity, preserved when reordering tabs.
-    pub id: u64,
-    /// Writable/readable path bound to the active project host, or `None` for unsaved/recovery
-    /// buffers.
-    pub path: Option<String>,
+    content: Content,
     recovery: Option<Recovery>,
-    /// Current source text; structured/preview documents use their dedicated state where
-    /// applicable.
-    pub text: String,
-    /// Exact source snapshot acknowledged by the last successful text save.
-    pub saved_text: String,
-    /// Content digest read/saved on the bound host, used for conflict detection.
-    pub revision: Option<String>,
-    /// Whether a source/binary save request is in flight.
-    pub saving: bool,
     /// Cached dirty state, including structured notebook or binary edits.
     modified: bool,
     /// Source identity for worker results; acknowledging a save does not advance it.
@@ -71,7 +60,132 @@ pub struct Document {
     lines: usize,
 }
 
+/// Read-only source and save facts. `Document` exposes this projection through
+/// `Deref` without `DerefMut`; mutation must pass through its owner operations.
+pub struct Content {
+    /// Stable runtime tab identity, preserved when reordering tabs.
+    pub id: u64,
+    /// Writable/readable path bound to the active project host, or `None` for unsaved/recovery
+    /// buffers.
+    pub path: Option<String>,
+    /// Current source text; structured/preview documents use their dedicated state where
+    /// applicable.
+    pub text: String,
+    /// Exact source snapshot acknowledged by the last successful text save.
+    pub saved_text: String,
+    /// Content digest read/saved on the bound host, used for conflict detection.
+    pub revision: Option<String>,
+    /// Whether a source/binary save request is in flight.
+    pub saving: bool,
+    pub(super) hex: Option<binary_view::HexView>,
+}
+
+impl std::ops::Deref for Document {
+    type Target = Content;
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+/// Exact source/version captured before an asynchronous analysis operation.
+pub(super) struct SourceSnapshot {
+    pub text: String,
+    pub version: u64,
+}
+/// Exact submitted contents and the revision required at their destination.
+pub(super) struct SaveSnapshot<T> {
+    pub contents: T,
+    pub expected: Option<String>,
+}
+
 impl Document {
+    /// Native widgets and batched byte replacements cannot bypass source metadata.
+    pub(super) fn edit_source<R>(&mut self, edit: impl FnOnce(&mut Edit<'_>) -> R) -> R {
+        let mut source = Edit::new(self);
+        edit(&mut source)
+    }
+    /// Byte editing has the same publication boundary, using the buffer's own revision.
+    pub(super) fn edit_binary<R>(
+        &mut self,
+        edit: impl FnOnce(&mut binary_view::HexView) -> R,
+    ) -> Option<R> {
+        let revision = self.content.hex.as_ref()?.buffer.revision();
+        let mut source = edit::BinaryEdit::new(self, revision);
+        Some(source.apply(edit))
+    }
+    /// Accept a complete formatter/notebook/template snapshot only when it differs.
+    pub(super) fn set_source(&mut self, text: String) {
+        if self.content.text != text {
+            self.content.text = text;
+            self.source_changed();
+        }
+    }
+    /// Prepare the preview against one owned source/version pair without copying the buffer.
+    pub(super) fn prepare_markdown(&mut self, path: &str) -> Vec<(String, String)> {
+        self.markdown.as_mut().map_or_else(Vec::new, |preview| {
+            preview.prepare(self.edit_version, path, &self.content.text)
+        })
+    }
+    pub(super) fn expected_revision(&self, path: &str, save_as: bool) -> Option<String> {
+        if save_as && self.path.as_deref() != Some(path) {
+            None
+        } else {
+            self.revision.clone()
+        }
+    }
+    /// Capture the submitted text and destination revision before marking its save in flight.
+    pub(super) fn begin_text_save(
+        &mut self,
+        path: &str,
+        save_as: bool,
+    ) -> Option<SaveSnapshot<String>> {
+        if self.saving {
+            return None;
+        }
+        let snapshot = SaveSnapshot {
+            contents: self.text.clone(),
+            expected: self.expected_revision(path, save_as),
+        };
+        self.content.saving = true;
+        Some(snapshot)
+    }
+    pub(super) fn begin_binary_save(
+        &mut self,
+        path: &str,
+        save_as: bool,
+    ) -> Option<SaveSnapshot<binary_view::SaveContents>> {
+        if self.saving {
+            return None;
+        }
+        let snapshot = SaveSnapshot {
+            contents: self.hex.as_ref()?.save_snapshot(),
+            expected: self.expected_revision(path, save_as),
+        };
+        self.content.saving = true;
+        Some(snapshot)
+    }
+    /// Analysis captures one version/source pair; saving analyses own the same in-flight flag.
+    pub(super) fn analysis_snapshot(&mut self, save: bool) -> Option<SourceSnapshot> {
+        if save && self.saving {
+            return None;
+        }
+        let snapshot = SourceSnapshot {
+            text: self.text.clone(),
+            version: self.version(),
+        };
+        self.content.saving |= save;
+        Some(snapshot)
+    }
+    /// Synthetic stale/save fixtures may construct state that production cannot publish.
+    #[cfg(test)]
+    pub(super) fn fixture_content(&mut self) -> &mut Content {
+        &mut self.content
+    }
+    #[cfg(test)]
+    pub(super) fn sync_source_fixture(&mut self) {
+        self.source_changed();
+    }
+
     pub(super) fn version(&self) -> u64 {
         self.edit_version
     }
@@ -89,13 +203,13 @@ impl Document {
     }
     /// Complete one accepted source mutation, including programmatic edits and undo.
     /// Save acknowledgements retain this version so later edits cannot be overwritten.
-    pub(super) fn source_changed(&mut self) {
+    fn source_changed(&mut self) {
         self.edit_version = self.edit_version.wrapping_add(1);
         self.modified = self.path.is_none() || self.text != self.saved_text;
         self.lines = self.text.bytes().filter(|b| *b == b'\n').count() + 1;
     }
     /// Binary edits publish their own dirty state but share source reply invalidation.
-    pub(super) fn binary_changed(&mut self, dirty: bool) {
+    fn binary_changed(&mut self, dirty: bool) {
         self.edit_version = self.edit_version.wrapping_add(1);
         self.modified = dirty;
     }
@@ -106,7 +220,7 @@ impl Document {
     }
     /// A successful rename changes host identity and invalidates source-derived previews.
     pub(super) fn renamed(&mut self, path: String) {
-        self.path = Some(path);
+        self.content.path = Some(path);
         self.edit_version = self.edit_version.wrapping_add(1);
         if let Some(preview) = &mut self.markdown {
             preview.invalidate();
@@ -143,7 +257,7 @@ impl Document {
     /// Acknowledge the submitted text snapshot, updating path/revision while preserving newer
     /// unsaved edits.
     pub fn acknowledge_save(&mut self, path: String, text: String, revision: String) {
-        self.saved_text = text;
+        self.content.saved_text = text;
         self.modified = self.text != self.saved_text;
         self.acknowledge_binding(path, revision);
     }
@@ -154,17 +268,17 @@ impl Document {
         bytes: Arc<Vec<u8>>,
         revision: String,
     ) {
-        if let Some(hex) = &mut self.hex {
+        if let Some(hex) = &mut self.content.hex {
             hex.buffer.acknowledge(bytes);
             self.modified = hex.buffer.dirty();
         }
         self.acknowledge_binding(path, revision);
     }
     fn acknowledge_binding(&mut self, path: String, revision: String) {
-        self.path = Some(path);
+        self.content.path = Some(path);
         self.recovery = None;
-        self.revision = Some(revision);
-        self.saving = false;
+        self.content.revision = Some(revision);
+        self.content.saving = false;
     }
     /// Recovery paths describe retained tabs; only `path` authorizes file I/O.
     pub(super) fn display_path(&self) -> Option<&str> {
@@ -185,13 +299,16 @@ impl Document {
     /// Create a dirty unsaved buffer with the same cursor/save defaults for every caller.
     fn untitled(id: u64) -> Self {
         Self {
-            id,
-            path: None,
+            content: Content {
+                id,
+                path: None,
+                text: String::new(),
+                saved_text: String::new(),
+                revision: None,
+                saving: false,
+                hex: None,
+            },
             recovery: None,
-            text: String::new(),
-            saved_text: String::new(),
-            revision: None,
-            saving: false,
             modified: true,
             edit_version: 0,
             last_cursor: usize::MAX,
@@ -202,7 +319,6 @@ impl Document {
             marp: None,
             image: None,
             pdf: None,
-            hex: None,
             notebook: None,
         }
     }
@@ -214,7 +330,7 @@ impl Document {
         shutdowns: &notebook_view::Shutdowns,
     ) -> Self {
         let mut doc = Self::untitled(id);
-        doc.path = Some(std::mem::take(&mut response.path));
+        doc.content.path = Some(std::mem::take(&mut response.path));
         doc.replace_views(&mut response, images, shutdowns);
         doc.replace_source(response.text, response.revision);
         doc.modified = false;
@@ -231,7 +347,7 @@ impl Document {
     ) {
         if response.notebook.is_some()
             && self.notebook.is_some()
-            && self.text == response.text
+            && self.content.text == response.text
             && self.revision.as_deref() == Some(&response.revision)
         {
             return;
@@ -254,7 +370,7 @@ impl Document {
         }
         if let Some(loaded) = response.hex.take() {
             self.notebook = None;
-            self.hex = Some(binary_view::HexView::new(loaded));
+            self.content.hex = Some(binary_view::HexView::new(loaded));
             self.pdf = None;
             self.image = None;
             self.markdown = None;
@@ -277,14 +393,14 @@ impl Document {
 
     fn replace_source(&mut self, text: String, revision: String) {
         self.lines = text.bytes().filter(|b| *b == b'\n').count() + 1;
-        self.saved_text.clone_from(&text);
-        self.text = text;
-        self.revision = Some(revision);
+        self.content.saved_text.clone_from(&text);
+        self.content.text = text;
+        self.content.revision = Some(revision);
     }
 
     /// Cancel source/preview acknowledgements without disposing notebook cleanup owners.
     pub(super) fn invalidate_context(&mut self, include_pdf: bool) {
-        self.saving = false;
+        self.content.saving = false;
         if include_pdf && let Some(pdf) = &mut self.pdf {
             pdf.invalidate();
         }
@@ -337,10 +453,10 @@ impl Documents {
         encrypted: bool,
     ) {
         for doc in &mut self.items {
-            if let Some(path) = doc.path.take() {
+            if let Some(path) = doc.content.path.take() {
                 doc.recovery = Some(Recovery {
                     path,
-                    revision: doc.revision.take(),
+                    revision: doc.content.revision.take(),
                     connection: connection.clone(),
                     encrypted,
                 });
@@ -364,14 +480,25 @@ impl Documents {
                 &origin.connection == connection && (!origin.encrypted || encrypted_ready)
             }) {
                 let origin = doc.recovery.take().unwrap();
-                doc.path = Some(origin.path);
-                doc.revision = origin.revision;
+                doc.content.path = Some(origin.path);
+                doc.content.revision = origin.revision;
             }
         }
     }
+    /// A tool reply may change only the exact document version it captured.
+    pub(super) fn apply_source_reply(&mut self, id: u64, version: u64, text: &str) -> Option<u64> {
+        let doc = self
+            .items
+            .iter_mut()
+            .find(|doc| doc.id == id && doc.version() == version)?;
+        if doc.text != text {
+            doc.set_source(text.into());
+        }
+        Some(doc.version())
+    }
     pub(super) fn finish_save(&mut self, id: u64) {
         if let Some(doc) = self.items.iter_mut().find(|doc| doc.id == id) {
-            doc.saving = false;
+            doc.content.saving = false;
         }
     }
     pub(super) fn active_source(&self) -> Option<Source<'_>> {

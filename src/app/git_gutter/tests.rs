@@ -92,7 +92,7 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     let mut documents = documents::Documents::default();
     documents.new_file();
     let doc = documents.active_mut().unwrap();
-    doc.path = Some("/project/source.rs".into());
+    doc.fixture_content().path = Some("/project/source.rs".into());
     let key = Key {
         id: doc.id,
         path: doc.path.clone().unwrap(),
@@ -153,7 +153,7 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     assert_eq!(state.peek, None);
     state.rendered.as_mut().unwrap().0 = doc.version();
     let _ = state.toggle_peek(doc, 0);
-    doc.path = None;
+    doc.fixture_content().path = None;
     assert_eq!(state.peek_height(doc, 500.), 0.);
     state.reset();
     assert_eq!(state.peek, None);
@@ -452,7 +452,7 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
     documents.new_file();
     let doc = documents.active_mut().unwrap();
     let path = "/project/source.rs".to_owned();
-    doc.path = Some(path.clone());
+    doc.fixture_content().path = Some(path.clone());
     let mut state = State::default();
     state.select(
         Key {
@@ -509,12 +509,12 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
     doc.set_version_fixture(1);
     assert_eq!(paint_count(doc), 0);
     doc.set_version_fixture(0);
-    doc.path = Some("/project/renamed.rs".into());
+    doc.fixture_content().path = Some("/project/renamed.rs".into());
     assert_eq!(paint_count(doc), 0);
-    doc.path = None;
+    doc.fixture_content().path = None;
     assert_eq!(paint_count(doc), 0);
-    doc.path = Some(path);
-    doc.id += 1;
+    doc.fixture_content().path = Some(path);
+    doc.fixture_content().id += 1;
     assert_eq!(paint_count(doc), 0);
 }
 
@@ -553,9 +553,9 @@ fn editor_markers_align_with_rendered_rows_throughout_long_files() {
                 })
                 .collect();
             let doc = app.documents.active_mut().unwrap();
-            doc.text = source.clone();
-            doc.source_changed();
-            doc.path = Some("/project/source.rs".into());
+            doc.fixture_content().text = source.clone();
+            doc.sync_source_fixture();
+            doc.fixture_content().path = Some("/project/source.rs".into());
             app.git_gutter.key = Some(Key {
                 id: doc.id,
                 path: doc.path.clone().unwrap(),
@@ -687,7 +687,7 @@ fn empty_source_keeps_line_one_and_its_deletion_marker_visible() {
         app.font_size = font_size;
         app.new_file();
         let doc = app.documents.active_mut().unwrap();
-        doc.path = Some("/project/empty.rs".into());
+        doc.fixture_content().path = Some("/project/empty.rs".into());
         app.git_gutter.key = Some(Key {
             id: doc.id,
             path: doc.path.clone().unwrap(),

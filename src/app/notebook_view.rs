@@ -190,10 +190,7 @@ impl View {
     fn sync(&mut self, doc: &mut Document) -> bool {
         match self.book.serialize() {
             Ok(text) => {
-                if text != doc.text {
-                    doc.text = text;
-                    doc.source_changed();
-                }
+                doc.set_source(text);
                 true
             }
             Err(error) => {
@@ -339,8 +336,7 @@ impl EditorApp {
         self.new_file();
         let book = Notebook::default();
         let doc = self.documents.active_mut().unwrap();
-        doc.text = book.serialize().expect("small new notebook");
-        doc.source_changed();
+        doc.set_source(book.serialize().expect("small new notebook"));
         doc.notebook = Some(View::new(
             book,
             self.markdown_images.clone(),
@@ -462,6 +458,8 @@ impl EditorApp {
             );
             return;
         }
+        let document_id = doc.id;
+        let path = doc.path.clone();
         let Some(view) = &mut doc.notebook else {
             self.notify("Open a Jupyter notebook first.", false);
             return;
@@ -480,7 +478,7 @@ impl EditorApp {
             for cell in &mut view.book.cells {
                 let id = cell.data["id"].as_str().unwrap_or_default();
                 if id.is_empty() || !identities.insert(id.to_owned()) {
-                    let mut replacement = format!("rode-{}-{}", doc.id, cell.uid);
+                    let mut replacement = format!("rode-{}-{}", document_id, cell.uid);
                     while !identities.insert(replacement.clone()) {
                         replacement.push('x');
                     }
@@ -492,8 +490,7 @@ impl EditorApp {
             if changed {
                 match view.book.serialize() {
                     Ok(text) => {
-                        doc.text = text;
-                        doc.source_changed();
+                        doc.set_source(text);
                     }
                     Err(error) => {
                         view.error = error.to_string();
@@ -539,8 +536,7 @@ impl EditorApp {
                 .as_ref()
                 .map(|w| (w.plan.clone(), w.remote.clone()))
                 .unwrap_or_else(|| {
-                    let root = doc
-                        .path
+                    let root = path
                         .as_ref()
                         .and_then(|p| {
                             PathBuf::from(p)
@@ -562,7 +558,7 @@ impl EditorApp {
                     )
                 });
             let context = ctx.clone();
-            if view.persistent && doc.path.is_none() {
+            if view.persistent && path.is_none() {
                 view.error = "Save this notebook before enabling persistent execution".into();
                 return;
             }
@@ -573,7 +569,7 @@ impl EditorApp {
                 python.clone(),
                 view.kernel_name.clone(),
                 view.execution_target.clone(),
-                doc.path.clone().unwrap_or_default(),
+                path.clone().unwrap_or_default(),
                 view.persistent,
                 wake,
             );

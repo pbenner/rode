@@ -1066,7 +1066,7 @@ mod tests {
     #[test]
     fn locking_waits_for_operations_and_failed_lock_preserves_buffers_and_prevents_exit() {
         let (mut app, ctx) = active(false);
-        app.documents[0].text = "keep text".into();
+        app.documents[0].fixture_content().text = "keep text".into();
         let work = app.vaults.work();
         app.lock_encrypted(true, &ctx);
         app.poll_vaults(&ctx);
@@ -1108,7 +1108,7 @@ mod tests {
     #[test]
     fn unexpected_host_cleanup_preserves_dirty_buffers() {
         let (mut app, ctx) = active(true);
-        app.documents[0].text = "do not discard on network loss".into();
+        app.documents[0].fixture_content().text = "do not discard on network loss".into();
         app.documents[0].set_dirty_fixture(true);
         app.vaults
             .active
@@ -1142,8 +1142,8 @@ mod tests {
         workspace.remote.as_mut().unwrap().profile.root = "/plain".into();
         app.vaults.active.as_mut().unwrap().remote = workspace.remote.clone();
         app.workspace.set_fixture(Some(workspace));
-        app.documents[0].path = Some("/plain/main.rs".into());
-        app.documents[0].text = "unsaved encrypted source".into();
+        app.documents[0].fixture_content().path = Some("/plain/main.rs".into());
+        app.documents[0].fixture_content().text = "unsaved encrypted source".into();
         app.documents[0].set_dirty_fixture(true);
         app.detach_ssh(&ctx);
         assert!(app.workspace.is_none());
@@ -1180,7 +1180,7 @@ mod tests {
     #[test]
     fn lock_and_exit_keep_unsaved_change_protection() {
         let (mut app, ctx) = active(true);
-        app.documents[0].text = "unsaved".into();
+        app.documents[0].fixture_content().text = "unsaved".into();
         app.documents[0].set_dirty_fixture(true);
         app.guarded(Action::LockEncrypted, &ctx);
         assert!(matches!(app.pending.as_ref(), Some(Action::LockEncrypted)));

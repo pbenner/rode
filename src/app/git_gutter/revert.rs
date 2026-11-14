@@ -78,7 +78,7 @@ impl EditorApp {
             .filter(|b| *b == b'\n')
             .count()
             + 1;
-        doc.text.replace_range(range, &replacement);
+        doc.edit_source(|source| source.replace_range(range, &replacement));
         let cursor = egui::text::CCursorRange::one(egui::text::CCursor::new(point));
         let after = (cursor, doc.text.clone());
         undo.feed_state(ctx.input(|input| input.time), &after);
@@ -86,7 +86,6 @@ impl EditorApp {
         state.set_undoer(undo);
         state.cursor.set_char_range(Some(cursor));
         state.store(ctx, id);
-        doc.source_changed();
         doc.selection = Some((point, point));
         doc.last_cursor = point;
         doc.cursor = (row, 1);

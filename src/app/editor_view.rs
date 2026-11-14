@@ -180,7 +180,8 @@ impl EditorApp {
                                 ui.memory_mut(|memory| memory.request_focus(id));
                                 ctx.request_repaint();
                             }
-                            let mut output = egui::TextEdit::multiline(&mut doc.text)
+                            let mut output = doc.edit_source(|source| {
+                                egui::TextEdit::multiline(source)
                                 .id(id)
                                 .code_editor()
                                 .cursor_at_end(false)
@@ -190,7 +191,8 @@ impl EditorApp {
                                 .frame(false)
                                 .margin(egui::vec2(6.0, 0.0))
                                 .layouter(&mut layouter)
-                                .show(ui);
+                                .show(ui)
+                            });
                             input.after_source(ui,doc.id,&mut output,&doc.text,palette);
                             ui_probe::button(ui, "source-editor", &output.response);
                             if output.cursor_range.is_some_and(|range| range.primary.index == 0 && range.secondary.index == 0) {
@@ -333,9 +335,6 @@ impl EditorApp {
                                     .on_hover_text(format!("{}: {}", issue.code, issue.message));
                                 }
                             }
-                            if output.response.changed() {
-                                doc.source_changed();
-                            }
                             if !doc.saving && !doc.dirty() {
                                 ui_probe::button(ui, "source-editor-saved", &output.response);
                             }
@@ -458,10 +457,11 @@ impl EditorApp {
         if replace && let Some(doc) = self.documents.active_mut() {
             let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
             if !matches.is_empty() {
-                for (start, end) in matches.iter().rev() {
-                    doc.text.replace_range(*start..*end, &self.replacement);
-                }
-                doc.source_changed();
+                doc.edit_source(|source| {
+                    for (start, end) in matches.iter().rev() {
+                        source.replace_range(*start..*end, &self.replacement);
+                    }
+                });
             }
             self.status = format!("Replaced {} occurrences", matches.len());
         }

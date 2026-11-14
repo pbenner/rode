@@ -156,7 +156,7 @@ fn edits_received_while_exit_waits_for_cleanup_still_require_a_dirty_buffer_deci
         app.new_file();
         app.documents[0].acknowledge_save("source.txt".into(), "".into(), "rev".into());
         if approved_discard {
-            app.documents[0].text = "already approved discard".into();
+            app.documents[0].fixture_content().text = "already approved discard".into();
             app.documents[0].set_dirty_fixture(true);
             app.documents[0].advance_version_fixture();
         }
@@ -170,7 +170,7 @@ fn edits_received_while_exit_waits_for_cleanup_still_require_a_dirty_buffer_deci
 
         // An already submitted tool may deliver accepted source edits during cleanup.
         if later_edit {
-            app.documents[0].text = "late worker edit".into();
+            app.documents[0].fixture_content().text = "late worker edit".into();
             app.documents[0].set_dirty_fixture(true);
             app.documents[0].advance_version_fixture();
         }
@@ -215,7 +215,7 @@ fn quit_still_guards_unsaved_source_before_any_terminal_cleanup() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "keep these edits".into();
+    app.documents[0].fixture_content().text = "keep these edits".into();
     app.documents[0].set_dirty_fixture(true);
     app.guarded(Action::Quit, &ctx);
     assert!(matches!(app.pending.as_ref(), Some(Action::Quit)));

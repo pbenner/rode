@@ -213,7 +213,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.new_file();
-        app.documents[0].text = "unsaved local edits".into();
+        app.documents[0].fixture_content().text = "unsaved local edits".into();
         let profile = Profile {
             name: "Saved connection shortcut".into(),
             host: "fixture.invalid".into(),
@@ -293,9 +293,9 @@ mod tests {
         app.workspace.set_fixture(Some(workspace));
         app.new_file();
         let doc = &mut app.documents[0];
-        doc.path = Some("/scratch/researcher/project/main.rs".into());
-        doc.revision = Some("original remote revision".into());
-        doc.text = "retained edits".into();
+        doc.fixture_content().path = Some("/scratch/researcher/project/main.rs".into());
+        doc.fixture_content().revision = Some("original remote revision".into());
+        doc.fixture_content().text = "retained edits".into();
         doc.set_version_fixture(7);
         (app, ctx)
     }
@@ -565,7 +565,7 @@ mod tests {
             .into_owned();
         let copy = temp.path().join("copy.txt").to_string_lossy().into_owned();
         std::fs::write(&original, "unrelated local source").unwrap();
-        app.documents[0].path = Some(original.clone());
+        app.documents[0].fixture_content().path = Some(original.clone());
         let id = app.documents[0].id;
         app.disconnect_ssh(&ctx);
         app.save_document(id, original.clone(), false, &ctx);

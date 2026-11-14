@@ -114,7 +114,7 @@ fn directions_and_zoom_restore_the_existing_layout_without_closing_documents() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "keep unsaved text".into();
+    app.documents[0].fixture_content().text = "keep unsaved text".into();
     app.navigation.rects[Pane::Explorer.index()] = Some(egui::Rect::from_min_max(
         egui::pos2(0., 0.),
         egui::pos2(200., 600.),
@@ -226,7 +226,7 @@ fn batched_emacs_edits_finish_before_the_native_save_prefix() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_file();
-    app.documents[0].text = "alpha beta\ngamma delta\n".into();
+    app.documents[0].fixture_content().text = "alpha beta\ngamma delta\n".into();
     app.navigation.bindings.select_style(Style::Emacs);
     let frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
         let modifiers = if events.iter().any(|event| matches!(event, egui::Event::Cut)) {

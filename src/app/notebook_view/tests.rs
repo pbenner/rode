@@ -129,7 +129,7 @@ fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images()
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.new_notebook();
-    app.documents[0].path = Some("/remote/work.ipynb".into());
+    app.documents[0].fixture_content().path = Some("/remote/work.ipynb".into());
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.detach_ssh(&ctx);
@@ -197,8 +197,8 @@ fn kernel_startup_failure_preserves_saved_outputs_and_a_clean_buffer() {
     app.new_notebook();
     let book = Notebook::parse(include_str!("../../../tests/fixtures/notebook.ipynb")).unwrap();
     let text = book.serialize().unwrap();
-    app.documents[0].text = text.clone();
-    app.documents[0].saved_text = text.clone();
+    app.documents[0].fixture_content().text = text.clone();
+    app.documents[0].fixture_content().saved_text = text.clone();
     app.documents[0].set_dirty_fixture(false);
     app.documents[0].notebook = Some(View::new(
         book,
@@ -255,8 +255,8 @@ fn missing_slurm_target_preserves_outputs_and_never_starts_a_host_kernel() {
     app.new_notebook();
     let book = Notebook::parse(include_str!("../../../tests/fixtures/notebook.ipynb")).unwrap();
     let text = book.serialize().unwrap();
-    app.documents[0].text = text.clone();
-    app.documents[0].saved_text = text.clone();
+    app.documents[0].fixture_content().text = text.clone();
+    app.documents[0].fixture_content().saved_text = text.clone();
     let mut view = View::new(
         book,
         app.markdown_images.clone(),
@@ -324,7 +324,7 @@ fn enter_in_notebook_find_reveals_and_selects_a_matching_cell() {
     app.new_notebook();
     let book = Notebook::parse(include_str!("../../../tests/fixtures/notebook.ipynb")).unwrap();
     let expected = book.cells[1].uid;
-    app.documents[0].text = book.serialize().unwrap();
+    app.documents[0].fixture_content().text = book.serialize().unwrap();
     app.documents[0].notebook = Some(View::new(
         book,
         app.markdown_images.clone(),
