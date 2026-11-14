@@ -5,7 +5,6 @@
 //! accepting a reply never widens its captured policy or replaces newer edits.
 
 use super::*;
-use crate::sandbox::PlanExt as _;
 
 impl EditorApp {
     /// Capture host, policy, generation, cancellation and encrypted-mount ownership,
@@ -22,14 +21,15 @@ impl EditorApp {
         if (host && !self.monitor_ready()) || (!host && !self.project_ready()) {
             return;
         }
-        let workspace = self.workspace.as_ref();
-        // Telemetry describes the host, not the sandbox's private /proc.
-        let plan = if host {
-            None
-        } else {
-            workspace.map(|w| w.plan.clone())
-        };
-        let remote = workspace.and_then(|w| w.remote.clone());
+        // Telemetry describes the selected host, not its private project /proc.
+        let mut work = self.capture_work(
+            if host {
+                execution::Scope::Host
+            } else {
+                execution::Scope::Project
+            },
+            ctx,
+        );
         let host_git = !self.workbench.git_sandbox()
             && matches!(job, ToolJob::Git(_))
             && matches!(
@@ -40,48 +40,29 @@ impl EditorApp {
             );
         let git_host_plan = self.workbench.git.host_plan.clone();
         let cancel = self.extensions.cancel.clone();
-        let replies = self.workers.workspace(ctx);
-        let vault_work = self.vaults.work();
         std::thread::spawn(move || {
-            let _vault_work = vault_work;
             let invocation = if let project::Request::Extension { invocation, .. } = &request {
                 Some(invocation.clone())
             } else {
                 None
             };
             let result = (|| -> anyhow::Result<files::Response> {
-                let plan = if host_git {
-                    let project = plan
-                        .as_ref()
-                        .ok_or_else(|| anyhow::anyhow!("Git requires a prepared project"))?;
-                    Some(git_host_plan.prepare(project, remote.as_ref())?)
-                } else {
-                    plan
-                };
+                if host_git {
+                    work.target.prepare_host_git(&git_host_plan)?;
+                }
                 let request = Request::Tool { request };
                 if let Request::Tool {
                     request: request @ project::Request::Extension { .. },
                 } = &request
                 {
-                    let reply = match &remote {
-                        Some(remote) => remote.extension_request(request, plan.as_ref(), &cancel),
-                        None => plan
-                            .clone()
-                            .unwrap_or_default()
-                            .extension_request(request, &cancel),
-                    };
-                    reply.map(|reply| files::Response {
-                        tool: Some(project::Response::Extension(reply)),
-                        ..Default::default()
-                    })
+                    work.target
+                        .extension_request(request, &cancel)
+                        .map(|tool| files::Response {
+                            tool: Some(tool),
+                            ..Default::default()
+                        })
                 } else {
-                    match remote {
-                        Some(remote) => remote.request_in(&request, plan.as_ref()),
-                        None => match plan {
-                            Some(plan) => plan.local_request(&request),
-                            None => files::local(&request),
-                        },
-                    }
+                    work.target.request(&request)
                 }
             })()
             .and_then(|r| {
@@ -112,7 +93,7 @@ impl EditorApp {
                 Ok(response)
             })
             .map_err(|e| format!("{e:#}"));
-            let _ = replies.send(WorkspaceEvent::Tool {
+            work.send(WorkspaceEvent::Tool {
                 job: Box::new(job),
                 result: Box::new(result),
             });

@@ -51,6 +51,9 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/diff_view.rs` | Shared bounded, selectable, read-only unified diff renderer for the Git panel and source change peeks |
 | `src/app/frame.rs` | Application menus, connection banners, activity controls and pane entry views; routes through the existing lifecycle guards |
 | `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
+| `src/app/execution.rs` | Shared captured host/project target, generation-bound reply endpoint and mount-work guard for file, tool and session workers; separate explicit host-mode Git preparation |
+| `src/app/agents/controller.rs`, `src/app/agents/view.rs` | Agent-owned lifecycle, queue and history admission; chat rendering receives immutable application facts and returns explicit cross-domain actions |
+| `src/app/sessions/controller.rs` | Terminal creation, retained attachment selection, bounded command routing and acknowledgement effects without access to the application coordinator |
 | `src/app/dialogs.rs`, `src/app/appearance.rs` | Guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
@@ -386,6 +389,27 @@ Other menu/picker ownership actions must wait for the current native edit batch.
 Each editor viewport owns its source queue. Detached tools cannot acknowledge or
 drain another viewport's source queue. Native
 TextEdit undo/IME handling and terminal/form input remain at their widget boundary.
+
+## Desktop domain adapters
+
+Agent and terminal orchestration use domain owners below the application adapter.
+The agent controller receives captured execution/interpreter facts and UI admission;
+its polling returns lifecycle failures and document-refresh effects. Chat rendering
+borrows only agent state plus immutable presentation facts. Save, attachment-dialog,
+history, send, refresh and recovery actions retain their original application order.
+The terminal controller owns creation admission, view selection, command-policy
+matching and reply caches. It borrows only the active terminal slot when switching
+or removing attachments, and returns creation/focus/notice effects for the adapter.
+Neither controller receives an `EditorApp` reference. Native viewports continue to
+share the same application, transport and service owners.
+
+`execution::Target` captures the selected transport and optional prepared plan.
+`Project`, `Host` and `Local` scopes make discovery/telemetry/desktop attachment
+exceptions explicit. `execution::Work` captures that target together with the
+workspace reply generation and vault work guard; workers retain it through reply
+publication. Domain-specific readiness checks run before capture. File, tool and
+terminal/scheduler workers execute against these snapshots, and explicit host-mode
+Git prepares its separate context on the worker without replacing project authority.
 
 ## Native editor windows
 

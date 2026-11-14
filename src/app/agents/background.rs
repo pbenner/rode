@@ -78,85 +78,20 @@ impl EditorApp {
         self.set_dialog(Dialog::AgentSessions);
         self.refresh_background_agents(None, ctx);
     }
-    /// Queue either read-only discovery or an already confirmed termination on the captured host.
+    /// Submit discovery or a confirmed end using captured agent authority.
     fn refresh_background_agents(&mut self, end: Option<Info>, ctx: &egui::Context) {
-        if self.agents.running.pending.is_some() {
-            return;
-        }
         let launch = self.agent_launch();
-        self.agents.running.mutating = end.is_some();
-        if end.is_some() {
-            self.agents.running.error.clear();
-        }
-        let request = end
-            .map(|info| rode_session::Request::EndAgent {
-                id: info.id,
-                policy: info.policy,
-            })
-            .unwrap_or(rode_session::Request::Agents);
-        let (sender, receiver) = mpsc::channel();
-        self.agents.running.pending = Some(receiver);
-        self.agents.running.last = Some(Instant::now());
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let result = agent::background::request(&launch, request)
-                .map(|reply| reply.response)
-                .map_err(|error| format!("{error:#}"));
-            let _ = sender.send(result);
-            ctx.request_repaint();
-        });
+        self.agents.refresh_background_agents(launch, end, ctx);
     }
-    /// Drain discovery/mutation acknowledgements and preserve shutdown errors for a waiting exit.
+    /// Fixture adapter for the same controller path used by normal agent polling.
+    #[cfg(test)]
     pub(super) fn poll_background_agents(&mut self, ctx: &egui::Context) {
-        let result = self
-            .agents
-            .running
-            .pending
-            .as_ref()
-            .and_then(|r| match r.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
-                    "Background-agent worker disconnected; inspect Running agents before exiting"
-                        .into(),
-                )),
-            });
-        if let Some(result) = result {
-            self.agents.running.pending = None;
-            let mutating = std::mem::take(&mut self.agents.running.mutating);
-            match result {
-                Ok(rode_session::Response::Agents(items)) if !mutating => {
-                    self.agents.running.items = items
-                        .into_iter()
-                        .filter(|info| !info.history_browser)
-                        .collect();
-                    self.agents.running.error.clear();
-                }
-                Ok(rode_session::Response::Ok) => {
-                    self.agents.running.last = None;
-                }
-                Ok(rode_session::Response::Error(error)) | Err(error) => {
-                    self.agents.running.error = error
-                }
-                _ => self.agents.running.error = "Unexpected background-agent service reply".into(),
-            }
-            if mutating && !self.agents.running.error.is_empty() {
-                self.abort_lifecycle(self.agents.running.error.clone(), ctx);
-            }
-        }
-        if self.agents.running.mutating {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-        if self.dialog == Dialog::AgentSessions {
-            if self
-                .agents
-                .running
-                .last
-                .is_none_or(|t| t.elapsed() >= Duration::from_secs(3))
-            {
-                self.refresh_background_agents(None, ctx);
-            }
-            ctx.request_repaint_after(Duration::from_secs(1));
+        let launch = self.agent_launch();
+        if let Some(error) =
+            self.agents
+                .poll_background(&launch, self.dialog == Dialog::AgentSessions, ctx)
+        {
+            self.abort_lifecycle(error, ctx);
         }
     }
     /// Render cached live sessions and their compatibility constraints; attachments
@@ -302,6 +237,98 @@ impl EditorApp {
         if ui.button("Close").clicked() {
             self.dialog = Dialog::None;
         }
+    }
+}
+
+impl Agents {
+    /// Queue either read-only discovery or an already confirmed termination on the captured host.
+    pub(super) fn refresh_background_agents(
+        &mut self,
+        launch: Launch,
+        end: Option<Info>,
+        ctx: &egui::Context,
+    ) {
+        if self.running.pending.is_some() {
+            return;
+        }
+        self.running.mutating = end.is_some();
+        if end.is_some() {
+            self.running.error.clear();
+        }
+        let request = end
+            .map(|info| rode_session::Request::EndAgent {
+                id: info.id,
+                policy: info.policy,
+            })
+            .unwrap_or(rode_session::Request::Agents);
+        let (sender, receiver) = mpsc::channel();
+        self.running.pending = Some(receiver);
+        self.running.last = Some(Instant::now());
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = agent::background::request(&launch, request)
+                .map(|reply| reply.response)
+                .map_err(|error| format!("{error:#}"));
+            let _ = sender.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    /// Drain discovery/mutation acknowledgements and preserve shutdown errors for a waiting exit.
+    pub(super) fn poll_background(
+        &mut self,
+        launch: &Launch,
+        visible: bool,
+        ctx: &egui::Context,
+    ) -> Option<String> {
+        let mut failure = None;
+        let result = self
+            .running
+            .pending
+            .as_ref()
+            .and_then(|r| match r.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                    "Background-agent worker disconnected; inspect Running agents before exiting"
+                        .into(),
+                )),
+            });
+        if let Some(result) = result {
+            self.running.pending = None;
+            let mutating = std::mem::take(&mut self.running.mutating);
+            match result {
+                Ok(rode_session::Response::Agents(items)) if !mutating => {
+                    self.running.items = items
+                        .into_iter()
+                        .filter(|info| !info.history_browser)
+                        .collect();
+                    self.running.error.clear();
+                }
+                Ok(rode_session::Response::Ok) => {
+                    self.running.last = None;
+                }
+                Ok(rode_session::Response::Error(error)) | Err(error) => self.running.error = error,
+                _ => self.running.error = "Unexpected background-agent service reply".into(),
+            }
+            if mutating && !self.running.error.is_empty() {
+                failure = Some(self.running.error.clone());
+            }
+        }
+        if self.running.mutating {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        if visible {
+            if self
+                .running
+                .last
+                .is_none_or(|t| t.elapsed() >= Duration::from_secs(3))
+            {
+                self.refresh_background_agents(launch.clone(), None, ctx);
+            }
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        failure
     }
 }
 

@@ -1,7 +1,120 @@
 //! Explicit execution choices for user-operated Git and terminal surfaces.
 //! These plans never replace the workspace policy used by agents and file tools.
 use super::*;
+use crate::sandbox::PlanExt as _;
 use std::sync::{Arc, Mutex};
+
+/// Authority requested by a UI adapter before starting background work.
+/// Host scope drops project policy only for explicit discovery or host operations.
+#[derive(Clone, Copy)]
+pub(super) enum Scope {
+    /// Use the current project host and its prepared policy, when present.
+    Project,
+    /// Use the selected host without a project context.
+    Host,
+    /// Use the desktop host without borrowing a selected SSH connection.
+    Local,
+}
+
+/// Execution destination captured on the UI thread. A worker never
+/// consults a later workspace selection or reconstructs policy from display labels.
+pub(super) struct Target {
+    remote: Option<Remote>,
+    plan: Option<sandbox::Plan>,
+}
+
+impl Target {
+    /// Capture only the authority explicitly requested by the domain adapter.
+    pub(super) fn capture(workspace: Option<&Workspace>, scope: Scope) -> Self {
+        Self {
+            remote: match scope {
+                Scope::Local => None,
+                Scope::Project | Scope::Host => workspace.and_then(|w| w.remote.clone()),
+            },
+            plan: match scope {
+                Scope::Project => workspace.map(|w| w.plan.clone()),
+                Scope::Host | Scope::Local => None,
+            },
+        }
+    }
+
+    /// Captured transport, never a connection looked up after dispatch.
+    pub(super) fn remote(&self) -> Option<&Remote> {
+        self.remote.as_ref()
+    }
+
+    /// Captured project policy; absence means the adapter explicitly chose host access
+    /// or no project existed. Readiness remains an adapter admission requirement.
+    pub(super) fn plan(&self) -> Option<&sandbox::Plan> {
+        self.plan.as_ref()
+    }
+
+    /// Execute on the captured host and policy. Call only from a worker.
+    pub(super) fn request(&self, request: &Request) -> anyhow::Result<Response> {
+        match &self.remote {
+            Some(remote) => remote.request_in(request, self.plan.as_ref()),
+            None => match &self.plan {
+                Some(plan) => plan.local_request(request),
+                None => files::local(request),
+            },
+        }
+    }
+
+    /// Execute an installed adapter with the same captured host and policy.
+    pub(super) fn extension_request(
+        &self,
+        request: &crate::project::Request,
+        cancel: &AtomicBool,
+    ) -> anyhow::Result<crate::project::Response> {
+        let reply = match &self.remote {
+            Some(remote) => remote.extension_request(request, self.plan.as_ref(), cancel),
+            None => self
+                .plan
+                .clone()
+                .unwrap_or_default()
+                .extension_request(request, cancel),
+        }?;
+        Ok(crate::project::Response::Extension(reply))
+    }
+
+    /// Prepare a separate normal-mode context for an explicit user Git choice.
+    /// The captured project plan remains the source of root/environment authority.
+    pub(super) fn prepare_host_git(&mut self, host: &HostPlan) -> anyhow::Result<()> {
+        let project = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Git requires a prepared project"))?;
+        self.plan = Some(host.prepare(project, self.remote.as_ref())?);
+        Ok(())
+    }
+}
+
+/// One worker's captured execution target, generation-bound reply endpoint and
+/// encrypted-mount work guard. Keep this value alive through reply publication.
+pub(super) struct Work {
+    pub target: Target,
+    replies: workers::WorkspaceSender,
+    _vault_work: vaults::Work,
+}
+
+impl Work {
+    /// Publish only through the generation captured with the execution target.
+    pub(super) fn send(&self, event: workers::WorkspaceEvent) {
+        let _ = self.replies.send(event);
+    }
+}
+
+impl EditorApp {
+    /// Capture transport, policy, reply generation and mount-work ownership together.
+    /// Domain-specific readiness checks must run before calling this composition boundary.
+    pub(super) fn capture_work(&self, scope: Scope, ctx: &egui::Context) -> Work {
+        Work {
+            target: Target::capture(self.workspace.as_ref(), scope),
+            replies: self.workers.workspace(ctx),
+            _vault_work: self.vaults.work(),
+        }
+    }
+}
 
 /// Retain the project host, environment and executable lease, without its sandbox.
 /// SSH requests need a separately prepared host context; the restricted context

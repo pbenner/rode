@@ -7,11 +7,10 @@
 //! utilization.
 use super::*;
 use crate::project;
-use crate::sandbox::PlanExt as _;
 use crate::{sessions as service, slurm};
-use anyhow::Context;
 use std::collections::VecDeque;
 mod allocation;
+mod controller;
 mod runtimes;
 #[derive(Clone)]
 /// Stable window view identity/order and optional host-owned terminal metadata;
@@ -114,48 +113,16 @@ impl Sessions {
     }
 }
 impl EditorApp {
-    /// Wrap through retained views in creation order without recreating their PTYs.
+    /// Cycle retained views through the session owner, then restore native terminal focus.
     pub(in crate::app) fn cycle_terminal(&mut self, direction: isize, ctx: &egui::Context) {
-        let mut views: Vec<_> = self
-            .sessions
-            .other
-            .iter()
-            .map(|s| s.meta.clone())
-            .chain(self.sessions.active.iter().cloned())
-            .collect();
-        views.sort_by_key(|m| m.order);
-        if views.len() < 2 {
-            return;
-        }
-        let index = views
-            .iter()
-            .position(|m| {
-                self.sessions
-                    .active
-                    .as_ref()
-                    .is_some_and(|a| a.key == m.key)
-            })
-            .unwrap_or(0);
-        let target = (index as isize + direction).rem_euclid(views.len() as isize) as usize;
-        if let Some(index) = self
-            .sessions
-            .other
-            .iter()
-            .position(|s| s.meta.key == views[target].key)
-        {
-            let slot = self.sessions.other.remove(index);
-            self.adopt_terminal(slot.terminal, slot.meta);
+        if self.sessions.cycle(&mut self.terminal, direction) {
+            self.show_terminal = true;
             Terminal::focus(ctx);
         }
     }
-    /// Report a running terminal in either the active or retained hidden views.
+    /// Include active and hidden attachments without creating another session owner.
     pub(super) fn has_live_terminal_views(&self) -> bool {
-        self.terminal.as_ref().is_some_and(Terminal::is_alive)
-            || self
-                .sessions
-                .other
-                .iter()
-                .any(|slot| slot.terminal.is_alive())
+        self.sessions.has_live_views(self.terminal.as_ref())
     }
     /// Capture the active project sandbox plan, or the default plan rooted at the current
     /// directory.
@@ -183,36 +150,21 @@ impl EditorApp {
     }
 
     fn compatible_session(&self, info: &rode_session::Info) -> bool {
-        let project = self.session_plan();
-        info.root == project.root
-            && (info.policy == service::fingerprint(&project)
-                || info.policy == service::fingerprint(&execution::outside_sandbox(&project)))
+        Sessions::compatible(info, &self.session_plan())
     }
 
-    fn terminal_matches(&self, plan: &sandbox::Plan) -> bool {
-        self.terminal.as_ref().is_some_and(Terminal::is_alive)
-            && self
-                .sessions
-                .active
-                .as_ref()
-                .is_some_and(|meta| meta.policy == service::fingerprint(plan))
-    }
     fn session_remote(&self) -> Option<Remote> {
         self.workspace
             .as_ref()
             .and_then(|workspace| workspace.remote.clone())
     }
-    /// Report serialized terminal creation/control work that prevents a conflicting lifetime action.
+    /// Serialized creation/control admission owned by the terminal controller.
     pub(super) fn session_busy(&self) -> bool {
-        self.sessions.starting || self.sessions.busy
+        self.sessions.busy()
     }
-    /// Discard project discovery/view state while retaining approved runtime termination workers.
+    /// Retire project discovery while preserving acknowledged runtime-shutdown ownership.
     pub(super) fn session_context_reset(&mut self) {
-        let runtimes = self.sessions.runtimes.take_shutdowns();
-        self.sessions = Sessions {
-            runtimes,
-            ..Sessions::default()
-        };
+        self.sessions.reset_context();
     }
     /// Register a new window-local terminal identity and make its view active.
     pub(super) fn add_terminal_view(&mut self, terminal: Terminal, key: String, name: String) {
@@ -230,27 +182,9 @@ impl EditorApp {
             },
         );
     }
-    /// Select an existing terminal while retaining the previously active view for later switching.
+    /// Reveal a terminal after its attachment owner has selected the retained view.
     pub(super) fn adopt_terminal(&mut self, terminal: Terminal, meta: Meta) {
-        if let Some(old) = self.terminal.take() {
-            old.set_visible(false);
-            let old_meta = self.sessions.active.take().unwrap_or(Meta {
-                key: "temporary-old".into(),
-                order: 0,
-                name: "Temporary terminal".into(),
-                native: None,
-                policy: String::new(),
-                mode: "Unknown".into(),
-            });
-            if old.is_alive() {
-                self.sessions.other.push(Attached {
-                    meta: old_meta,
-                    terminal: old,
-                });
-            }
-        }
-        self.terminal = Some(terminal);
-        self.sessions.active = Some(meta);
+        self.sessions.adopt(&mut self.terminal, terminal, meta);
         self.show_terminal = true;
     }
     /// Create a window-owned fallback shell subject to the view bound and captured project policy.
@@ -320,110 +254,36 @@ impl EditorApp {
         ctx: &egui::Context,
     ) {
         self.terminal_intent();
-        if self.session_busy() {
-            return;
-        }
-        if self.sessions.other.len() >= 15 {
-            self.notify(
-                "At most 16 terminal views per window. Detach an existing view first.",
-                true,
-            );
-            return;
-        }
-        if self
+        let ready = self
             .workspace
             .as_ref()
-            .is_some_and(|workspace| !workspace.ready || !workspace.connected)
-        {
-            self.notify("Open a connected project before starting a terminal.", true);
-            return;
+            .is_none_or(|w| w.ready && w.connected);
+        let request = self.sessions.prepare_create(controller::Create {
+            plan,
+            persistent,
+            allocation,
+            reserve,
+            ready,
+            python: self.terminal_python_selection(),
+            environment: self.workbench.environment_settings().clone(),
+        });
+        match request {
+            Ok(Some((operation, job))) => {
+                self.show_terminal = true;
+                self.session_request(operation, job, ctx);
+            }
+            Ok(None) => {}
+            Err(error) => self.notify(error, true),
         }
-        let id = match rode_session::new_id() {
-            Ok(id) => id,
-            Err(error) => {
-                self.notify(error.to_string(), true);
-                return;
-            }
-        };
-        self.sessions.next += 1;
-        let allocation = match allocation
-            .map(|settings| {
-                if reserve {
-                    settings.reserve(&plan, &id)
-                } else {
-                    settings.launch(&plan, &id)
-                }
-            })
-            .transpose()
-        {
-            Ok(launch) => launch,
-            Err(error) => {
-                self.sessions.allocation_error = error.to_string();
-                return;
-            }
-        };
-        let policy = service::fingerprint(&plan);
-        let python = self.terminal_python_selection();
-        self.sessions.starting = true;
-        self.show_terminal = true;
-        self.session_request(
-            service::Operation::Create {
-                id,
-                name: format!(
-                    "{} {}",
-                    if reserve {
-                        "Notebook allocation"
-                    } else if allocation.is_some() {
-                        "Slurm"
-                    } else {
-                        "Terminal"
-                    },
-                    self.sessions.next
-                ),
-                plan: Box::new(plan),
-                policy: policy.clone(),
-                python,
-                environment: Box::new(self.workbench.environment_settings().clone()),
-                persistent,
-                allocation,
-            },
-            Job::Create { persistent, policy },
-            ctx,
-        );
     }
+    /// Capture one host/reply/lease capability before handing execution to the session owner.
     fn session_request(&mut self, operation: service::Operation, job: Job, ctx: &egui::Context) {
         if self.sessions.busy {
             return;
         }
-        self.sessions.busy = true;
-        let remote = self.session_remote();
         let root = self.session_plan().root;
-        let replies = self.workers.workspace(ctx);
-        let vault_work = self.vaults.work();
-        std::thread::spawn(move || {
-            let _vault_work = vault_work;
-            let result = (|| -> anyhow::Result<project::Response> {
-                if let Some(remote) = remote {
-                    remote
-                        .request_in(
-                            &Request::Tool {
-                                request: project::Request::Sessions {
-                                    root,
-                                    operation,
-                                    directory: std::env::var("RODE_SESSION_DIR").ok(),
-                                },
-                            },
-                            None,
-                        )?
-                        .tool
-                        .context("Missing terminal service response")
-                } else {
-                    Ok(project::Response::Sessions(service::local(&operation)?))
-                }
-            })()
-            .map_err(|error| format!("{error:#}"));
-            let _ = replies.send(WorkspaceEvent::Session { job, result });
-        });
+        let work = self.capture_work(execution::Scope::Host, ctx);
+        self.sessions.request(operation, job, root, work);
     }
     /// Open terminal/runtime/scheduler discovery and queue independent metadata refreshes.
     pub(super) fn open_sessions(&mut self, ctx: &egui::Context) {
@@ -436,49 +296,16 @@ impl EditorApp {
         self.sessions.last = Some(Instant::now());
         self.session_request(service::Operation::List, Job::List, ctx);
     }
-    /// Queue one scheduler listing or an already confirmed captured-job cancellation;
-    /// GPU allocation counts remain distinct from host utilization telemetry.
+    /// Capture scheduler configuration and project authority for the session owner.
     pub(super) fn refresh_slurm(&mut self, cancel: Option<String>, ctx: &egui::Context) {
         if self.sessions.slurm_busy {
             return;
         }
-        self.sessions.slurm_busy = true;
-        self.sessions.slurm_last = Some(Instant::now());
-        let job = if cancel.is_some() {
-            Job::Release
-        } else {
-            Job::Slurm
-        };
         let root = self.session_plan().root;
         let (queue, cancel_program) = self.slurm_programs();
-        let remote = self.session_remote();
-        let plan = self
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.plan.clone());
-        let request = Request::Tool {
-            request: project::Request::Slurm {
-                root,
-                queue,
-                cancel_program,
-                cancel,
-            },
-        };
-        let replies = self.workers.workspace(ctx);
-        let vault_work = self.vaults.work();
-        std::thread::spawn(move || {
-            let _vault_work = vault_work;
-            let result = (match remote {
-                Some(remote) => remote.request_in(&request, plan.as_ref()),
-                None => match plan {
-                    Some(plan) => plan.local_request(&request),
-                    None => files::local(&request),
-                },
-            })
-            .and_then(|response| response.tool.context("Missing Slurm response"))
-            .map_err(|error| format!("{error:#}"));
-            let _ = replies.send(WorkspaceEvent::Session { job, result });
-        });
+        let work = self.capture_work(execution::Scope::Project, ctx);
+        self.sessions
+            .refresh_slurm(cancel, root, queue, cancel_program, work);
     }
     /// Drain runtime completions, advance waiting exits and refresh visible session/scheduler caches.
     pub(super) fn session_tick(&mut self, ctx: &egui::Context) {
@@ -589,23 +416,9 @@ impl EditorApp {
             Err(error) => self.notify(format!("{error:#}"), true),
         }
     }
-    /// Release the matching window attachment and select another retained view if available;
-    /// the host session follows its acknowledged persistence policy.
+    /// Release only the named attachment; the host applies its acknowledged lifetime policy.
     pub(super) fn remove_view(&mut self, key: &str) {
-        self.sessions.other.retain(|slot| slot.meta.key != key);
-        if self
-            .sessions
-            .active
-            .as_ref()
-            .is_some_and(|active| active.key == key)
-        {
-            self.terminal = None;
-            self.sessions.active = None;
-            if let Some(slot) = self.sessions.other.pop() {
-                self.terminal = Some(slot.terminal);
-                self.sessions.active = Some(slot.meta);
-            }
-        }
+        self.sessions.remove(&mut self.terminal, key);
     }
     /// Release an explicitly persistent attachment; temporary views require their confirmation path.
     pub(super) fn detach_terminal(&mut self, ctx: &egui::Context) {
@@ -645,148 +458,50 @@ impl EditorApp {
         self.session_request(operation, Job::Persistence, ctx);
         Terminal::focus(ctx);
     }
-    /// Apply a current-context terminal/scheduler reply and clear its matching in-flight state.
+    /// Apply only cross-domain presentation/lifecycle effects of an admitted session reply.
     pub(super) fn handle_session(
         &mut self,
         job: Job,
         result: Result<project::Response, String>,
         ctx: &egui::Context,
     ) {
-        if matches!(job, Job::Slurm | Job::Release) {
-            self.sessions.slurm_busy = false;
-        } else {
-            self.sessions.busy = false;
-        }
-        if matches!(job, Job::Create { .. }) {
-            self.sessions.starting = false;
-        }
-        if matches!(job, Job::Persistence) {
-            self.sessions.persistence_pending = false;
-        }
-        let result = result.and_then(|response| {
-            if let Job::Create { policy, .. } = &job {
-                let valid = matches!(&response,
-                    project::Response::Sessions(reply)
-                    if matches!(&reply.response, rode_session::Response::Session(info)
-                        if info.policy == *policy && self.compatible_session(info))
-                );
-                if !valid {
-                    return Err("The terminal service did not return the requested project and execution policy. No commands were sent.".into());
-                }
-            }
-            Ok(response)
-        });
-        let response = match result {
-            Ok(response) => response,
+        let effects = match self.sessions.complete(&job, result, &self.session_plan()) {
+            Ok(effects) => effects,
             Err(error) => {
-                if matches!(job, Job::Slurm | Job::Release) {
-                    self.sessions.slurm_error = error.clone();
-                } else {
-                    self.sessions.error = error.clone();
-                    self.sessions.queued.clear();
-                }
                 self.abort_lifecycle(error, ctx);
                 return;
             }
         };
-        match response {
-            project::Response::Sessions(reply) => {
-                self.sessions.error.clear();
-                self.sessions.backend = Some(reply.clone());
-                match reply.response {
-                    rode_session::Response::Sessions(mut infos) => {
-                        infos.retain(|info| info.alive);
-                        self.sessions.available = infos;
-                    }
-                    rode_session::Response::Session(info) => {
-                        if info.allocation.is_some() && matches!(job, Job::Create { .. }) {
-                            self.sessions.slurm_last = None;
-                        }
-                        if let Job::Create { persistent, .. } = &job {
-                            if info.persistent != *persistent {
-                                self.notify("The running terminal service predates persistence controls. This session remains persistent; existing jobs were preserved. Finish old sessions before restarting the service.", true);
-                            }
-                            let restore = if self.navigation.active != navigation::Pane::Terminal {
-                                Some(self.navigation.active)
-                            } else {
-                                None
-                            };
-                            let restore_composer = restore == Some(navigation::Pane::Tools)
-                                && self.workbench.panel == Some(Panel::Agent)
-                                && ctx.memory(|memory| {
-                                    memory.has_focus(egui::Id::new("agent-composer"))
-                                });
-                            self.attach_info(info.clone(), ctx);
-                            if !self
-                                .sessions
-                                .active
-                                .as_ref()
-                                .is_some_and(|meta| meta.key == info.id)
-                            {
-                                self.sessions.queued.clear();
-                            }
-                            if !info.alive {
-                                self.sessions.queued.clear();
-                                self.notify("The new terminal exited. Remaining queued commands were not sent.", true);
-                            }
-                            if let Some(pane) = restore {
-                                self.focus_pane(pane, ctx);
-                                self.agents.focus |= restore_composer;
-                            }
-                        }
-                        if let Some(meta) = &mut self.sessions.active
-                            && meta.key == info.id
-                        {
-                            meta.name = info.name.clone();
-                            meta.native = Some(info.clone());
-                            if let Some(terminal) = &mut self.terminal {
-                                terminal.title = format!("NATIVE · {} / {}", info.name, info.mode);
-                            }
-                        }
-                        for slot in &mut self.sessions.other {
-                            if slot.meta.key == info.id {
-                                slot.meta.name = info.name.clone();
-                                slot.meta.native = Some(info.clone());
-                                slot.terminal.title =
-                                    format!("NATIVE · {} / {}", info.name, info.mode);
-                            }
-                        }
-                        self.sessions.available.retain(|old| old.id != info.id);
-                        if info.alive {
-                            self.sessions.available.push(info);
-                        }
-                    }
-                    rode_session::Response::Ok => {}
-                    rode_session::Response::Error(error) => self.notify(error, true),
-                    rode_session::Response::Protocol(_)
-                    | rode_session::Response::Tunnels(_)
-                    | rode_session::Response::Tunnel(_)
-                    | rode_session::Response::Agents(_)
-                    | rode_session::Response::Agent(_)
-                    | rode_session::Response::Runtimes(_)
-                    | rode_session::Response::Runtime(_) => {
-                        self.notify("Unexpected agent reply in terminal controls", true)
-                    }
+        if let Some(error) = effects.notice {
+            self.notify(error, true);
+        }
+        if let Some(info) = effects.info {
+            if let Some(persistent) = effects.created_persistence {
+                if info.persistent != persistent {
+                    self.notify("The running terminal service predates persistence controls. This session remains persistent; existing jobs were preserved. Finish old sessions before restarting the service.", true);
                 }
-                if let Job::End(id) = &job {
-                    self.remove_view(id);
-                    self.sessions.available.retain(|info| info.id != *id);
+                let restore = (self.navigation.active != navigation::Pane::Terminal)
+                    .then_some(self.navigation.active);
+                let restore_composer = restore == Some(navigation::Pane::Tools)
+                    && self.workbench.panel == Some(Panel::Agent)
+                    && ctx.memory(|memory| memory.has_focus(egui::Id::new("agent-composer")));
+                self.attach_info(info.clone(), ctx);
+                if let Some(error) = self.sessions.finish_creation(&info) {
+                    self.notify(error, true);
+                }
+                if let Some(pane) = restore {
+                    self.focus_pane(pane, ctx);
+                    self.agents.focus |= restore_composer;
                 }
             }
-            project::Response::Slurm(snapshot) => {
-                self.sessions.slurm = Some(snapshot);
-                self.sessions.slurm_error.clear();
-            }
-            project::Response::Command(output) if matches!(job, Job::Release) => {
-                if output.success() {
-                    self.sessions.slurm_error.clear();
-                    self.status="Allocation cancellation requested; GPUs remain allocated until Slurm completes cleanup.".into();
-                    self.refresh_slurm(None, ctx);
-                } else {
-                    self.sessions.slurm_error = output.stderr + &output.stdout;
-                }
-            }
-            _ => self.notify("Unexpected session response", true),
+            self.sessions.update_info(&mut self.terminal, info);
+        }
+        if let Some(id) = effects.ended {
+            self.sessions.finish_end(&mut self.terminal, &id);
+        }
+        if effects.allocation_cancelled {
+            self.status = "Allocation cancellation requested; GPUs remain allocated until Slurm completes cleanup.".into();
+            self.refresh_slurm(None, ctx);
         }
         let created_policy = if let Job::Create { policy, .. } = &job {
             Some(policy.as_str())
@@ -1098,16 +813,7 @@ impl EditorApp {
     }
     /// Render window-owned terminal views using their stable keys and retained creation order.
     pub(super) fn terminal_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let mut slots: Vec<_> = self
-            .sessions
-            .other
-            .iter()
-            .map(|slot| slot.meta.clone())
-            .collect();
-        if let Some(active) = &self.sessions.active {
-            slots.push(active.clone());
-        }
-        slots.sort_by_key(|meta| meta.order);
+        let slots = self.sessions.tabs();
         if slots.len() < 2 {
             return;
         }
@@ -1123,73 +829,43 @@ impl EditorApp {
                             .as_ref()
                             .is_some_and(|active| active.key == meta.key);
                         if ui.selectable_label(selected, &meta.name).clicked()
-                            && let Some(index) = self
-                                .sessions
-                                .other
-                                .iter()
-                                .position(|slot| slot.meta.key == meta.key)
+                            && self.sessions.select(&mut self.terminal, &meta.key)
                         {
-                            let slot = self.sessions.other.remove(index);
-                            self.adopt_terminal(slot.terminal, slot.meta);
+                            self.show_terminal = true;
                             Terminal::focus(ctx);
                         }
                     }
                 });
             });
     }
-    /// Retain at most eight commands while a native terminal starts; report overflow without execution.
+    /// Admit a bounded captured command through its owner before requesting a suitable view.
     pub(super) fn queue_terminal_command(
         &mut self,
         command: String,
         plan: sandbox::Plan,
         ctx: &egui::Context,
     ) {
-        if self.sessions.queued.len() >= 8 {
-            self.notify(
-                "Terminal startup command queue is full; command was not run.",
-                true,
-            );
-            return;
+        match self.sessions.enqueue(command, plan) {
+            Ok(()) => self.drain_terminal_commands(ctx, None),
+            Err(error) => self.notify(error, true),
         }
-        self.sessions
-            .queued
-            .push_back(QueuedCommand { command, plan });
-        self.drain_terminal_commands(ctx, None);
     }
 
-    /// A queued project command must never enter an explicitly unrestricted shell.
-    /// Capture each command's policy and create another view when it differs.
+    /// Apply a session owner's request for a matching terminal while respecting application exit.
     fn drain_terminal_commands(&mut self, ctx: &egui::Context, created_policy: Option<&str>) {
-        if self.session_busy() || self.exit.waiting() {
+        if self.exit.waiting() {
             return;
         }
-        while let Some(next) = self.sessions.queued.front() {
-            if !self.terminal_matches(&next.plan) {
-                // A creation reply is the one attempt to satisfy this policy.
-                // An early shell/attachment exit must not become a restart loop.
-                if created_policy == Some(service::fingerprint(&next.plan).as_str()) {
-                    self.sessions.queued.clear();
-                    self.notify(
-                        "The new terminal exited. Remaining queued commands were not sent.",
-                        true,
-                    );
-                    return;
-                }
-                let plan = next.plan.clone();
+        match self
+            .sessions
+            .drain_commands(self.terminal.as_ref(), created_policy)
+        {
+            Ok(Some(plan)) => {
                 self.create_terminal(false, None, false, plan, ctx);
-                if !self.sessions.starting {
-                    self.sessions.queued.clear();
-                }
-                return;
+                self.sessions.discard_unstarted_commands();
             }
-            let next = self.sessions.queued.pop_front().unwrap();
-            if let Some(terminal) = &self.terminal
-                && let Err(error) = terminal.send((next.command + "\n").into_bytes())
-            {
-                self.sessions.queued.clear();
-                self.notify(error.to_string(), true);
-                return;
-            }
+            Ok(None) => {}
+            Err(error) => self.notify(error, true),
         }
     }
 

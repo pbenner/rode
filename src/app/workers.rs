@@ -5,7 +5,6 @@
 //! before changing buffers; decoding and blocking host I/O stay on workers.
 
 use super::*;
-use crate::sandbox::PlanExt as _;
 use anyhow::Context;
 use std::collections::BTreeMap;
 
@@ -145,16 +144,14 @@ impl EditorApp {
             }
             _ => self.workspace.as_ref().is_some_and(|w| w.remote.is_some()),
         };
-        let remote = if use_remote {
-            self.workspace.as_ref().and_then(|w| w.remote.clone())
+        let scope = if !raw {
+            execution::Scope::Project
+        } else if use_remote {
+            execution::Scope::Host
         } else {
-            None
+            execution::Scope::Local
         };
-        let plan = if raw {
-            None
-        } else {
-            self.workspace.as_ref().map(|w| w.plan.clone())
-        };
+        let work = self.capture_work(scope, ctx);
         let mut job = job;
         let restore_policies = if matches!(
             job,
@@ -167,7 +164,6 @@ impl EditorApp {
         } else {
             Default::default()
         };
-        let replies: WorkspaceSender = self.workers.workspace(ctx);
         let image_budget = self.image_budget.clone();
         let notebooks_enabled = self.feature(crate::extensions::Feature::Notebooks);
         let extension_cancel = self.extensions.cancel.clone();
@@ -200,9 +196,7 @@ impl EditorApp {
         } else {
             None
         };
-        let vault_work = self.vaults.work();
         std::thread::spawn(move || {
-            let _vault_work = vault_work;
             let mut request = match (request, &job) {
                 (Request::WriteBinary { path, expected, .. }, Job::SaveBinary { bytes, .. }) => {
                     use base64::Engine;
@@ -230,13 +224,7 @@ impl EditorApp {
                     | Request::ReadAttachment { .. }
             )
             .then(|| image_budget.io.lock().unwrap_or_else(|e| e.into_inner()));
-            let execute = |request: &Request| match &remote {
-                Some(remote) => remote.request_in(request, plan.as_ref()),
-                None => match &plan {
-                    Some(plan) => plan.local_request(request),
-                    None => files::local(request),
-                },
-            };
+            let execute = |request: &Request| work.target.request(request);
             let resolved = resolve_startup_path(
                 &mut request,
                 &mut job,
@@ -361,7 +349,7 @@ impl EditorApp {
             {
                 std::mem::swap(text, snapshot);
             }
-            let _ = replies.send(WorkspaceEvent::Done {
+            work.send(WorkspaceEvent::Done {
                 job,
                 result: Box::new(result),
             });
