@@ -472,18 +472,19 @@ impl EditorApp {
         column: usize,
         ctx: &egui::Context,
     ) {
-        if let Some(index) = self.documents.iter().position(|d| d.id == id) {
-            self.documents.select_index(index);
-            let doc = &mut self.documents[index];
-            let offset: usize = doc
-                .text
-                .split_inclusive('\n')
-                .take(row.saturating_sub(1))
-                .map(|s| s.chars().count())
-                .sum::<usize>()
-                + column.saturating_sub(1);
-            doc.selection = Some((offset, offset));
-            self.focus_document(id, ctx);
+        if let Some(doc) = self.documents.by_id(id) {
+            let position = editor_operations::Position {
+                row,
+                column,
+                version: doc.version(),
+            };
+            self.submit_editor_operation(
+                editor_operations::Operation::Select {
+                    document: id,
+                    position: Some(position),
+                },
+                ctx,
+            );
         }
     }
     /// Return diagnostics only when their captured source version matches this document.

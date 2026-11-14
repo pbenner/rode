@@ -223,7 +223,6 @@ impl EditorApp {
             .iter()
             .position(|doc| doc.path.as_deref() == Some(path.as_str()))
         {
-            self.documents.select_index(index);
             self.reload_pdf(self.documents[index].id, ctx);
             self.focus_document(self.documents[index].id, ctx);
         } else {

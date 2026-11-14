@@ -32,7 +32,11 @@ fn child_frame(
     if close {
         info.events.push(egui::ViewportEvent::Close);
     }
-    ctx.run(input, |ctx| app.editor_window_ui(ctx))
+    ctx.run(input, |ctx| {
+        app.begin_editor_frame();
+        app.editor_window_ui(ctx);
+        app.finish_editor_frame(ctx);
+    })
 }
 
 #[test]

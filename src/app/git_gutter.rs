@@ -188,8 +188,7 @@ impl EditorApp {
     pub(super) fn git_gutter_tick(&mut self, ctx: &egui::Context) {
         let eligible = self.project_ready()
             && self.feature(crate::extensions::Feature::Git)
-            && (ctx.viewport_id() != egui::ViewportId::ROOT
-                || self.navigation.visible(navigation::Pane::Editor));
+            && self.pane_visible(navigation::Pane::Editor, ctx.viewport_id());
         let doc = self.documents.active().filter(|d| {
             !d.is_preview() && d.text.len() <= MAX_BYTES && d.line_count() <= MAX_LINES
         });

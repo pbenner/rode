@@ -188,7 +188,7 @@ impl EditorApp {
         self.dialog = Dialog::None;
         self.show_terminal = false;
         self.status = "SSH disconnected · local mode".into();
-        self.focus_editor(ctx);
+        self.focus_editor_in(self.focused_editor(), ctx);
     }
     /// Restore bound paths/revisions only for recovery records matching the prepared connection identity.
     pub(super) fn restore_ssh_buffers(&mut self) {

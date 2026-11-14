@@ -10,6 +10,14 @@ mod model;
 pub(super) use model::State;
 use model::{TreeRow, renamed};
 
+pub(super) fn panel_id(viewport: egui::ViewportId, zoom: bool) -> egui::Id {
+    if viewport == egui::ViewportId::ROOT {
+        egui::Id::new(if zoom { "explorer-zoom" } else { "explorer" })
+    } else {
+        egui::Id::new(("explorer", viewport, zoom))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     File,
@@ -52,6 +60,27 @@ fn valid_name(name: &str) -> bool {
 }
 
 impl EditorApp {
+    /// Sidebar visibility belongs to its native host; directory data stays project-scoped.
+    pub(super) fn explorer_visible(&self, viewport: egui::ViewportId) -> bool {
+        if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
+            self.show_explorer
+        } else {
+            self.editor_view(viewport)
+                .is_none_or(|view| view.show_explorer)
+        }
+    }
+
+    pub(super) fn set_explorer_visible(&mut self, viewport: egui::ViewportId, visible: bool) {
+        if visible || self.pane_zoom(viewport) == Some(navigation::Pane::Explorer) {
+            self.set_pane_zoom(viewport, None);
+        }
+        if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
+            self.show_explorer = visible;
+        } else if let Some(view) = self.editor_view_mut(viewport) {
+            view.show_explorer = visible;
+        }
+    }
+
     fn explorer_writable(&self) -> bool {
         self.project_ready()
             && !self.workspace.preparing()
@@ -377,24 +406,41 @@ impl EditorApp {
     /// Render cached directory rows and explicit project actions; directory I/O is delegated to workers.
     pub(super) fn explorer(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        if !self.show_explorer || !self.navigation.visible(navigation::Pane::Explorer) {
+        let viewport = ctx.viewport_id();
+        if !self.explorer_visible(viewport)
+            || !self.pane_visible(navigation::Pane::Explorer, viewport)
+        {
             return;
         }
-        let maximum = (ctx.available_rect().width() - 320.).clamp(180., 450.);
-        let zoom = self.navigation.zoom == Some(navigation::Pane::Explorer);
-        let panel = egui::SidePanel::left(if zoom { "explorer-zoom" } else { "explorer" })
+        let minimum_editor = if viewport == egui::ViewportId::ROOT {
+            320.
+        } else {
+            240.
+        };
+        let maximum = (ctx.available_rect().width() - minimum_editor).clamp(180., 450.);
+        let zoom = self.pane_zoom(viewport) == Some(navigation::Pane::Explorer);
+        let width = if viewport == egui::ViewportId::ROOT {
+            self.navigation.widths[0].take()
+        } else {
+            self.editor_view_mut(viewport)
+                .and_then(|view| view.explorer_width.take())
+        };
+        let panel = egui::SidePanel::left(panel_id(viewport, zoom))
             .default_width(250.0)
             .width_range(180.0..=maximum)
             .frame(theme::frame(palette.panel));
         let panel = if zoom {
             panel.exact_width(ctx.available_rect().width())
-        } else if let Some(width) = self.navigation.widths[0].take() {
+        } else if let Some(width) = width {
             panel.exact_width(width.clamp(180., maximum))
         } else {
             panel
         };
         panel.show(ctx, |ui| {
             palette.paint_panel(ui);
+            if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() {
+                ui.disable();
+            }
             self.pane_ui(ui, navigation::Pane::Explorer);
             ui.horizontal(|ui| {
                 ui.label(
@@ -427,7 +473,7 @@ impl EditorApp {
                     }
                     self.project_bookmark_button(ui);
                     if icons::small(ui, Icon::NewFile, "New file").clicked() {
-                        self.new_file();
+                        self.execute_command(Command::New, ctx);
                     }
                 });
             });
@@ -538,15 +584,25 @@ impl EditorApp {
         self.tree_keyboard(ctx);
         ui.spacing_mut().item_spacing.y = 2.0;
         let mut scroll = egui::ScrollArea::vertical().id_salt("file-tree");
-        if std::mem::take(&mut self.explorer_state.selection.reveal)
+        let explorer_id = navigation::Pane::Explorer.id_in(ctx.viewport_id());
+        let focused =
+            ctx.input(|input| input.focused) && ctx.memory(|memory| memory.has_focus(explorer_id));
+        if focused
+            && std::mem::take(&mut self.explorer_state.selection.reveal)
             && let Some(index) =
                 self.explorer_state.tree_rows.iter().position(|r| {
                     Some(&r.entry.path) == self.explorer_state.selection.path.as_ref()
                 })
         {
             let top = index as f32 * 27.;
-            let offset = self.explorer_state.selection.offset;
-            let height = self.explorer_state.selection.height.max(27.);
+            let (offset, height) = self
+                .explorer_state
+                .selection
+                .scroll
+                .get(&ctx.viewport_id())
+                .copied()
+                .unwrap_or_default();
+            let height = height.max(27.);
             if top < offset {
                 scroll = scroll.vertical_scroll_offset(top);
             } else if top + 27. > offset + height {
@@ -561,7 +617,7 @@ impl EditorApp {
                 for index in range {
                     let TreeRow { entry, depth } = self.explorer_state.tree_rows[index].clone();
                     let expanded = self.explorer_state.expanded.contains(&entry.path);
-                    let selected = (ctx.memory(|m| m.has_focus(navigation::Pane::Explorer.id()))
+                    let selected = (ctx.memory(|m| m.has_focus(explorer_id))
                         && self.explorer_state.selection.path.as_deref() == Some(&entry.path))
                         || self
                             .documents
@@ -638,15 +694,13 @@ impl EditorApp {
                     }
                     if response.secondary_clicked() {
                         self.explorer_state.selection.path = Some(entry.path.clone());
-                        ctx.memory_mut(|memory| {
-                            memory.request_focus(navigation::Pane::Explorer.id())
-                        });
+                        ctx.memory_mut(|memory| memory.request_focus(explorer_id));
                     }
                     response.context_menu(|ui| self.explorer_menu(ui, &entry, false, ctx));
                     let response = response.on_hover_text(&entry.path);
                     if response.clicked() {
                         self.explorer_state.selection.path = Some(entry.path.clone());
-                        ctx.memory_mut(|m| m.request_focus(navigation::Pane::Explorer.id()));
+                        ctx.memory_mut(|m| m.request_focus(explorer_id));
                         if entry.dir {
                             if expanded {
                                 self.explorer_state.expanded.remove(&entry.path);
@@ -664,7 +718,9 @@ impl EditorApp {
                 }
             },
         );
-        self.explorer_state.selection.offset = output.state.offset.y;
-        self.explorer_state.selection.height = output.inner_rect.height();
+        self.explorer_state.selection.scroll.insert(
+            ctx.viewport_id(),
+            (output.state.offset.y, output.inner_rect.height()),
+        );
     }
 }

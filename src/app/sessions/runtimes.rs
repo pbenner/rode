@@ -261,7 +261,6 @@ impl EditorApp {
                 .position(|d| d.path.as_deref() == Some(&info.document) && d.notebook.is_some())
             {
                 if current {
-                    self.documents.select_index(index);
                     self.focus_document(self.documents[index].id, ctx);
                 } else if let Err(error) = self.attach_notebook_runtime(index, info, ctx) {
                     self.sessions.runtimes.error = error.to_string();

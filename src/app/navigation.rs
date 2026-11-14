@@ -27,6 +27,13 @@ impl Pane {
     pub fn id(self) -> egui::Id {
         egui::Id::new(("pane-focus", self.index()))
     }
+    pub fn id_in(self, viewport: egui::ViewportId) -> egui::Id {
+        if viewport == egui::ViewportId::ROOT {
+            self.id()
+        } else {
+            self.id().with(viewport)
+        }
+    }
 }
 /// Immutable command recognition facts shared with source admission.
 #[derive(Clone, Copy)]
@@ -79,6 +86,7 @@ pub(super) struct State {
     pub widths: [Option<f32>; 2],
     rects: [Option<egui::Rect>; 5],
     viewports: [Option<egui::ViewportId>; 5],
+    native_rects: HashMap<egui::ViewportId, [Option<egui::Rect>; 5]>,
     remembered: std::collections::HashMap<egui::ViewportId, [Option<egui::Id>; 5]>,
     pub list: List,
     modal: bool,
@@ -97,6 +105,7 @@ impl State {
             widths: [None; 2],
             rects: [None; 5],
             viewports: [None; 5],
+            native_rects: Default::default(),
             remembered: Default::default(),
             list: Default::default(),
             modal: false,
@@ -105,6 +114,25 @@ impl State {
     pub fn begin_layout(&mut self) {
         self.rects = [None; 5];
         self.viewports = [None; 5];
+        self.begin_viewport_layout(egui::ViewportId::ROOT);
+    }
+    pub fn begin_viewport_layout(&mut self, viewport: egui::ViewportId) {
+        self.native_rects.insert(viewport, [None; 5]);
+    }
+    pub fn forget_viewport(&mut self, viewport: egui::ViewportId) {
+        self.native_rects.remove(&viewport);
+        self.remembered.remove(&viewport);
+    }
+    fn rect_in(&self, pane: Pane, viewport: egui::ViewportId) -> Option<egui::Rect> {
+        self.native_rects.get(&viewport).map_or_else(
+            || {
+                self.viewports[pane.index()]
+                    .is_none_or(|host| host == viewport)
+                    .then(|| self.rect(pane))
+                    .flatten()
+            },
+            |rects| rects[pane.index()],
+        )
     }
     pub fn rect(&self, pane: Pane) -> Option<egui::Rect> {
         self.rects[pane.index()]
@@ -253,6 +281,26 @@ impl List {
 }
 
 impl EditorApp {
+    pub(super) fn pane_zoom(&self, viewport: egui::ViewportId) -> Option<Pane> {
+        if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
+            self.navigation.zoom
+        } else {
+            self.editor_view(viewport).and_then(|view| view.pane_zoom)
+        }
+    }
+
+    pub(super) fn set_pane_zoom(&mut self, viewport: egui::ViewportId, pane: Option<Pane>) {
+        if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
+            self.navigation.zoom = pane;
+        } else if let Some(view) = self.editor_view_mut(viewport) {
+            view.pane_zoom = pane;
+        }
+    }
+
+    pub(super) fn pane_visible(&self, pane: Pane, viewport: egui::ViewportId) -> bool {
+        self.pane_zoom(viewport).is_none_or(|zoom| zoom == pane)
+    }
+
     /// Route pane/leader commands only when modal barriers and native terminal input permit them.
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused) {
@@ -280,8 +328,8 @@ impl EditorApp {
         match action {
             Left | Right | Up | Down => {
                 let current = self.navigation.active;
-                self.navigation.zoom = None;
-                if let Some(rect) = self.navigation.rects[current.index()] {
+                self.set_pane_zoom(ctx.viewport_id(), None);
+                if let Some(rect) = self.navigation.rect_in(current, ctx.viewport_id()) {
                     let axis = if matches!(action, Left | Right) { 0 } else { 1 };
                     let sign = if matches!(action, Right | Down) {
                         1.
@@ -290,12 +338,12 @@ impl EditorApp {
                     };
                     let next = [Pane::Explorer, Pane::Editor, Pane::Terminal, Pane::Tools]
                         .into_iter()
-                        .filter(|p| *p != current && self.pane_exists(*p))
-                        .filter(|p| {
-                            self.navigation.viewports[p.index()]
-                                .is_none_or(|viewport| viewport == ctx.viewport_id())
+                        .filter(|p| *p != current && self.pane_exists(*p, ctx.viewport_id()))
+                        .filter_map(|p| {
+                            self.navigation
+                                .rect_in(p, ctx.viewport_id())
+                                .map(|other| (p, other))
                         })
-                        .filter_map(|p| self.navigation.rects[p.index()].map(|other| (p, other)))
                         .filter(|(_, other)| {
                             (other.center()[axis] - rect.center()[axis]) * sign > 1.
                                 && other.min[1 - axis] < rect.max[1 - axis]
@@ -317,7 +365,7 @@ impl EditorApp {
             Next | Previous => {
                 let panes: Vec<_> = [Pane::Explorer, Pane::Editor, Pane::Terminal, Pane::Tools]
                     .into_iter()
-                    .filter(|p| self.pane_exists(*p))
+                    .filter(|p| self.pane_exists(*p, ctx.viewport_id()))
                     .collect();
                 let index = panes
                     .iter()
@@ -341,7 +389,7 @@ impl EditorApp {
             }
             Menus => self.focus_pane(Pane::Menus, ctx),
             Narrower | Wider | Shorter | Taller => {
-                self.navigation.zoom = None;
+                self.set_pane_zoom(ctx.viewport_id(), None);
                 let viewport = self.navigation.viewports[self.navigation.active.index()]
                     .unwrap_or(ctx.viewport_id());
                 if viewport != egui::ViewportId::ROOT
@@ -369,12 +417,17 @@ impl EditorApp {
                 } else if matches!(action, Narrower | Wider)
                     && self.navigation.active == Pane::Explorer
                 {
-                    let width = self
-                        .navigation
-                        .rect(Pane::Explorer)
-                        .map_or(250., |rect| rect.width());
-                    self.navigation.widths[0] =
-                        Some(width + if action == Wider { 32. } else { -32. });
+                    let width = egui::containers::panel::PanelState::load(
+                        ctx,
+                        explorer::panel_id(ctx.viewport_id(), false),
+                    )
+                    .map_or(250., |state| state.rect.width());
+                    let width = Some(width + if action == Wider { 32. } else { -32. });
+                    if ctx.viewport_id() == egui::ViewportId::ROOT {
+                        self.navigation.widths[0] = width;
+                    } else if let Some(view) = self.editor_view_mut(ctx.viewport_id()) {
+                        view.explorer_width = width;
+                    }
                 }
             }
             Zoom => {
@@ -400,11 +453,12 @@ impl EditorApp {
                 }
                 let pane = self.navigation.active;
                 if pane != Pane::Menus {
-                    self.navigation.zoom = if self.navigation.zoom == Some(pane) {
+                    let zoom = if self.pane_zoom(ctx.viewport_id()) == Some(pane) {
                         None
                     } else {
                         Some(pane)
                     };
+                    self.set_pane_zoom(ctx.viewport_id(), zoom);
                 }
             }
             Hide => {
@@ -414,12 +468,12 @@ impl EditorApp {
                 }
                 self.remember_tool_tab();
                 match self.navigation.active {
-                    Pane::Explorer => self.show_explorer = false,
+                    Pane::Explorer => self.set_explorer_visible(ctx.viewport_id(), false),
                     Pane::Terminal => self.show_terminal = false,
                     Pane::Tools => self.workbench.panel = None,
                     _ => {}
                 }
-                self.navigation.zoom = None;
+                self.set_pane_zoom(ctx.viewport_id(), None);
                 self.focus_pane(Pane::Editor, ctx);
             }
             NewTerminal => {
@@ -458,9 +512,16 @@ impl EditorApp {
         }
         ctx.request_repaint();
     }
-    fn pane_exists(&self, pane: Pane) -> bool {
+    fn pane_exists(&self, pane: Pane, viewport: egui::ViewportId) -> bool {
+        if viewport != egui::ViewportId::ROOT && self.editors.contains(viewport) {
+            return match pane {
+                Pane::Explorer => self.explorer_visible(viewport),
+                Pane::Editor => true,
+                _ => false,
+            };
+        }
         match pane {
-            Pane::Explorer => self.show_explorer,
+            Pane::Explorer => self.explorer_visible(viewport),
             Pane::Editor => true,
             Pane::Terminal => self.terminal_visible(),
             Pane::Tools => self.tools_visible(),
@@ -482,7 +543,9 @@ impl EditorApp {
         }
         let viewport = tab.map_or_else(
             || {
-                if pane == Pane::Editor {
+                if pane == Pane::Explorer && self.editors.contains(ctx.viewport_id()) {
+                    ctx.viewport_id()
+                } else if pane == Pane::Editor {
                     self.documents.viewport()
                 } else {
                     egui::ViewportId::ROOT
@@ -498,14 +561,14 @@ impl EditorApp {
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
         }
         self.navigation.request_focus(pane, viewport);
-        if self.navigation.zoom.is_some_and(|p| p != pane) {
-            self.navigation.zoom = None;
+        if self.pane_zoom(viewport).is_some_and(|p| p != pane) {
+            self.set_pane_zoom(viewport, None);
         }
         self.editor.tabs.cancel_focus();
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("terminal-wants-focus"), false));
         ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
         match pane {
-            Pane::Explorer => self.show_explorer = true,
+            Pane::Explorer => self.set_explorer_visible(viewport, true),
             Pane::Terminal => {
                 self.terminal_intent();
                 self.show_terminal = true;
@@ -532,7 +595,14 @@ impl EditorApp {
     pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane) {
         let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
-        if self.navigation.zoom.is_none()
+        let zoom = self.pane_zoom(ctx.viewport_id());
+        if zoom.is_none() {
+            self.navigation
+                .native_rects
+                .entry(ctx.viewport_id())
+                .or_insert([None; 5])[pane.index()] = Some(rect);
+        }
+        if zoom.is_none()
             && (self.navigation.viewports[pane.index()].is_none()
                 || ctx.input(|input| input.focused)
                 || (self.navigation.pending == Some(pane)
@@ -541,14 +611,10 @@ impl EditorApp {
             self.navigation.rects[pane.index()] = Some(rect);
             self.navigation.viewports[pane.index()] = Some(ctx.viewport_id());
         }
-        let host_id = if ctx.viewport_id() == egui::ViewportId::ROOT {
-            pane.id()
-        } else {
-            pane.id().with(ctx.viewport_id())
-        };
+        let host_id = pane.id_in(ctx.viewport_id());
         let host = ui.interact(rect, host_id, Sense::focusable_noninteractive());
         ui_probe::button(ui, &format!("pane-{pane:?}"), &host);
-        if self.navigation.zoom == Some(pane) {
+        if zoom == Some(pane) {
             ui_probe::button(ui, &format!("pane-maximized-{pane:?}"), &host);
         }
         let blocked = self.dialog != Dialog::None

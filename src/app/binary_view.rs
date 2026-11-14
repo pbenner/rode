@@ -187,7 +187,6 @@ impl EditorApp {
             .iter()
             .position(|d| d.path.as_deref() == Some(&path))
         {
-            self.documents.select_index(index);
             if self.documents[index].hex.is_some() {
                 self.focus_document(self.documents[index].id, ctx);
                 return;
@@ -199,7 +198,9 @@ impl EditorApp {
                 );
                 return;
             }
-            let doc = &self.documents[index];
+            let id = self.documents[index].id;
+            self.focus_document(id, ctx);
+            let doc = self.documents.by_id(id).unwrap();
             self.dispatch(
                 Request::ReadHex { path },
                 Job::Reload {
@@ -208,7 +209,10 @@ impl EditorApp {
                 },
                 ctx,
             );
-        } else if self.documents.begin_open(path.clone()) {
+        } else if self
+            .documents
+            .begin_open_in(path.clone(), self.command_editor(ctx))
+        {
             self.dispatch(
                 Request::ReadHex { path: path.clone() },
                 Job::Open(path),

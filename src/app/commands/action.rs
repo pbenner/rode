@@ -362,10 +362,13 @@ impl EditorApp {
         self.editing_hint(&hint).to_owned()
     }
 
-    pub(in crate::app) fn command_selected(&self, command: Command) -> bool {
+    pub(in crate::app) fn command_selected(&self, command: Command, ctx: &egui::Context) -> bool {
         match command {
             Command::Panel(panel) => self.panel_visible(panel),
-            Command::Explorer => self.show_explorer,
+            Command::Explorer => {
+                self.explorer_visible(ctx.viewport_id())
+                    && self.pane_visible(navigation::Pane::Explorer, ctx.viewport_id())
+            }
             Command::Connect => self.dialog == Dialog::Connect,
             Command::Terminal => self.terminal_any_visible(),
             Command::Extensions => self.dialog == Dialog::Extensions,
@@ -388,10 +391,22 @@ impl EditorApp {
 
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
-            Command::New => self.new_file(),
+            Command::New => self.submit_editor_operation(
+                editor_operations::Operation::Create {
+                    viewport: self.command_editor(ctx),
+                    template: editor_operations::Template::Source,
+                },
+                ctx,
+            ),
             Command::NewEditorWindow => self.new_editor_window(ctx),
             Command::BookmarkProject => self.toggle_project_bookmark(),
-            Command::NewNotebook => self.new_notebook(),
+            Command::NewNotebook => self.submit_editor_operation(
+                editor_operations::Operation::Create {
+                    viewport: self.command_editor(ctx),
+                    template: editor_operations::Template::Notebook,
+                },
+                ctx,
+            ),
             Command::NotebookRun => self.run_notebook(false, ctx),
             Command::NotebookRunAll => self.run_notebook(true, ctx),
             Command::NotebookSource => self.toggle_notebook_source(ctx),
@@ -403,13 +418,18 @@ impl EditorApp {
             Command::Encrypted => self.encrypted_dialog(),
             Command::LockEncrypted => self.guarded(Action::LockEncrypted, ctx),
             Command::Reconnect => self.reconnect_ssh(ctx),
-            Command::Save => self.save_active(ctx, false),
-            Command::SaveAs => self.save_active(ctx, true),
+            Command::Save => self.save_editor(self.command_editor(ctx), ctx, false),
+            Command::SaveAs => self.save_editor(self.command_editor(ctx), ctx, true),
             Command::Terminal => self.toggle_terminal(ctx),
             Command::CopyTerminal => self.copy_terminal_output(ctx),
             Command::Sidebar => self.toggle_sidebar(ctx),
             Command::Slurm => self.open_slurm(ctx),
-            Command::Explorer => self.show_explorer = !self.show_explorer,
+            Command::Explorer => {
+                let viewport = ctx.viewport_id();
+                let visible = self.explorer_visible(viewport)
+                    && self.pane_visible(navigation::Pane::Explorer, viewport);
+                self.set_explorer_visible(viewport, !visible);
+            }
             Command::Find => {
                 self.markdown_source();
                 self.editor.show_find = true;
@@ -431,7 +451,13 @@ impl EditorApp {
                 }
             }
             Command::Markdown => self.toggle_markdown(ctx),
-            Command::MarpNew => self.new_marp(),
+            Command::MarpNew => self.submit_editor_operation(
+                editor_operations::Operation::Create {
+                    viewport: self.command_editor(ctx),
+                    template: editor_operations::Template::Presentation,
+                },
+                ctx,
+            ),
             Command::LatexBuild => self.build_latex(false, ctx),
             Command::LatexPreview => self.build_latex(true, ctx),
             Command::LatexPdf => self.open_latex_pdf(ctx),

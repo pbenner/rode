@@ -689,7 +689,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
         );
         let path = p.ansi[12];
         match builtin.id.as_str() {
-            "carbon" | "carbon-edge" | "amber" => assert!(
+            "carbon" | "carbon-edge" | "amber" | "atelier-dark" => assert!(
                 path.r() > path.g() && path.g() > path.b(),
                 "{} warm path",
                 builtin.id
@@ -700,7 +700,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 builtin.id
             ),
             "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" | "studio"
-            | "studio-neutral" | "atelier-dark" | "atelier-light" => {
+            | "studio-neutral" | "atelier-light" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),

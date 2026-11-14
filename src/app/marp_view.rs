@@ -76,16 +76,24 @@ impl Drop for View {
 }
 
 impl EditorApp {
-    /// Create an unsaved slide-source document from the bundled template without invoking Marp.
+    #[cfg(test)]
     pub(super) fn new_marp(&mut self) {
+        if self.new_marp_in(self.documents.viewport()).is_some() {
+            self.editor_intent();
+        }
+    }
+
+    /// Create addressed slide source from the bundled template without invoking Marp.
+    pub(super) fn new_marp_in(&mut self, viewport: egui::ViewportId) -> Option<u64> {
         if !self.feature(crate::extensions::Feature::Marp) {
             self.notify("Enable Marp presentations in Extensions.", false);
-            return;
+            return None;
         }
-        self.new_file();
-        let doc = self.documents.active_mut().unwrap();
+        let id = self.documents.new_file_in(viewport);
+        let doc = self.documents.by_id_mut(id).unwrap();
         doc.set_source(marp::TEMPLATE.into());
         doc.marp = Some(View::default());
+        Some(id)
     }
     /// Switch a Markdown document between source and slide view, preserving its source buffer.
     pub(super) fn toggle_marp(&mut self, ctx: &egui::Context) {

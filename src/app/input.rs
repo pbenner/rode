@@ -121,7 +121,9 @@ impl EditorApp {
                 }
             }
             self.consume_command(Command::Open, ctx);
-            self.consume_command(Command::New, ctx);
+            if Command::New.consume(ctx) {
+                self.new_file();
+            }
             if consume(egui::Modifiers::COMMAND, Key::W)
                 && let Some(doc) = self.documents.active()
             {
@@ -152,6 +154,7 @@ impl EditorApp {
     }
     /// One production entry point for source replay, navigation, editing and global commands.
     pub(super) fn route_input(&mut self, ctx: &egui::Context) {
+        self.prepare_editor_input(ctx);
         self.navigation.bind_input(ctx);
         let context = self.input_context(ctx);
         let frame = self
@@ -177,7 +180,7 @@ impl EditorApp {
             // translate it only after that editor has established focus/cursor state.
             match command {
                 DocumentShortcut::Cycle(direction) => self.cycle_tab(direction, ctx),
-                DocumentShortcut::New => self.execute_command(Command::New, ctx),
+                DocumentShortcut::New => self.new_file(),
                 DocumentShortcut::Close => {
                     self.guarded_source_close(&frame, ctx);
                 }

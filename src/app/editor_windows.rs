@@ -13,6 +13,9 @@ pub(super) struct View {
     pub replacement: String,
     pub find_focus: bool,
     pub case_sensitive: bool,
+    pub show_explorer: bool,
+    pub explorer_width: Option<f32>,
+    pub pane_zoom: Option<navigation::Pane>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -25,6 +28,9 @@ impl Default for View {
             replacement: String::new(),
             find_focus: false,
             case_sensitive: true,
+            show_explorer: true,
+            explorer_width: None,
+            pane_zoom: None,
         }
     }
 }
@@ -36,23 +42,18 @@ struct Window {
 }
 
 pub(super) struct Windows {
-    /// Ownership changes wait until all editor callbacks publish this frame's input.
-    pub(super) input_frame_pending: bool,
     current: egui::ViewportId,
     focused: egui::ViewportId,
     windows: Vec<Window>,
-    returning: HashSet<egui::ViewportId>,
     parked: HashMap<egui::ViewportId, View>,
     next: u64,
 }
 impl Default for Windows {
     fn default() -> Self {
         Self {
-            input_frame_pending: false,
             current: egui::ViewportId::ROOT,
             focused: egui::ViewportId::ROOT,
             windows: Vec::new(),
-            returning: HashSet::new(),
             parked: HashMap::new(),
             next: 1,
         }
@@ -69,6 +70,26 @@ impl Windows {
 }
 
 impl EditorApp {
+    pub(super) fn editor_view(&self, viewport: egui::ViewportId) -> Option<&View> {
+        if self.editors.current == viewport {
+            Some(&self.editor)
+        } else {
+            self.editors.parked.get(&viewport)
+        }
+    }
+
+    /// Address presentation state without changing the rendering context.
+    pub(super) fn editor_view_mut(&mut self, viewport: egui::ViewportId) -> Option<&mut View> {
+        if !self.editors.contains(viewport) {
+            return None;
+        }
+        if self.editors.current == viewport {
+            Some(&mut self.editor)
+        } else {
+            Some(self.editors.parked.entry(viewport).or_default())
+        }
+    }
+
     /// Switch the explicit editor context, including its input replay and diff cache.
     /// The document owner retains selection independently for every tab group.
     pub(super) fn activate_editor(&mut self, viewport: egui::ViewportId) {
@@ -111,19 +132,16 @@ impl EditorApp {
 
     /// Reuse the existing host when another pane opens or navigates an existing document.
     pub(super) fn focus_document(&mut self, id: u64, ctx: &egui::Context) {
-        let Some(viewport) = self.documents.owner(id) else {
-            return;
-        };
-        self.in_editor(viewport, |app| {
-            if let Some(index) = app.documents.iter().position(|doc| doc.id == id) {
-                app.documents.select_index(index);
-            }
-            app.reveal_tab(id);
-            app.focus_editor(ctx);
-        });
+        self.submit_editor_operation(
+            editor_operations::Operation::Select {
+                document: id,
+                position: None,
+            },
+            ctx,
+        );
     }
 
-    fn allocate_editor_window(&mut self) -> egui::ViewportId {
+    pub(super) fn allocate_editor_window(&mut self) -> egui::ViewportId {
         let number = self.editors.next;
         self.editors.next = number
             .checked_add(1)
@@ -134,9 +152,7 @@ impl EditorApp {
     }
 
     pub(super) fn new_editor_window(&mut self, ctx: &egui::Context) {
-        let viewport = self.allocate_editor_window();
-        self.in_editor(viewport, |app| app.focus_editor(ctx));
-        ctx.request_repaint_of(egui::ViewportId::ROOT);
+        self.submit_editor_operation(editor_operations::Operation::NewWindow, ctx);
     }
 
     pub(super) fn editor_input_pending(&self, ctx: &egui::Context) -> bool {
@@ -149,6 +165,21 @@ impl EditorApp {
     }
 
     pub(super) fn move_editor_tab(
+        &mut self,
+        id: u64,
+        destination: Option<egui::ViewportId>,
+        ctx: &egui::Context,
+    ) {
+        self.submit_editor_operation(
+            editor_operations::Operation::Move {
+                document: id,
+                destination,
+            },
+            ctx,
+        );
+    }
+
+    pub(super) fn transfer_editor_tab(
         &mut self,
         id: u64,
         destination: Option<egui::ViewportId>,
@@ -168,8 +199,14 @@ impl EditorApp {
         if !self.editors.contains(viewport) {
             return;
         }
-        self.editor.input.cancel_sequence();
-        self.editor.tabs.cancel_focus();
+        if let Some(view) = self
+            .documents
+            .owner(id)
+            .and_then(|owner| self.editor_view_mut(owner))
+        {
+            view.input.cancel_sequence();
+            view.tabs.cancel_focus();
+        }
         self.documents.move_to(id, viewport);
         self.focus_document(id, ctx);
         ctx.request_repaint_of(egui::ViewportId::ROOT);
@@ -187,21 +224,31 @@ impl EditorApp {
             .collect()
     }
 
-    fn reattach_editor(&mut self, viewport: egui::ViewportId, ctx: &egui::Context) {
+    pub(super) fn reattach_editor(&mut self, viewport: egui::ViewportId, ctx: &egui::Context) {
         self.documents.reattach(viewport);
+        self.navigation.forget_viewport(viewport);
+        self.explorer_state.selection.scroll.remove(&viewport);
         self.editors
             .windows
             .retain(|window| window.viewport != viewport);
-        self.editors.returning.remove(&viewport);
         if self.dialog_viewport == viewport {
             self.dialog_viewport = egui::ViewportId::ROOT;
         }
         if self.editors.focused == viewport {
-            self.editors.focused = egui::ViewportId::ROOT;
+            self.remember_editor_focus(egui::ViewportId::ROOT);
         }
-        self.activate_editor(egui::ViewportId::ROOT);
-        self.editors.parked.remove(&viewport);
-        self.focus_editor(ctx);
+        if self.editors.current == viewport {
+            self.editor = self
+                .editors
+                .parked
+                .remove(&egui::ViewportId::ROOT)
+                .unwrap_or_default();
+            self.editors.current = egui::ViewportId::ROOT;
+            self.documents.set_viewport(egui::ViewportId::ROOT);
+        } else {
+            self.editors.parked.remove(&viewport);
+        }
+        self.focus_editor_in(egui::ViewportId::ROOT, ctx);
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
@@ -222,8 +269,8 @@ impl EditorApp {
         viewport: egui::ViewportId,
         result: git_gutter::Completed,
     ) {
-        if self.editors.contains(viewport) {
-            self.in_editor(viewport, |app| app.editor.git_gutter.complete(result));
+        if let Some(view) = self.editor_view_mut(viewport) {
+            view.git_gutter.complete(result);
         }
     }
 
@@ -241,7 +288,10 @@ impl EditorApp {
                     // Rode's native backend uses immediate viewports. A backend without
                     // native viewports leaves tabs accessible through the main editor.
                     if class == egui::ViewportClass::Embedded {
-                        self.reattach_editor(viewport, ctx);
+                        self.submit_editor_operation(
+                            editor_operations::Operation::Return(viewport),
+                            ctx,
+                        );
                         return;
                     }
                     self.editor_window_ui(ctx);
@@ -256,7 +306,7 @@ impl EditorApp {
         let viewport = ctx.viewport_id();
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.editors.returning.insert(viewport);
+            self.submit_editor_operation(editor_operations::Operation::Return(viewport), ctx);
         }
         let previous_ui = self.ui_viewport;
         self.ui_viewport = viewport;
@@ -265,40 +315,48 @@ impl EditorApp {
                 app.remember_editor_focus(viewport);
             }
             app.route_input(ctx);
-            app.editor_window_toolbar(ctx);
+            app.navigation.begin_viewport_layout(viewport);
+            app.editor_explorer_activity(ctx);
+            app.explorer(ctx);
             app.git_gutter_tick(ctx);
             app.editor(ctx);
             app.dialogs(ctx);
             app.workbench_windows(ctx);
             app.notice_ui(ctx);
             app.navigation_finish(ctx);
-            if app.editors.returning.contains(&viewport) {
-                if app.editor.input.source_pending(ctx) {
-                    ctx.request_repaint();
-                } else {
-                    app.reattach_editor(viewport, ctx);
-                }
-            }
         });
         self.ui_viewport = previous_ui;
     }
 
-    fn editor_window_toolbar(&mut self, ctx: &egui::Context) {
+    fn editor_explorer_activity(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        egui::TopBottomPanel::top("editor-window-actions").frame(theme::frame(palette.panel)).show(ctx, |ui| {
-            if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() { ui.disable(); }
-            ui.horizontal_wrapped(|ui| {
-                for command in [Command::New, Command::Open, Command::Save, Command::SaveAs, Command::Find] {
-                    let definition = command.definition();
-                    let button = ui.add(IconButton::new(definition.icon, definition.label));
-                    ui_probe::button(ui, &format!("editor-window:{}", definition.label), &button);
-                    if button.clicked() { self.execute_command(command, ctx); }
+        egui::SidePanel::left(egui::Id::new(("editor-activity", ctx.viewport_id())))
+            .exact_width(52.)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.panel)
+                    .inner_margin(egui::Margin::symmetric(7, 14)),
+            )
+            .show(ctx, |ui| {
+                if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() {
+                    ui.disable();
                 }
-                let reattach = ui.button("Return tabs to main window").on_hover_text("Keeps all buffers and unsaved edits. Chat and project tools stay in their existing windows.");
-                ui_probe::button(ui, "editor-window-reattach", &reattach);
-                if reattach.clicked() { self.editors.returning.insert(self.documents.viewport()); }
+                self.activity_button(ui, Command::Explorer, 40., ctx);
+                ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
+                    let reattach = ui.add_sized(
+                        [36., 32.],
+                        IconButton::icon(Icon::ChevronLeft, "Return tabs to main window"),
+                    );
+                    ui_probe::button(ui, "editor-window-reattach", &reattach);
+                    if reattach.clicked() {
+                        self.submit_editor_operation(
+                            editor_operations::Operation::Return(ctx.viewport_id()),
+                            ctx,
+                        );
+                    }
+                });
             });
-        });
     }
 }
 

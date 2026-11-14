@@ -94,7 +94,8 @@ impl EditorApp {
         (
             Policy {
                 valid,
-                source_pending: self.editors.input_frame_pending || self.editor_input_pending(ctx),
+                source_pending: self.editor_operations.collecting()
+                    || self.editor_input_pending(ctx),
                 files_pending: self.explorer_state.busy,
                 runtime_pending,
                 vault: self.vaults.admission(vault),
@@ -242,12 +243,13 @@ impl EditorApp {
             Action::Reconnect(profile) => self.connect(*profile, ctx, true),
             Action::Disconnect => self.detach_ssh(ctx),
             Action::CloseTab(id) => {
+                let owner = self.documents.owner(id);
                 if self.documents.notebook_pending(id) {
                     self.notify("Wait for kernel startup or submitted work to be acknowledged before closing this notebook.",false);
                     return;
                 }
-                if self.documents.close(id).is_some() {
-                    self.focus_editor(ctx);
+                if self.documents.close(id).is_some() && let Some(viewport) = owner {
+                    self.focus_editor_in(viewport, ctx);
                 }
             }
 

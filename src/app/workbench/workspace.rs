@@ -192,13 +192,25 @@ impl EditorApp {
 
     /// Record source-editor focus intent and select the docked editor without discarding tool state.
     pub(in crate::app) fn editor_intent(&mut self) {
-        if self.documents.viewport() == egui::ViewportId::ROOT && !self.workbench.detached {
+        self.editor_intent_in(self.documents.viewport());
+    }
+
+    pub(in crate::app) fn editor_intent_in(&mut self, viewport: egui::ViewportId) {
+        if viewport == egui::ViewportId::ROOT && !self.workbench.detached {
             self.remember_tool_tab();
             self.workbench.surface = Surface::Editor;
         }
-        self.navigation.editor_intent();
+        if viewport == egui::ViewportId::ROOT {
+            self.navigation.editor_intent();
+        } else {
+            self.set_pane_zoom(
+                viewport,
+                self.pane_zoom(viewport)
+                    .filter(|pane| *pane == navigation::Pane::Editor),
+            );
+        }
         self.navigation
-            .request_focus(navigation::Pane::Editor, self.documents.viewport());
+            .request_focus(navigation::Pane::Editor, viewport);
     }
 
     /// Select and reveal the terminal surface while preserving its running shell.

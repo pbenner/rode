@@ -18,16 +18,17 @@ pub(in crate::app) struct Selection {
     pub path: Option<String>,
     prefix: String,
     typed: Option<Instant>,
+    typed_viewport: Option<egui::ViewportId>,
     pub reveal: bool,
-    pub offset: f32,
-    pub height: f32,
+    pub scroll: HashMap<egui::ViewportId, (f32, f32)>,
 }
 impl EditorApp {
     /// Handle explorer keys only while its pane owns focus, selecting cached rows
     /// and delegating opens/listings through the ordinary host-aware app paths.
     pub(in crate::app) fn tree_keyboard(&mut self, ctx: &egui::Context) {
-        let id = Pane::Explorer.id();
-        if !ctx.memory(|m| m.has_focus(id))
+        let id = Pane::Explorer.id_in(ctx.viewport_id());
+        if !ctx.input(|input| input.focused)
+            || !ctx.memory(|m| m.has_focus(id))
             || self.explorer_state.tree_rows.is_empty()
             || egui::Popup::is_any_open(ctx)
             || self.dialog != Dialog::None
@@ -50,7 +51,11 @@ impl State {
     /// Consume keys only after the coordinator has established native pane focus.
     fn keyboard(&mut self, ctx: &egui::Context) -> Vec<TreeIntent> {
         let mut intents = Vec::new();
-        let id = Pane::Explorer.id();
+        let id = Pane::Explorer.id_in(ctx.viewport_id());
+        if self.selection.typed_viewport != Some(ctx.viewport_id()) {
+            self.selection.prefix.clear();
+            self.selection.typed_viewport = Some(ctx.viewport_id());
+        }
         ctx.memory_mut(|m| {
             m.set_focus_lock_filter(
                 id,

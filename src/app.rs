@@ -36,6 +36,7 @@ mod debugging;
 mod dialogs;
 mod diff_view;
 mod documents;
+mod editor_operations;
 mod editor_view;
 mod editor_windows;
 mod execution;
@@ -173,6 +174,7 @@ pub struct EditorApp {
     agents: agents::Agents,
     editor: editor_windows::View,
     editors: editor_windows::Windows,
+    editor_operations: editor_operations::Coordinator,
     navigation: navigation::State,
     workbench: Workbench,
     debugger: debugging::State,
@@ -288,6 +290,7 @@ impl EditorApp {
             agents: agents::Agents::load(storage),
             editor: Default::default(),
             editors: Default::default(),
+            editor_operations: Default::default(),
             navigation: navigation::State::load(storage),
             workbench: Workbench::load(storage),
             debugger: Default::default(),
@@ -578,7 +581,17 @@ impl EditorApp {
 
     /// Route the active editable document to its current destination or shared Save As picker.
     fn save_active(&mut self, ctx: &egui::Context, save_as: bool) {
-        if let Some(doc) = self.documents.active() {
+        self.save_editor(self.documents.viewport(), ctx, save_as);
+    }
+
+    fn save_editor(&mut self, viewport: egui::ViewportId, ctx: &egui::Context, save_as: bool) {
+        if let Some(id) = self.documents.selected_in(viewport) {
+            self.save_target(id, ctx, save_as);
+        }
+    }
+
+    fn save_target(&mut self, id: u64, ctx: &egui::Context, save_as: bool) {
+        if let Some(doc) = self.documents.by_id(id) {
             if doc.is_preview() && doc.hex.is_none() && doc.notebook.is_none() {
                 self.notify("Image and PDF previews are read-only.", false);
                 return;
@@ -718,8 +731,8 @@ fn consume_extensions_shortcut(ctx: &egui::Context) -> bool {
 impl eframe::App for EditorApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.ui_viewport = egui::ViewportId::ROOT;
-        self.editors.input_frame_pending = true;
-        self.activate_editor(self.focused_editor());
+        self.begin_editor_frame();
+        self.activate_editor(egui::ViewportId::ROOT);
         self.poll(ctx);
         self.poll_vaults(ctx);
         self.poll_agents(ctx);
@@ -760,10 +773,9 @@ impl eframe::App for EditorApp {
         self.detached_tools(ctx);
         self.detached_tabs(ctx);
         self.detached_editors(ctx);
-        // Prepared replies and UI intents must see every editor's accepted edits.
-        self.editors.input_frame_pending = false;
-        self.in_editor(egui::ViewportId::ROOT, |app| app.handle_close_request(ctx));
-        self.activate_editor(self.focused_editor());
+        self.handle_close_request(ctx);
+        self.finish_editor_frame(ctx);
+        self.activate_editor(egui::ViewportId::ROOT);
         if let Some(remote) = self
             .workspace
             .as_ref()

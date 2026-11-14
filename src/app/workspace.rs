@@ -189,7 +189,7 @@ impl EditorApp {
         }
         self.show_terminal |= remote || options.enabled;
         if let Some(path) = open_file {
-            self.open_file(path, ctx);
+            self.open_file_in(path, egui::ViewportId::ROOT, ctx);
         } else if self.show_terminal {
             self.start_project_terminal(ctx);
         }

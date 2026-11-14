@@ -10,12 +10,60 @@ use super::*;
 pub(super) mod gutter;
 
 impl EditorApp {
+    /// Keep the empty state independent of tab-strip cursor placement and pane width.
+    fn empty_editor(&mut self, ui: &mut egui::Ui) {
+        let palette = self.themes.active().palette;
+        let top = ((ui.available_height() - 230.) / 2.).max(20.);
+        egui::ScrollArea::vertical()
+            .id_salt("empty-editor")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(top);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new("Start editing")
+                            .size(24.)
+                            .strong()
+                            .color(palette.heading),
+                    );
+                    ui.add_space(8.);
+                    ui.label(palette.tag("Choose a file in Explorer to start editing."));
+                    ui.add_space(16.);
+                    ui.label(palette.tag(format!(
+                        "{} · Open file    {} · New file",
+                        self.command_hint(Command::Open),
+                        self.command_hint(Command::New)
+                    )));
+                });
+            });
+    }
+
+    /// Keep the landing page's document actions in one aligned group.
+    pub(super) fn empty_editor_actions(&mut self, ui: &mut egui::Ui) {
+        let width = (ui.available_width() - 32.).clamp(0., 320.);
+        let ctx = ui.ctx().clone();
+        let new = ui.add_sized(
+            egui::vec2(width, 32.),
+            IconButton::new(Icon::NewFile, "New file").shortcut("Ctrl+N"),
+        );
+        ui_probe::button(ui, "editor-empty-new", &new);
+        if new.clicked() {
+            self.execute_command(Command::New, &ctx);
+        }
+        let open = ui.add_sized(
+            egui::vec2(width, 32.),
+            IconButton::new(Icon::Search, "Open file…").shortcut("Ctrl+O"),
+        );
+        ui_probe::button(ui, "editor-empty-open", &open);
+        if open.clicked() {
+            self.set_dialog(Dialog::Open);
+        }
+    }
+
     /// Render the active specialized or source document, retaining native edit/cursor/undo
     /// state and updating buffer versions only for accepted source changes.
     pub(super) fn editor(&mut self, ctx: &egui::Context) {
-        if ctx.viewport_id() == egui::ViewportId::ROOT
-            && !self.navigation.visible(navigation::Pane::Editor)
-        {
+        if !self.pane_visible(navigation::Pane::Editor, ctx.viewport_id()) {
             return;
         }
         if self.vaults.locking() {
@@ -38,18 +86,16 @@ impl EditorApp {
                 if ui.available_height() <= 1.0 {
                     return;
                 }
-                self.tab_strip(ui, ctx);
                 if self.documents.active().is_none() {
-                    ui.label("No files in this editor window.");
-                    let new = ui.button("New file");
-                    ui_probe::button(ui, "editor-empty-new", &new);
-                    if new.clicked() { self.new_file(); self.focus_editor(ctx); }
-                    let open = ui.button("Open file…");
-                    ui_probe::button(ui, "editor-empty-open", &open);
-                    if open.clicked() { self.set_dialog(Dialog::Open); }
-                    if ctx.viewport_id() == egui::ViewportId::ROOT { self.welcome(ui); }
+                    if ctx.viewport_id() == egui::ViewportId::ROOT {
+                        self.welcome(ui);
+                    } else {
+                        self.empty_editor(ui);
+                    }
                     return;
                 }
+                self.tab_strip(ui, ctx);
+                if self.documents.active().is_none() { return; }
                 let path = self.documents[self.documents.active_index()]
                     .display_path()
                     .unwrap_or("Untitled");

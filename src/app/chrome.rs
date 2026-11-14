@@ -292,7 +292,13 @@ impl EditorApp {
 
     /// Request that the next tab-strip layout scroll the given document into view.
     pub(super) fn reveal_tab(&mut self, id: u64) {
-        self.editor.tabs.reveal = Some(id);
+        if let Some(view) = self
+            .documents
+            .owner(id)
+            .and_then(|owner| self.editor_view_mut(owner))
+        {
+            view.tabs.reveal = Some(id);
+        }
     }
 
     /// Wrap the active tab index in either direction and transfer focus to its editor.
@@ -307,25 +313,45 @@ impl EditorApp {
     /// Request source-editor focus for the active document, including a later frame
     /// when a closing modal still blocks the editor layer.
     pub(super) fn focus_editor(&mut self, ctx: &egui::Context) {
+        self.focus_editor_in(self.documents.viewport(), ctx);
+    }
+
+    /// A selection committed after layout must own the next frame's keyboard
+    /// events before keymap translation, including the first key after a tab click.
+    pub(super) fn prepare_editor_input(&self, ctx: &egui::Context) {
+        if self.documents.viewport() == ctx.viewport_id()
+            && self.editing_allowed(ctx)
+            && ctx.memory(|memory| memory.allows_interaction(egui::LayerId::background()))
+            && let Some(id) = self.editor.tabs.focus
+            && self
+                .documents
+                .active_source()
+                .is_some_and(|source| source.id == id)
+        {
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new(("document", id))));
+        }
+    }
+
+    pub(super) fn focus_editor_in(&mut self, viewport: egui::ViewportId, ctx: &egui::Context) {
         if self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal() {
             return;
         }
-        self.editor_intent();
+        if !self.editors.contains(viewport) {
+            return;
+        }
+        self.editor_intent_in(viewport);
         ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
-        let viewport = self.documents.viewport();
         self.remember_editor_focus(viewport);
         self.navigation
             .request_focus(navigation::Pane::Editor, viewport);
         if ctx.viewport_id() != viewport {
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
         }
-        self.navigation.zoom = self
-            .navigation
-            .zoom
-            .filter(|p| *p == navigation::Pane::Editor);
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("terminal-wants-focus"), false));
-        if let Some(doc) = self.documents.active() {
-            self.editor.tabs.focus = Some(doc.id);
+        if let Some(id) = self.documents.selected_in(viewport) {
+            if let Some(view) = self.editor_view_mut(viewport) {
+                view.tabs.focus = Some(id);
+            }
             ctx.request_repaint();
         }
     }
@@ -692,10 +718,10 @@ impl EditorApp {
         if let Some((id, viewport)) = transfer {
             self.move_editor_tab(id, viewport, ctx);
         }
-        if let Some(index) = selected {
-            self.documents.select_index(index);
-            self.editor.tabs.reveal = self.documents.get(index).map(|d| d.id);
-            self.focus_editor(ctx);
+        if let Some(index) = selected
+            && let Some(doc) = self.documents.get(index)
+        {
+            self.focus_document(doc.id, ctx);
         }
         if let Some((source, target, after)) = move_tab {
             self.reorder_tab(source, target, after);

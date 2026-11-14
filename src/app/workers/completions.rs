@@ -8,7 +8,6 @@ impl EditorApp {
         result: Result<Response, String>,
         ctx: &egui::Context,
     ) {
-        let mut open_viewport = None;
         match &job {
             Job::List(_, epoch) if *epoch != self.explorer_state.epoch => return,
             Job::Prepare { token, .. } | Job::StandaloneFile { token, .. }
@@ -43,9 +42,10 @@ impl EditorApp {
                 self.explorer_state.loading.remove(path);
             }
             Job::Explorer(_) => self.explorer_state.busy = false,
-            Job::Open(path) => {
-                open_viewport = self.documents.finish_open(path);
+            Job::Open(path) if result.is_err() => {
+                self.documents.finish_open(path);
             }
+            Job::Open(_) => {}
             Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
                 self.documents.finish_save(*id);
             }
@@ -119,7 +119,9 @@ impl EditorApp {
                         doc.reload(response, &self.markdown_images, &self.notebook_shutdowns);
                     }
                 }
-                Job::StandaloneFile { path, .. } => self.open_file(path, ctx),
+                Job::StandaloneFile { path, .. } => {
+                    self.open_file_in(path, egui::ViewportId::ROOT, ctx)
+                }
                 Job::Prepare {
                     token,
                     remote,
@@ -154,25 +156,19 @@ impl EditorApp {
                     }
                     self.explorer_state.loaded(path, response);
                 }
-                Job::Open(_) => {
-                    let viewport = open_viewport.unwrap_or(self.documents.viewport());
-                    self.in_editor(viewport, |app| {
-                        let id = app.documents.open(
-                            response,
-                            &app.markdown_images,
-                            &app.notebook_shutdowns,
-                        );
-                        if app.documents.iter().find(|d| d.id == id).is_some_and(|d| {
-                            crate::languages::detect(d.path.as_deref())
-                                .is_some_and(|l| l.id == "python")
-                        }) {
-                            app.refresh_environment(false, ctx);
-                        }
-                        app.status = "File loaded".into();
-                        if app.navigation.accepts_editor_focus() {
-                            app.focus_document(id, ctx);
-                        }
-                    });
+                Job::Open(path) => {
+                    let viewport = self
+                        .documents
+                        .open_destination(&path)
+                        .unwrap_or(egui::ViewportId::ROOT);
+                    self.submit_editor_operation(
+                        editor_operations::Operation::Opened {
+                            path,
+                            viewport,
+                            response: Box::new(response),
+                        },
+                        ctx,
+                    );
                 }
                 Job::SaveBinary { id, bytes, .. } => {
                     if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
@@ -185,7 +181,12 @@ impl EditorApp {
                         doc.acknowledge_save(response.path, text, response.revision);
                         self.status = format!("Saved {}", doc.name());
                     }
-                    if self.documents.active().is_some_and(|d| d.id == id) {
+                    if self
+                        .documents
+                        .owner(id)
+                        .and_then(|owner| self.documents.selected_in(owner))
+                        == Some(id)
+                    {
                         self.reveal_tab(id);
                     }
                     if let Some(root) = self.workspace.as_ref().map(|w| w.root.clone()) {

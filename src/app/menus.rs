@@ -168,7 +168,7 @@ impl EditorApp {
             ui,
             Command::Explorer.definition().label,
             &self.command_hint(Command::Explorer),
-            self.command_selected(Command::Explorer),
+            self.command_selected(Command::Explorer, ctx),
         ) {
             self.execute_command(Command::Explorer, ctx);
         }

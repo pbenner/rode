@@ -274,33 +274,7 @@ impl EditorApp {
                 let button_height =
                     ((ui.available_height() - 68.) / commands.len() as f32 - 6.).clamp(22., 40.);
                 for command in commands {
-                    let definition = command.definition();
-                    let shortcut = self.command_hint(command);
-                    let hint = if shortcut.is_empty() {
-                        definition.label.to_owned()
-                    } else {
-                        format!("{} · {shortcut}", definition.label)
-                    };
-                    let selected = self.command_selected(command);
-                    let response = ui.add_sized(
-                        [36.0, button_height],
-                        IconButton::icon(definition.icon, &hint)
-                            .icon_size(if button_height < 34. { 20. } else { 23. })
-                            .selected(selected),
-                    );
-                    if selected {
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_size(
-                                egui::pos2(response.rect.left() - 7., response.rect.top() + 6.),
-                                egui::vec2(2., response.rect.height() - 12.),
-                            ),
-                            0,
-                            palette.accent,
-                        );
-                    }
-                    if response.clicked() {
-                        self.execute_command(command, ctx);
-                    }
+                    self.activity_button(ui, command, button_height, ctx);
                     ui.add_space(6.0);
                 }
                 ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
@@ -316,6 +290,45 @@ impl EditorApp {
                     ui.label(palette.tag("0.1"));
                 });
             });
+    }
+
+    /// Activity rails share icons, selection, shortcuts and command dispatch.
+    pub(super) fn activity_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        command: Command,
+        button_height: f32,
+        ctx: &egui::Context,
+    ) {
+        let palette = self.themes.active().palette;
+        let definition = command.definition();
+        let shortcut = self.command_hint(command);
+        let hint = if shortcut.is_empty() {
+            definition.label.to_owned()
+        } else {
+            format!("{} · {shortcut}", definition.label)
+        };
+        let selected = self.command_selected(command, ctx);
+        let response = ui.add_sized(
+            [36.0, button_height],
+            IconButton::icon(definition.icon, &hint)
+                .icon_size(if button_height < 34. { 20. } else { 23. })
+                .selected(selected),
+        );
+        ui_probe::button(ui, &format!("activity:{}", definition.label), &response);
+        if selected {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(response.rect.left() - 7., response.rect.top() + 6.),
+                    egui::vec2(2., response.rect.height() - 12.),
+                ),
+                0,
+                palette.accent,
+            );
+        }
+        if response.clicked() {
+            self.execute_command(command, ctx);
+        }
     }
 
     /// Render the selected terminal surface, keeping PTY input and native focus ownership together.
@@ -359,81 +372,84 @@ impl EditorApp {
     /// Render local/SSH project entry points when no document surface is selected.
     pub(super) fn welcome(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
-        let top = ((ui.available_height() - 440.0) / 2.0).max(25.0);
-        ui.add_space(top);
-        ui.vertical_centered(|ui| {
-            ui.label(
-                RichText::new("[ r ]")
-                    .monospace()
-                    .size(64.0)
-                    .color(palette.accent),
-            );
-            ui.add_space(12.0);
-            ui.label(
-                RichText::new("RODE")
-                    .size(34.0)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.label(
-                RichText::new("Small footprint. Far reach.")
-                    .size(18.0)
-                    .color(palette.muted),
-            );
-            ui.add_space(12.0);
-            ui.label(palette.tag("RUST EDITOR  /  OPENSSH NATIVE  /  REMOTE READY"));
-            ui.add_space(32.0);
-            let action_size = egui::vec2(ui.available_width().min(320.), 32.);
-            if ui
-                .add_sized(
-                    action_size,
-                    egui::Button::new(
-                        RichText::new("Connect via SSH")
-                            .color(palette.background)
-                            .strong(),
-                    )
-                    .fill(palette.accent),
-                )
-                .clicked()
-            {
-                self.set_dialog(Dialog::Connect);
-            }
-            ui.add_space(8.0);
-            if ui
-                .add_sized(
-                    action_size,
-                    IconButton::new(Icon::Folder, "Open project folder").shortcut("Ctrl+Shift+O"),
-                )
-                .clicked()
-            {
-                self.set_dialog(Dialog::Folder);
-            }
-            if ui
-                .add_sized(
-                    action_size,
-                    IconButton::new(Icon::NewFile, "New file").shortcut("Ctrl+N"),
-                )
-                .clicked()
-            {
-                self.new_file();
-            }
-            ui.add_space(28.0);
-            ui.label(
-                RichText::new("Your SSH config. Your keys. Your machine.")
-                    .color(palette.muted)
-                    .size(12.0),
-            );
-            ui.add_space(18.0);
-            if ui
-                .link(
-                    RichText::new("Keyboard shortcuts")
-                        .color(palette.accent)
-                        .size(12.0),
-                )
-                .clicked()
-            {
-                self.set_dialog(Dialog::Shortcuts);
-            }
-        });
+        let compact = ui.available_height() < 620.;
+        let top = if compact {
+            16.
+        } else {
+            ((ui.available_height() - 500.) / 2.).max(24.)
+        };
+        egui::ScrollArea::vertical()
+            .id_salt("welcome-page")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(top);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new("[ r ]")
+                            .monospace()
+                            .size(if compact { 44. } else { 64. })
+                            .color(palette.accent),
+                    );
+                    ui.add_space(12.0);
+                    ui.label(
+                        RichText::new("RODE")
+                            .size(if compact { 28. } else { 34. })
+                            .strong()
+                            .color(palette.text),
+                    );
+                    ui.label(
+                        RichText::new("Small footprint. Far reach.")
+                            .size(18.0)
+                            .color(palette.muted),
+                    );
+                    ui.add_space(12.0);
+                    ui.label(palette.tag("RUST EDITOR  /  OPENSSH NATIVE  /  REMOTE READY"));
+                    ui.add_space(if compact { 20. } else { 32. });
+                    let action_size = egui::vec2((ui.available_width() - 32.).clamp(0., 320.), 32.);
+                    if ui
+                        .add_sized(
+                            action_size,
+                            egui::Button::new(
+                                RichText::new("Connect via SSH")
+                                    .color(palette.background)
+                                    .strong(),
+                            )
+                            .fill(palette.accent),
+                        )
+                        .clicked()
+                    {
+                        self.set_dialog(Dialog::Connect);
+                    }
+                    ui.add_space(8.0);
+                    if ui
+                        .add_sized(
+                            action_size,
+                            IconButton::new(Icon::Folder, "Open project folder")
+                                .shortcut("Ctrl+Shift+O"),
+                        )
+                        .clicked()
+                    {
+                        self.set_dialog(Dialog::Folder);
+                    }
+                    self.empty_editor_actions(ui);
+                    ui.add_space(if compact { 16. } else { 28. });
+                    ui.label(
+                        RichText::new("Your SSH config. Your keys. Your machine.")
+                            .color(palette.muted)
+                            .size(12.0),
+                    );
+                    ui.add_space(18.0);
+                    if ui
+                        .link(
+                            RichText::new("Keyboard shortcuts")
+                                .color(palette.accent)
+                                .size(12.0),
+                        )
+                        .clicked()
+                    {
+                        self.set_dialog(Dialog::Shortcuts);
+                    }
+                });
+            });
     }
 }

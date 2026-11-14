@@ -608,7 +608,25 @@ impl Documents {
         self.items.get_mut(index)
     }
     pub(super) fn selected_id(&self) -> Option<u64> {
-        self.active().map(|doc| doc.id)
+        self.selected_in(self.viewport)
+    }
+    /// Operation targets are resolved from a specified host, independently of rendering.
+    pub(super) fn selected_in(&self, viewport: egui::ViewportId) -> Option<u64> {
+        self.selected_index_for(viewport)
+            .map(|index| self.items[index].id)
+    }
+    pub(super) fn by_id(&self, id: u64) -> Option<&Document> {
+        self.items.iter().find(|doc| doc.id == id)
+    }
+    pub(super) fn by_id_mut(&mut self, id: u64) -> Option<&mut Document> {
+        self.items.iter_mut().find(|doc| doc.id == id)
+    }
+    pub(super) fn select(&mut self, id: u64) -> bool {
+        let Some(viewport) = self.owner(id) else {
+            return false;
+        };
+        self.selected.insert(viewport, id);
+        true
     }
     /// Select in the document's existing host; callers decide whether to raise that host.
     pub(super) fn select_index(&mut self, index: usize) -> bool {
@@ -652,17 +670,31 @@ impl Documents {
     }
 
     pub(super) fn new_file(&mut self) -> u64 {
+        self.new_file_in(self.viewport)
+    }
+    pub(super) fn new_file_in(&mut self, viewport: egui::ViewportId) -> u64 {
         let id = self.allocate_id();
         self.items.push(Document::untitled(id));
-        self.owners.insert(id, self.viewport);
-        self.selected.insert(self.viewport, id);
+        self.owners.insert(id, viewport);
+        self.selected.insert(viewport, id);
         id
     }
 
     /// Canonical host replies may name a path already opened by a different alias.
     /// Select the existing buffer without replacing edits or allocating a second ID.
+    #[cfg(test)]
     pub(super) fn open(
         &mut self,
+        response: Response,
+        images: &Arc<markdown::Images>,
+        shutdowns: &notebook_view::Shutdowns,
+    ) -> u64 {
+        self.open_in(self.viewport, response, images, shutdowns)
+    }
+
+    pub(super) fn open_in(
+        &mut self,
+        viewport: egui::ViewportId,
         response: Response,
         images: &Arc<markdown::Images>,
         shutdowns: &notebook_view::Shutdowns,
@@ -678,8 +710,8 @@ impl Documents {
         let id = self.allocate_id();
         self.items
             .push(Document::loaded(id, response, images, shutdowns));
-        self.owners.insert(id, self.viewport);
-        self.selected.insert(self.viewport, id);
+        self.owners.insert(id, viewport);
+        self.selected.insert(viewport, id);
         id
     }
 
@@ -765,15 +797,22 @@ impl Documents {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn begin_open(&mut self, path: String) -> bool {
+        self.begin_open_in(path, self.viewport)
+    }
+    pub(super) fn begin_open_in(&mut self, path: String, viewport: egui::ViewportId) -> bool {
         if self.opening.contains_key(&path) {
             return false;
         }
-        self.opening.insert(path, self.viewport);
+        self.opening.insert(path, viewport);
         true
     }
     pub(super) fn finish_open(&mut self, path: &str) -> Option<egui::ViewportId> {
         self.opening.remove(path)
+    }
+    pub(super) fn open_destination(&self, path: &str) -> Option<egui::ViewportId> {
+        self.opening.get(path).copied()
     }
     pub(super) fn is_opening(&self, path: &str) -> bool {
         self.opening.contains_key(path)

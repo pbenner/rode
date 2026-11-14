@@ -323,25 +323,32 @@ impl EditorApp {
         view.execution_target = target;
         view.kernel = Some(kernel);
         view.error.clear();
-        self.documents.select_index(index);
         self.focus_document(self.documents[index].id, ctx);
         Ok(())
     }
-    /// Create an unsaved metadata-preserving notebook document without starting Jupyter.
+    #[cfg(test)]
     pub(super) fn new_notebook(&mut self) {
+        if self.new_notebook_in(self.documents.viewport()).is_some() {
+            self.editor_intent();
+        }
+    }
+
+    /// Create an addressed notebook buffer without starting Jupyter or changing rendering context.
+    pub(super) fn new_notebook_in(&mut self, viewport: egui::ViewportId) -> Option<u64> {
         if !self.feature(crate::extensions::Feature::Notebooks) {
             self.notify("Enable Jupyter notebooks in View → Extensions.", false);
-            return;
+            return None;
         }
-        self.new_file();
+        let id = self.documents.new_file_in(viewport);
         let book = Notebook::default();
-        let doc = self.documents.active_mut().unwrap();
+        let doc = self.documents.by_id_mut(id).unwrap();
         doc.set_source(book.serialize().expect("small new notebook"));
         doc.notebook = Some(View::new(
             book,
             self.markdown_images.clone(),
             self.notebook_shutdowns.clone(),
         ));
+        Some(id)
     }
     /// Window-owned shutdowns and submitted view lifetime edits both block normal exit.
     pub(super) fn notebook_lifetime_pending(&self) -> bool {

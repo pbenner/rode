@@ -26,7 +26,9 @@ fn running(pid: u32) -> bool {
         .ok()
         .and_then(|text| {
             text.rsplit_once(") ")
-                .map(|(_, state)| !state.starts_with('Z'))
+                // A zombie may pass through the dead state before /proc removes
+                // it. Neither state denotes a descendant that can keep running.
+                .map(|(_, state)| !matches!(state.chars().next(), Some('Z' | 'X' | 'x')))
         })
         .unwrap_or(false)
 }

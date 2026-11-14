@@ -381,17 +381,25 @@ impl EditorApp {
 
     /// Select an existing path-bound tab or queue a host-scoped read for a new document.
     pub(super) fn open_file(&mut self, path: String, ctx: &egui::Context) {
+        self.open_file_in(path, self.command_editor(ctx), ctx);
+    }
+
+    pub(super) fn open_file_in(
+        &mut self,
+        path: String,
+        viewport: egui::ViewportId,
+        ctx: &egui::Context,
+    ) {
         if let Some(index) = self
             .documents
             .iter()
             .position(|d| d.path.as_deref() == Some(&path))
         {
-            self.documents.select_index(index);
             self.focus_document(self.documents[index].id, ctx);
             return;
         }
-        self.editor_intent();
-        if self.documents.begin_open(path.clone()) {
+        self.editor_intent_in(viewport);
+        if self.documents.begin_open_in(path.clone(), viewport) {
             let request = if crate::pdf::is_path(&path) {
                 self.status = "Opening PDF preview…".into();
                 Request::ReadBinary { path: path.clone() }

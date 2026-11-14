@@ -191,7 +191,10 @@ impl EditorApp {
             ctx.request_repaint_after(Duration::from_secs(5));
         }
         if self.workbench.prefs.live_checks
-            && let Some(doc) = self.documents.active()
+            && let Some(doc) = self
+                .documents
+                .selected_in(self.focused_editor())
+                .and_then(|id| self.documents.by_id(id))
             && let Some(path) = doc.path.as_deref()
         {
             let language = crate::languages::detect(Some(path));

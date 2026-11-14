@@ -392,8 +392,28 @@ TextEdit undo/IME handling and terminal/form input remain at their widget bounda
 and raises that existing host instead of cloning a buffer. Each editor keeps its
 own tab overflow/focus, input router, find/replace state and Git diff cache. Native
 TextEdit IDs remain document-based, retaining cursor and undo state across moves.
-Viewport callbacks enter an explicit editor context and restore the caller's
-context before returning. Tool windows never render an additional editor.
+Viewport callbacks enter a rendering context and restore the caller's context
+before returning. This context is confined to UI layout and native input;
+operation handlers address documents and presentation state by stable document
+and viewport IDs. Tool windows never render an additional editor.
+
+Secondary editors render the same Explorer sidebar and activity button as the
+main window. Directory listings, expansion and file operations share the project
+controller; visibility, panel sizing, scroll position, pane focus IDs and zoom
+belong to the native viewport. Ctrl+B or the Explorer activity icon hides and
+restores that window's sidebar without changing other windows or starting any
+additional project services.
+
+`app/editor_operations.rs` owns the frame coordination boundary. Root polling
+runs in the root context, then every native viewport publishes its input. The
+coordinator applies bounded, generation-scoped open completions, navigation,
+tab selection/transfers and source/notebook/presentation creation. It creates or
+returns editor windows, then advances guarded project/connection/quit transitions.
+Queued operations wait for ordered source
+replay; positions also retain their source version. Returning a window redirects
+pending reads before the corresponding completion is installed. Source shortcut
+handoffs and saves retain their widget acknowledgement boundary so later typing
+cannot enter an earlier save snapshot.
 
 All windows share the existing project, worker inbox, chat, debugger, sessions,
 SSH connection and encrypted workspace owners. Only the root frame polls those
@@ -406,8 +426,8 @@ it drains that window's ordered input before removing its presentation, without
 discarding buffers or ending sessions. Guarded ownership changes, including
 asynchronous project preparation replies, wait until all native editors have
 published their input. The guards then inspect every buffer. Editor windows are
-presentation state, not independently opened projects
-or additional application processes.
+presentation state, not independently opened projects or additional application
+processes.
 
 ## Document collection and workspace teardown
 

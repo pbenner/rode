@@ -5,7 +5,7 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Se
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
-| Atelier Dark | `atelier-dark` | Coordinated slate surfaces, pale blue accents, compact rounded controls and readable semantic syntax |
+| Atelier Dark | `atelier-dark` | Warm charcoal surfaces, copper accents, ivory text and sage/brass syntax with compact rounded controls |
 | Atelier Light | `atelier-light` | Matching cool-white surfaces, cobalt accents, deep ink text and a complete light terminal palette |
 | Phosphor | `phosphor` | Original charcoal and soft green; the default |
 | Carbon | `carbon` | Near-black, neutral panels, amber accents, teal keywords; inspired by the reference screenshot |
@@ -25,7 +25,7 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Se
 
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, or One Half Dark code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
-Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in Atelier Light). Carbon and Carbon Edge use warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier cool blue, Studio Neutral silver-blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
+Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in Atelier Light). Carbon and Carbon Edge use warm-neutral prompt accents, Atelier Dark copper and cream, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier Light cool blue, Studio Neutral silver-blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
 Bash prompt colors come from `PS1` in the shell's own configuration. RODE honors bold ANSI foreground colors using the theme's bright variants: `\e[1;30m` uses bright black and `\e[1;34m` uses bright blue. Existing prompts therefore follow the selected terminal palette without editing `.bashrc`; see [prompt rendering](terminals.md#bash-prompts-and-colors).
 
@@ -57,8 +57,8 @@ The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber*
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
 Both share compact 28-point controls, restrained corner radii, proportional UI
 labels, quiet separators and stronger control/focus outlines. The dark palette
-uses slate surfaces and pale blue emphasis; the light palette uses cool-white
-surfaces, deep ink text and cobalt emphasis. Each includes its own syntax, Git
+uses warm charcoal surfaces, copper emphasis and ivory text; the light palette
+uses cool-white surfaces, deep ink text and cobalt emphasis. Each includes its own syntax, Git
 status and ANSI terminal colors. Choose **Follow UI theme** under Syntax
 highlighting for the matching code palette; explicitly selected independent
 syntax themes retain their own colors.

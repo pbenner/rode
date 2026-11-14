@@ -17,12 +17,12 @@ impl EditorApp {
     pub(super) fn abort_lifecycle(&mut self, error: String, ctx: &egui::Context) {
         if self.pending.waiting_for_ack() {
             self.cancel_guarded_action();
-            self.focus_editor(ctx);
+            self.focus_editor_in(self.focused_editor(), ctx);
         }
         if self.exit.waiting() {
             self.exit.cancel();
             self.dialog = Dialog::None;
-            self.focus_editor(ctx);
+            self.focus_editor_in(self.focused_editor(), ctx);
         }
         self.notify(error, true);
     }
@@ -113,7 +113,10 @@ impl EditorApp {
                 self.guarded(Action::Quit, ctx);
             }
         }
-        self.advance_guarded_action(ctx);
+        if !self.editor_operations.collecting() {
+            self.apply_editor_operations(ctx);
+            self.advance_guarded_action(ctx);
+        }
     }
 }
 
