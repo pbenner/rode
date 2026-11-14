@@ -268,11 +268,7 @@ impl EditorApp {
 
     /// Render the active PDF and dispatch requested page turns/reloads after releasing its borrow.
     pub(super) fn pdf_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        let Some(doc) = self
-            .documents
-            .get(self.documents.active_index())
-            .filter(|doc| doc.pdf.is_some())
-        else {
+        let Some(doc) = self.documents.active().filter(|doc| doc.pdf.is_some()) else {
             return false;
         };
         let id = doc.id;

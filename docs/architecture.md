@@ -381,13 +381,38 @@ focus and cursor state. Unrelated context changes discard the old source batch.
 An explicit source Close shortcut supplies its opaque routing frame as proof that
 earlier edits were acknowledged, allowing following input to reach the next tab.
 Other menu/picker ownership actions must wait for the current native edit batch.
-Detached tools cannot acknowledge or drain the root source queue. Native
+Each editor viewport owns its source queue. Detached tools cannot acknowledge or
+drain another viewport's source queue. Native
 TextEdit undo/IME handling and terminal/form input remain at their widget boundary.
+
+## Native editor windows
+
+`app/editor_windows.rs` owns additional editor viewports inside the same
+`EditorApp`. A document has one tab-group owner; opening its path again selects
+and raises that existing host instead of cloning a buffer. Each editor keeps its
+own tab overflow/focus, input router, find/replace state and Git diff cache. Native
+TextEdit IDs remain document-based, retaining cursor and undo state across moves.
+Viewport callbacks enter an explicit editor context and restore the caller's
+context before returning. Tool windows never render an additional editor.
+
+All windows share the existing project, worker inbox, chat, debugger, sessions,
+SSH connection and encrypted workspace owners. Only the root frame polls those
+services. File-open requests retain their destination viewport, and Git replies
+carry their originating viewport as well as the existing generation/token/version
+checks. Project invalidation reaches every editor's cache and input queue.
+
+Closing a secondary editor returns its tabs and pending reads to the main editor;
+it drains that window's ordered input before removing its presentation, without
+discarding buffers or ending sessions. Guarded ownership changes, including
+asynchronous project preparation replies, wait until all native editors have
+published their input. The guards then inspect every buffer. Editor windows are
+presentation state, not independently opened projects
+or additional application processes.
 
 ## Document collection and workspace teardown
 
-`Documents` owns the buffer vector, active index, monotonic ID allocator and
-pending open paths. Views borrow document slices to edit buffers; insertion,
+`Documents` owns the buffer vector, per-editor tab ownership and selection,
+monotonic ID allocator and pending open paths. Views borrow document slices to edit buffers; insertion,
 closing, reordering and selection go through the collection. Closing an inactive
 tab preserves the selected ID, closing the selected tab chooses its neighbor,
 and clearing a workspace never resets the ID allocator. Canonical read replies

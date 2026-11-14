@@ -425,6 +425,7 @@ impl EditorApp {
                             self.list(path, ctx);
                         }
                     }
+                    self.project_bookmark_button(ui);
                     if icons::small(ui, Icon::NewFile, "New file").clicked() {
                         self.new_file();
                     }
@@ -437,6 +438,7 @@ impl EditorApp {
                 });
             }
             ui.add_space(12.0);
+            self.project_bookmarks_ui(ui, ctx);
             if let Some(workspace) = self.workspace.as_ref() {
                 let root = workspace.root.clone();
                 let remote = workspace.remote.is_some();
@@ -563,7 +565,7 @@ impl EditorApp {
                         && self.explorer_state.selection.path.as_deref() == Some(&entry.path))
                         || self
                             .documents
-                            .get(self.documents.active_index())
+                            .active()
                             .is_some_and(|d| d.path.as_deref() == Some(&entry.path));
                     let (rect, _) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), 25.0),

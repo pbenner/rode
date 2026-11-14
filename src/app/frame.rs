@@ -78,10 +78,7 @@ impl EditorApp {
     pub(super) fn workspace_banner(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let Some(workspace) = self.workspace.as_ref() else {
-            let file = self
-                .documents
-                .get(self.documents.active_index())
-                .and_then(|d| d.path.as_deref());
+            let file = self.documents.active().and_then(|d| d.path.as_deref());
             let title = file.map_or_else(
                 || "RODE".into(),
                 |path| format!("RODE · {} [File mode]", ssh::display_name(path)),

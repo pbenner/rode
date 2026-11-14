@@ -117,7 +117,7 @@ impl EditorApp {
 
     /// Raise a tab's existing host without changing the selection of any other window.
     pub(in crate::app) fn focus_tool_tab(&mut self, tab: ToolTab, ctx: &egui::Context) {
-        self.tabs.cancel_focus();
+        self.editor.tabs.cancel_focus();
         self.workbench.last_tool = Some(tab);
         self.navigation
             .request_focus(tab.pane(), self.tool_viewport(tab));
@@ -192,11 +192,13 @@ impl EditorApp {
 
     /// Record source-editor focus intent and select the docked editor without discarding tool state.
     pub(in crate::app) fn editor_intent(&mut self) {
-        if !self.workbench.detached {
+        if self.documents.viewport() == egui::ViewportId::ROOT && !self.workbench.detached {
             self.remember_tool_tab();
             self.workbench.surface = Surface::Editor;
         }
         self.navigation.editor_intent();
+        self.navigation
+            .request_focus(navigation::Pane::Editor, self.documents.viewport());
     }
 
     /// Select and reveal the terminal surface while preserving its running shell.
@@ -289,7 +291,7 @@ impl EditorApp {
             && (self.workbench.detached || self.navigation.visible(navigation::Pane::Terminal))
     }
 
-    fn tool_surface(&self) -> bool {
+    pub(in crate::app) fn tool_surface(&self) -> bool {
         self.tools_visible() || self.terminal_visible()
     }
 
@@ -431,15 +433,25 @@ impl EditorApp {
         if (self.workbench.detached || !self.tool_surface())
             && self.workbench.floating_tabs.is_empty()
         {
-            self.editor(ctx);
+            self.in_editor(egui::ViewportId::ROOT, |app| {
+                app.git_gutter_tick(ctx);
+                app.editor(ctx);
+            });
             return;
         }
         let palette = self.themes.active().palette;
         egui::TopBottomPanel::top("workspace-tabs")
             .frame(theme::frame(palette.panel))
-            .show(ctx, |ui| self.workspace_tabs(ui, ctx, false));
+            .show(ctx, |ui| {
+                self.in_editor(egui::ViewportId::ROOT, |app| {
+                    app.workspace_tabs(ui, ctx, false)
+                })
+            });
         if self.workbench.detached || !self.tool_surface() {
-            self.editor(ctx);
+            self.in_editor(egui::ViewportId::ROOT, |app| {
+                app.git_gutter_tick(ctx);
+                app.editor(ctx);
+            });
         } else {
             egui::CentralPanel::default()
                 .frame(theme::frame(palette.panel))

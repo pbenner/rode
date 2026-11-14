@@ -262,7 +262,7 @@ impl EditorApp {
             {
                 if current {
                     self.documents.select_index(index);
-                    self.focus_editor(ctx);
+                    self.focus_document(self.documents[index].id, ctx);
                 } else if let Err(error) = self.attach_notebook_runtime(index, info, ctx) {
                     self.sessions.runtimes.error = error.to_string();
                     return;

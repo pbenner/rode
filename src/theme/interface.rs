@@ -164,7 +164,7 @@ impl InterfaceStyle {
             offset: [0, 8],
             blur: 24,
             spread: 0,
-            color: egui::Color32::from_black_alpha(72),
+            color: egui::Color32::from_black_alpha(if palette.dark_mode { 72 } else { 28 }),
         };
         visuals.window_shadow = shadow;
         visuals.popup_shadow = shadow;
@@ -198,6 +198,13 @@ impl InterfaceStyle {
 /// Install palette colors, spacing and typography into the native egui context.
 pub fn install(ctx: &egui::Context, palette: Palette) {
     let mut style = (*ctx.style()).clone();
+    // Explicit palette selection owns appearance across every native viewport;
+    // an OS appearance notification must not replace its installed widget style.
+    ctx.set_theme(if palette.dark_mode {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
     // Reset all spacing and the secondary text role before applying a palette,
     // so optional component styles cannot leak into a subsequent legacy theme.
     style.spacing = Default::default();
@@ -205,7 +212,11 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
         TextStyle::Small,
         egui::Style::default().text_styles[&TextStyle::Small].clone(),
     );
-    style.visuals = egui::Visuals::dark();
+    style.visuals = if palette.dark_mode {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
     style.visuals.panel_fill = palette.background;
     style.visuals.window_fill = palette.panel;
     style.visuals.extreme_bg_color = palette.background;
@@ -290,6 +301,11 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
         ui.install(&mut style, palette);
     }
     ctx.set_style(style);
+    // Theme changes also repaint unfocused editor and tool windows.
+    let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+    for viewport in viewports {
+        ctx.request_repaint_of(viewport);
+    }
 }
 
 #[cfg(test)]

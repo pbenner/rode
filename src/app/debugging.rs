@@ -215,7 +215,7 @@ impl EditorApp {
         let settings = self.workbench.debugger_settings().clone();
         let file = self
             .documents
-            .get(self.documents.active_index())
+            .active()
             .filter(|d| !d.is_preview())
             .and_then(|d| d.path.clone())
             .unwrap_or_default();

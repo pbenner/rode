@@ -496,20 +496,20 @@ impl EditorApp {
     }
     /// Serialize the host transport identity and project path into the settings-map key.
     pub(in crate::app) fn project_settings_key(&self, path: &str, remote: bool) -> String {
-        let host = self
+        let profile = self
             .workspace
             .as_ref()
             .and_then(|w| w.remote.as_ref())
             .filter(|_| remote)
-            .map(|r| {
-                (
-                    &r.profile.host,
-                    &r.profile.user,
-                    &r.profile.port,
-                    &r.profile.config,
-                    &r.profile.jump,
-                )
-            });
+            .map(|r| &r.profile);
+        Self::project_settings_key_for(path, profile)
+    }
+    /// Stable preference identity for a location, including a host not currently connected.
+    pub(in crate::app) fn project_settings_key_for(
+        path: &str,
+        profile: Option<&Profile>,
+    ) -> String {
+        let host = profile.map(|p| (&p.host, &p.user, &p.port, &p.config, &p.jump));
         serde_json::to_string(&(host, path)).unwrap_or_default()
     }
     /// Return requested grants saved for exactly this host/project, or None if none were recorded.
@@ -521,6 +521,17 @@ impl EditorApp {
         self.workbench
             .preferences
             .get(&self.project_settings_key(path, remote))
+            .map(|p| p.sandbox.clone())
+    }
+    /// Bookmarks can resolve current preferences before connecting to their saved host.
+    pub(in crate::app) fn saved_project_sandbox(
+        &self,
+        path: &str,
+        profile: Option<&Profile>,
+    ) -> Option<sandbox::Options> {
+        self.workbench
+            .preferences
+            .get(&Self::project_settings_key_for(path, profile))
             .map(|p| p.sandbox.clone())
     }
     /// Collect saved project policies only for the currently selected local or SSH host identity.

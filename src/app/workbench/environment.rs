@@ -354,7 +354,7 @@ impl EditorApp {
                 let open = std::mem::take(&mut self.workbench.environment.open_python);
                 let active_python = self
                     .documents
-                    .get(self.documents.active_index())
+                    .active()
                     .and_then(|doc| crate::languages::detect(doc.path.as_deref()))
                     .is_some_and(|language| language.id == "python");
                 // CollapsingHeader does not wrap its label.
@@ -388,7 +388,7 @@ impl EditorApp {
         layout::section(ui, "Run and build", palette, |ui| {
             let language = self
                 .documents
-                .get(self.documents.active_index())
+                .active()
                 .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
             let language_tools = self.feature(crate::extensions::Feature::Languages);
             if !language_tools {
@@ -455,7 +455,7 @@ impl EditorApp {
         if self.feature(crate::extensions::Feature::Python) {
             let language = self
                 .documents
-                .get(self.documents.active_index())
+                .active()
                 .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
             layout::card(ui, palette, |ui| {
                 egui::CollapsingHeader::new("Python tasks")

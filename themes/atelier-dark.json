@@ -1,0 +1,84 @@
+{
+  "name": "Atelier Dark",
+  "base": "studio",
+  "appearance": "dark",
+  "chrome": "plain",
+  "colors": {
+    "background": "#171B23",
+    "panel": "#1E2430",
+    "raised": "#272F3D",
+    "border": "#3A4557",
+    "control_border": "#8493AB",
+    "text": "#E7ECF4",
+    "muted": "#AFB9CB",
+    "accent": "#A9C2FF",
+    "frame_accent": "#A9C2FF",
+    "heading": "#F4F6FA",
+    "success": "#95D5AC",
+    "error": "#F1A1AB",
+    "selection": "#35486B",
+    "hover": "#303B4E",
+    "active": "#394760",
+    "gutter": "#8C9CB5",
+    "terminal_background": "#141820",
+    "terminal_foreground": "#E7ECF4"
+  },
+  "syntax": {
+    "comment": "#AFB9CB",
+    "keyword": "#C2B5EF",
+    "type": "#9BD5DB",
+    "function": "#A9C8FF",
+    "string": "#B4D5B4",
+    "number": "#EAC38F",
+    "constant": "#E5ACC6",
+    "variable": "#E7ECF4",
+    "operator": "#C2CDDF",
+    "punctuation": "#B2BFD3",
+    "builtin": "#98D1C3",
+    "attribute": "#D7C0EC"
+  },
+  "ansi": [
+    "#2B3445",
+    "#E49AA5",
+    "#9CCFAE",
+    "#DFC38A",
+    "#9CBDEA",
+    "#C9AFE8",
+    "#91CED5",
+    "#E7ECF4",
+    "#A6B2C6",
+    "#FFB0BB",
+    "#B3E5C1",
+    "#F5DAA4",
+    "#C1D3FF",
+    "#E1C8FB",
+    "#B5E5EA",
+    "#F7F9FD"
+  ],
+  "terminal": {
+    "minimum_contrast": 4.5
+  },
+  "ui": {
+    "control_radius": 5,
+    "surface_radius": 8,
+    "popup_radius": 10,
+    "control_height": 28,
+    "button_padding": [
+      10,
+      5
+    ],
+    "item_spacing": [
+      8,
+      6
+    ],
+    "surface_padding": 12,
+    "popup_padding": 18,
+    "body_size": 14,
+    "button_size": 13,
+    "heading_size": 21,
+    "small_size": 11,
+    "border_width": 1,
+    "focus_width": 2,
+    "disabled_alpha": 0.5
+  }
+}

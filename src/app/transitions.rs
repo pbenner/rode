@@ -94,7 +94,7 @@ impl EditorApp {
         (
             Policy {
                 valid,
-                source_pending: self.input.source_pending(ctx),
+                source_pending: self.editors.input_frame_pending || self.editor_input_pending(ctx),
                 files_pending: self.explorer_state.busy,
                 runtime_pending,
                 vault: self.vaults.admission(vault),

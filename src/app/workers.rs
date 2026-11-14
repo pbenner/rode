@@ -381,20 +381,16 @@ impl EditorApp {
 
     /// Select an existing path-bound tab or queue a host-scoped read for a new document.
     pub(super) fn open_file(&mut self, path: String, ctx: &egui::Context) {
-        self.editor_intent();
-        if ctx.viewport_id() != egui::ViewportId::ROOT {
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
-        }
         if let Some(index) = self
             .documents
             .iter()
             .position(|d| d.path.as_deref() == Some(&path))
         {
             self.documents.select_index(index);
-            self.reveal_tab(self.documents[index].id);
-            self.focus_editor(ctx);
+            self.focus_document(self.documents[index].id, ctx);
             return;
         }
+        self.editor_intent();
         if self.documents.begin_open(path.clone()) {
             let request = if crate::pdf::is_path(&path) {
                 self.status = "Opening PDF preview…".into();
@@ -438,7 +434,9 @@ impl EditorApp {
 
     fn workspace_event(&mut self, event: WorkspaceEvent, ctx: &egui::Context) {
         match event {
-            WorkspaceEvent::GitGutter(result) => self.git_gutter.complete(result),
+            WorkspaceEvent::GitGutter(viewport, result) => {
+                self.complete_editor_gutter(viewport, result)
+            }
             WorkspaceEvent::NotebookParsed {
                 id,
                 version,

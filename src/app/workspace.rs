@@ -222,22 +222,20 @@ impl EditorApp {
         self.reset_pdf_requests();
         self.leave_project_agent();
         self.leave_notebooks(reason);
-        if retention == documents::Retention::Discard {
-            self.tabs = Default::default();
-        }
+        self.reset_editor_contexts(retention);
         self.extensions.reset_project();
         self.workbench.reset_project();
-        self.git_gutter.reset();
+        self.editor.git_gutter.reset();
         self.terminal = None;
         self.session_context_reset();
         self.vaults.release_project();
         self.documents.reset_context(retention);
         self.explorer_state.reset();
         self.file_browser.reset();
-        self.input = Default::default();
+        self.editor.input = Default::default();
         self.navigation.cancel_input();
         self.workers.invalidate_workspace();
-        self.show_find = false;
+        self.editor.show_find = false;
     }
 
     /// Cancel connection work, clear project ownership and release only this window's private SSH master.

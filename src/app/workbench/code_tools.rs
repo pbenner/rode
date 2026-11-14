@@ -82,7 +82,7 @@ impl EditorApp {
             );
         }
         if let Some((id, row, col)) = jump {
-            self.jump_to_issue(id, row, col);
+            self.jump_to_issue(id, row, col, ctx);
         }
         if count == 0 {
             layout::empty(
@@ -151,7 +151,7 @@ impl EditorApp {
     pub(in crate::app) fn run_active(&mut self, build: bool, ctx: &egui::Context) {
         if self
             .documents
-            .get(self.documents.active_index())
+            .active()
             .is_some_and(|doc| crate::latex::is_source(doc.path.as_deref()))
         {
             self.build_latex(!build, ctx);
@@ -159,7 +159,7 @@ impl EditorApp {
         }
         if self
             .documents
-            .get(self.documents.active_index())
+            .active()
             .is_some_and(|d| d.notebook.is_some())
         {
             if !build {
@@ -465,7 +465,13 @@ impl EditorApp {
         }
     }
     /// Select a stable document and translate a one-based diagnostic row/column into a source selection.
-    pub(in crate::app) fn jump_to_issue(&mut self, id: u64, row: usize, column: usize) {
+    pub(in crate::app) fn jump_to_issue(
+        &mut self,
+        id: u64,
+        row: usize,
+        column: usize,
+        ctx: &egui::Context,
+    ) {
         if let Some(index) = self.documents.iter().position(|d| d.id == id) {
             self.documents.select_index(index);
             let doc = &mut self.documents[index];
@@ -477,6 +483,7 @@ impl EditorApp {
                 .sum::<usize>()
                 + column.saturating_sub(1);
             doc.selection = Some((offset, offset));
+            self.focus_document(id, ctx);
         }
     }
     /// Return diagnostics only when their captured source version matches this document.

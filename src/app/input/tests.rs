@@ -99,20 +99,20 @@ fn native_close_preserves_edits_on_both_sides_of_a_queued_document_handoff() {
         ],
         true,
     );
-    assert!(app.input.pending());
+    assert!(app.editor.input.pending());
     assert!(
         !app.pending.modal(),
         "A quit modal must not prevent source replay"
     );
     for _ in 0..8 {
         frame(&mut app, &ctx, vec![]);
-        if !app.input.pending() {
+        if !app.editor.input.pending() {
             break;
         }
     }
     assert_eq!(app.documents[0].text, "after");
     assert_eq!(app.documents[1].text, "before");
-    assert!(!app.input.pending());
+    assert!(!app.editor.input.pending());
     assert!(
         matches!(app.pending.as_ref(), Some(Action::Quit)),
         "The single native close intent was lost"
@@ -145,10 +145,10 @@ fn native_close_waits_for_queued_saves_and_keeps_edits_newer_than_the_saved_snap
             events.push(egui::Event::Text("newer".into()));
         }
         input_and_close(&mut app, &ctx, events, true);
-        assert!(app.input.pending());
+        assert!(app.editor.input.pending());
         assert!(!app.pending.modal());
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.input.pending()
+        while app.editor.input.pending()
             || app.documents[0].saving
             || (!trailing_edit && !app.exit.closing())
         {
@@ -203,7 +203,7 @@ fn save_after_batched_source_edits_uses_the_text_applied_by_the_native_editor() 
             "Native edit was not applied: {style:?}"
         );
         let until = Instant::now() + Duration::from_secs(5);
-        while app.input.pending() || app.documents[0].dirty() || app.documents[0].saving {
+        while app.editor.input.pending() || app.documents[0].dirty() || app.documents[0].saving {
             frame(&mut app, &ctx, vec![]);
             assert!(
                 Instant::now() < until,
@@ -269,11 +269,11 @@ fn a_native_clipboard_shortcut_waits_for_earlier_source_edits_even_after_modifie
     );
     assert!(app.dialog == Dialog::None);
     assert_eq!(app.documents[0].text, "keep this edit");
-    assert!(app.input.pending());
+    assert!(app.editor.input.pending());
     frame(&mut app, &ctx, vec![]);
     assert!(app.dialog == Dialog::Extensions);
     assert_eq!(app.documents[0].text, "keep this edit");
-    assert!(!app.input.pending());
+    assert!(!app.editor.input.pending());
 }
 
 #[test]
@@ -306,14 +306,14 @@ fn a_tab_command_preserves_following_input_and_uses_the_destination_keymap() {
         );
         for _ in 0..8 {
             frame(&mut app, &ctx, vec![]);
-            if !app.input.pending() {
+            if !app.editor.input.pending() {
                 break;
             }
         }
         assert_eq!(app.documents.active_index(), 0);
         assert_eq!(app.documents[0].text, "typed first", "{style:?}");
         assert_eq!(app.documents[1].text, "second", "{style:?}");
-        assert!(!app.input.pending());
+        assert!(!app.editor.input.pending());
     }
 }
 
@@ -350,7 +350,7 @@ fn new_and_clean_close_commands_preserve_following_source_input() {
     frame(&mut app, &ctx, vec![]);
     assert_eq!(app.documents.len(), 1);
     assert_eq!(app.documents[0].text, "returned original");
-    assert!(!app.input.pending());
+    assert!(!app.editor.input.pending());
 }
 
 #[test]
@@ -375,14 +375,14 @@ fn source_edits_on_each_side_of_a_tab_switch_stay_with_their_document() {
     );
     for _ in 0..8 {
         frame(&mut app, &ctx, vec![]);
-        if !app.input.pending() {
+        if !app.editor.input.pending() {
             break;
         }
     }
     assert_eq!(app.documents.active_index(), 0);
     assert_eq!(app.documents[0].text, "after first");
     assert_eq!(app.documents[1].text, "before second");
-    assert!(!app.input.pending());
+    assert!(!app.editor.input.pending());
 }
 
 #[test]

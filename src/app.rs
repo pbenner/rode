@@ -37,6 +37,7 @@ mod dialogs;
 mod diff_view;
 mod documents;
 mod editor_view;
+mod editor_windows;
 mod execution;
 mod explorer;
 mod extensions;
@@ -57,6 +58,7 @@ mod menus;
 mod navigation;
 mod notebook_view;
 mod pdf_view;
+mod project_bookmarks;
 mod project_dialog;
 mod sandbox_presets;
 mod saved_connections;
@@ -169,15 +171,14 @@ pub struct EditorApp {
     persistence: Option<crate::persistence::Preferences>,
     font_save_pending: bool,
     agents: agents::Agents,
-    tabs: chrome::Tabs,
-    input: input::Router,
+    editor: editor_windows::View,
+    editors: editor_windows::Windows,
     navigation: navigation::State,
     workbench: Workbench,
     debugger: debugging::State,
     extensions: extensions::Extensions,
     workspace: workspace::Controller,
     documents: documents::Documents,
-    git_gutter: git_gutter::State,
     /// Cleanup ownership survives notebook view replacement and tab removal.
     notebook_shutdowns: notebook_view::Shutdowns,
     /// Owns completion admission and the workspace clock independently of domain state.
@@ -189,6 +190,7 @@ pub struct EditorApp {
     ssh_master: Option<Terminal>,
     file_browser: file_browser::State,
     project_picker: project_dialog::State,
+    project_bookmarks: project_bookmarks::State,
     sandbox_defaults: sandbox::Options,
     sandbox_presets: sandbox_presets::State,
     startup_restore: Option<bool>,
@@ -215,11 +217,6 @@ pub struct EditorApp {
     terminal_colors: terminal_colors::State,
     theme_save_pending: bool,
     syntax_save_pending: bool,
-    show_find: bool,
-    find: String,
-    replacement: String,
-    find_focus: bool,
-    case_sensitive: bool,
     started: Instant,
 }
 
@@ -289,15 +286,14 @@ impl EditorApp {
             persistence: None,
             font_save_pending: false,
             agents: agents::Agents::load(storage),
-            tabs: Default::default(),
-            input: Default::default(),
+            editor: Default::default(),
+            editors: Default::default(),
             navigation: navigation::State::load(storage),
             workbench: Workbench::load(storage),
             debugger: Default::default(),
             extensions: extensions::Extensions::load(storage),
             workspace: Default::default(),
             documents: Default::default(),
-            git_gutter: Default::default(),
             notebook_shutdowns: Default::default(),
             workers: Default::default(),
             explorer_state: Default::default(),
@@ -307,6 +303,7 @@ impl EditorApp {
             ssh_master: None,
             file_browser: Default::default(),
             project_picker: Default::default(),
+            project_bookmarks: Default::default(),
             sandbox_defaults: storage
                 .and_then(|s| s.get_string("sandbox_defaults"))
                 .and_then(|s| serde_json::from_str(&s).ok())
@@ -340,11 +337,6 @@ impl EditorApp {
             themes,
             theme_save_pending: startup.theme.is_some(),
             syntax_save_pending: startup.syntax_theme.is_some(),
-            show_find: false,
-            find: String::new(),
-            replacement: String::new(),
-            find_focus: false,
-            case_sensitive: true,
             started: Instant::now(),
         };
         if !warnings.is_empty() {
@@ -726,6 +718,8 @@ fn consume_extensions_shortcut(ctx: &egui::Context) -> bool {
 impl eframe::App for EditorApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.ui_viewport = egui::ViewportId::ROOT;
+        self.editors.input_frame_pending = true;
+        self.activate_editor(self.focused_editor());
         self.poll(ctx);
         self.poll_vaults(ctx);
         self.poll_agents(ctx);
@@ -733,34 +727,43 @@ impl eframe::App for EditorApp {
         self.poll_notebooks(ctx);
         self.marp_tick();
         self.workbench_tick(ctx);
-        self.git_gutter_tick(ctx);
+
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
-        self.route_input(ctx);
-        if (self.dialog != Dialog::None || self.pending.modal() || self.workbench_modal())
-            && Terminal::focused(ctx)
-        {
-            ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
+        if ctx.input(|i| i.focused) && (self.workbench.detached || !self.tool_surface()) {
+            self.remember_editor_focus(egui::ViewportId::ROOT);
         }
-        self.navigation.begin_layout();
-        self.titlebar(ctx);
-        self.workspace_banner(ctx);
-        self.encrypted_banner(ctx);
-        self.statusbar(ctx);
-        self.activity(ctx);
-        self.explorer(ctx);
-        self.workspace_content(ctx);
-        // Accepted source events must update dirty/version state before Quit guards.
-        self.handle_close_request(ctx);
-        self.dialogs(ctx);
-        self.workbench_windows(ctx);
-        self.extension_windows(ctx);
-        self.latex_window(ctx);
-        self.terminal_colors.show(ctx, self.themes.active());
-        self.notice_ui(ctx);
-        self.navigation_finish(ctx);
+        self.in_editor(self.focused_editor(), |app| {
+            app.route_input(ctx);
+            if (app.dialog != Dialog::None || app.pending.modal() || app.workbench_modal())
+                && Terminal::focused(ctx)
+            {
+                ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
+            }
+            app.navigation.begin_layout();
+            app.titlebar(ctx);
+            app.workspace_banner(ctx);
+            app.encrypted_banner(ctx);
+            app.statusbar(ctx);
+            app.activity(ctx);
+            app.explorer(ctx);
+            app.workspace_content(ctx);
+            app.dialogs(ctx);
+            app.workbench_windows(ctx);
+            app.extension_windows(ctx);
+            app.latex_window(ctx);
+            app.terminal_colors.show(ctx, app.themes.active());
+            app.notice_ui(ctx);
+            app.navigation_finish(ctx);
+        });
+        self.activate_editor(self.focused_editor());
         self.detached_tools(ctx);
         self.detached_tabs(ctx);
+        self.detached_editors(ctx);
+        // Prepared replies and UI intents must see every editor's accepted edits.
+        self.editors.input_frame_pending = false;
+        self.in_editor(egui::ViewportId::ROOT, |app| app.handle_close_request(ctx));
+        self.activate_editor(self.focused_editor());
         if let Some(remote) = self
             .workspace
             .as_ref()

@@ -262,23 +262,23 @@ impl EditorApp {
                     });
                     });
                     ui_probe::button(ui, "notebook-settings", &settings.header_response);
-                    if self.show_find {
+                    if self.editor.show_find {
                         ui.horizontal(|ui| {
                             let response = ui.add(
-                                egui::TextEdit::singleline(&mut self.find)
+                                egui::TextEdit::singleline(&mut self.editor.find)
                                     .hint_text("Find in cell sources…")
                                     .desired_width(220.),
                             );
-                            if self.find_focus {
+                            if self.editor.find_focus {
                                 response.request_focus();
-                                self.find_focus = false;
+                                self.editor.find_focus = false;
                             }
                             ui_probe::button(ui, "notebook-find", &response);
-                            ui_probe::value(ui, "notebook-find-value", &response, &self.find);
+                            ui_probe::value(ui, "notebook-find-value", &response, &self.editor.find);
                             if (ui.button("Next").clicked()
                                 || (response.has_focus() || response.lost_focus())
                                     && ui.input(|i| i.key_pressed(Key::Enter)))
-                                && !self.find.is_empty()
+                                && !self.editor.find.is_empty()
                             {
                                 let start = view.active_index().unwrap_or(0);
                                 if let Some((at, range)) = (0..view.book.cells.len())
@@ -286,8 +286,8 @@ impl EditorApp {
                                     .find_map(|at| {
                                         find_matches(
                                             &view.book.cells[at].source,
-                                            &self.find,
-                                            self.case_sensitive,
+                                            &self.editor.find,
+                                            self.editor.case_sensitive,
                                         )
                                         .first()
                                         .copied()
@@ -305,7 +305,7 @@ impl EditorApp {
                                 }
                             }
                             if ui.button("Close").clicked() {
-                                self.show_find = false;
+                                self.editor.show_find = false;
                             }
                         });
                     }

@@ -32,6 +32,21 @@ rode --ssh user@host --remote-path '~/project'
 
 Use **Project: Settings and sandbox access** in the command palette for categorised [project settings](docs/configuration.md#project-settings): code tools, sandbox access, monitoring, LaTeX and presentations. Each category saves its own changes.
 
+Use **File → New editor window** for another native editor window with its own tabs.
+Right-click a file tab to move it to a new or existing editor window. Closing an
+editor window returns its tabs and unsaved edits to the main window. These windows
+share one application process and project; chat, terminals and project tools keep
+their existing location.
+
+Bookmark the current local or SSH project with the **bookmark icon** in the
+Explorer header. **Saved projects**, above the file tree, reopens a project with
+one click; right-click an entry to rename or remove it. This bundled **Project
+bookmarks** extension can be disabled in **View → Extensions**.
+
+For a coordinated light/dark interface, choose **Atelier Light** or **Atelier Dark**
+from **View → Color theme**. Both include matching code and terminal palettes;
+see [themes](docs/themes.md).
+
 Manage saved SSH connections directly in the Explorer: right-click to rename,
 edit or remove a connection, and drag rows to save your preferred order.
 

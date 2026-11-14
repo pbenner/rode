@@ -243,7 +243,10 @@ impl EditorApp {
                             } else {
                                 "INSTALLED TOOL"
                             });
-                            if entry.manifest.is_some() && ui.small_button("Settings").clicked() {
+                            if (entry.manifest.is_some()
+                                || entry.feature == Some(Feature::ProjectBookmarks))
+                                && ui.small_button("Settings").clicked()
+                            {
                                 settings = Some(entry.id.clone());
                             }
                         });

@@ -119,11 +119,12 @@ impl EditorApp {
     }
     /// Cancel obsolete or hidden preview work instead of continuing background rendering on each edit.
     pub(super) fn marp_tick(&mut self) {
-        let active = self.documents.active_index();
-        for (index, doc) in self.documents.iter_mut().enumerate() {
+        let active = self.documents.selected_ids();
+        for doc in self.documents.iter_mut() {
+            let selected = active.contains(&doc.id);
             let version = doc.version();
             if let Some(view) = &mut doc.marp
-                && (index != active
+                && (!selected
                     || !view.showing
                     || view
                         .attempted

@@ -62,7 +62,7 @@ impl EditorApp {
         let Some(doc) = self.documents.active_mut() else {
             return;
         };
-        let Some((range, replacement)) = self.git_gutter.replacement(doc, &request) else {
+        let Some((range, replacement)) = self.editor.git_gutter.replacement(doc, &request) else {
             return;
         };
         let id = egui::Id::new(("document", doc.id));
@@ -89,7 +89,7 @@ impl EditorApp {
         doc.selection = Some((point, point));
         doc.last_cursor = point;
         doc.cursor = (row, 1);
-        self.git_gutter.peek = None;
+        self.editor.git_gutter.peek = None;
         self.focus_editor(ctx);
         self.status = "Change reverted in editor · Save to update the file".into();
         ctx.request_repaint();

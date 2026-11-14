@@ -8,6 +8,7 @@ impl EditorApp {
         result: Result<Response, String>,
         ctx: &egui::Context,
     ) {
+        let mut open_viewport = None;
         match &job {
             Job::List(_, epoch) if *epoch != self.explorer_state.epoch => return,
             Job::Prepare { token, .. } | Job::StandaloneFile { token, .. }
@@ -43,7 +44,7 @@ impl EditorApp {
             }
             Job::Explorer(_) => self.explorer_state.busy = false,
             Job::Open(path) => {
-                self.documents.finish_open(path);
+                open_viewport = self.documents.finish_open(path);
             }
             Job::Save { id, .. } | Job::SaveBinary { id, .. } => {
                 self.documents.finish_save(*id);
@@ -154,18 +155,24 @@ impl EditorApp {
                     self.explorer_state.loaded(path, response);
                 }
                 Job::Open(_) => {
-                    self.documents
-                        .open(response, &self.markdown_images, &self.notebook_shutdowns);
-                    if self.documents.active().is_some_and(|d| {
-                        crate::languages::detect(d.path.as_deref())
-                            .is_some_and(|l| l.id == "python")
-                    }) {
-                        self.refresh_environment(false, ctx);
-                    }
-                    self.status = "File loaded".into();
-                    if self.navigation.accepts_editor_focus() {
-                        self.focus_editor(ctx);
-                    }
+                    let viewport = open_viewport.unwrap_or(self.documents.viewport());
+                    self.in_editor(viewport, |app| {
+                        let id = app.documents.open(
+                            response,
+                            &app.markdown_images,
+                            &app.notebook_shutdowns,
+                        );
+                        if app.documents.iter().find(|d| d.id == id).is_some_and(|d| {
+                            crate::languages::detect(d.path.as_deref())
+                                .is_some_and(|l| l.id == "python")
+                        }) {
+                            app.refresh_environment(false, ctx);
+                        }
+                        app.status = "File loaded".into();
+                        if app.navigation.accepts_editor_focus() {
+                            app.focus_document(id, ctx);
+                        }
+                    });
                 }
                 Job::SaveBinary { id, bytes, .. } => {
                     if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {

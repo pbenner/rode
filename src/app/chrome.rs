@@ -292,16 +292,16 @@ impl EditorApp {
 
     /// Request that the next tab-strip layout scroll the given document into view.
     pub(super) fn reveal_tab(&mut self, id: u64) {
-        self.tabs.reveal = Some(id);
+        self.editor.tabs.reveal = Some(id);
     }
 
     /// Wrap the active tab index in either direction and transfer focus to its editor.
     pub(super) fn cycle_tab(&mut self, direction: isize, ctx: &egui::Context) {
-        if self.documents.is_empty() {
+        if self.documents.active().is_none() {
             return;
         }
         self.documents.cycle(direction);
-        self.tabs.reveal = self.documents.selected_id();
+        self.editor.tabs.reveal = self.documents.selected_id();
         self.focus_editor(ctx);
     }
     /// Request source-editor focus for the active document, including a later frame
@@ -312,8 +312,12 @@ impl EditorApp {
         }
         self.editor_intent();
         ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
-        if ctx.viewport_id() != egui::ViewportId::ROOT {
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        let viewport = self.documents.viewport();
+        self.remember_editor_focus(viewport);
+        self.navigation
+            .request_focus(navigation::Pane::Editor, viewport);
+        if ctx.viewport_id() != viewport {
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
         }
         self.navigation.zoom = self
             .navigation
@@ -321,13 +325,13 @@ impl EditorApp {
             .filter(|p| *p == navigation::Pane::Editor);
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("terminal-wants-focus"), false));
         if let Some(doc) = self.documents.active() {
-            self.tabs.focus = Some(doc.id);
+            self.editor.tabs.focus = Some(doc.id);
             ctx.request_repaint();
         }
     }
     /// Consume the pending document focus request only when this editor can accept input.
     pub(super) fn take_editor_focus(&mut self, ui: &egui::Ui, ctx: &egui::Context) -> Option<u64> {
-        self.tabs.focus?;
+        self.editor.tabs.focus?;
         if self.dialog != Dialog::None
             || self.pending.modal()
             || self.workbench_modal()
@@ -337,7 +341,7 @@ impl EditorApp {
         }
         // A closed modal still blocks its background for one egui pass.
         if ctx.memory(|m| m.allows_interaction(ui.layer_id())) {
-            self.tabs.focus.take()
+            self.editor.tabs.focus.take()
         } else {
             ctx.request_repaint();
             None
@@ -347,7 +351,7 @@ impl EditorApp {
     /// Move a stable document ID around another tab while preserving the selected document.
     pub(super) fn reorder_tab(&mut self, source: u64, target: u64, after: bool) {
         if self.documents.reorder(source, target, after) {
-            self.tabs.reveal = self.documents.selected_id();
+            self.editor.tabs.reveal = self.documents.selected_id();
         }
     }
 
@@ -356,10 +360,10 @@ impl EditorApp {
     pub(super) fn tab_strip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let active = self.documents.active().map(|d| d.id);
-        if active != self.tabs.active {
-            self.tabs.reveal = active;
-            self.tabs.active = active;
-            if self.navigation.accepts_editor_focus() {
+        if active != self.editor.tabs.active {
+            self.editor.tabs.reveal = active;
+            self.editor.tabs.active = active;
+            if ctx.input(|i| i.focused) && self.navigation.accepts_editor_focus() {
                 self.focus_editor(ctx);
             }
         }
@@ -376,19 +380,31 @@ impl EditorApp {
                 (width + 94.0).clamp(TAB_MIN, TAB_MAX)
             })
             .collect();
-        let natural: f32 = widths.iter().sum();
+        let natural: f32 = self
+            .documents
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| self.documents.in_viewport(d.id))
+            .map(|(i, _)| widths[i])
+            .sum();
         let width = ui.available_width();
         let overflow = natural > width - 34.0;
         let tools_width = if overflow { 90.0 } else { 32.0 };
         let strip_width = (width - tools_width).max(32.0);
-        if (self.tabs.width - strip_width).abs() > 0.5 {
-            self.tabs.width = strip_width;
-            self.tabs.reveal = active;
+        if (self.editor.tabs.width - strip_width).abs() > 0.5 {
+            self.editor.tabs.width = strip_width;
+            self.editor.tabs.reveal = active;
         }
         for width in &mut widths {
             *width = width.min(strip_width);
         }
-        let total: f32 = widths.iter().sum();
+        let total: f32 = self
+            .documents
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| self.documents.in_viewport(d.id))
+            .map(|(i, _)| widths[i])
+            .sum();
         let (row, _) = ui.allocate_exact_size(egui::vec2(width, TAB_HEIGHT), Sense::hover());
         ui.painter().rect_filled(row, 0, palette.panel);
         let strip = egui::Rect::from_min_size(row.min, egui::vec2(strip_width, TAB_HEIGHT));
@@ -396,8 +412,10 @@ impl EditorApp {
         let mut close = None;
         let mut move_tab = None;
         let mut selected = None;
-        let reveal = self.tabs.reveal.take();
-        let old_offset = self.tabs.offset;
+        let mut transfer = None;
+        let destinations = self.editor_tab_destinations();
+        let reveal = self.editor.tabs.reveal.take();
+        let old_offset = self.editor.tabs.offset;
         let output = ui
             .scope_builder(egui::UiBuilder::new().max_rect(strip), |ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
@@ -409,7 +427,12 @@ impl EditorApp {
                     .max_height(TAB_HEIGHT)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            for (index, doc) in self.documents.iter().enumerate() {
+                            for (index, doc) in self
+                                .documents
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, doc)| self.documents.in_viewport(doc.id))
+                            {
                                 let is_active = index == self.documents.active_index();
                                 let (rect, _) = ui.allocate_exact_size(
                                     egui::vec2(widths[index], TAB_HEIGHT),
@@ -557,6 +580,24 @@ impl EditorApp {
                                     }
                                 }
                                 response.context_menu(|ui| {
+                                    let detach = ui.button("Move to new editor window");
+                                    ui_probe::button(ui, "editor-tab-detach", &detach);
+                                    if detach.clicked() {
+                                        transfer = Some((doc.id, None));
+                                        ui.close();
+                                    }
+                                    for (viewport, label) in &destinations {
+                                        let move_to = ui.button(format!("Move to {label}"));
+                                        ui_probe::button(
+                                            ui,
+                                            &format!("editor-tab-move:{label}"),
+                                            &move_to,
+                                        );
+                                        if move_to.clicked() {
+                                            transfer = Some((doc.id, Some(*viewport)));
+                                            ui.close();
+                                        }
+                                    }
                                     if ui.add(IconButton::new(Icon::Close, "Close tab")).clicked() {
                                         close = Some(doc.id);
                                         ui.close();
@@ -578,7 +619,7 @@ impl EditorApp {
                     })
             })
             .inner;
-        self.tabs.offset = output.state.offset.x;
+        self.editor.tabs.offset = output.state.offset.x;
         let max_offset = (total - strip_width).max(0.0);
         ui.scope_builder(
             egui::UiBuilder::new()
@@ -590,26 +631,28 @@ impl EditorApp {
                 if overflow {
                     if ui
                         .add_enabled(
-                            self.tabs.offset > 0.5,
+                            self.editor.tabs.offset > 0.5,
                             IconButton::icon(Icon::ChevronLeft, "Scroll tabs left")
                                 .icon_size(14.)
                                 .min_size(egui::vec2(28., TAB_HEIGHT)),
                         )
                         .clicked()
                     {
-                        self.tabs.offset = (self.tabs.offset - strip_width * 0.7).max(0.);
+                        self.editor.tabs.offset =
+                            (self.editor.tabs.offset - strip_width * 0.7).max(0.);
                         ctx.request_repaint();
                     }
                     if ui
                         .add_enabled(
-                            self.tabs.offset < max_offset - 0.5,
+                            self.editor.tabs.offset < max_offset - 0.5,
                             IconButton::icon(Icon::ChevronRight, "Scroll tabs right")
                                 .icon_size(14.)
                                 .min_size(egui::vec2(28., TAB_HEIGHT)),
                         )
                         .clicked()
                     {
-                        self.tabs.offset = (self.tabs.offset + strip_width * 0.7).min(max_offset);
+                        self.editor.tabs.offset =
+                            (self.editor.tabs.offset + strip_width * 0.7).min(max_offset);
                         ctx.request_repaint();
                     }
                 }
@@ -618,7 +661,12 @@ impl EditorApp {
                     egui::ScrollArea::vertical()
                         .max_height(320.)
                         .show(ui, |ui| {
-                            for (index, doc) in self.documents.iter().enumerate() {
+                            for (index, doc) in self
+                                .documents
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, doc)| self.documents.in_viewport(doc.id))
+                            {
                                 if ui
                                     .selectable_label(
                                         index == self.documents.active_index(),
@@ -632,7 +680,7 @@ impl EditorApp {
                                     .clicked()
                                 {
                                     selected = Some(index);
-                                    self.tabs.reveal = Some(doc.id);
+                                    self.editor.tabs.reveal = Some(doc.id);
                                     ui.close();
                                 }
                             }
@@ -641,9 +689,12 @@ impl EditorApp {
                 .on_hover_text("All open editors · Ctrl+PageUp / Ctrl+PageDown");
             },
         );
+        if let Some((id, viewport)) = transfer {
+            self.move_editor_tab(id, viewport, ctx);
+        }
         if let Some(index) = selected {
             self.documents.select_index(index);
-            self.tabs.reveal = self.documents.get(index).map(|d| d.id);
+            self.editor.tabs.reveal = self.documents.get(index).map(|d| d.id);
             self.focus_editor(ctx);
         }
         if let Some((source, target, after)) = move_tab {
@@ -952,7 +1003,10 @@ mod tests {
                 },
             );
         }
-        assert!(app.tabs.offset > 0., "The active last tab must be revealed");
+        assert!(
+            app.editor.tabs.offset > 0.,
+            "The active last tab must be revealed"
+        );
     }
     #[test]
     fn editor_focus_survives_the_pass_after_a_modal_closes() {
@@ -974,11 +1028,11 @@ mod tests {
         app.focus_editor(&ctx);
         let _ = ctx.run(frame(0.1), |ctx| app.editor(ctx));
         assert!(
-            app.tabs.focus.is_some(),
+            app.editor.tabs.focus.is_some(),
             "Keep the focus request while the old modal layer blocks input"
         );
         let _ = ctx.run(frame(0.2), |ctx| app.editor(ctx));
-        assert!(app.tabs.focus.is_none());
+        assert!(app.editor.tabs.focus.is_none());
         let mut input = frame(0.3);
         input
             .events

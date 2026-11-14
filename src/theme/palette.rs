@@ -6,6 +6,8 @@ use eframe::egui::Color32;
 /// Copyable interface/terminal colors; syntax themes may be selected independently.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
+    /// Native widget appearance, inherited independently of the interface colors.
+    pub dark_mode: bool,
     /// Optional component dimensions, typography and state styling.
     pub ui: Option<InterfaceStyle>,
     /// Static native surface treatment, independent of interface colors.
@@ -55,6 +57,7 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
+            dark_mode: true,
             ui: None,
             chrome: Chrome::Plain,
             frame_accent: Color32::from_rgb(125, 235, 164),

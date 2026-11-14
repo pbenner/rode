@@ -5,6 +5,8 @@ use super::super::*;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) enum Command {
     New,
+    NewEditorWindow,
+    BookmarkProject,
     NewNotebook,
     NotebookRun,
     NotebookRunAll,
@@ -90,6 +92,8 @@ impl Definition {
 impl Command {
     pub(in crate::app) const PALETTE: &'static [Self] = &[
         Self::New,
+        Self::NewEditorWindow,
+        Self::BookmarkProject,
         Self::Open,
         Self::Folder,
         Self::Connect,
@@ -165,6 +169,9 @@ impl Command {
     ];
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
+            Self::NewEditorWindow => Definition::new("New editor window", Icon::Files),
+            Self::BookmarkProject => Definition::new("Bookmark current project", Icon::Bookmark)
+                .palette("Projects: Toggle current project bookmark"),
             Self::New => Definition::new("New file", Icon::NewFile),
             Self::Open => Definition::new("Open file…", Icon::Search).palette("Open file by path"),
             Self::Folder => {
@@ -382,6 +389,8 @@ impl EditorApp {
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
             Command::New => self.new_file(),
+            Command::NewEditorWindow => self.new_editor_window(ctx),
+            Command::BookmarkProject => self.toggle_project_bookmark(),
             Command::NewNotebook => self.new_notebook(),
             Command::NotebookRun => self.run_notebook(false, ctx),
             Command::NotebookRunAll => self.run_notebook(true, ctx),
@@ -403,8 +412,8 @@ impl EditorApp {
             Command::Explorer => self.show_explorer = !self.show_explorer,
             Command::Find => {
                 self.markdown_source();
-                self.show_find = true;
-                self.find_focus = true;
+                self.editor.show_find = true;
+                self.editor.find_focus = true;
             }
             Command::Shortcuts => self.set_dialog(Dialog::Shortcuts),
             Command::Python => self.open_python_environment(ctx),

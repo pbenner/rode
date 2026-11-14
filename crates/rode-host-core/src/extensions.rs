@@ -35,6 +35,8 @@ pub const MAX_EXTENSIONS: usize = 64;
 /// code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
+    /// Explicitly bookmarked local and SSH project locations in the Explorer.
+    ProjectBookmarks,
     /// Optional mise toolchain, environment and task integration; disabled by default.
     Mise,
     /// Project-host Git tools and source-control panels.
@@ -68,6 +70,7 @@ impl Feature {
     /// Stable namespaced bundled-feature identifier used by preferences.
     pub fn id(self) -> &'static str {
         match self {
+            Self::ProjectBookmarks => "rode.project-bookmarks",
             Self::Mise => "rode.mise",
             Self::Git => "rode.git",
             Self::Monitor => "rode.monitor",
@@ -270,6 +273,12 @@ impl Registry {
             ..Default::default()
         };
         for (feature, name, description, activation) in [
+            (
+                Feature::ProjectBookmarks,
+                "Project bookmarks",
+                "Save local and SSH project locations in the Explorer and reopen them through the normal project guards.",
+                "Explicit bookmark / reopen action",
+            ),
             (
                 Feature::Debugger,
                 "Debugger",

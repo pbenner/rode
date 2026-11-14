@@ -270,6 +270,84 @@ fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
 }
 
 #[test]
+fn atelier_appearance_inherits_and_resets_native_light_and_dark_widget_defaults() {
+    let dark = Theme::builtin("atelier-dark").unwrap();
+    let light = Theme::builtin("atelier-light").unwrap();
+    assert!(dark.palette.dark_mode);
+    assert!(!light.palette.dark_mode);
+    assert_eq!(dark.palette.ui, light.palette.ui);
+    let derived = Theme::from_json(
+        "custom:paper",
+        r##"{"name":"Paper","base":"atelier-light","colors":{"accent":"#244fae"}}"##,
+    )
+    .unwrap();
+    assert!(!derived.palette.dark_mode);
+    assert!(Theme::from_json("custom:bad", r#"{"name":"Bad","appearance":"automatic"}"#).is_err());
+    let ctx = egui::Context::default();
+    rode::theme::install(&ctx, dark.palette);
+    let before = ctx.style();
+    rode::theme::install(&ctx, light.palette);
+    assert!(!ctx.style().visuals.dark_mode);
+    assert_eq!(ctx.theme(), egui::Theme::Light);
+    let _ = ctx.run(
+        egui::RawInput {
+            system_theme: Some(egui::Theme::Dark),
+            ..Default::default()
+        },
+        |_| {},
+    );
+    assert_eq!(
+        ctx.theme(),
+        egui::Theme::Light,
+        "System appearance replaced an explicit palette"
+    );
+    assert_eq!(ctx.style().visuals.window_fill, light.palette.panel);
+    assert!(ctx.style().visuals.window_shadow.color.a() < before.visuals.window_shadow.color.a());
+    rode::theme::install(&ctx, dark.palette);
+    assert_eq!(
+        *ctx.style(),
+        *before,
+        "Light widget defaults leaked into dark mode"
+    );
+    rode::theme::install(&ctx, Palette::default());
+    assert!(ctx.style().visuals.dark_mode);
+}
+
+#[test]
+fn atelier_syntax_and_terminal_text_remain_readable_after_live_appearance_switches() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut themes, warnings) = Themes::load(directory.path(), "atelier-dark");
+    assert!(warnings.is_empty());
+    let ctx = egui::Context::default();
+    let source = "// Notes\n#[derive(Debug)]\nstruct Packet { name: String }\npub fn dispatch() { let count = 42; println!(\"Ready\"); }\n";
+    let mut previous = None;
+    for id in ["atelier-dark", "atelier-light", "atelier-dark"] {
+        themes.select(id, &ctx).unwrap();
+        let palette = themes.active().palette;
+        let layout = themes.highlight_with_style(&ctx, &ctx.style(), source, "rs", 14.);
+        for section in &layout.sections {
+            assert!(
+                contrast(section.format.color, palette.background) >= 4.5,
+                "{id} code text"
+            );
+            assert!(
+                contrast(section.format.color, palette.selection) >= 4.5,
+                "{id} selected code text"
+            );
+        }
+        if let Some(previous) = previous {
+            assert_ne!(layout, previous);
+        }
+        previous = Some(layout);
+        assert_eq!(palette.terminal_minimum_contrast, 4.5);
+        assert!(contrast(palette.gutter, palette.background) >= 4.5);
+        for color in [palette.accent, palette.success, palette.error] {
+            assert!(contrast(color, palette.background) >= 4.5);
+        }
+    }
+}
+
+#[test]
 fn component_controls_have_consistent_height_at_multiple_scales() {
     let studio = Theme::builtin("studio").unwrap();
     let ctx = egui::Context::default();
@@ -291,8 +369,14 @@ fn component_controls_have_consistent_height_at_multiple_scales() {
 }
 
 #[test]
-fn studio_controls_and_secondary_labels_stay_readable_in_every_interaction_state() {
-    for theme in ["studio", "studio-neutral", "studio-hacker"] {
+fn component_themes_keep_controls_and_secondary_labels_readable_in_every_state() {
+    for theme in [
+        "studio",
+        "studio-neutral",
+        "studio-hacker",
+        "atelier-dark",
+        "atelier-light",
+    ] {
         let palette = Theme::builtin(theme).unwrap().palette;
         let ctx = egui::Context::default();
         rode::theme::install(&ctx, palette);
@@ -327,8 +411,14 @@ fn studio_controls_and_secondary_labels_stay_readable_in_every_interaction_state
 }
 
 #[test]
-fn studio_text_fields_and_filled_primary_actions_draw_visible_keyboard_focus() {
-    for theme in ["studio", "studio-neutral", "studio-hacker"] {
+fn component_themes_draw_visible_keyboard_focus_on_inputs_and_primary_actions() {
+    for theme in [
+        "studio",
+        "studio-neutral",
+        "studio-hacker",
+        "atelier-dark",
+        "atelier-light",
+    ] {
         let palette = Theme::builtin(theme).unwrap().palette;
         let ctx = egui::Context::default();
         rode::theme::install(&ctx, palette);
@@ -610,7 +700,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 builtin.id
             ),
             "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" | "studio"
-            | "studio-neutral" => {
+            | "studio-neutral" | "atelier-dark" | "atelier-light" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),

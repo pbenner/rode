@@ -74,6 +74,7 @@ pub(super) struct State {
     /// Focus requests target a native host so another tool window cannot consume them.
     pending_viewport: egui::ViewportId,
     leader: Option<Instant>,
+    input_viewport: egui::ViewportId,
     pub zoom: Option<Pane>,
     pub widths: [Option<f32>; 2],
     rects: [Option<egui::Rect>; 5],
@@ -91,6 +92,7 @@ impl State {
             pending: None,
             pending_viewport: egui::ViewportId::ROOT,
             leader: None,
+            input_viewport: egui::ViewportId::ROOT,
             zoom: None,
             widths: [None; 2],
             rects: [None; 5],
@@ -132,6 +134,13 @@ impl State {
     /// A partial prefix has no authority after its source context is replaced.
     pub(super) fn cancel_input(&mut self) {
         self.leader = None;
+    }
+    /// Inactive native callbacks must not cancel another window's partial chord.
+    pub(super) fn bind_input(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.focused) && self.input_viewport != ctx.viewport_id() {
+            self.cancel_input();
+            self.input_viewport = ctx.viewport_id();
+        }
     }
     /// Source routing sees bindings and prefix intent, never pane layout or focus caches.
     pub(super) fn input_rules(&self) -> InputRules<'_> {
@@ -246,8 +255,10 @@ impl List {
 impl EditorApp {
     /// Route pane/leader commands only when modal barriers and native terminal input permit them.
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
-        if !ctx.input(|i| i.focused)
-            || self.dialog != Dialog::None
+        if !ctx.input(|i| i.focused) {
+            return;
+        }
+        if self.dialog != Dialog::None
             || self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending()
@@ -265,7 +276,7 @@ impl EditorApp {
     pub(super) fn navigate(&mut self, action: NavAction, ctx: &egui::Context) {
         use NavAction::*;
         self.navigation.used = true;
-        self.input.cancel_sequence();
+        self.editor.input.cancel_sequence();
         match action {
             Left | Right | Up | Down => {
                 let current = self.navigation.active;
@@ -441,8 +452,8 @@ impl EditorApp {
             NextMatch | PreviousMatch => self.style_find_match(action == PreviousMatch, ctx),
             Find => {
                 self.markdown_source();
-                self.show_find = true;
-                self.find_focus = true;
+                self.editor.show_find = true;
+                self.editor.find_focus = true;
             }
         }
         ctx.request_repaint();
@@ -469,7 +480,16 @@ impl EditorApp {
             self.focus_tool_tab(tab, ctx);
             return;
         }
-        let viewport = tab.map_or(egui::ViewportId::ROOT, |tab| self.tool_viewport(tab));
+        let viewport = tab.map_or_else(
+            || {
+                if pane == Pane::Editor {
+                    self.documents.viewport()
+                } else {
+                    egui::ViewportId::ROOT
+                }
+            },
+            |tab| self.tool_viewport(tab),
+        );
         if viewport == Self::tools_viewport() {
             self.workbench.tools_hidden = false;
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
@@ -481,7 +501,7 @@ impl EditorApp {
         if self.navigation.zoom.is_some_and(|p| p != pane) {
             self.navigation.zoom = None;
         }
-        self.tabs.cancel_focus();
+        self.editor.tabs.cancel_focus();
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("terminal-wants-focus"), false));
         ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
         match pane {
@@ -545,7 +565,7 @@ impl EditorApp {
             }
             match pane {
                 Pane::Terminal => Terminal::focus(&ctx),
-                Pane::Editor if !self.documents.is_empty() => self.focus_editor(&ctx),
+                Pane::Editor if self.documents.active().is_some() => self.focus_editor(&ctx),
                 Pane::Explorer if self.workspace.is_some() => host.request_focus(),
                 _ => {
                     let remembered = self

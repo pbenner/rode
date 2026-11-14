@@ -56,7 +56,7 @@ pub(super) enum PeekAction {
     Close,
 }
 
-/// Clear the global concurrency slot on every exit, including cancellation/panic.
+/// Clear this editor's concurrency slot on every exit, including cancellation/panic.
 struct Running(Arc<AtomicBool>);
 impl Drop for Running {
     fn drop(&mut self) {
@@ -188,7 +188,8 @@ impl EditorApp {
     pub(super) fn git_gutter_tick(&mut self, ctx: &egui::Context) {
         let eligible = self.project_ready()
             && self.feature(crate::extensions::Feature::Git)
-            && self.navigation.visible(navigation::Pane::Editor);
+            && (ctx.viewport_id() != egui::ViewportId::ROOT
+                || self.navigation.visible(navigation::Pane::Editor));
         let doc = self.documents.active().filter(|d| {
             !d.is_preview() && d.text.len() <= MAX_BYTES && d.line_count() <= MAX_LINES
         });
@@ -201,39 +202,43 @@ impl EditorApp {
             })
         });
         let Some(key) = key else {
-            if self.git_gutter.key.is_some() {
-                self.git_gutter.reset();
+            if self.editor.git_gutter.key.is_some() {
+                self.editor.git_gutter.reset();
             }
             return;
         };
         let doc = doc.unwrap();
         let now = Instant::now();
-        self.git_gutter.select(key.clone(), doc.version(), now);
-        let delay = if self.git_gutter.pending.is_some() {
+        self.editor
+            .git_gutter
+            .select(key.clone(), doc.version(), now);
+        let delay = if self.editor.git_gutter.pending.is_some() {
             REFRESH
         } else if self
+            .editor
             .git_gutter
             .rendered
             .as_ref()
             .is_some_and(|(v, _)| *v == doc.version())
         {
-            self.git_gutter
+            self.editor
+                .git_gutter
                 .refreshed
                 .map_or(REFRESH, |t| REFRESH.saturating_sub(t.elapsed()))
         } else {
             DEBOUNCE
         };
         ctx.request_repaint_after(delay.max(Duration::from_millis(20)));
-        let Some(refresh) = self.git_gutter.due(now) else {
+        let Some(refresh) = self.editor.git_gutter.due(now) else {
             return;
         };
-        self.git_gutter.token = self.git_gutter.token.wrapping_add(1);
-        let token = self.git_gutter.token;
-        self.git_gutter.pending = Some(token);
-        self.git_gutter.busy.store(true, Ordering::Release);
-        let running = Running(self.git_gutter.busy.clone());
-        let cancel = self.git_gutter.cancel.clone();
-        let baseline = self.git_gutter.baseline.clone();
+        self.editor.git_gutter.token = self.editor.git_gutter.token.wrapping_add(1);
+        let token = self.editor.git_gutter.token;
+        self.editor.git_gutter.pending = Some(token);
+        self.editor.git_gutter.busy.store(true, Ordering::Release);
+        let running = Running(self.editor.git_gutter.busy.clone());
+        let cancel = self.editor.git_gutter.cancel.clone();
+        let baseline = self.editor.git_gutter.baseline.clone();
         let text = doc.text.clone();
         let version = doc.version();
         let workspace = self.workspace.as_ref().unwrap();
@@ -242,6 +247,7 @@ impl EditorApp {
         let plan = workspace.plan.clone();
         let vault_work = self.vaults.work();
         let replies = self.workers.workspace(ctx);
+        let viewport = self.documents.viewport();
         std::thread::spawn(move || {
             let _running = running;
             let _vault_work = vault_work;
@@ -283,13 +289,16 @@ impl EditorApp {
             }))
             .unwrap_or_default();
             if !cancel.load(Ordering::Acquire) {
-                let _ = replies.send(WorkspaceEvent::GitGutter(Completed {
-                    token,
-                    version,
-                    refreshed: refresh,
-                    baseline: result.0,
-                    changes: result.1,
-                }));
+                let _ = replies.send(WorkspaceEvent::GitGutter(
+                    viewport,
+                    Completed {
+                        token,
+                        version,
+                        refreshed: refresh,
+                        baseline: result.0,
+                        changes: result.1,
+                    },
+                ));
             }
         });
     }

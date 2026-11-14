@@ -324,7 +324,7 @@ impl EditorApp {
         view.kernel = Some(kernel);
         view.error.clear();
         self.documents.select_index(index);
-        self.focus_editor(ctx);
+        self.focus_document(self.documents[index].id, ctx);
         Ok(())
     }
     /// Create an unsaved metadata-preserving notebook document without starting Jupyter.

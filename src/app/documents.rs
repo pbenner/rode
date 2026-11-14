@@ -425,22 +425,26 @@ impl From<bool> for Retention {
     }
 }
 
-/// One structural owner for buffers. An empty collection uses index zero only as
-/// an inert display sentinel; active()/active_mut() return None until insertion.
+/// One structural owner for buffers, tab-group membership and selection. Indices
+/// locate shared storage; an editor without tabs has no active document.
 pub(super) struct Documents {
     items: Vec<Document>,
-    active: usize,
+    viewport: egui::ViewportId,
+    owners: HashMap<u64, egui::ViewportId>,
+    selected: HashMap<egui::ViewportId, u64>,
     next_id: u64,
-    opening: HashSet<String>,
+    opening: HashMap<String, egui::ViewportId>,
 }
 
 impl Default for Documents {
     fn default() -> Self {
         Self {
             items: Vec::new(),
-            active: 0,
+            viewport: egui::ViewportId::ROOT,
+            owners: HashMap::new(),
+            selected: HashMap::new(),
             next_id: 1,
-            opening: HashSet::new(),
+            opening: HashMap::new(),
         }
     }
 }
@@ -549,25 +553,94 @@ impl Documents {
             .is_some_and(|view| view.lifetime_pending())
     }
 
+    pub(super) fn viewport(&self) -> egui::ViewportId {
+        self.viewport
+    }
+    pub(super) fn set_viewport(&mut self, viewport: egui::ViewportId) {
+        self.viewport = viewport;
+    }
+    pub(super) fn owner(&self, id: u64) -> Option<egui::ViewportId> {
+        self.owners.get(&id).copied()
+    }
+    pub(super) fn in_viewport(&self, id: u64) -> bool {
+        self.owner(id) == Some(self.viewport)
+    }
+    fn selected_index_for(&self, viewport: egui::ViewportId) -> Option<usize> {
+        self.selected
+            .get(&viewport)
+            .and_then(|id| {
+                self.items
+                    .iter()
+                    .position(|doc| doc.id == *id && self.owner(doc.id) == Some(viewport))
+            })
+            .or_else(|| {
+                self.items
+                    .iter()
+                    .position(|doc| self.owner(doc.id) == Some(viewport))
+            })
+    }
+    /// Each tab group's selected preview remains visible independently of native focus.
+    pub(super) fn selected_ids(&self) -> HashSet<u64> {
+        self.owners
+            .values()
+            .copied()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .filter_map(|viewport| {
+                self.selected_index_for(viewport)
+                    .map(|index| self.items[index].id)
+            })
+            .collect()
+    }
     pub(super) fn active_index(&self) -> usize {
-        self.active
+        self.selected_index_for(self.viewport)
+            .unwrap_or(if self.items.is_empty() {
+                0
+            } else {
+                self.items.len()
+            })
     }
     pub(super) fn active(&self) -> Option<&Document> {
-        self.items.get(self.active)
+        self.items.get(self.active_index())
     }
     pub(super) fn active_mut(&mut self) -> Option<&mut Document> {
-        self.items.get_mut(self.active)
+        let index = self.active_index();
+        self.items.get_mut(index)
     }
     pub(super) fn selected_id(&self) -> Option<u64> {
         self.active().map(|doc| doc.id)
     }
-
+    /// Select in the document's existing host; callers decide whether to raise that host.
     pub(super) fn select_index(&mut self, index: usize) -> bool {
-        if index >= self.items.len() {
+        let Some(doc) = self.items.get(index) else {
             return false;
-        }
-        self.active = index;
+        };
+        self.selected.insert(self.owners[&doc.id], doc.id);
         true
+    }
+    /// Transfer the sole editor presentation without cloning the buffer or its save owner.
+    pub(super) fn move_to(&mut self, id: u64, viewport: egui::ViewportId) -> bool {
+        let Some(owner) = self.owners.get_mut(&id) else {
+            return false;
+        };
+        *owner = viewport;
+        self.selected.insert(viewport, id);
+        true
+    }
+    /// Closing a presentation returns buffers and pending reads to the main editor.
+    pub(super) fn reattach(&mut self, viewport: egui::ViewportId) {
+        let selected = self
+            .selected_index_for(viewport)
+            .map(|index| self.items[index].id);
+        self.selected.remove(&viewport);
+        for owner in self.owners.values_mut().chain(self.opening.values_mut()) {
+            if *owner == viewport {
+                *owner = egui::ViewportId::ROOT;
+            }
+        }
+        if let Some(id) = selected.filter(|id| self.owners.contains_key(id)) {
+            self.selected.insert(egui::ViewportId::ROOT, id);
+        }
     }
 
     fn allocate_id(&mut self) -> u64 {
@@ -581,7 +654,8 @@ impl Documents {
     pub(super) fn new_file(&mut self) -> u64 {
         let id = self.allocate_id();
         self.items.push(Document::untitled(id));
-        self.active = self.items.len() - 1;
+        self.owners.insert(id, self.viewport);
+        self.selected.insert(self.viewport, id);
         id
     }
 
@@ -598,30 +672,57 @@ impl Documents {
             .iter()
             .position(|doc| doc.path.as_deref() == Some(&response.path))
         {
-            self.active = index;
+            self.select_index(index);
             return self.items[index].id;
         }
         let id = self.allocate_id();
         self.items
             .push(Document::loaded(id, response, images, shutdowns));
-        self.active = self.items.len() - 1;
+        self.owners.insert(id, self.viewport);
+        self.selected.insert(self.viewport, id);
         id
     }
 
     pub(super) fn close(&mut self, id: u64) -> Option<Document> {
         let index = self.items.iter().position(|doc| doc.id == id)?;
+        let owner = self.owner(id)?;
         let doc = self.items.remove(index);
-        if self.active > index {
-            self.active -= 1;
+        self.owners.remove(&id);
+        if self.selected.get(&owner) == Some(&id) {
+            let next = self
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| self.owner(d.id) == Some(owner))
+                .find(|(i, _)| *i >= index)
+                .or_else(|| {
+                    self.items
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, d)| self.owner(d.id) == Some(owner))
+                })
+                .map(|(_, d)| d.id);
+            self.selected.remove(&owner);
+            if let Some(next) = next {
+                self.selected.insert(owner, next);
+            }
         }
-        self.active = self.active.min(self.items.len().saturating_sub(1));
         Some(doc)
     }
 
     pub(super) fn cycle(&mut self, direction: isize) {
-        if !self.items.is_empty() {
-            self.active =
-                (self.active as isize + direction).rem_euclid(self.items.len() as isize) as usize;
+        let indices: Vec<_> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, doc)| self.in_viewport(doc.id))
+            .map(|(i, _)| i)
+            .collect();
+        if let Some(index) = indices.iter().position(|i| *i == self.active_index()) {
+            self.select_index(
+                indices[(index as isize + direction).rem_euclid(indices.len() as isize) as usize],
+            );
         }
     }
 
@@ -633,21 +734,16 @@ impl Documents {
         let Some(from) = self.items.iter().position(|doc| doc.id == source) else {
             return false;
         };
-        let selected = self.selected_id();
         let document = self.items.remove(from);
         let target = self.items.iter().position(|doc| doc.id == target).unwrap();
         self.items.insert(target + usize::from(after), document);
-        self.active = self
-            .items
-            .iter()
-            .position(|doc| Some(doc.id) == selected)
-            .unwrap_or(0);
         true
     }
 
     pub(super) fn clear(&mut self) {
         self.items.clear();
-        self.active = 0;
+        self.owners.clear();
+        self.selected.clear();
         self.opening.clear();
     }
 
@@ -670,13 +766,17 @@ impl Documents {
     }
 
     pub(super) fn begin_open(&mut self, path: String) -> bool {
-        self.opening.insert(path)
+        if self.opening.contains_key(&path) {
+            return false;
+        }
+        self.opening.insert(path, self.viewport);
+        true
     }
-    pub(super) fn finish_open(&mut self, path: &str) {
-        self.opening.remove(path);
+    pub(super) fn finish_open(&mut self, path: &str) -> Option<egui::ViewportId> {
+        self.opening.remove(path)
     }
     pub(super) fn is_opening(&self, path: &str) -> bool {
-        self.opening.contains(path)
+        self.opening.contains_key(path)
     }
     pub(super) fn has_pending_opens(&self) -> bool {
         !self.opening.is_empty()

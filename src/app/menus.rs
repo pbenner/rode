@@ -114,7 +114,12 @@ impl EditorApp {
         self.menu_commands(
             ui,
             ctx,
-            &[Command::New, Command::NewNotebook, Command::MarpNew],
+            &[
+                Command::New,
+                Command::NewEditorWindow,
+                Command::NewNotebook,
+                Command::MarpNew,
+            ],
         );
         section(ui, "OPEN", false);
         self.menu_commands(

@@ -1154,8 +1154,11 @@ mod lifecycle_tests {
         );
         let original = terminal.contents();
         for theme in crate::theme::Theme::builtins() {
-            let palette = theme.palette;
-            assert_eq!(palette.terminal_minimum_contrast, 1.);
+            // This checks raw ANSI mapping; contrast rendering is covered separately.
+            let palette = Palette {
+                terminal_minimum_contrast: 1.,
+                ..theme.palette
+            };
             let output = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(

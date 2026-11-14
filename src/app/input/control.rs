@@ -107,7 +107,7 @@ impl Replay {
         }
     }
     pub fn replay(&mut self, ctx: &egui::Context, scope: Option<Scope>) {
-        // A detached tool window cannot consume or cancel the root editor's queue.
+        // A tool viewport cannot consume or cancel another editor's queue.
         if self.scope.is_some_and(|s| s.viewport != ctx.viewport_id()) {
             return;
         }
@@ -143,8 +143,11 @@ impl Router {
         context: Context,
         rules: navigation::InputRules<'_>,
     ) -> Frame {
-        let reset_prefix =
-            ctx.viewport_id() == egui::ViewportId::ROOT && self.queue.scope != context.source;
+        let reset_prefix = self
+            .queue
+            .scope
+            .is_none_or(|scope| scope.viewport == ctx.viewport_id())
+            && self.queue.scope != context.source;
         let rules = if reset_prefix {
             rules.without_prefix()
         } else {

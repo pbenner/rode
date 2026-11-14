@@ -79,7 +79,7 @@ fn editor(old: &str, current: &str) -> (Repo, EditorApp, egui::Context) {
         current.into(),
         "revision".into(),
     );
-    app.git_gutter.select(
+    app.editor.git_gutter.select(
         Key {
             id: doc.id,
             path: doc.path.clone().unwrap(),
@@ -87,8 +87,8 @@ fn editor(old: &str, current: &str) -> (Repo, EditorApp, egui::Context) {
         doc.version(),
         Instant::now(),
     );
-    app.git_gutter.baseline = repo.snapshot("source.rs", None).0;
-    app.git_gutter.rendered = Some((doc.version(), diff::compare(old, current).unwrap()));
+    app.editor.git_gutter.baseline = repo.snapshot("source.rs", None).0;
+    app.editor.git_gutter.rendered = Some((doc.version(), diff::compare(old, current).unwrap()));
     (repo, app, ctx)
 }
 
@@ -116,7 +116,11 @@ fn revert_is_a_native_undo_step_and_preserves_disk_saved_baseline_and_other_hunk
     let (repo, mut app, ctx) = editor("α\nold\nkeep\nlast\n", before);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
-    let request = app.git_gutter.revert_request(&app.documents[0], 0).unwrap();
+    let request = app
+        .editor
+        .git_gutter
+        .revert_request(&app.documents[0], 0)
+        .unwrap();
     let version = app.documents[0].version();
     app.revert_git_change(request, &ctx);
     assert_eq!(app.documents[0].text, after);
@@ -170,7 +174,11 @@ fn an_old_revert_cannot_modify_a_new_edit_path_document_or_baseline() {
         "reset",
     ] {
         let (repo, mut app, ctx) = editor("old\n", "new\n");
-        let request = app.git_gutter.revert_request(&app.documents[0], 0).unwrap();
+        let request = app
+            .editor
+            .git_gutter
+            .revert_request(&app.documents[0], 0)
+            .unwrap();
         match invalidation {
             "edit" => {
                 app.documents[0].fixture_content().text = "later edit\n".into();
@@ -184,14 +192,14 @@ fn an_old_revert_cannot_modify_a_new_edit_path_document_or_baseline() {
                 repo.write("source.rs", "latest commit\n");
                 repo.git(&["add", "."]);
                 repo.git(&["commit", "-qm", "New baseline"]);
-                app.git_gutter.baseline = repo.snapshot("source.rs", None).0;
-                app.git_gutter.rendered = Some((
+                app.editor.git_gutter.baseline = repo.snapshot("source.rs", None).0;
+                app.editor.git_gutter.rendered = Some((
                     app.documents[0].version(),
                     diff::compare("latest commit\n", "new\n").unwrap(),
                 ));
             }
-            "missing-baseline" => app.git_gutter.baseline = None,
-            "reset" => app.git_gutter.reset(),
+            "missing-baseline" => app.editor.git_gutter.baseline = None,
+            "reset" => app.editor.git_gutter.reset(),
             _ => unreachable!(),
         }
         let before = app.documents.active().unwrap().text.clone();

@@ -13,7 +13,9 @@ impl EditorApp {
     /// Render the active specialized or source document, retaining native edit/cursor/undo
     /// state and updating buffer versions only for accepted source changes.
     pub(super) fn editor(&mut self, ctx: &egui::Context) {
-        if !self.navigation.visible(navigation::Pane::Editor) {
+        if ctx.viewport_id() == egui::ViewportId::ROOT
+            && !self.navigation.visible(navigation::Pane::Editor)
+        {
             return;
         }
         if self.vaults.locking() {
@@ -36,12 +38,16 @@ impl EditorApp {
                 if ui.available_height() <= 1.0 {
                     return;
                 }
-                if self.documents.is_empty() {
-                    self.welcome(ui);
-                    return;
-                }
                 self.tab_strip(ui, ctx);
-                if self.documents.is_empty() {
+                if self.documents.active().is_none() {
+                    ui.label("No files in this editor window.");
+                    let new = ui.button("New file");
+                    ui_probe::button(ui, "editor-empty-new", &new);
+                    if new.clicked() { self.new_file(); self.focus_editor(ctx); }
+                    let open = ui.button("Open file…");
+                    ui_probe::button(ui, "editor-empty-open", &open);
+                    if open.clicked() { self.set_dialog(Dialog::Open); }
+                    if ctx.viewport_id() == egui::ViewportId::ROOT { self.welcome(ui); }
                     return;
                 }
                 let path = self.documents[self.documents.active_index()]
@@ -102,14 +108,14 @@ impl EditorApp {
                     return;
                 }
                 self.latex_toolbar(ui, ctx);
-                if self.show_find {
+                if self.editor.show_find {
                     self.find_bar(ui);
                 }
-                let peek_height = self.git_gutter.peek_height(self.documents.active().unwrap(), ui.available_height());
+                let peek_height = self.editor.git_gutter.peek_height(self.documents.active().unwrap(), ui.available_height());
                 let source_height = if peek_height > 0. { (ui.available_height() - peek_height).max(40.) } else { f32::INFINITY };
                 let queued_focus = self.take_editor_focus(ui, ctx);
                 let shortcut_style=self.navigation.bindings.style();
-                if shortcut_style!=navigation::Style::Standard {ui.label(palette.tag(self.input.label(shortcut_style)));}
+                if shortcut_style!=navigation::Style::Standard {ui.label(palette.tag(self.editor.input.label(shortcut_style)));}
                 let source_stale=self.debug_source_stale(self.documents.active().unwrap());
                 if source_stale {ui.colored_label(palette.accent,"Source changed since debugging started; execution locations may be stale. Restart debugging to use these changes.");}
                 let debug_line=self.debug_line().filter(|(p,_)|self.documents[self.documents.active_index()].path.as_deref()==Some(*p)).filter(|_|!source_stale).map(|(_,line)|line);
@@ -118,8 +124,8 @@ impl EditorApp {
                 let debug_verified=self.documents[self.documents.active_index()].path.as_ref().and_then(|p|self.debugger.client.as_ref().and_then(|c|c.breakpoints.get(p))).map_or(&[][..],Vec::as_slice);
                 let themes = &self.themes;
                 let diagnostics = self.document_issues(self.documents.active().unwrap());
-                let git_gutter = &self.git_gutter;
-                let input=&mut self.input;
+                let git_gutter = &self.editor.git_gutter;
+                let input=&mut self.editor.input;
                 let doc = self.documents.active_mut().unwrap();
                 input.bind_source(doc.id,shortcut_style);
                 let id = egui::Id::new(("document", doc.id));
@@ -367,19 +373,18 @@ impl EditorApp {
                             }
                         });
                     });
-                peek_action = self.git_gutter.peek_ui(ui, self.documents.active().unwrap(), palette, peek_height);
+                peek_action = self.editor.git_gutter.peek_ui(ui, self.documents.active().unwrap(), palette, peek_height);
             });
         if let Some(index) = change_clicked {
             if let Some(doc) = self.documents.active() {
-                peek_action = self.git_gutter.toggle_peek(doc, index);
+                peek_action = self.editor.git_gutter.toggle_peek(doc, index);
             }
             ctx.request_repaint();
         }
         match peek_action {
             Some(git_gutter::PeekAction::Navigate(row)) => {
                 if let Some(id) = self.documents.selected_id() {
-                    self.jump_to_issue(id, row, 1);
-                    self.focus_editor(ctx);
+                    self.jump_to_issue(id, row, 1, ctx);
                 }
             }
             Some(git_gutter::PeekAction::Close) => self.focus_editor(ctx),
@@ -408,23 +413,23 @@ impl EditorApp {
                         180.
                     };
                     let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.find)
+                        egui::TextEdit::singleline(&mut self.editor.find)
                             .hint_text("Find in file")
                             .desired_width(field_width),
                     );
-                    if self.find_focus {
+                    if self.editor.find_focus {
                         response.request_focus();
-                        self.find_focus = false;
+                        self.editor.find_focus = false;
                     }
                     ui_probe::button(ui, "source-find", &response);
-                    ui_probe::value(ui, "source-find-value", &response, &self.find);
+                    ui_probe::value(ui, "source-find-value", &response, &self.editor.find);
                     next = ui.button("Next ↓").clicked()
                         || ((response.has_focus() || response.lost_focus())
                             && ui.input(|i| i.key_pressed(Key::Enter)));
-                    ui.checkbox(&mut self.case_sensitive, "Aa");
+                    ui.checkbox(&mut self.editor.case_sensitive, "Aa");
                     if !compact {
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.replacement)
+                            egui::TextEdit::singleline(&mut self.editor.replacement)
                                 .hint_text("Replace with")
                                 .desired_width(140.),
                         );
@@ -437,13 +442,13 @@ impl EditorApp {
                         )
                         .clicked()
                     {
-                        self.show_find = false;
+                        self.editor.show_find = false;
                     }
                 });
                 if compact {
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.replacement)
+                            egui::TextEdit::singleline(&mut self.editor.replacement)
                                 .hint_text("Replace with")
                                 .desired_width((ui.available_width() - 108.).max(70.)),
                         );
@@ -451,15 +456,15 @@ impl EditorApp {
                     });
                 }
             });
-        if self.find.is_empty() {
+        if self.editor.find.is_empty() {
             return;
         }
         if replace && let Some(doc) = self.documents.active_mut() {
-            let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
+            let matches = find_matches(&doc.text, &self.editor.find, self.editor.case_sensitive);
             if !matches.is_empty() {
                 doc.edit_source(|source| {
                     for (start, end) in matches.iter().rev() {
-                        source.replace_range(*start..*end, &self.replacement);
+                        source.replace_range(*start..*end, &self.editor.replacement);
                     }
                 });
             }
@@ -471,7 +476,7 @@ impl EditorApp {
             });
         }
         if next && let Some(doc) = self.documents.active_mut() {
-            let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
+            let matches = find_matches(&doc.text, &self.editor.find, self.editor.case_sensitive);
             let cursor = egui::TextEdit::load_state(ui.ctx(), egui::Id::new(("document", doc.id)))
                 .and_then(|s| s.cursor.char_range())
                 .map(|r| r.primary.index)

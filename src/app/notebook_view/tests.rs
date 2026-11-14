@@ -330,9 +330,9 @@ fn enter_in_notebook_find_reveals_and_selects_a_matching_cell() {
         app.markdown_images.clone(),
         app.notebook_shutdowns.clone(),
     ));
-    app.show_find = true;
-    app.find = "counter = 40".into();
-    app.find_focus = true;
+    app.editor.show_find = true;
+    app.editor.find = "counter = 40".into();
+    app.editor.find_focus = true;
     let frame = |app: &mut EditorApp, events| {
         ctx.run(
             egui::RawInput {

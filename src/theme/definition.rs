@@ -15,6 +15,14 @@ pub(super) const MAX_THEME_BYTES: u64 = 64 * 1024;
 pub(super) const MAX_CUSTOM_THEMES: usize = 32;
 
 const EMBEDDED_THEMES: &[(&str, &str)] = &[
+    (
+        "atelier-dark",
+        include_str!("../../themes/atelier-dark.json"),
+    ),
+    (
+        "atelier-light",
+        include_str!("../../themes/atelier-light.json"),
+    ),
     ("carbon", include_str!("../../themes/carbon.json")),
     ("carbon-edge", include_str!("../../themes/carbon-edge.json")),
     ("code-dark", include_str!("../../themes/code-dark.json")),
@@ -44,6 +52,7 @@ const EMBEDDED_THEMES: &[(&str, &str)] = &[
 #[serde(deny_unknown_fields)]
 struct ThemeFile {
     name: String,
+    appearance: Option<Appearance>,
     #[serde(default = "default_base")]
     base: String,
     #[serde(default)]
@@ -54,6 +63,13 @@ struct ThemeFile {
     terminal: Option<TerminalSettings>,
     chrome: Option<Chrome>,
     ui: Option<interface::Overrides>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Appearance {
+    Dark,
+    Light,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +100,9 @@ impl ThemeFile {
         let mut theme = base.clone();
         theme.id = id.into();
         theme.name = name.into();
+        if let Some(appearance) = file.appearance {
+            theme.palette.dark_mode = matches!(appearance, Appearance::Dark);
+        }
         if let Some(chrome) = file.chrome {
             theme.palette.chrome = chrome;
         }

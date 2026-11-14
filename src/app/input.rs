@@ -52,14 +52,16 @@ impl DocumentShortcut {
 
 impl EditorApp {
     fn source_input_scope(&self, ctx: &egui::Context) -> Option<Scope> {
-        (ctx.viewport_id() == egui::ViewportId::ROOT && self.editing_allowed(ctx))
-            .then(|| {
-                self.documents
-                    .active_source()
-                    .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()))
-            })
-            .flatten()
-            .filter(|s| s.focused(ctx))
+        (self.editors.contains(ctx.viewport_id())
+            && self.documents.viewport() == ctx.viewport_id()
+            && self.editing_allowed(ctx))
+        .then(|| {
+            self.documents
+                .active_source()
+                .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()))
+        })
+        .flatten()
+        .filter(|s| s.focused(ctx))
     }
 
     fn input_context(&self, ctx: &egui::Context) -> Context {
@@ -112,8 +114,8 @@ impl EditorApp {
             self.consume_command(Command::Format, ctx);
             if !self.consume_command(Command::SaveAs, ctx) && Command::Save.consume(ctx) {
                 if self.navigation.bindings.style() == navigation::Style::Emacs {
-                    self.show_find = true;
-                    self.find_focus = true;
+                    self.editor.show_find = true;
+                    self.editor.find_focus = true;
                 } else {
                     self.execute_command(Command::Save, ctx);
                 }
@@ -143,22 +145,28 @@ impl EditorApp {
             }
             self.consume_command(Command::UiScaleReset, ctx);
         }
-        if !terminal_focus && self.show_find && consume(egui::Modifiers::NONE, Key::Escape) {
-            self.show_find = false;
+        if !terminal_focus && self.editor.show_find && consume(egui::Modifiers::NONE, Key::Escape) {
+            self.editor.show_find = false;
             self.focus_editor(ctx);
         }
     }
     /// One production entry point for source replay, navigation, editing and global commands.
     pub(super) fn route_input(&mut self, ctx: &egui::Context) {
+        self.navigation.bind_input(ctx);
         let context = self.input_context(ctx);
         let frame = self
+            .editor
             .input
             .begin(ctx, context, self.navigation.input_rules());
         if frame.resets_prefix() {
             self.navigation.cancel_input();
         }
         self.navigation_shortcuts(ctx);
-        if !self.input.accepts(ctx, &frame, self.input_context(ctx)) {
+        if !self
+            .editor
+            .input
+            .accepts(ctx, &frame, self.input_context(ctx))
+        {
             return;
         }
         if context.source.is_some()
@@ -179,29 +187,39 @@ impl EditorApp {
                 .then(|| self.documents.active_source())
                 .flatten()
                 .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()));
-            self.input.handoff(ctx, frame, next);
+            self.editor.input.handoff(ctx, frame, next);
             self.finish_input(ctx);
             return;
         }
-        if ctx.viewport_id() == egui::ViewportId::ROOT {
+        if self.editors.contains(ctx.viewport_id())
+            && self.documents.viewport() == ctx.viewport_id()
+        {
             self.editing_shortcuts(ctx);
         }
-        if !self.input.accepts(ctx, &frame, self.input_context(ctx)) {
+        if !self
+            .editor
+            .input
+            .accepts(ctx, &frame, self.input_context(ctx))
+        {
             return;
         }
         self.shortcuts(ctx);
-        if !self.input.accepts(ctx, &frame, self.input_context(ctx)) {
+        if !self
+            .editor
+            .input
+            .accepts(ctx, &frame, self.input_context(ctx))
+        {
             return;
         }
-        self.input.finish(frame);
+        self.editor.input.finish(frame);
         self.finish_input(ctx);
     }
 
     fn finish_input(&mut self, ctx: &egui::Context) {
-        if self.input.pending() {
+        if self.editor.input.pending() {
             ctx.request_repaint();
         }
-        if let Some(notice) = self.input.take_notice() {
+        if let Some(notice) = self.editor.input.take_notice() {
             self.notify(notice, true);
         }
     }
@@ -224,7 +242,7 @@ impl EditorApp {
     }
     /// Navigate the configured source search in either direction using character cursor offsets.
     pub(in crate::app) fn style_find_match(&mut self, reverse: bool, ctx: &egui::Context) {
-        if self.documents.active_source().is_none() || self.find.is_empty() {
+        if self.documents.active_source().is_none() || self.editor.find.is_empty() {
             return;
         }
         let Some(doc) = self.documents.active_mut() else {
@@ -233,7 +251,7 @@ impl EditorApp {
         let range = egui::TextEdit::load_state(ctx, egui::Id::new(("document", doc.id)))
             .and_then(|s| s.cursor.char_range())
             .unwrap_or_default();
-        let matches = find_matches(&doc.text, &self.find, self.case_sensitive);
+        let matches = find_matches(&doc.text, &self.editor.find, self.editor.case_sensitive);
         let point = if reverse {
             range.as_sorted_char_range().start
         } else {
@@ -275,7 +293,7 @@ impl EditorApp {
     /// Translate supported Standard/Emacs/Vim input into the existing source edit/undo path;
     /// modal barriers, terminal focus and unsupported document modes keep their normal input.
     pub(in crate::app) fn editing_shortcuts(&mut self, ctx: &egui::Context) {
-        let actions = self.input.translate_source(
+        let actions = self.editor.input.translate_source(
             ctx,
             self.documents.active_source(),
             self.navigation.bindings.style(),
@@ -284,7 +302,7 @@ impl EditorApp {
         for action in actions {
             self.navigate(action, ctx);
         }
-        if let Some(message) = self.input.take_notice() {
+        if let Some(message) = self.editor.input.take_notice() {
             self.notify(message, true);
         }
     }

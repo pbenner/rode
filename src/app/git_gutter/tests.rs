@@ -556,11 +556,11 @@ fn editor_markers_align_with_rendered_rows_throughout_long_files() {
             doc.fixture_content().text = source.clone();
             doc.sync_source_fixture();
             doc.fixture_content().path = Some("/project/source.rs".into());
-            app.git_gutter.key = Some(Key {
+            app.editor.git_gutter.key = Some(Key {
                 id: doc.id,
                 path: doc.path.clone().unwrap(),
             });
-            app.git_gutter.rendered = Some((
+            app.editor.git_gutter.rendered = Some((
                 doc.version(),
                 Changes {
                     markers: [0, 64, 199]
@@ -688,11 +688,11 @@ fn empty_source_keeps_line_one_and_its_deletion_marker_visible() {
         app.new_file();
         let doc = app.documents.active_mut().unwrap();
         doc.fixture_content().path = Some("/project/empty.rs".into());
-        app.git_gutter.key = Some(Key {
+        app.editor.git_gutter.key = Some(Key {
             id: doc.id,
             path: doc.path.clone().unwrap(),
         });
-        app.git_gutter.rendered = Some((
+        app.editor.git_gutter.rendered = Some((
             doc.version(),
             Changes {
                 markers: vec![Marker {

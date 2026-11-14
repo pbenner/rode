@@ -10,11 +10,40 @@ Filter the list by extension name or ID. The filter receives keyboard focus when
 
 ## Bundled features
 
-Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.
+Project bookmarks, Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.
 
 Disabling a feature preserves open documents and unsaved edits. Binary edits can still be saved while their view is disabled. Monitoring polls only while visible. Python environment discovery starts when a Python file or environment panel is used, rather than probing every opened project. New terminals still honor configured environments; disabling the Python module leaves existing terminals alone and omits its environment activation from new ones. Chat still starts a process only on Send; disabling it stops its process. Debug adapters start only on explicit launch/attach; disabling the debugger stops its session.
 
 Changing extensions/settings or the workspace cancels executable adapter jobs and rejects stale edits/diagnostics. Source saves already submitted by a user can complete with their original buffer if formatting was cancelled. Disabling a bundled module stops future activation; short built-in tool requests already running may finish, but their disabled/stale results are not applied. Runtime disabling does not remove compiled dependencies or promise a smaller executable.
+
+## Project bookmarks
+
+The bundled **Project bookmarks** extension (`rode.project-bookmarks`) adds a
+**Saved projects** section above the Explorer file tree. It is enabled by default.
+Use the bookmark icon in the Explorer header to save the current local or SSH
+project; the selected icon removes that bookmark. Open a saved project with one
+click, and right-click an entry to rename or remove it. The list is alphabetical
+and scrolls independently so it leaves room for project files.
+
+An entry retains the project location, requested sandbox settings and, for SSH,
+the connection configuration, including ProxyJump, configuration and identity-file
+paths. Reopening uses current saved project policy when available and runs the
+normal project preparation and unsaved-buffer guards. A matching live SSH
+connection is reused; another host goes through ordinary SSH authentication and
+host verification. Loading the list reads metadata only. Editor tabs and running
+processes keep their existing independent lifecycle.
+
+Bookmarks are desktop preferences under this extension's `projects` settings map.
+Individual records merge through the existing private, atomic preference writer,
+so separate editor processes can add different projects without replacing the
+whole list. A running instance keeps its own catalogue until changed or restarted,
+as with other extension preferences. Disable the extension to hide its controls
+while retaining saved projects. The library supports up to 128 entries within
+192 KiB; malformed records are preserved and reported rather than overwritten.
+
+Encrypted projects continue to use **Open encrypted project**; temporary decrypted
+mounts cannot be bookmarked. Bookmarking is available once ordinary local or SSH
+project preparation has finished.
 
 ## Installing a tool adapter
 

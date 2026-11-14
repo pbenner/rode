@@ -13,6 +13,7 @@ use eframe::egui::{
 /// Repository-native vector icon identity; glyphs render consistently without icon-font dependencies.
 pub(super) enum Icon {
     Files,
+    Bookmark,
     Search,
     Remote,
     Terminal,
@@ -63,6 +64,16 @@ impl Icon {
         };
         let c = &canvas;
         match self {
+            Self::Bookmark => {
+                c.path(&[
+                    [6., 3.],
+                    [18., 3.],
+                    [18., 21.],
+                    [12., 17.],
+                    [6., 21.],
+                    [6., 3.],
+                ]);
+            }
             Self::Debug => {
                 c.rect([7., 8., 17., 20.], 4.);
                 c.circle([12., 6.], 3.);

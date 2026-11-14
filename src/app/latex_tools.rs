@@ -225,7 +225,7 @@ impl EditorApp {
         {
             self.documents.select_index(index);
             self.reload_pdf(self.documents[index].id, ctx);
-            self.reveal_tab(self.documents[index].id);
+            self.focus_document(self.documents[index].id, ctx);
         } else {
             self.open_file(path, ctx);
         }
@@ -247,7 +247,7 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Latex)
             || !self
                 .documents
-                .get(self.documents.active_index())
+                .active()
                 .is_some_and(|doc| crate::latex::is_source(doc.path.as_deref()))
         {
             return;
@@ -297,8 +297,7 @@ impl EditorApp {
             {
                 let id = doc.id;
                 self.latex.pending_jump = None;
-                self.jump_to_issue(id, row, column);
-                self.focus_editor(ctx);
+                self.jump_to_issue(id, row, column, ctx);
             } else if !self.documents.is_opening(&path) {
                 self.latex.pending_jump = None;
             }

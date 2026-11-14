@@ -189,7 +189,7 @@ impl EditorApp {
         {
             self.documents.select_index(index);
             if self.documents[index].hex.is_some() {
-                self.focus_editor(ctx);
+                self.focus_document(self.documents[index].id, ctx);
                 return;
             }
             if self.documents[index].dirty() {
@@ -250,11 +250,7 @@ impl EditorApp {
     }
     /// Render the active hex/inspection view and apply explicit edit/save/reload actions.
     pub(super) fn hex_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        if self
-            .documents
-            .get(self.documents.active_index())
-            .is_none_or(|d| d.hex.is_none())
-        {
+        if self.documents.active().is_none_or(|d| d.hex.is_none()) {
             return false;
         }
         egui::Frame::new()
@@ -263,11 +259,7 @@ impl EditorApp {
             .inner
     }
     fn hex_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        if self
-            .documents
-            .get(self.documents.active_index())
-            .is_none_or(|d| d.hex.is_none())
-        {
+        if self.documents.active().is_none_or(|d| d.hex.is_none()) {
             return false;
         }
         let focus = self.take_editor_focus(ui, ctx).is_some();

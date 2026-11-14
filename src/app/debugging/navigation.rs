@@ -54,8 +54,7 @@ impl EditorApp {
             let version = self.debugger.source_version(doc);
             self.debugger.versions.entry(id).or_insert(version);
             self.debugger.pending_jump = None;
-            self.jump_to_issue(id, row, column);
-            self.focus_editor(ctx);
+            self.jump_to_issue(id, row, column, ctx);
         } else if target.requested {
             // The completed read failed. Preserve its normal I/O error; do not
             // retry every frame or substitute a desktop-local source path.

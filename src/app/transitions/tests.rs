@@ -127,7 +127,7 @@ fn a_nonmodal_quit_intent_preserves_input_on_both_sides_of_a_document_handoff() 
     );
     for _ in 0..8 {
         frame(&mut app, &ctx, vec![], None);
-        if !app.input.pending() {
+        if !app.editor.input.pending() {
             break;
         }
     }

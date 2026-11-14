@@ -1,10 +1,12 @@
 # Themes
 
 
-Click **Theme: …** at the bottom right, or choose **View → Color theme**. Fifteen built-in dark themes cover the interface and terminal, with matching syntax colors when **Follow UI theme** is selected:
+Click **Theme: …** at the bottom right, or choose **View → Color theme**. Seventeen built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
+| Atelier Dark | `atelier-dark` | Coordinated slate surfaces, pale blue accents, compact rounded controls and readable semantic syntax |
+| Atelier Light | `atelier-light` | Matching cool-white surfaces, cobalt accents, deep ink text and a complete light terminal palette |
 | Phosphor | `phosphor` | Original charcoal and soft green; the default |
 | Carbon | `carbon` | Near-black, neutral panels, amber accents, teal keywords; inspired by the reference screenshot |
 | Carbon Edge | `carbon-edge` | Carbon’s interface, syntax and terminal colours with amber cut-corner frames and static glow |
@@ -23,13 +25,13 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Fi
 
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, or One Half Dark code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
-Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a lighter matching **Bright white**. Carbon and Carbon Edge use warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio cool blue, Studio Neutral silver-blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
+Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in Atelier Light). Carbon and Carbon Edge use warm-neutral prompt accents, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier cool blue, Studio Neutral silver-blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
 Bash prompt colors come from `PS1` in the shell's own configuration. RODE honors bold ANSI foreground colors using the theme's bright variants: `\e[1;30m` uses bright black and `\e[1;34m` uses bright blue. Existing prompts therefore follow the selected terminal palette without editing `.bashrc`; see [prompt rendering](terminals.md#bash-prompts-and-colors).
 
 Choose **View → Terminal colors…**, or **Terminal: Colors and contrast** in the command palette, to adjust the terminal foreground, background and 16 ANSI colors. Settings are saved immediately, separately for each interface theme. **Reset to theme defaults** removes that theme's overrides.
 
-**Minimum text contrast** is optional and defaults to **1:1** (off), preserving shell colors. Increase it, for example to **4.5:1**, if you want additional readability protection for terminal text, including 256-color and explicit RGB text. Correction changes only rendered text, against each cell's actual background; backgrounds, Powerline separators and box/block graphics keep their colors. A requested ratio may be impossible against a midtone background; RODE then uses the most readable black/white foreground. These settings apply to all terminal text, including local, SSH, debugger and retained error views, without changing shell configuration or restarting commands. Custom themes can set their own contrast default in the [theme format](../themes/README.md).
+**Minimum text contrast** is optional. Atelier defaults to **4.5:1**; the other built-in themes use **1:1** (off), preserving shell colors. Increase it, for example to **4.5:1**, if you want additional readability protection for terminal text, including 256-color and explicit RGB text. Correction changes only rendered text, against each cell's actual background; backgrounds, Powerline separators and box/block graphics keep their colors. A requested ratio may be impossible against a midtone background; RODE then uses the most readable black/white foreground. These settings apply to all terminal text, including local, SSH, debugger and retained error views, without changing shell configuration or restarting commands. Custom themes can set their own contrast default in the [theme format](../themes/README.md).
 
 Navigation, command menus, and toolbar controls share a theme-aware outline icon style. Icon-only controls show descriptive tooltips; menus retain text labels and aligned keyboard shortcuts. Icons are drawn directly in Rust without an icon font or additional runtime dependencies.
 
@@ -38,6 +40,8 @@ Empty input fields show examples and default behaviour in the theme's muted text
 The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber**, and the other built-in/custom choices. Changes apply immediately without restarting the session. An independently selected syntax theme keeps its code colors. UI selections are flushed to local preferences as soon as they change and restored on startup; closing the application is not required to save them. On Linux the preference file is `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`.
 
 ```sh
+./target/release/rode . --theme atelier-dark
+./target/release/rode . --theme atelier-light
 ./target/release/rode . --theme carbon
 ./target/release/rode . --theme carbon-edge
 ./target/release/rode . --theme code-dark
@@ -49,6 +53,28 @@ The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber*
 ./target/release/rode . --theme studio-neutral
 ./target/release/rode . --theme studio-hacker
 ```
+
+**Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
+Both share compact 28-point controls, restrained corner radii, proportional UI
+labels, quiet separators and stronger control/focus outlines. The dark palette
+uses slate surfaces and pale blue emphasis; the light palette uses cool-white
+surfaces, deep ink text and cobalt emphasis. Each includes its own syntax, Git
+status and ANSI terminal colors. Choose **Follow UI theme** under Syntax
+highlighting for the matching code palette; explicitly selected independent
+syntax themes retain their own colors.
+
+Atelier Light selects native light widget defaults for tooltips, menus, inputs
+and Markdown rendering. Enabled controls in both palettes retain measured 7:1
+primary-text and 4.5:1 secondary-text contrast across normal, hover, pressed,
+focused and open states. Syntax text also reaches 4.5:1 against the editor and selection fills, and terminal text defaults to the
+existing 4.5:1 minimum-contrast rendering option. Bright ANSI colors retain at
+least 4.5:1 against the default terminal background.
+
+Native RODE captures with a demo Rust workspace:
+
+| Atelier Dark | Atelier Light |
+| --- | --- |
+| ![Atelier Dark native editor](../assets/atelier-dark.png) | ![Atelier Light native editor](../assets/atelier-light.png) |
 
 Studio is designed for everyday work: graphite surface layers, quiet borders, proportional interface labels and a restrained blue-violet accent. Shared component settings coordinate control heights, corner radii, card padding and heading sizes. Control outlines use a dedicated color, separate from quiet panel dividers. Keyboard focus uses a stronger outline on inputs, chat composers and buttons, including filled primary actions. Secondary text stays readable on hover, pressed and open surfaces; disabled controls are subdued, and soft shadows distinguish menus and dialogs. Code and terminal fonts keep their separate size preference. Select **Follow UI theme** for its matching syntax palette. Studio is an optional preset; Phosphor remains the default.
 

@@ -1,0 +1,61 @@
+{
+  "name": "Atelier Light",
+  "base": "atelier-dark",
+  "appearance": "light",
+  "chrome": "plain",
+  "colors": {
+    "background": "#FBFCFE",
+    "panel": "#F1F4F8",
+    "raised": "#E8EDF4",
+    "border": "#CAD3E0",
+    "control_border": "#74849D",
+    "text": "#263244",
+    "muted": "#4D5C70",
+    "accent": "#244FAE",
+    "frame_accent": "#244FAE",
+    "heading": "#142338",
+    "success": "#24703E",
+    "error": "#AF3045",
+    "selection": "#CEDDF6",
+    "hover": "#DDE6F2",
+    "active": "#D2DFF2",
+    "gutter": "#626F84",
+    "terminal_background": "#F6F8FC",
+    "terminal_foreground": "#263244"
+  },
+  "syntax": {
+    "comment": "#4D5C70",
+    "keyword": "#7242A0",
+    "type": "#1E6978",
+    "function": "#2855B8",
+    "string": "#316B45",
+    "number": "#875317",
+    "constant": "#934064",
+    "variable": "#263244",
+    "operator": "#43556F",
+    "punctuation": "#4D5C70",
+    "builtin": "#20695F",
+    "attribute": "#755193"
+  },
+  "ansi": [
+    "#344155",
+    "#A72D3F",
+    "#256B3D",
+    "#855D13",
+    "#2855B8",
+    "#7949A3",
+    "#1E6976",
+    "#263244",
+    "#5F6E84",
+    "#B32E46",
+    "#1F7444",
+    "#8C600D",
+    "#1F57CB",
+    "#8245B4",
+    "#176E82",
+    "#172334"
+  ],
+  "terminal": {
+    "minimum_contrast": 4.5
+  }
+}
