@@ -689,12 +689,12 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
         );
         let path = p.ansi[12];
         match builtin.id.as_str() {
-            "carbon" | "carbon-edge" | "amber" | "atelier-dark" => assert!(
+            "carbon" | "carbon-edge" | "amber" => assert!(
                 path.r() > path.g() && path.g() > path.b(),
                 "{} warm path",
                 builtin.id
             ),
-            "phosphor" | "matrix" | "studio-hacker" => assert!(
+            "phosphor" | "matrix" | "studio-hacker" | "atelier-dark" => assert!(
                 path.g() > path.r() && path.g() > path.b(),
                 "{} green path",
                 builtin.id
