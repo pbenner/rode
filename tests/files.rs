@@ -242,6 +242,25 @@ fn terminal_keys_keep_shell_control_sequences() {
         key_bytes(Key::Tab, Modifiers::SHIFT, false),
         Some(b"\x1b[Z".to_vec())
     );
+    for app_cursor in [false, true] {
+        for (modifiers, parameter) in [
+            (Modifiers::CTRL, 5),
+            (Modifiers::CTRL | Modifiers::SHIFT, 6),
+            (Modifiers::CTRL | Modifiers::ALT, 7),
+            (Modifiers::CTRL | Modifiers::ALT | Modifiers::SHIFT, 8),
+        ] {
+            for (key, direction) in [(Key::ArrowLeft, 'D'), (Key::ArrowRight, 'C')] {
+                assert_eq!(
+                    key_bytes(key, modifiers, app_cursor),
+                    Some(format!("\x1b[1;{parameter}{direction}").into_bytes())
+                );
+            }
+        }
+        assert_eq!(
+            key_bytes(Key::ArrowLeft, Modifiers::NONE, app_cursor),
+            Some(if app_cursor { b"\x1bOD" } else { b"\x1b[D" }.to_vec())
+        );
+    }
 }
 
 #[test]

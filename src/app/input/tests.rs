@@ -221,6 +221,64 @@ fn save_after_batched_source_edits_uses_the_text_applied_by_the_native_editor() 
 }
 
 #[test]
+fn markdown_return_undo_and_save_preserve_native_input_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("README.md");
+    let original = "# Original\n";
+    std::fs::write(&path, original).unwrap();
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_file();
+    app.documents[0].fixture_content().text = original.into();
+    app.documents[0].acknowledge_save(
+        path.to_string_lossy().into(),
+        original.into(),
+        files::digest(original.as_bytes()),
+    );
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![egui::Event::Text("changed ".into())]);
+    let changed = app.documents[0].text.clone();
+    assert_ne!(changed, original);
+    // Simulate the acknowledged save made while previewing the edited source.
+    std::fs::write(&path, &changed).unwrap();
+    app.documents[0].acknowledge_save(
+        path.to_string_lossy().into(),
+        changed.clone(),
+        files::digest(changed.as_bytes()),
+    );
+    app.toggle_markdown(&ctx);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.documents[0].markdown.as_ref().unwrap().showing);
+    frame(
+        &mut app,
+        &ctx,
+        vec![
+            key(Key::R, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+            key(Key::Z, egui::Modifiers::COMMAND),
+            key(Key::S, egui::Modifiers::COMMAND),
+        ],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.editor.input.pending() || app.documents[0].saving {
+        frame(&mut app, &ctx, vec![]);
+        assert!(Instant::now() < deadline, "Preview return/save stalled");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!app.documents[0].markdown.as_ref().unwrap().showing);
+    assert_eq!(
+        app.documents[0].text, original,
+        "Undo must retain its history"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "Save must follow the native undo, including when returning from preview"
+    );
+}
+
+#[test]
 fn a_style_change_cancels_an_incomplete_prefix_instead_of_consuming_new_source_text() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());

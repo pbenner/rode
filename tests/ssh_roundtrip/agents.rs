@@ -498,12 +498,15 @@ pub(super) fn agent_roundtrip(remote: &Remote, plan: &rode::sandbox::Plan) {
             .unwrap();
         let field = if provider.is_acp() { "prompt" } else { "input" };
         assert_eq!(prompt["params"][field][0]["text"], "remote");
-        assert!(
-            prompt["params"][field][1]["text"]
-                .as_str()
-                .unwrap()
-                .contains("jackson_lamb")
-        );
+        let style = if provider.is_acp() {
+            &prompt["params"][field][1]["text"]
+        } else {
+            assert_eq!(prompt["params"][field].as_array().unwrap().len(), 1);
+            let context = &prompt["params"]["additionalContext"]["rode_response_personality"];
+            assert_eq!(context["kind"], "application");
+            &context["value"]
+        };
+        assert!(style.as_str().unwrap().contains("jackson_lamb"));
         let scope: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(root.join("agent-scope.json")).unwrap())
                 .unwrap();

@@ -31,6 +31,7 @@ enum DocumentShortcut {
     Cycle(isize),
     New,
     Close,
+    MarkdownSource,
 }
 impl DocumentShortcut {
     /// These commands establish a new source destination before translating later input.
@@ -51,6 +52,47 @@ impl DocumentShortcut {
 }
 
 impl EditorApp {
+    /// Returning from a preview establishes a source destination before later
+    /// keys in the same native batch. Do not move this command ahead of earlier
+    /// input, or admit it through modal, terminal or other-viewport barriers.
+    fn markdown_source_shortcut(&self, ctx: &egui::Context) -> bool {
+        if !self.editors.contains(ctx.viewport_id())
+            || self.documents.viewport() != ctx.viewport_id()
+            || !self.editing_allowed(ctx)
+            || Terminal::focused(ctx)
+            || !self.documents.active().is_some_and(|doc| {
+                doc.markdown.as_ref().is_some_and(|preview| preview.showing)
+                    || doc.marp.as_ref().is_some_and(|preview| preview.showing)
+            })
+        {
+            return false;
+        }
+        let shortcut = Command::Markdown.shortcut().unwrap();
+        ctx.input_mut(|input| {
+            let Some(index) = input.events.iter().position(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                        | egui::Event::Cut
+                        | egui::Event::Copy
+                        | egui::Event::Ime(_)
+                )
+            }) else {
+                return false;
+            };
+            if matches!(&input.events[index], egui::Event::Key { key, modifiers, .. }
+                if *key == shortcut.logical_key && modifiers.matches_logically(shortcut.modifiers))
+            {
+                input.events.remove(index);
+                true
+            } else {
+                false
+            }
+        })
+    }
+
     fn source_input_scope(&self, ctx: &egui::Context) -> Option<Scope> {
         (self.editors.contains(ctx.viewport_id())
             && self.documents.viewport() == ctx.viewport_id()
@@ -172,9 +214,13 @@ impl EditorApp {
         {
             return;
         }
-        if context.source.is_some()
-            && let Some(command) = DocumentShortcut::take(ctx, self.navigation.bindings.style())
-        {
+        let document_command = if context.source.is_some() {
+            DocumentShortcut::take(ctx, self.navigation.bindings.style())
+        } else {
+            self.markdown_source_shortcut(ctx)
+                .then_some(DocumentShortcut::MarkdownSource)
+        };
+        if let Some(command) = document_command {
             // Earlier source operations have already crossed the native edit
             // boundary. Input after this explicit document command belongs to its target;
             // translate it only after that editor has established focus/cursor state.
@@ -184,6 +230,7 @@ impl EditorApp {
                 DocumentShortcut::Close => {
                     self.guarded_source_close(&frame, ctx);
                 }
+                DocumentShortcut::MarkdownSource => self.toggle_markdown(ctx),
             }
             let next = self
                 .editing_allowed(ctx)

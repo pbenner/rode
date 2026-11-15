@@ -944,6 +944,13 @@ impl Drop for Terminal {
 /// Encode shell keys, including application-cursor mode and control modifiers;
 /// unsupported/editor-only keys return `None`.
 pub fn key_bytes(key: Key, modifiers: egui::Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
+    if modifiers.ctrl && matches!(key, Key::ArrowLeft | Key::ArrowRight) {
+        // Modified cursor keys use xterm CSI parameters even in application
+        // cursor mode. Passing a plain arrow loses readline's word movement.
+        let modifier = 5 + u8::from(modifiers.shift) + 2 * u8::from(modifiers.alt);
+        let direction = if key == Key::ArrowLeft { 'D' } else { 'C' };
+        return Some(format!("\x1b[1;{modifier}{direction}").into_bytes());
+    }
     if modifiers.ctrl && !modifiers.alt && !modifiers.shift {
         if key == Key::Space {
             return Some(vec![0]);

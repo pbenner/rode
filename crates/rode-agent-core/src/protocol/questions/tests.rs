@@ -216,11 +216,10 @@ fn idle_answers_start_a_turn_under_the_original_access_and_style() {
                 "restricted"
             );
         }
-        assert!(
-            request["params"]["input"]
-                .to_string()
-                .contains("jackson_lamb")
-        );
+        assert_eq!(request["params"]["input"].as_array().unwrap().len(), 1);
+        let style = &request["params"]["additionalContext"]["rode_response_personality"];
+        assert_eq!(style["kind"], "application");
+        assert!(style["value"].as_str().unwrap().contains("jackson_lamb"));
         chat.receive(json!({"id":request["id"],"result":{"turn":{"id":"answer-turn"}}}))
             .unwrap();
         assert_eq!(chat.turn, "answer-turn");

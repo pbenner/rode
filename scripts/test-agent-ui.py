@@ -543,7 +543,10 @@ with fixture_directory(prefix="rode-agent-ui-") as base:
             send(root, "second")
             styled = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert styled["params"]["input"][0]["text"] == "second"
-            assert 'name="panne"' in styled["params"]["input"][1]["text"]
+            assert len(styled["params"]["input"]) == 1
+            tone = styled["params"]["additionalContext"]["rode_response_personality"]
+            assert tone["kind"] == "application"
+            assert 'name="panne"' in tone["value"]
             assert sum(m.get("method") == "initialize" for m in rpc(root)) == 2
             # Recall is local editing. Assert each transition through the real
             # clipboard instead of assuming several X11 keys rendered separately.
@@ -625,7 +628,10 @@ with fixture_directory(prefix="rode-agent-ui-") as base:
             send(root, "approve", idle=False)
             selected_turn = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
             assert selected_turn["params"]["effort"] == "high"
-            assert selected_turn["params"]["input"][1] == styled["params"]["input"][1]
+            assert (
+                selected_turn["params"]["additionalContext"]
+                == styled["params"]["additionalContext"]
+            )
             assert not (root / "approved.txt").exists()
             control("agent-permission-choice-0")
             screenshot(window, "permission.png")
@@ -634,7 +640,7 @@ with fixture_directory(prefix="rode-agent-ui-") as base:
             control("agent-idle")
             send(root, "wait", idle=False)
             follow_up = next(m for m in reversed(rpc(root)) if m.get("method") == "turn/start")
-            assert follow_up["params"]["input"][1] == styled["params"]["input"][1]
+            assert follow_up["params"]["additionalContext"] == styled["params"]["additionalContext"]
             wait_for(lambda: (root / "agent-child.pid").exists(), "Long task did not start")
 
             def new_chat_state():

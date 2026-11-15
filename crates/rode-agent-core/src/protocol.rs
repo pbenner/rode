@@ -675,15 +675,30 @@ impl Chat {
         for attachment in attachments {
             input.extend(attachment.blocks(self.config.provider.is_acp()));
         }
-        if let Some(hint) = self.config.personality.hint(self.response_style_context) {
-            input.push(json!({"type":"text","text":format!("\n\n{hint}")}));
-            self.response_style_context = true;
+        if self.config.provider.is_acp() {
+            // Compatibility fallback: this client does not yet negotiate ACP's
+            // optional session systemPrompt support. Keep the user-role reminder
+            // separate from the original task and attachment blocks.
+            if let Some(hint) = self.config.personality.hint(self.response_style_context) {
+                input.push(json!({"type":"text","text":format!("\n\n{hint}")}));
+                self.response_style_context = true;
+            }
         }
         input
     }
 
     fn codex_turn(&mut self, input: Vec<Value>, call: Call) -> Result<()> {
         let mut params = json!({"threadId":self.conversation,"input":input});
+        if let Some(hint) = self.config.personality.hint(self.response_style_context) {
+            // Codex delivers application context as developer instructions.
+            // User-message hints alone compete with the backend's own voice.
+            // Use one stable source so follow-ups replace the current style;
+            // only built-in prompts belong here, never user or project text.
+            params["additionalContext"] = json!({
+                "rode_response_personality":{"kind":"application","value":hint}
+            });
+            self.response_style_context = true;
+        }
         params["approvalPolicy"] = if self.read_only {
             "never"
         } else {

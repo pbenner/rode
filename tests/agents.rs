@@ -84,7 +84,7 @@ fn log(root: &Path) -> Vec<Value> {
 }
 
 #[test]
-fn personalities_change_only_reply_hints_without_restarting_or_changing_permissions() {
+fn personalities_use_reply_context_without_restarting_or_changing_permissions() {
     for personality in Personality::ALL
         .into_iter()
         .filter(|style| *style != Personality::Default)
@@ -94,6 +94,17 @@ fn personalities_change_only_reply_hints_without_restarting_or_changing_permissi
 }
 
 fn check_reply_personality(personality: Personality) {
+    fn style(call: &Value, provider: Provider) -> &Value {
+        if provider.is_acp() {
+            &call["params"]["prompt"][1]["text"]
+        } else {
+            assert_eq!(
+                call["params"]["additionalContext"]["rode_response_personality"]["kind"],
+                "application"
+            );
+            &call["params"]["additionalContext"]["rode_response_personality"]["value"]
+        }
+    }
     for provider in Provider::ALL {
         for isolated in [false, true] {
             let (_temp, root, program) = fixture();
@@ -115,6 +126,7 @@ fn check_reply_personality(personality: Personality) {
                 1,
                 "Fresh Default is unmodified"
             );
+            assert!(first["params"].get("additionalContext").is_none());
 
             launch.config.personality = personality;
             assert!(original.same_process(&launch.config));
@@ -133,7 +145,11 @@ fn check_reply_personality(personality: Personality) {
                 .find(|v| v["method"] == first["method"])
                 .unwrap();
             assert_eq!(styled["params"][field][0]["text"], "approve");
-            let hint = styled["params"][field][1]["text"].as_str().unwrap();
+            assert_eq!(
+                styled["params"][field].as_array().unwrap().len(),
+                if provider.is_acp() { 2 } else { 1 }
+            );
+            let hint = style(styled, provider).as_str().unwrap();
             assert!(hint.contains(&format!("name=\"{}\"", personality.id())));
             assert!(!hint.contains("version="));
             if personality == Personality::JacksonLamb {
@@ -156,8 +172,11 @@ fn check_reply_personality(personality: Personality) {
             }
             assert!(
                 styled["params"].get("personality").is_none(),
-                "Do not alter a vendor operating-mode selector"
+                "Preserve the backend's own configured tone for Default"
             );
+            if provider.is_acp() {
+                assert!(styled["params"].get("additionalContext").is_none());
+            }
             for (index, message) in ["continue", "one more follow-up"].iter().enumerate() {
                 submit(&mut chat, launch.clone(), message);
                 wait(&mut chat, |c| c.completed == 3 + index as u64);
@@ -168,8 +187,11 @@ fn check_reply_personality(personality: Personality) {
                     .find(|v| v["method"] == first["method"])
                     .unwrap();
                 assert_eq!(follow_up["params"][field][0]["text"], *message);
-                assert_eq!(follow_up["params"][field].as_array().unwrap().len(), 2);
-                assert_eq!(follow_up["params"][field][1]["text"], hint);
+                assert_eq!(
+                    follow_up["params"][field].as_array().unwrap().len(),
+                    if provider.is_acp() { 2 } else { 1 }
+                );
+                assert_eq!(style(follow_up, provider), hint);
                 for key in [
                     "model",
                     "effort",
@@ -194,7 +216,7 @@ fn check_reply_personality(personality: Personality) {
                 .find(|v| v["method"] == first["method"])
                 .unwrap();
             assert!(
-                reset["params"][field][1]["text"]
+                style(reset, provider)
                     .as_str()
                     .unwrap()
                     .contains("name=\"default\"")
@@ -227,6 +249,7 @@ fn check_reply_personality(personality: Personality) {
                 .find(|v| v["method"] == first["method"])
                 .unwrap();
             assert_eq!(fresh["params"][field].as_array().unwrap().len(), 1);
+            assert!(fresh["params"].get("additionalContext").is_none());
         }
     }
 }

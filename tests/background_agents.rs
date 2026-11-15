@@ -1768,7 +1768,25 @@ fn queued_prompts_dispatch_without_any_desktop_view_and_keep_captured_files_and_
                 .to_string()
                 .contains("Immutable detached snapshot λ")
         );
-        assert!(calls[1].to_string().contains("panne"));
+        if provider.is_acp() {
+            assert!(calls[1].to_string().contains("panne"));
+            assert!(calls[2].to_string().contains("panne"));
+        } else {
+            let requests: Vec<serde_json::Value> =
+                fs::read_to_string(fixture.root.join("backend-rpc.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                    .filter(|request| request["method"] == "turn/start")
+                    .collect();
+            assert_eq!(requests.len(), 3);
+            assert!(requests[0]["params"].get("additionalContext").is_none());
+            for request in &requests[1..] {
+                let style = &request["params"]["additionalContext"]["rode_response_personality"];
+                assert_eq!(style["kind"], "application");
+                assert!(style["value"].as_str().unwrap().contains("name=\"panne\""));
+            }
+        }
         view.send(Action::End);
         view.until(|s| !s.info.alive);
     }

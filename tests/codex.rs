@@ -200,14 +200,18 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
                 .join("\n")
         );
     }
-    fn check_latest_prompt(directory: &std::path::Path, task: &str) {
+    fn check_latest_prompt(
+        directory: &std::path::Path,
+        task: &str,
+        style: rode::agent::Personality,
+    ) {
         let request: Value =
             serde_json::from_str(&fs::read_to_string(directory.join("request.json")).unwrap())
                 .unwrap();
         assert_eq!(request["model"], "fixture-local-model");
         assert_eq!(request["stream"], true);
-        // Looking anywhere in history could pass with only the first turn's
-        // hint. Check the most recent user input that actually reaches a model.
+        // Verify the model-bound role, not just delivery of a user-text hint.
+        // The original task must stay intact, separate from application policy.
         let latest = request["input"]
             .as_array()
             .unwrap()
@@ -222,10 +226,20 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
             .filter_map(|v| v["text"].as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains(task), "{latest}");
-        assert!(text.contains("name=\"jackson_lamb\""), "{latest}");
-        assert!(!text.contains("<rode_response_style version="), "{latest}");
-        assert_eq!(text.matches("<rode_response_style ").count(), 1, "{latest}");
+        assert_eq!(text, task, "{latest}");
+        let hint = request["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .filter(|v| v["role"] == "developer")
+            .flat_map(|v| v["content"].as_array().unwrap())
+            .filter_map(|v| v["text"].as_str())
+            .find(|text| text.contains("<rode_response_personality>"))
+            .expect("RODE tone must reach the model as application instructions");
+        assert!(hint.contains(&format!("name=\"{}\"", style.id())), "{hint}");
+        assert!(!hint.contains("<rode_response_style version="), "{hint}");
+        assert_eq!(hint.matches("<rode_response_style ").count(), 1, "{hint}");
     }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
@@ -328,7 +342,11 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
             .iter()
             .any(|m| m.role == Role::Assistant && m.text == "Local Responses fixture reply.")
     );
-    check_latest_prompt(temp.path(), "Reply once without tools.");
+    check_latest_prompt(
+        temp.path(),
+        "Reply once without tools.",
+        launch.config.personality,
+    );
     for task in [
         "Continue without tools.",
         "One more follow-up without tools.",
@@ -336,7 +354,7 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
         chat.submit(launch.clone(), task.into(), Arc::new(|| {}))
             .unwrap();
         finish_turn(&mut chat);
-        check_latest_prompt(temp.path(), task);
+        check_latest_prompt(temp.path(), task, launch.config.personality);
     }
     // A second read-only connection can recover old prompts even while this
     // process owns the live thread. It must not resume it or call the model.
@@ -374,6 +392,31 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
         before,
         "Reading recall history called the model"
     );
+    // Changing or resetting the style must replace the latest application
+    // context on the same thread, without replacing Codex's base instructions.
+    let original_request: Value = serde_json::from_slice(&before).unwrap();
+    let thread = chat.conversation_id().unwrap().to_owned();
+    for (style, task) in [
+        (
+            rode::agent::Personality::Panne,
+            "Switch the response voice.",
+        ),
+        (rode::agent::Personality::Default, "Use the normal voice."),
+        (
+            rode::agent::Personality::JacksonLamb,
+            "Return to the earlier voice.",
+        ),
+    ] {
+        let mut styled = launch.clone();
+        styled.config.personality = style;
+        chat.submit(styled, task.into(), Arc::new(|| {})).unwrap();
+        finish_turn(&mut chat);
+        assert_eq!(chat.conversation_id(), Some(thread.as_str()));
+        check_latest_prompt(temp.path(), task, style);
+        let request: Value =
+            serde_json::from_slice(&fs::read(temp.path().join("request.json")).unwrap()).unwrap();
+        assert_eq!(request["instructions"], original_request["instructions"]);
+    }
     fs::write(temp.path().join("tool-mode"), "run one tool").unwrap();
     chat.submit(
         launch.clone(),
@@ -606,9 +649,10 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
             .collect::<Vec<_>>()
     );
     let task = "Continue the restored conversation without tools.";
+    let style = launch.config.personality;
     restored
         .submit(launch, task.into(), Arc::new(|| {}))
         .unwrap();
     finish_turn(&mut restored);
-    check_latest_prompt(temp.path(), task);
+    check_latest_prompt(temp.path(), task, style);
 }

@@ -2,10 +2,13 @@
 //!
 //! # Design decisions
 //! Keep these hints separate from executable arguments, tool policies and agent
-//! operating modes. Each styled turn carries one extra text block; no second
-//! model request rewrites a response. The original task stays in its own block
-//! and in the displayed transcript. Default sends no hint in a fresh chat, and
-//! explicitly resets tone after a styled/restored conversation. Models may
+//! operating modes. Each styled Codex turn carries named application context,
+//! delivered as developer instructions; ACP currently uses a separate user-text
+//! block without negotiating optional session systemPrompt support. Only these
+//! built-in prompts may enter the trusted context, never user or project text.
+//! No second model request rewrites a response. The original task stays in its
+//! own block and in the displayed transcript. Default sends no hint in a fresh
+//! chat, and explicitly resets tone after a styled/restored conversation. Models may
 //! interpret style differently; this is guidance, not an execution control.
 //! Renew the voice for progress and final replies on every follow-up, rather
 //! than relying on a first-turn instruction surviving the backend's context.

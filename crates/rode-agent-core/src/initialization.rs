@@ -26,7 +26,12 @@ pub(crate) fn parameters(provider: Provider, role: Role) -> Value {
                 "terminal":false,"session":{"configOptions":{"boolean":true}}}})
     } else {
         let mut params = json!({"clientInfo":client});
-        if matches!(role, Role::Conversation | Role::PromptHistory) {
+        // A history connection can become the live conversation after resume,
+        // so it must also negotiate per-turn application context up front.
+        if matches!(
+            role,
+            Role::Conversation | Role::History | Role::PromptHistory
+        ) {
             params["capabilities"] = json!({"experimentalApi":true});
         }
         params

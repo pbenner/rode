@@ -16,6 +16,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     close_window,
+    delayed_input,
     fixture_directory,
     fixture_environment,
     key,
@@ -161,15 +162,21 @@ fn main() { println!("ready"); }
                     lambda: source.read_text() == expected,
                     "Preview save did not save Markdown source",
                 )
-                key("r", ("Control_L", "Shift_L"))
-                key("z", ("Control_L",))
-                key("s", ("Control_L",))
+                # Slow-UI runs queue the transition, undo and save together.
+                # Save must follow the native undo even across the view change.
+                with delayed_input(process):
+                    key("r", ("Control_L", "Shift_L"))
+                    key("z", ("Control_L",))
+                    key("s", ("Control_L",))
+                ui.source(original)
                 wait_for(
-                    lambda: source.read_text() != expected,
-                    "Preview lost the text editor's undo history",
+                    lambda: source.read_text() == original,
+                    "Save overtook Undo after returning from Markdown preview",
                 )
-                key("y", ("Control_L",))
-                key("s", ("Control_L",))
+                with delayed_input(process):
+                    key("y", ("Control_L",))
+                    key("s", ("Control_L",))
+                ui.source(expected)
                 wait_for(
                     lambda: source.read_text() == expected, "Redo failed after returning to Edit"
                 )
