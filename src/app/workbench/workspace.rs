@@ -481,7 +481,7 @@ impl EditorApp {
             });
         } else {
             egui::CentralPanel::default()
-                .frame(theme::frame(palette.panel))
+                .frame(layout::pane_frame(palette.panel))
                 .show(ctx, |ui| self.surface_ui(ui, ctx));
         }
     }
@@ -545,7 +545,7 @@ impl EditorApp {
                             .frame(theme::frame(palette.panel))
                             .show(ctx, |ui| app.workspace_tabs(ui, ctx, true));
                         egui::CentralPanel::default()
-                            .frame(theme::frame(palette.panel))
+                            .frame(layout::pane_frame(palette.panel))
                             .show(ctx, |ui| app.surface_ui(ui, ctx));
                         app.finish_tool_viewport(ctx);
                     }
@@ -587,7 +587,7 @@ impl EditorApp {
                                 .frame(theme::frame(palette.panel))
                                 .show(ctx, |ui| app.detached_tab_header(tab, ui, ctx));
                             egui::CentralPanel::default()
-                                .frame(theme::frame(palette.panel))
+                                .frame(layout::pane_frame(palette.panel))
                                 .show(ctx, |ui| {
                                     if app.tab_detached(tab) {
                                         app.tab_content(tab, ui, ctx);
@@ -820,13 +820,13 @@ mod tests {
         app.toggle_panel(Panel::Settings, &ctx);
         render(&mut app, &ctx);
         let tools = app.navigation.rect(navigation::Pane::Tools).unwrap();
-        assert!((code.width() - tools.width() - 24.).abs() < 1.);
+        assert!((code.width() - tools.width()).abs() < 1.);
         assert!(app.navigation.rect(navigation::Pane::Editor).is_none());
         app.show_terminal = true;
         app.terminal_intent();
         render(&mut app, &ctx);
         let terminal = app.navigation.rect(navigation::Pane::Terminal).unwrap();
-        assert!((code.width() - terminal.width() - 24.).abs() < 1.);
+        assert!((code.width() - terminal.width()).abs() < 1.);
         assert!(app.navigation.rect(navigation::Pane::Tools).is_none());
         assert!(app.navigation.rect(navigation::Pane::Editor).is_none());
         app.focus_editor(&ctx);

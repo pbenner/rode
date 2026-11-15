@@ -78,7 +78,7 @@ impl EditorApp {
         let mut change_clicked = None;
         let mut peek_action = None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome.is_decorated() { 8 } else { 0 }))
+            .frame(layout::pane_frame(palette.background))
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
                 palette.paint_editor_background(ui);

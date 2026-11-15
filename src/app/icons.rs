@@ -446,6 +446,10 @@ impl<'a> IconButton<'a> {
             ..Self::new(icon, label)
         }
     }
+    /// A square toolbar target with room around the glyph and a consistent hover/focus surface.
+    pub(super) fn toolbar(icon: Icon, label: &'a str) -> Self {
+        Self::icon(icon, label).min_size(Vec2::splat(24.))
+    }
     /// Add a displayed shortcut hint without installing or consuming that keyboard binding.
     pub(super) fn shortcut(mut self, shortcut: &'a str) -> Self {
         self.shortcut = shortcut;

@@ -435,7 +435,7 @@ impl EditorApp {
         let panel = egui::SidePanel::left(panel_id(viewport, zoom))
             .default_width(250.0)
             .width_range(180.0..=maximum)
-            .frame(theme::frame(palette.panel));
+            .frame(layout::pane_frame(palette.panel));
         let panel = if zoom {
             panel.exact_width(ctx.available_rect().width())
         } else if let Some(width) = width {
@@ -451,15 +451,9 @@ impl EditorApp {
             let mut content = self.pane_ui(ui, navigation::Pane::Explorer);
             let ui = &mut content;
             ui.horizontal(|ui| {
-                ui.label(
-                    palette
-                        .tag("EXPLORER")
-                        .color(if palette.chrome.is_decorated() {
-                            palette.heading
-                        } else {
-                            palette.muted
-                        }),
-                );
+                ui.spacing_mut().item_spacing.x = 4.;
+                // Allocate actions first, then constrain the title to the
+                // remaining space. Theme typography cannot push actions out.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let ready = self.project_ready()
                         && !self.explorer_state.busy
@@ -469,7 +463,10 @@ impl EditorApp {
                         && ui.memory(|memory| memory.allows_interaction(ui.layer_id()));
                     let refresh = ui
                         .add_enabled_ui(ready, |ui| {
-                            icons::small(ui, Icon::Refresh, "Refresh expanded folders")
+                            ui.add(icons::IconButton::toolbar(
+                                Icon::Refresh,
+                                "Refresh expanded folders",
+                            ))
                         })
                         .inner;
                     ui_probe::button(ui, "explorer-refresh-expanded", &refresh);
@@ -480,11 +477,26 @@ impl EditorApp {
                         }
                     }
                     self.project_bookmark_button(ui);
-                    let new = icons::small(ui, Icon::NewFile, "New file");
+                    let new = ui.add(icons::IconButton::toolbar(Icon::NewFile, "New file"));
                     ui_probe::button(ui, "explorer-new-document", &new);
                     if new.clicked() {
                         self.execute_command(Command::New, ctx);
                     }
+                    ui.add_space(4.);
+                    let size = egui::vec2(ui.available_width().max(0.), 24.);
+                    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                        ui.set_min_size(size);
+                        ui.add(
+                            egui::Label::new(palette.tag("EXPLORER").color(
+                                if palette.chrome.is_decorated() {
+                                    palette.heading
+                                } else {
+                                    palette.muted
+                                },
+                            ))
+                            .truncate(),
+                        );
+                    });
                 });
             });
             if self.explorer_state.busy {

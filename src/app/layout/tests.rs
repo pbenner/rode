@@ -19,7 +19,7 @@ fn pane_outlines_stay_outside_child_paint_and_preceding_toolbars() {
                 },
                 |ctx| {
                     egui::CentralPanel::default()
-                        .frame(egui::Frame::NONE)
+                        .frame(pane_frame(egui::Color32::TRANSPARENT))
                         .show(ctx, |ui| {
                             let toolbar = ui.button("Existing toolbar").rect;
                             let mut pane = PaneSurface::new(ui, egui::Id::new("bounded-pane"));
@@ -52,8 +52,8 @@ fn pane_outlines_stay_outside_child_paint_and_preceding_toolbars() {
                 }
             }
             if inner.is_positive() {
-                assert!(inner.left() - outer.left() >= 1. + 1.9 / scale);
-                assert!(inner.top() - outer.top() >= 1. + 1.9 / scale);
+                assert!(inner.left() - outer.left() >= 12.);
+                assert!(inner.top() - outer.top() >= 8.);
             }
         }
     }

@@ -12,9 +12,9 @@ pub(super) mod tests;
 
 /// A bounded pane with a separate gutter for its keyboard-focus outline.
 ///
-/// Reserve the gutter even when unfocused, so focusing never moves controls.
-/// The content clip excludes it: oversized widgets and their hover paint cannot
-/// cover the outline, including in themes with no surrounding panel margin.
+/// Own the panel's normal padding inside its boundary, even when unfocused, so
+/// focusing never moves controls. The content clip excludes that padding:
+/// oversized widgets and their hover paint cannot cover the outline.
 pub(super) struct PaneSurface {
     pub content: egui::Ui,
     pub outer: egui::Rect,
@@ -31,9 +31,10 @@ impl PaneSurface {
         let outer =
             egui::Rect::from_min_size(available.min, available.size().max(egui::Vec2::ZERO));
         let clearance = Self::STROKE_WIDTH + 2. / ui.pixels_per_point();
+        let padding = crate::theme::PANEL_MARGIN;
         let inset = egui::vec2(
-            clearance.min(outer.width() / 2.),
-            clearance.min(outer.height() / 2.),
+            (padding.left as f32).max(clearance).min(outer.width() / 2.),
+            (padding.top as f32).max(clearance).min(outer.height() / 2.),
         );
         let inner = outer.shrink2(inset);
         let painter = ui.painter().with_clip_rect(outer.intersect(ui.clip_rect()));
@@ -63,6 +64,13 @@ impl PaneSurface {
             egui::StrokeKind::Inside,
         );
     }
+}
+
+/// A pane surface owns its padding. Its parent frame must leave that space to
+/// the surface, so the focus outline follows the panel edge instead of forming
+/// an inset box with controls crowded against its inner border.
+pub(super) fn pane_frame(fill: egui::Color32) -> egui::Frame {
+    crate::theme::frame(fill).inner_margin(0)
 }
 
 /// Paint a clipped label in a fixed cell. Callers attach tooltips to the returned response.

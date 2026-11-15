@@ -206,7 +206,7 @@ impl EditorApp {
             && !self.pending.modal();
         let button = ui.add_enabled(
             enabled,
-            IconButton::icon(
+            IconButton::toolbar(
                 Icon::Bookmark,
                 if saved {
                     "Remove project bookmark"

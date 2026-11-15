@@ -374,13 +374,13 @@ impl EditorApp {
 
     /// Render a specific tool using its existing controller, independent of the dock selection.
     fn panel_content(&mut self, panel: Panel, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let mut content = self.pane_ui(ui, navigation::Pane::Tools);
+        let ui = &mut content;
         if !self.panel_enabled(panel) {
             ui.label("This extension is disabled. Enable it in View → Extensions.");
             return;
         }
         let palette = self.themes.active().palette;
-        let mut content = self.pane_ui(ui, navigation::Pane::Tools);
-        let ui = &mut content;
         if panel == Panel::Debug {
             layout::page(ui, layout::PAGE_WIDTH, |ui| self.debugger_ui(ui, ctx));
             return;

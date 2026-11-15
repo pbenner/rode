@@ -110,9 +110,10 @@ pub fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame {
     frame
 }
 
+/// Standard symmetric panel padding, shared by ordinary frames and pane interiors.
+pub(crate) const PANEL_MARGIN: egui::Margin = egui::Margin::symmetric(12, 8);
+
 /// Create a native panel frame with the standard border/padding and supplied fill.
 pub fn frame(fill: Color32) -> egui::Frame {
-    egui::Frame::new()
-        .fill(fill)
-        .inner_margin(egui::Margin::symmetric(12, 8))
+    egui::Frame::new().fill(fill).inner_margin(PANEL_MARGIN)
 }

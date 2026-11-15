@@ -61,12 +61,27 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                     let outer = app.navigation.native_rects[&egui::ViewportId::ROOT]
                         [Pane::Explorer.index()]
                     .unwrap();
-                    let safe = outer.shrink(1. + 1. / scale);
+                    assert_eq!(outer.left_top(), egui::Pos2::ZERO, "Inset pane boundary");
+                    let safe = outer.shrink2(egui::vec2(11.5, 7.5));
                     for rect in controls {
                         assert!(
                             safe.contains_rect(rect) && title.right() < rect.left(),
                             "{} at width {width}, scale {scale}: toolbar {rect:?} overlaps title {title:?} or outline {outer:?}",
                             theme.id,
+                        );
+                        assert!(
+                            rect.width() >= 24. && rect.height() >= 24.,
+                            "Cramped toolbar target: {rect:?}"
+                        );
+                    }
+                    for pair in controls.windows(2) {
+                        assert!(
+                            pair[0].right() + 3.5 <= pair[1].left(),
+                            "Toolbar targets touch: {pair:?}"
+                        );
+                        assert!(
+                            (pair[0].center().y - pair[1].center().y).abs() < 0.5,
+                            "Misaligned toolbar targets: {pair:?}"
                         );
                     }
                     if focused {
