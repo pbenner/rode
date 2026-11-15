@@ -12,6 +12,9 @@ def on_page_markdown(markdown, **_kwargs):
     """Rewrite repository-relative references to the matching generated documentation-site locations."""
     for source, destination in {
         "../themes/README.md": "theme-format.md",
+        "../themes/syntax/README.md": "synthwave84-source.md",
+        "syntax/README.md": "synthwave84-source.md",
+        "../../packaging/licenses/synthwave84-LICENSE-MIT": "licenses/synthwave84-LICENSE-MIT.txt",
         "../docs/syntax-themes.md": "syntax-themes.md",
         "../docs/development.md": "development.md",
         "../src/theme/interface.rs": "https://github.com/pbenner/rode/blob/main/src/theme/interface.rs",
@@ -26,6 +29,20 @@ def on_files(files, config):
     """Export canonical theme definitions, image assets and example notebooks into the MkDocs file set."""
     files.append(
         File.generated(config, "theme-format.md", content=(ROOT / "themes/README.md").read_text())
+    )
+    files.append(
+        File.generated(
+            config,
+            "synthwave84-source.md",
+            content=(ROOT / "themes/syntax/README.md").read_text(),
+        )
+    )
+    files.append(
+        File.generated(
+            config,
+            "licenses/synthwave84-LICENSE-MIT.txt",
+            abs_src_path=str(ROOT / "packaging/licenses/synthwave84-LICENSE-MIT"),
+        )
     )
     for definition in sorted((ROOT / "themes").glob("*.json")):
         files.append(File.generated(config, definition.name, abs_src_path=str(definition)))

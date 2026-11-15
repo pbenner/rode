@@ -39,6 +39,7 @@ nav:
       - Themes: themes.md
       - Syntax highlighting themes: syntax-themes.md
       - Theme format: theme-format.md
+      - SynthWave ’84 source: synthwave84-source.md
       - Sandbox access: sandbox.md
       - Artwork and licensing: licensing.md
   - Development:
