@@ -448,7 +448,8 @@ impl EditorApp {
             if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() {
                 ui.disable();
             }
-            self.pane_ui(ui, navigation::Pane::Explorer);
+            let mut content = self.pane_ui(ui, navigation::Pane::Explorer);
+            let ui = &mut content;
             ui.horizontal(|ui| {
                 ui.label(
                     palette
@@ -479,7 +480,9 @@ impl EditorApp {
                         }
                     }
                     self.project_bookmark_button(ui);
-                    if icons::small(ui, Icon::NewFile, "New file").clicked() {
+                    let new = icons::small(ui, Icon::NewFile, "New file");
+                    ui_probe::button(ui, "explorer-new-document", &new);
+                    if new.clicked() {
                         self.execute_command(Command::New, ctx);
                     }
                 });

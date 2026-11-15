@@ -10,6 +10,61 @@ use eframe::egui::{self, Align, Layout, RichText};
 #[cfg(test)]
 pub(super) mod tests;
 
+/// A bounded pane with a separate gutter for its keyboard-focus outline.
+///
+/// Reserve the gutter even when unfocused, so focusing never moves controls.
+/// The content clip excludes it: oversized widgets and their hover paint cannot
+/// cover the outline, including in themes with no surrounding panel margin.
+pub(super) struct PaneSurface {
+    pub content: egui::Ui,
+    pub outer: egui::Rect,
+    painter: egui::Painter,
+}
+
+impl PaneSurface {
+    const STROKE_WIDTH: f32 = 1.;
+
+    pub fn new(ui: &mut egui::Ui, id: egui::Id) -> Self {
+        // Use the remaining space, not max_rect: embedded tool windows have
+        // already placed their tabs and toolbar in the same parent Ui.
+        let available = ui.available_rect_before_wrap();
+        let outer =
+            egui::Rect::from_min_size(available.min, available.size().max(egui::Vec2::ZERO));
+        let clearance = Self::STROKE_WIDTH + 2. / ui.pixels_per_point();
+        let inset = egui::vec2(
+            clearance.min(outer.width() / 2.),
+            clearance.min(outer.height() / 2.),
+        );
+        let inner = outer.shrink2(inset);
+        let painter = ui.painter().with_clip_rect(outer.intersect(ui.clip_rect()));
+        // Allocate the bounded surface, rather than letting child overflow
+        // enlarge it and displace adjacent panes or preceding toolbar rows.
+        ui.advance_cursor_after_rect(outer);
+        let mut content = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(id)
+                .max_rect(inner)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        content.set_clip_rect(inner.intersect(ui.clip_rect()));
+        Self {
+            content,
+            outer,
+            painter,
+        }
+    }
+
+    /// Paint only in the reserved gutter, outside the clipped content area.
+    pub fn focus_outline(&self, color: egui::Color32) {
+        self.painter.rect_stroke(
+            self.outer,
+            0,
+            egui::Stroke::new(Self::STROKE_WIDTH, color),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
 /// Paint a clipped label in a fixed cell. Callers attach tooltips to the returned response.
 pub(super) fn bounded_label(
     ui: &mut egui::Ui,

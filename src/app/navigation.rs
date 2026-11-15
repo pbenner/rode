@@ -638,10 +638,15 @@ impl EditorApp {
         }
         ctx.request_repaint();
     }
-    /// A stable fallback focus target, plus remembered child controls for tools.
-    pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane) {
+    /// Allocate a clipped pane interior and track its stable fallback focus target.
+    /// Callers must render controls in the returned Ui, leaving the outline gutter empty.
+    #[must_use = "Render pane controls in the returned interior, outside the focus-outline gutter"]
+    pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane) -> egui::Ui {
         let ctx = ui.ctx().clone();
-        let rect = ui.max_rect();
+        let host_id = pane.id_in(ctx.viewport_id());
+        let mut surface = layout::PaneSurface::new(ui, host_id);
+        let rect = surface.outer;
+        let ui = &mut surface.content;
         let zoom = self.pane_zoom(ctx.viewport_id());
         if zoom.is_none() {
             self.navigation
@@ -658,8 +663,7 @@ impl EditorApp {
             self.navigation.rects[pane.index()] = Some(rect);
             self.navigation.viewports[pane.index()] = Some(ctx.viewport_id());
         }
-        let host_id = pane.id_in(ctx.viewport_id());
-        let host = ui.interact(rect, host_id, Sense::focusable_noninteractive());
+        let host = ui.interact(ui.max_rect(), host_id, Sense::focusable_noninteractive());
         if pane == Pane::Explorer {
             keyboard::field_target(ui, "Explorer tree", &host);
         }
@@ -716,16 +720,9 @@ impl EditorApp {
             }
         }
         if self.navigation.used && self.navigation.active == pane && !blocked {
-            ui.painter().rect_stroke(
-                rect.shrink(1.),
-                0,
-                Stroke::new(
-                    1.0_f32,
-                    self.themes.active().palette.accent.gamma_multiply(0.6),
-                ),
-                egui::StrokeKind::Inside,
-            );
+            surface.focus_outline(self.themes.active().palette.accent.gamma_multiply(0.6));
         }
+        surface.content
     }
     /// Render the same focus/zoom commands exposed by keyboard navigation.
     pub(super) fn navigation_menu(&mut self, response: &egui::Response) {

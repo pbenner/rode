@@ -379,7 +379,8 @@ impl EditorApp {
             return;
         }
         let palette = self.themes.active().palette;
-        self.pane_ui(ui, navigation::Pane::Tools);
+        let mut content = self.pane_ui(ui, navigation::Pane::Tools);
+        let ui = &mut content;
         if panel == Panel::Debug {
             layout::page(ui, layout::PAGE_WIDTH, |ui| self.debugger_ui(ui, ctx));
             return;

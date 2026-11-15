@@ -2,6 +2,64 @@
 use super::*;
 
 #[test]
+fn pane_outlines_stay_outside_child_paint_and_preceding_toolbars() {
+    for scale in [0.75, 1., 1.25, 2.] {
+        for size in [egui::vec2(2., 2.), egui::vec2(180., 160.)] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut bounds = None;
+            let color = egui::Color32::MAGENTA;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        size + egui::vec2(0., 40.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            let toolbar = ui.button("Existing toolbar").rect;
+                            let mut pane = PaneSurface::new(ui, egui::Id::new("bounded-pane"));
+                            pane.focus_outline(color);
+                            let inner = pane.content.max_rect();
+                            // Even an oversized widget drawn after the outline
+                            // cannot paint over it or resize the parent surface.
+                            pane.content
+                                .add_sized([500., 500.], egui::Button::new("Oversized control"));
+                            bounds = Some((toolbar, pane.outer, inner, ui.min_rect()));
+                        });
+                },
+            );
+            let (toolbar, outer, inner, allocated) = bounds.unwrap();
+            assert!(inner.is_finite() && inner.width() >= 0. && inner.height() >= 0.);
+            assert!(toolbar.bottom() < outer.top());
+            assert!(outer.contains_rect(inner));
+            assert!(allocated.bottom() <= outer.bottom());
+            let outline = output.shapes.iter().position(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == color)
+            }).expect("Missing pane outline");
+            for shape in &output.shapes[outline + 1..] {
+                // Child UI bookkeeping may leave empty placeholders.
+                if !matches!(shape.shape, egui::Shape::Noop) {
+                    assert!(
+                        inner.contains_rect(shape.clip_rect),
+                        "{size:?}, scale {scale}: child paint clip {:?} escapes {inner:?}",
+                        shape.clip_rect,
+                    );
+                }
+            }
+            if inner.is_positive() {
+                assert!(inner.left() - outer.left() >= 1. + 1.9 / scale);
+                assert!(inner.top() - outer.top() >= 1. + 1.9 / scale);
+            }
+        }
+    }
+}
+
+#[test]
 fn ordinary_text_fields_keep_paint_inside_their_own_frames_when_scrolled() {
     for theme in crate::theme::Theme::builtins() {
         for scale in [1., 1.25, 2.] {

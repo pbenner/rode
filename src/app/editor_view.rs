@@ -83,7 +83,8 @@ impl EditorApp {
                 palette.paint_panel(ui);
                 palette.paint_editor_background(ui);
                 if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() { ui.disable(); }
-                self.pane_ui(ui,navigation::Pane::Editor);
+                let mut content = self.pane_ui(ui, navigation::Pane::Editor);
+                let ui = &mut content;
                 if ui.available_height() <= 1.0 {
                     return;
                 }

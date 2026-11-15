@@ -3,6 +3,92 @@
 use super::*;
 
 #[test]
+fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pane-layout.json");
+    for theme in crate::theme::Theme::builtins() {
+        for scale in [0.75, 1., 1.25, 2.] {
+            for width in [180., 250., 450.] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(
+                    &cc,
+                    Startup {
+                        theme: Some(theme.id.clone()),
+                        ..Default::default()
+                    },
+                );
+                ctx.set_pixels_per_point(scale);
+                ui_probe::install_at(&ctx, path.clone());
+                app.show_explorer = true;
+                app.navigation.active = Pane::Explorer;
+                app.navigation.widths[0] = Some(width);
+                let mut unfocused = None;
+                for focused in [false, true] {
+                    app.navigation.used = focused;
+                    let mut output = None;
+                    for _ in 0..3 {
+                        output = Some(ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(1000., 700.),
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| app.explorer(ctx),
+                        ));
+                    }
+                    let state: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    let control = |name| {
+                        let button = state["buttons"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|button| button["name"] == name)
+                            .unwrap_or_else(|| panic!("Missing {name}"));
+                        let r: [f32; 4] = serde_json::from_value(button["rect"].clone()).unwrap();
+                        egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
+                    };
+                    let controls = [
+                        control("explorer-new-document"),
+                        control("bookmark-project"),
+                        control("explorer-refresh-expanded"),
+                    ];
+                    let output = output.unwrap();
+                    let title = layout::tests::text_bounds(&output, "EXPLORER");
+                    let outer = app.navigation.native_rects[&egui::ViewportId::ROOT]
+                        [Pane::Explorer.index()]
+                    .unwrap();
+                    let safe = outer.shrink(1. + 1. / scale);
+                    for rect in controls {
+                        assert!(
+                            safe.contains_rect(rect) && title.right() < rect.left(),
+                            "{} at width {width}, scale {scale}: toolbar {rect:?} overlaps title {title:?} or outline {outer:?}",
+                            theme.id,
+                        );
+                    }
+                    if focused {
+                        assert_eq!(Some(controls), unfocused, "Focus changed toolbar geometry");
+                        assert!(
+                            output.shapes.iter().any(|shape| {
+                                matches!(&shape.shape, egui::Shape::Rect(rect)
+                                if rect.rect == outer && rect.stroke.color
+                                    == app.themes.active().palette.accent.gamma_multiply(0.6))
+                            }),
+                            "Missing Explorer focus outline"
+                        );
+                    } else {
+                        unfocused = Some(controls);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn tool_focus_is_consumed_only_by_its_requested_native_window() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());

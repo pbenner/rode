@@ -86,17 +86,28 @@ def terminal_focus(ui):
     )
 
 
-def active_line(window, filename, width, height, accent, left=302, right=None, minimum=80):
+def active_line(ui, filename, width, height, accent, minimum=80):
     def painted():
-        screenshot(window, filename)
+        # Follow the rendered tab instead of assuming a theme's top margin.
+        layout = ui.layout()
+        controls = {button["name"]: button["rect"] for button in layout["buttons"]}
+        active = next(
+            name.split(":", 1)[1] for name in controls if name.startswith("active-document:")
+        )
+        tab = controls["editor-tab:" + active]
+        pane = controls["pane-Editor"]
+        scale = layout["pixels_per_point"]
+        y = round(tab[1] * scale)
+        left = max(0, round(pane[0] * scale))
+        right = min(width, round(pane[2] * scale))
+        screenshot(ui.window, filename)
         data = subprocess.check_output(
             ["convert", str(ARTIFACTS / filename), "-depth", "8", "rgb:-"]
         )
         if len(data) != width * height * 3:
             return False
         pixels = [
-            tuple(data[(48 * width + x) * 3 : (48 * width + x) * 3 + 3])
-            for x in range(left, right or width - 90)
+            tuple(data[(y * width + x) * 3 : (y * width + x) * 3 + 3]) for x in range(left, right)
         ]
         return pixels.count(accent) >= minimum
 
@@ -159,7 +170,7 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             key("Return")
             wait_for(renamed.exists, "Save As did not finish")
             screenshot(window, "tabs-carbon.png")
-            active_line(window, "tabs-carbon.png", 1380, 900, (220, 163, 37), minimum=240)
+            active_line(ui, "tabs-carbon.png", 1380, 900, (220, 163, 37), minimum=240)
             click(1356, 66)  # All open editors
             screenshot(window, "open-editors.png")
             click(1130, 101)  # README, first item
@@ -217,13 +228,11 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             text("layout")
             screenshot(window, "minimum-window.png")
             active_line(
-                window,
+                ui,
                 "minimum-window.png",
                 850,
                 560,
                 (220, 163, 37),
-                left=250,
-                right=750,
                 minimum=140,
             )
             key("Escape")
@@ -236,7 +245,7 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             ui.resize(1380, 900)
             ui.command("Theme: Phosphor")
             screenshot(window, "tabs-phosphor.png")
-            active_line(window, "tabs-phosphor.png", 1380, 900, (125, 235, 164), left=240)
+            active_line(ui, "tabs-phosphor.png", 1380, 900, (125, 235, 164))
             key("t", ("Control_L", "Shift_L"))
             terminal_focus(ui)
             screenshot(window, "terminal-full-height.png")

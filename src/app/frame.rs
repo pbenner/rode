@@ -335,7 +335,8 @@ impl EditorApp {
     /// Render the selected terminal surface, keeping PTY input and native focus ownership together.
     pub(in crate::app) fn terminal_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.terminal_colors.palette(self.themes.active());
-        self.pane_ui(ui, navigation::Pane::Terminal);
+        let mut content = self.pane_ui(ui, navigation::Pane::Terminal);
+        let ui = &mut content;
         self.terminal_header(ui, ctx);
         self.terminal_tabs(ui, ctx);
         ui.separator();
