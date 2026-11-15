@@ -128,11 +128,6 @@ def run():
             " Path('control-result').write_text(data.hex())\n"
             "finally: termios.tcsetattr(0,termios.TCSANOW,settings)\n"
         )
-        (root / "word-input.py").write_text(
-            "import readline\nfrom pathlib import Path\n"
-            "readline.set_pre_input_hook(lambda: Path('word-ready').touch())\n"
-            "Path('word-result').write_text(input('WORD_MOVEMENT_READY> '))\n"
-        )
         (root / "selection-input.py").write_text(
             "import os,termios,tty\nfrom pathlib import Path\n"
             "settings=termios.tcgetattr(0)\n"
@@ -244,16 +239,24 @@ def run():
                 wait_for(
                     lambda: (root / "history.out").exists(), "Up did not navigate shell history"
                 )
-                # Check readline's resulting line, not just the encoded bytes.
-                text("python3 word-input.py\n")
-                wait_for(lambda: (root / "word-ready").exists(), "Word-motion input not ready")
-                text("alpha beta gamma")
+                # Exercise Bash's readline directly: Python builds using libedit
+                # may ignore set_pre_input_hook even when input() is ready.
+                # The resulting command must reflect word movement, not just
+                # correctly encoded cursor bytes.
+                text("echo alpha beta gamma")
                 key("Left", ("Control_L",))
                 key("Left", ("Control_L",))
                 key("Right", ("Control_L",))
-                text("-jump\n")
-                wait_for(lambda: (root / "word-result").exists(), "Word-motion input not submitted")
-                assert (root / "word-result").read_text() == "alpha beta-jump gamma"
+                text("-jump")
+                key("End")
+                text(" > word-result\n")
+                wait_for(
+                    lambda: (
+                        (root / "word-result").exists()
+                        and (root / "word-result").read_text() == "alpha beta-jump gamma\n"
+                    ),
+                    "Ctrl+Left/Right did not produce the expected Bash command",
+                )
                 # Native clipboard events must reach raw terminal applications
                 # as Control+X (nano exit) and Control+C (interrupt/cancel).
                 text("python3 control-input.py\n")
