@@ -28,6 +28,7 @@ use std::{
 use syntect::highlighting::Theme as SyntaxTheme;
 mod components;
 mod definition;
+mod glow;
 mod interface;
 mod palette;
 mod surfaces;
@@ -52,6 +53,8 @@ pub struct Theme {
     /// Interface and terminal colors.
     pub palette: Palette,
     syntax: BTreeMap<String, Color32>,
+    syntax_base: Option<SyntaxTheme>,
+    syntax_glow: bool,
 }
 
 impl Theme {
@@ -62,6 +65,8 @@ impl Theme {
             name: "Phosphor".into(),
             palette: Palette::default(),
             syntax: BTreeMap::new(),
+            syntax_base: None,
+            syntax_glow: false,
         }
     }
 
@@ -99,6 +104,7 @@ pub struct Themes {
     syntax_generation: u64,
     syntax: Box<SyntectSettings>,
     original_syntax: SyntaxTheme,
+    code_glow: bool,
 }
 
 impl Themes {
@@ -188,6 +194,7 @@ impl Themes {
         let (syntax_entries, syntax_warnings) =
             syntax::load(&directory.with_file_name("syntax-themes"));
         warnings.extend(syntax_warnings);
+        let code_glow = entries[selected].syntax_glow;
         (
             Self {
                 entries,
@@ -197,6 +204,7 @@ impl Themes {
                 syntax_generation: syntax::generation(),
                 syntax,
                 original_syntax,
+                code_glow,
             },
             warnings,
         )
@@ -232,6 +240,11 @@ impl Themes {
     }
 
     fn rebuild_syntax(&mut self) {
+        self.code_glow = if self.active_syntax().theme.is_some() {
+            self.active_syntax().glow
+        } else {
+            self.active().syntax_glow
+        };
         let theme = self
             .active_syntax()
             .theme
@@ -290,7 +303,26 @@ impl Themes {
             font_size,
             &self.syntax,
             self.syntax_generation,
+            self.code_glow,
         )
+    }
+
+    /// Reserve the halo layer before TextEdit paints selection, text and caret.
+    pub(crate) fn glow_layer(&self, ui: &egui::Ui) -> Option<egui::layers::ShapeIdx> {
+        self.code_glow.then(|| ui.painter().add(egui::Shape::Noop))
+    }
+
+    /// Paint bounded visible glyph halos without changing editing geometry or input.
+    pub(crate) fn paint_glow(
+        &self,
+        ui: &egui::Ui,
+        layer: Option<egui::layers::ShapeIdx>,
+        galley: &egui::Galley,
+        position: egui::Pos2,
+    ) {
+        if let Some(layer) = layer {
+            ui.painter().set(layer, glow::shape(ui, galley, position));
+        }
     }
 }
 

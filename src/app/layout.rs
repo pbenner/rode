@@ -10,6 +10,24 @@ use eframe::egui::{self, Align, Layout, RichText};
 #[cfg(test)]
 pub(super) mod tests;
 
+/// Paint a clipped label in a fixed cell. Callers attach tooltips to the returned response.
+pub(super) fn bounded_label(
+    ui: &mut egui::Ui,
+    text: RichText,
+    width: f32,
+    height: f32,
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.set_min_size(egui::vec2(width, height));
+            ui.add(egui::Label::new(text).truncate())
+        },
+    )
+    .inner
+}
+
 /// Maximum outer width for lists and forms, including the page's inner margin.
 pub(super) const PAGE_WIDTH: f32 = 1000.;
 

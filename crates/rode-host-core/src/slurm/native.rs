@@ -168,7 +168,7 @@ pub fn step(arguments: &[String]) -> Result<()> {
         .current_dir(&root)
         .env_clear()
         .envs(&environment);
-    let output = crate::project::run_controlled_limited(
+    let output = crate::command::run_controlled_limited(
         query,
         vec![],
         Duration::from_secs(15),

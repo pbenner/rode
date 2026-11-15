@@ -148,7 +148,7 @@ pub fn snapshot(root: &Path, queue: &str) -> Result<Snapshot> {
 }
 /// Recheck ownership in a fresh snapshot, then cancel one exact allocation with the installed
 /// cancellation executable. Requires explicit user action and never cancels by wildcard.
-pub fn cancel(root: &Path, queue: &str, program: &str, id: &str) -> Result<crate::project::Output> {
+pub fn cancel(root: &Path, queue: &str, program: &str, id: &str) -> Result<crate::command::Output> {
     ensure!(
         valid_id(id),
         "Only exact Slurm allocation IDs may be released (not steps, ranges, or arbitrary arguments)"

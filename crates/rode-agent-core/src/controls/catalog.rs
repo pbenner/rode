@@ -81,7 +81,13 @@ impl Catalog {
             let result = match event {
                 Event::Started => {
                     self.deadline = Instant::now() + Duration::from_secs(60);
-                    self.call("initialize", json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}}))
+                    self.call(
+                        "initialize",
+                        crate::initialization::parameters(
+                            self.config.provider,
+                            crate::initialization::Role::Catalog,
+                        ),
+                    )
                 }
                 Event::Message(value) => self.receive(value),
                 Event::Stderr(_) => Ok(()),

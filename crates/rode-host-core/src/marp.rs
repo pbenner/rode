@@ -1,5 +1,6 @@
 //! Explicit Marp CLI snapshots. Rendering runs on the project host, under the
 //! prepared policy; only a bounded PDF or export acknowledgement comes back.
+use crate::paths::resolve;
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -145,14 +146,6 @@ pub fn is_deck(path: Option<&str>, text: &str) -> bool {
             })
         })
 }
-fn resolve(root: &Path, value: &str) -> PathBuf {
-    let path = crate::files::expand_home(value);
-    if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    }
-}
 /// Encode a host path as a file URL for the renderer without interpreting shell syntax.
 pub fn file_url(path: &Path) -> String {
     let mut url = String::from("file://");
@@ -184,7 +177,6 @@ impl Drop for Scratch {
 /// Run a cancellable Marp conversion on the project host. Keeps scratch under the permitted
 /// temporary/encrypted context and publishes exports atomically with overwrite guards.
 pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
-    use std::os::unix::process::CommandExt;
     ensure!(
         invocation.text.len() <= MAX_SOURCE,
         "Marp supports source up to 256 KiB."
@@ -318,21 +310,10 @@ pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
             .arg(resolve(&root, &settings.theme_css));
     }
     command.env("NO_COLOR", "1");
-    unsafe {
-        command.pre_exec(|| {
-            let limit = libc::rlimit {
-                // Browser profiles may write caches larger than the retained
-                // artifact. The artifact is independently bounded below.
-                rlim_cur: 64 * 1024 * 1024,
-                rlim_max: 64 * 1024 * 1024,
-            };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let output = crate::project::run_controlled_limited(command, invocation.text.as_bytes().to_vec(), Duration::from_secs(90), cancel, false, MAX_OUTPUT as u64, Duration::from_secs(2))
+    // Browser profiles may write caches larger than the retained artifact,
+    // which has its own independently checked output budget.
+    crate::command::limit_file_size(&mut command, 64 * 1024 * 1024);
+    let output = crate::command::run_controlled_limited(command, invocation.text.as_bytes().to_vec(), Duration::from_secs(90), cancel, false, MAX_OUTPUT as u64, Duration::from_secs(2))
         .with_context(|| format!("Marp needs an installed Marp CLI on the project host (project node_modules/.bin/marp or configured executable). PDF/PPTX also need a supported browser. Cannot convert with {program}"))?;
     ensure!(
         output.success(),
@@ -385,7 +366,7 @@ pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
 pub fn execute(command: Command, invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
     let mut input = serde_json::to_vec(invocation)?;
     input.push(b'\n');
-    let output = crate::project::run_controlled_limited(
+    let output = crate::command::run_controlled_limited(
         command,
         input,
         Duration::from_secs(100),

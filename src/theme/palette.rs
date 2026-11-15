@@ -26,6 +26,14 @@ pub struct Palette {
     pub border: Color32,
     /// Optional control outline, separate from quiet surface borders; falls back to `border`.
     pub control_border: Option<Color32>,
+    /// Optional activity-rail fill, otherwise the shared panel surface.
+    pub activity_background: Option<Color32>,
+    /// Optional status-bar fill, otherwise the shared raised surface.
+    pub status_background: Option<Color32>,
+    /// Optional editor caret color, independent of interactive emphasis.
+    pub cursor: Option<Color32>,
+    /// Optional bottom-quarter editor wash used by flat neon chrome.
+    pub editor_gradient: Option<Color32>,
     /// Primary readable interface foreground.
     pub text: Color32,
     /// Secondary labels and subdued foreground.
@@ -67,6 +75,10 @@ impl Default for Palette {
             raised: Color32::from_rgb(25, 34, 36),
             border: Color32::from_rgb(38, 51, 53),
             control_border: None,
+            activity_background: None,
+            status_background: None,
+            cursor: None,
+            editor_gradient: None,
             text: Color32::from_rgb(205, 218, 216),
             muted: Color32::from_rgb(117, 139, 141),
             accent: Color32::from_rgb(125, 235, 164),
@@ -105,8 +117,16 @@ impl Palette {
     /// Apply one named palette color, rejecting unknown keys without changing the palette.
     /// The optional control-border override remains distinct from the general border.
     pub(super) fn override_color(&mut self, key: &str, color: Color32) -> Result<()> {
-        if key == "control_border" {
-            self.control_border = Some(color);
+        let optional = match key {
+            "control_border" => Some(&mut self.control_border),
+            "activity_background" => Some(&mut self.activity_background),
+            "status_background" => Some(&mut self.status_background),
+            "cursor" => Some(&mut self.cursor),
+            "editor_gradient" => Some(&mut self.editor_gradient),
+            _ => None,
+        };
+        if let Some(field) = optional {
+            *field = Some(color);
             return Ok(());
         }
         let field = match key {

@@ -1,14 +1,16 @@
 //! Bounded project services shared by local execution and the native SSH helper.
 //! Local and remote helpers share the same wire contract.
+use crate::{
+    command::{OUTPUT_LIMIT, program_argument as resolve_program},
+    paths::resolve,
+};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::AtomicBool,
     time::Duration,
 };
 pub mod git_auth;
@@ -17,7 +19,11 @@ mod stash;
 mod tests;
 pub use stash::Action as StashAction;
 
-const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
+// Keep the project API stable while command execution and result ownership live
+// below service dispatch, where individual host features can reuse them.
+pub use crate::command::{
+    Output, run, run_controlled, run_controlled_limited, run_controlled_stream,
+};
 
 /// Tagged project-host service requests shared by desktop and headless helpers. Calls are explicit and
 /// bounded; the caller supplies the active sandbox boundary, except for intentional read-only
@@ -194,42 +200,6 @@ pub struct Runtime {
     pub version: String,
     /// Probe error, without treating missing tools as a global failure.
     pub error: String,
-}
-
-/// Bounded UTF-8 command output and an exit status.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Output {
-    /// Exit code; `-1` represents termination without a conventional exit code.
-    pub code: i32,
-    /// Captured standard output.
-    pub stdout: String,
-    /// Captured standard error.
-    pub stderr: String,
-}
-impl Output {
-    /// Return whether the command exited with code zero.
-    pub fn success(&self) -> bool {
-        self.code == 0
-    }
-    /// Return stdout on success, or diagnostics with an exit-status fallback on failure.
-    pub fn checked(self) -> Result<String> {
-        if self.success() {
-            Ok(self.stdout)
-        } else {
-            let diagnostics = [self.stderr.trim(), self.stdout.trim()]
-                .into_iter()
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !diagnostics.is_empty() {
-                bail!("{diagnostics}");
-            }
-            if self.code < 0 {
-                bail!("Command terminated without an exit code");
-            }
-            bail!("Command exited with status {}", self.code)
-        }
-    }
 }
 
 /// Cumulative Linux CPU counters; utilization requires differences between samples.
@@ -599,14 +569,6 @@ fn git_command(root: &Path) -> Command {
     command
 }
 
-fn resolve(root: &Path, value: &str) -> PathBuf {
-    let path = crate::files::expand_home(value);
-    if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    }
-}
 /// Resolve an interpreter or environment directory relative to the project, honoring explicit
 /// executable overrides.
 pub fn python_path(root: &Path, value: &str) -> PathBuf {
@@ -869,91 +831,6 @@ fn analyze(
     }
     Ok(result)
 }
-fn resolve_program(root: &Path, value: &str) -> String {
-    if value.contains('/') || value.starts_with('~') {
-        resolve(root, value).to_string_lossy().into()
-    } else {
-        value.into()
-    }
-}
-
-/// Drain both pipes concurrently, cap allocations, and stop the owned command
-/// group on completion, timeout or overflow (including hooks and children).
-pub fn run(command: Command, input: Vec<u8>, timeout: Duration) -> Result<Output> {
-    run_controlled(command, input, timeout, &AtomicBool::new(false), false)
-}
-
-/// Run an owned command with concurrent bounded I/O, cancellation and a deadline.
-/// `lifeline` retains stdin after the initial payload so helper cleanup follows channel loss.
-pub fn run_controlled(
-    command: Command,
-    input: Vec<u8>,
-    timeout: Duration,
-    cancel: &AtomicBool,
-    lifeline: bool,
-) -> Result<Output> {
-    run_controlled_limited(
-        command,
-        input,
-        timeout,
-        cancel,
-        lifeline,
-        OUTPUT_LIMIT,
-        Duration::ZERO,
-    )
-}
-/// Use explicit per-stream output-byte bounds and termination grace before scoped
-/// process-group escalation; return captured exit/output only after pipe cleanup.
-pub fn run_controlled_limited(
-    command: Command,
-    input: Vec<u8>,
-    timeout: Duration,
-    cancel: &AtomicBool,
-    lifeline: bool,
-    output_limit: u64,
-    terminate_grace: Duration,
-) -> Result<Output> {
-    run_controlled_stream(
-        command,
-        std::io::Cursor::new(input),
-        timeout,
-        cancel,
-        lifeline,
-        output_limit,
-        terminate_grace,
-    )
-}
-
-/// Stream an owned input without retaining large executable transfers in memory.
-/// The same cancellation, output bounds and process-group cleanup apply as for tools.
-pub fn run_controlled_stream(
-    command: Command,
-    input: impl Read + Send + 'static,
-    timeout: Duration,
-    cancel: &AtomicBool,
-    lifeline: bool,
-    output_limit: u64,
-    terminate_grace: Duration,
-) -> Result<Output> {
-    let output = crate::command::capture::run(
-        command,
-        input,
-        timeout,
-        cancel,
-        lifeline,
-        crate::command::capture::Limits {
-            stdout: output_limit,
-            stderr: output_limit,
-        },
-        terminate_grace,
-    )?;
-    Ok(Output {
-        code: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8(output.stdout).context("Tool output is not UTF-8")?,
-        stderr: String::from_utf8(output.stderr).context("Tool output is not UTF-8")?,
-    })
-}
-
 fn read(path: impl AsRef<Path>) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }

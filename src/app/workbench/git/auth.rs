@@ -12,8 +12,7 @@ pub(super) struct State {
     generation: u64,
 }
 struct Attempt {
-    args: Vec<String>,
-    job: GitJob,
+    operation: Operation,
     credentials: Vec<Credentials>,
 }
 struct Prompt {
@@ -46,8 +45,7 @@ impl State {
         no_input: bool,
     ) {
         self.pending = (no_input && project::git_auth::network(args)).then(|| Attempt {
-            args: args.to_vec(),
-            job: job.clone(),
+            operation: Operation::command(args.to_vec(), job.clone(), None),
             credentials: credentials.to_vec(),
         });
     }
@@ -140,12 +138,18 @@ impl EditorApp {
                         "This operation exceeds the limit of eight authentication origins.".into();
                 } else {
                     credentials.push(prompt.entry.clone());
-                    let args = prompt.attempt.args.clone();
-                    let job = prompt.attempt.job.clone();
-                    let credentials = std::mem::take(credentials);
-                    self.git_command_authenticated(args, job, None, credentials, ctx);
-                    ctx.request_repaint();
-                    return;
+                    let operation = prompt.attempt.operation.clone();
+                    let credentials = credentials.clone();
+                    match self.dispatch_git(operation, credentials, ctx) {
+                        Ok(()) => {
+                            ctx.request_repaint();
+                            return;
+                        }
+                        Err(error) => {
+                            prompt.error = error.message().into();
+                            ctx.request_repaint();
+                        }
+                    }
                 }
             }
         }

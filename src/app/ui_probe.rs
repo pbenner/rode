@@ -81,11 +81,15 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             drop(viewports);
             // Resolve focus and modal blocking after layout: a later modal can
             // take focus away from an editor registered earlier in the pass.
+            let pointer_layer = ctx.pointer_hover_pos().and_then(|pos| ctx.layer_id_at(pos));
             ctx.memory(|memory| {
                 for button in &mut buttons {
                     button.focused = memory.has_focus(button.id);
                     button.enabled &= memory.allows_interaction(button.layer);
-                    button.hovered &= button.enabled;
+                    // egui can hover both a click target and a nearby drag
+                    // target. At an overlay's edge, a covered text editor may
+                    // therefore hover even though the overlay receives clicks.
+                    button.hovered &= button.enabled && pointer_layer == Some(button.layer);
                 }
             });
             // Winit's X11 title getter returns an empty string. Child window

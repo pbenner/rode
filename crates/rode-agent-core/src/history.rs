@@ -283,13 +283,23 @@ impl Browser {
                 break;
             };
             let result = match event {
-                Event::Started => self.call("initialize",if self.launch.config.provider.is_acp() {
-                    json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"configOptions":{"boolean":true}}}})
-                } else { json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}}) },Call::Initialize),
+                Event::Started => self.call(
+                    "initialize",
+                    crate::initialization::parameters(
+                        self.launch.config.provider,
+                        crate::initialization::Role::History,
+                    ),
+                    Call::Initialize,
+                ),
                 Event::Message(value) => self.receive(value),
-                Event::Stderr(text) => { self.stderr=clip(&format!("{}\n{text}",self.stderr),8192); Ok(()) },
+                Event::Stderr(text) => {
+                    self.stderr = clip(&format!("{}\n{text}", self.stderr), 8192);
+                    Ok(())
+                }
                 Event::Error(error) => Err(anyhow::anyhow!(error)),
-                Event::Exited(code) => Err(anyhow::anyhow!("History agent exited ({code:?}); refresh history to reconnect")),
+                Event::Exited(code) => Err(anyhow::anyhow!(
+                    "History agent exited ({code:?}); refresh history to reconnect"
+                )),
             };
             if let Err(error) = result {
                 self.fail(&format!("{error:#}"));

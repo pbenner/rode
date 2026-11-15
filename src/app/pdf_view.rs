@@ -6,6 +6,22 @@
 use super::*;
 use crate::pdf;
 
+/// The PDF view that owns a page request. Capture this with the document version
+/// so a slide-preview reply cannot replace a standalone PDF page or vice versa.
+#[derive(Clone, Copy)]
+pub(super) enum Target {
+    Document,
+    Presentation,
+}
+impl Target {
+    fn view(self, doc: &mut Document) -> Option<&mut PdfView> {
+        match self {
+            Self::Document => doc.pdf.as_mut(),
+            Self::Presentation => doc.marp.as_mut().and_then(|view| view.pdf.as_mut()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Which vertical edge to reveal after a page turn; page numbers themselves are one-based.
 pub(super) enum PageEntry {
@@ -288,16 +304,25 @@ impl EditorApp {
         if reload {
             self.reload_pdf(id, ctx);
         } else if let Some((page, entry)) = page {
-            self.render_pdf_page(id, page, entry, ctx);
+            self.render_pdf_page(id, Target::Document, page, entry, ctx);
         }
         true
     }
 
-    fn render_pdf_page(&mut self, id: u64, page: usize, entry: PageEntry, ctx: &egui::Context) {
+    /// Schedule one bounded page render for either PDF presentation, retaining
+    /// its cancellation, image budget and encrypted-mount guard through publication.
+    pub(super) fn render_pdf_page(
+        &mut self,
+        id: u64,
+        target: Target,
+        page: usize,
+        entry: PageEntry,
+        ctx: &egui::Context,
+    ) {
         let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
             return;
         };
-        let Some(view) = &mut doc.pdf else {
+        let Some(view) = target.view(doc) else {
             return;
         };
         let Some((source, cancel, token)) = view.begin_page(page, entry) else {
@@ -315,6 +340,7 @@ impl EditorApp {
                 .render(page, &budget, texture_limit, &cancel)
                 .map_err(|error| format!("{error:#}"));
             let _ = replies.send(WorkspaceEvent::PdfPage {
+                target,
                 id,
                 version,
                 token,
@@ -323,9 +349,10 @@ impl EditorApp {
             });
         });
     }
-    /// Schedule a bounded page render with captured document version, request token and cancellation.
+    /// Admit a page reply only to its captured view, document version and request token.
     pub(super) fn pdf_page(
         &mut self,
+        target: Target,
         id: u64,
         version: u64,
         token: u64,
@@ -339,7 +366,7 @@ impl EditorApp {
         else {
             return;
         };
-        let Some(view) = &mut doc.pdf else {
+        let Some(view) = target.view(doc) else {
             return;
         };
         if let Some(error) = view.complete_page(token, page, result) {
@@ -447,14 +474,14 @@ mod tests {
                 .source
                 .render(2, &budget, 128, &AtomicBool::new(false))
                 .unwrap();
-            app.pdf_page(id, 0, token, 2, Ok(pixels));
+            app.pdf_page(Target::Document, id, 0, token, 2, Ok(pixels));
             assert_eq!(
                 app.documents[0].pdf.as_ref().unwrap().page,
                 if token == 0 { 2 } else { 1 }
             );
         }
         app.documents[0].pdf.as_mut().unwrap().image.loading = true;
-        app.pdf_page(id, 0, 0, 1, Err("Renderer failed".into()));
+        app.pdf_page(Target::Document, id, 0, 0, 1, Err("Renderer failed".into()));
         assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
         assert!(!app.documents[0].preview_loading());
         app.clear_project(
@@ -468,7 +495,7 @@ mod tests {
             .source
             .render(1, &budget, 128, &AtomicBool::new(false))
             .unwrap();
-        app.pdf_page(id, 0, 0, 1, Ok(pixels));
+        app.pdf_page(Target::Document, id, 0, 0, 1, Ok(pixels));
         assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
         assert!(!app.documents[0].dirty());
         drop(app);

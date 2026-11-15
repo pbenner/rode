@@ -39,6 +39,7 @@ pub struct SyntaxPalette {
     pub name: String,
     // None follows the current UI palette, preserving older configurations.
     pub(super) theme: Option<Theme>,
+    pub(super) glow: bool,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +49,8 @@ struct Definition {
     #[serde(default = "default_base")]
     base: String,
     foreground: Option<String>,
+    #[serde(default)]
+    glow: bool,
     #[serde(default)]
     rules: Vec<Rule>,
 }
@@ -67,6 +70,12 @@ impl SyntaxPalette {
     /// Parse a bounded custom full-scope theme from a supported built-in base and explicit
     /// style rules.
     pub fn from_json(id: &str, json: &str) -> Result<Self> {
+        Self::parse(id, json, false)
+    }
+
+    // Preserve upstream font-weight metadata without extending the custom
+    // format: egui's native TextFormat currently paints italic/underline only.
+    fn parse(id: &str, json: &str, embedded: bool) -> Result<Self> {
         ensure!(
             json.len() as u64 <= MAX_BYTES,
             "Syntax theme exceeds 128 KiB"
@@ -82,11 +91,8 @@ impl SyntaxPalette {
             definition.rules.len() <= 256,
             "Syntax themes support at most 256 rules"
         );
-        let (_, _, embedded) = PRESETS
-            .iter()
-            .find(|(id, _, _)| *id == definition.base)
-            .context("Unknown built-in syntax theme base")?;
-        let mut theme = presets().get(*embedded).clone();
+        let mut theme =
+            builtin_theme(&definition.base).context("Unknown built-in syntax theme base")?;
         theme.name = Some(name.into());
         if let Some(color) = definition.foreground {
             theme.settings.foreground = Some(syntax_color(parse_color(&color)?));
@@ -110,6 +116,7 @@ impl SyntaxPalette {
                     for word in value.split_whitespace() {
                         style |= match word {
                             "italic" => FontStyle::ITALIC,
+                            "bold" if embedded => FontStyle::BOLD,
                             "underline" => FontStyle::UNDERLINE,
                             _ => bail!("Unsupported font style '{word}'"),
                         };
@@ -140,6 +147,7 @@ impl SyntaxPalette {
             id: id.into(),
             name: name.into(),
             theme: Some(theme),
+            glow: definition.glow,
         })
     }
 }
@@ -157,12 +165,25 @@ pub(super) fn load(directory: &Path) -> (Vec<SyntaxPalette>, Vec<String>) {
         id: "ui".into(),
         name: "Follow UI theme".into(),
         theme: None,
+        glow: false,
     }];
     entries.extend(PRESETS.iter().map(|(id, name, preset)| SyntaxPalette {
         id: (*id).into(),
         name: (*name).into(),
         theme: Some(presets().get(*preset).clone()),
+        glow: false,
     }));
+    for (id, name, glow) in [
+        ("synthwave84", "SynthWave ’84", false),
+        ("synthwave84-neon", "SynthWave ’84 — Neon Dreams", true),
+    ] {
+        entries.push(SyntaxPalette {
+            id: id.into(),
+            name: name.into(),
+            theme: builtin_theme("synthwave84"),
+            glow,
+        });
+    }
     let mut warnings = vec![];
     if !directory.exists() {
         return (entries, warnings);
@@ -227,10 +248,12 @@ pub(super) fn generation() -> u64 {
 struct Settings<'a> {
     settings: &'a SyntectSettings,
     generation: u64,
+    glow: bool,
 }
 impl std::hash::Hash for Settings<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.generation.hash(state);
+        self.glow.hash(state);
     }
 }
 #[derive(Default)]
@@ -240,6 +263,7 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
         &mut self,
         (code, language, size, settings): (&str, &str, u32, Settings<'_>),
     ) -> LayoutJob {
+        let glow = settings.glow;
         let settings = settings.settings;
         let syntax = settings
             .ps
@@ -269,8 +293,11 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
                 return LayoutJob::simple(code.into(), font_id, foreground, f32::INFINITY);
             };
             for (style, token) in tokens {
-                let color =
+                let mut color =
                     Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+                if glow {
+                    color = super::glow::foreground(color);
+                }
                 job.sections.push(LayoutSection {
                     leading_space: 0.,
                     byte_range: offset..offset + token.len(),
@@ -302,6 +329,7 @@ pub(super) fn highlight(
     font_size: f32,
     settings: &SyntectSettings,
     generation: u64,
+    glow: bool,
 ) -> LayoutJob {
     ctx.memory_mut(|memory| {
         memory
@@ -314,9 +342,32 @@ pub(super) fn highlight(
                 Settings {
                     settings,
                     generation,
+                    glow,
                 },
             ))
     })
+}
+
+/// Resolve registered scope palettes, including the complete pinned SynthWave rules.
+/// `plain` starts a full custom scope map without unrelated inherited selectors.
+pub(super) fn builtin_theme(id: &str) -> Option<Theme> {
+    match id {
+        "plain" => Some(Theme::default()),
+        "synthwave84" | "synthwave84-neon" => Some(
+            SyntaxPalette::parse(
+                "synthwave84",
+                include_str!("../../themes/syntax/synthwave84.json"),
+                true,
+            )
+            .expect("embedded SynthWave syntax is valid")
+            .theme
+            .expect("scope palette"),
+        ),
+        _ => PRESETS
+            .iter()
+            .find(|(name, _, _)| *name == id)
+            .map(|(_, _, preset)| presets().get(*preset).clone()),
+    }
 }
 
 /// Convert an interface token to an opaque syntax foreground.

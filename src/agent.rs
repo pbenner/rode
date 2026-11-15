@@ -131,7 +131,7 @@ impl rode_agent_core::Factory for HostFactory {
                 &plan.prefix,
             )?,
         };
-        let output = crate::project::run_controlled(
+        let output = rode_host_core::command::run_controlled(
             command,
             serde_json::to_vec(&request)?,
             std::time::Duration::from_secs(10),

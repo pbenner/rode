@@ -578,15 +578,10 @@ impl Chat {
 
     fn initialize(&mut self) -> Result<()> {
         self.deadline = Some(Instant::now() + Duration::from_secs(60));
-        let mut params = if self.config.provider.is_acp() {
-            json!({"protocolVersion":1,"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")},
-                "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false,"session":{"configOptions":{"boolean":true}}}})
-        } else {
-            json!({"clientInfo":{"name":"rode","title":"RODE","version":env!("CARGO_PKG_VERSION")}})
-        };
-        if !self.config.provider.is_acp() {
-            params["capabilities"] = json!({"experimentalApi":true});
-        }
+        let params = crate::initialization::parameters(
+            self.config.provider,
+            crate::initialization::Role::Conversation,
+        );
         self.call("initialize", params, Call::Initialize)
     }
     fn begin_turn(&mut self) -> Result<()> {

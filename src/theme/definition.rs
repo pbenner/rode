@@ -15,6 +15,11 @@ pub(super) const MAX_THEME_BYTES: u64 = 64 * 1024;
 pub(super) const MAX_CUSTOM_THEMES: usize = 32;
 
 const EMBEDDED_THEMES: &[(&str, &str)] = &[
+    ("synthwave84", include_str!("../../themes/synthwave84.json")),
+    (
+        "synthwave84-neon",
+        include_str!("../../themes/synthwave84-neon.json"),
+    ),
     (
         "atelier-dark",
         include_str!("../../themes/atelier-dark.json"),
@@ -59,6 +64,8 @@ struct ThemeFile {
     colors: BTreeMap<String, String>,
     #[serde(default)]
     syntax: BTreeMap<String, String>,
+    syntax_theme: Option<String>,
+    syntax_glow: Option<bool>,
     ansi: Option<[String; 16]>,
     terminal: Option<TerminalSettings>,
     chrome: Option<Chrome>,
@@ -100,6 +107,16 @@ impl ThemeFile {
         let mut theme = base.clone();
         theme.id = id.into();
         theme.name = name.into();
+        if let Some(base) = file.syntax_theme {
+            theme.syntax_base = Some(
+                super::syntax::builtin_theme(&base)
+                    .with_context(|| format!("Unknown built-in syntax theme '{base}'"))?,
+            );
+            theme.syntax.clear();
+        }
+        if let Some(glow) = file.syntax_glow {
+            theme.syntax_glow = glow;
+        }
         if let Some(appearance) = file.appearance {
             theme.palette.dark_mode = matches!(appearance, Appearance::Dark);
         }
@@ -125,7 +142,7 @@ impl ThemeFile {
         }
         for (key, value) in file.syntax {
             syntax_scopes(&key).with_context(|| format!("Unknown syntax color '{key}'"))?;
-            if theme.syntax.is_empty() {
+            if theme.syntax.is_empty() && theme.syntax_base.is_none() {
                 // A partial override of Phosphor should retain a complete code
                 // palette instead of turning every other token into plain text.
                 for (kind, value) in [
@@ -213,23 +230,25 @@ fn resolve(id: &str, definitions: &[(&str, &str)], chain: &mut Vec<String>) -> R
 }
 
 impl Theme {
-    /// Build syntax colors from semantic overrides or retain the original scope rules when none
-    /// exist.
-    /// An explicit semantic palette starts a fresh scope map so inherited rules cannot override it.
+    /// Build from an explicit full-scope base or a standalone semantic palette.
+    /// Category overrides join an explicitly chosen scope base; without one,
+    /// start fresh so unrelated inherited selectors cannot override the colors.
     pub(super) fn syntax_theme(&self, original: &SyntaxTheme) -> SyntaxTheme {
-        if self.syntax.is_empty() {
+        if self.syntax.is_empty() && self.syntax_base.is_none() {
             let mut theme = original.clone();
             if self.palette.text != Palette::default().text {
                 theme.settings.foreground = Some(syntax_color(self.palette.text));
             }
             return theme;
         }
-        // Start clean so inherited scopes cannot override a semantic palette.
-        let mut theme = SyntaxTheme {
+        // Only an explicitly selected full-scope base contributes inherited rules.
+        let mut theme = self.syntax_base.clone().unwrap_or_else(|| SyntaxTheme {
             name: Some(self.name.clone()),
             ..Default::default()
-        };
-        theme.settings.foreground = Some(syntax_color(self.palette.text));
+        });
+        if self.syntax_base.is_none() {
+            theme.settings.foreground = Some(syntax_color(self.palette.text));
+        }
         theme.settings.background = Some(syntax_color(self.palette.background));
         for (key, color) in &self.syntax {
             theme.scopes.push(ThemeItem {

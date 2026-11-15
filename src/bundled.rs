@@ -14,7 +14,9 @@
 //! Only the verified tool directory is mounted read-only into an active sandbox;
 //! project grants, credentials, model servers and inference remain independent.
 
-use crate::{files, project, sandbox, ssh};
+#[cfg(test)]
+use crate::project;
+use crate::{files, sandbox, ssh};
 use anyhow::{Context, Result, bail, ensure};
 use rode_host_core::runtime_cache::pins::{Notice, Target, valid_sha256, validate_version};
 use serde::Deserialize;
@@ -458,7 +460,7 @@ fn remote_call(
     ));
     let mut prelude = data.into_bytes();
     prelude.push(b'\n');
-    let output = project::run_controlled_stream(
+    let output = rode_host_core::command::run_controlled_stream(
         command,
         std::io::Cursor::new(prelude).chain(input),
         Duration::from_secs(180),

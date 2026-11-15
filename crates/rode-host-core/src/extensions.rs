@@ -608,7 +608,7 @@ pub fn run_cancellable(
     let payload = serde_json::json!({"api": API_VERSION, "extension": invocation.extension, "operation": invocation.operation, "root": root, "path": invocation.path, "text": invocation.text, "settings": invocation.settings});
     let mut command = Command::new(&invocation.program);
     command.args(&invocation.args).current_dir(&root);
-    let output = crate::project::run_controlled(
+    let output = crate::command::run_controlled(
         command,
         serde_json::to_vec(&payload)?,
         Duration::from_secs(20),
@@ -643,7 +643,7 @@ pub fn execute<S: Serialize>(
 ) -> Result<Reply> {
     let mut input = serde_json::to_vec(request)?;
     input.push(b'\n');
-    let output = crate::project::run_controlled(
+    let output = crate::command::run_controlled(
         command,
         input,
         std::time::Duration::from_secs(25),

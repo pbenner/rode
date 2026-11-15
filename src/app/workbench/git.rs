@@ -5,6 +5,8 @@
 //! choices. Render from cached results rather than running Git during layout.
 use super::*;
 mod auth;
+mod controller;
+use controller::{Admission, Operation};
 mod history;
 pub(super) mod identity;
 mod rows;
@@ -880,27 +882,20 @@ impl EditorApp {
                                     )
                                     .clicked()
                                 {
-                                    if self.documents.iter().any(Document::dirty) {
-                                        self.notify(
-                                            "Save modified editor buffers before staging hunks.",
-                                            true,
-                                        );
-                                    } else {
-                                        let mut args = strings(&["apply", "--cached"]);
-                                        if diff.staged {
-                                            args.push("--reverse".into());
-                                        }
-                                        args.push("-".into());
-                                        self.git_command(
-                                            args,
-                                            GitJob::Mutate {
-                                                label: "Stage hunk".into(),
-                                                clear_message: false,
-                                            },
-                                            Some(patch),
-                                            ctx,
-                                        );
+                                    let mut args = strings(&["apply", "--cached"]);
+                                    if diff.staged {
+                                        args.push("--reverse".into());
                                     }
+                                    args.push("-".into());
+                                    self.git_command(
+                                        args,
+                                        GitJob::Mutate {
+                                            label: "Stage hunk".into(),
+                                            clear_message: false,
+                                        },
+                                        Some(patch),
+                                        ctx,
+                                    );
                                 }
                             }
                         });
@@ -957,6 +952,36 @@ impl EditorApp {
         }
         self.git_auth_dialog(ctx);
     }
+    /// Background refreshes silently defer when unavailable; rejected source/index
+    /// mutations explain the dirty-buffer requirement to the user.
+    fn git_operation(&mut self, operation: Operation, ctx: &egui::Context) {
+        if let Err(error @ Admission::Dirty) = self.dispatch_git(operation, vec![], ctx) {
+            self.notify(error.message(), true);
+        }
+    }
+
+    /// Compose domain admission with the existing policy-bound project worker.
+    /// Credential prompts retain their operation when admission rejects a retry.
+    fn dispatch_git(
+        &mut self,
+        operation: Operation,
+        credentials: Vec<project::git_auth::Credentials>,
+        ctx: &egui::Context,
+    ) -> Result<(), Admission> {
+        let ready = self.project_ready();
+        let dirty = self.documents.iter().any(Document::dirty);
+        self.workbench.git.admit(&operation, ready, dirty)?;
+        let root = if self.workbench.git.git_root.is_empty() {
+            self.root()
+        } else {
+            self.workbench.git.git_root.clone()
+        };
+        operation.begin_auth(&mut self.workbench.git.auth, &credentials);
+        let (request, job) = operation.into_request(root, credentials);
+        self.dispatch_tool(request, super::ToolJob::Git(job), ctx);
+        Ok(())
+    }
+
     /// Serialize a literal-argument Git request against the discovered repository root
     /// and return its captured completion intent through the project worker.
     pub(in crate::app) fn git_command(
@@ -966,49 +991,9 @@ impl EditorApp {
         input: Option<String>,
         ctx: &egui::Context,
     ) {
-        self.git_command_authenticated(args, job, input, vec![], ctx);
+        self.git_operation(Operation::command(args, job, input), ctx);
     }
 
-    /// Capture an explicit retry; secrets travel in the request body, never argv or preferences.
-    fn git_command_authenticated(
-        &mut self,
-        args: Vec<String>,
-        job: GitJob,
-        input: Option<String>,
-        credentials: Vec<project::git_auth::Credentials>,
-        ctx: &egui::Context,
-    ) {
-        if self.workbench.git.git_busy || !self.project_ready() {
-            return;
-        }
-        self.workbench.git.git_busy = true;
-        self.workbench.git.committing = matches!(
-            job,
-            GitJob::Mutate {
-                clear_message: true,
-                ..
-            }
-        );
-        let root = if self.workbench.git.git_root.is_empty() {
-            self.root()
-        } else {
-            self.workbench.git.git_root.clone()
-        };
-        self.workbench
-            .git
-            .auth
-            .begin(&args, &job, &credentials, input.is_none());
-        let request = if credentials.is_empty() {
-            project::Request::Git { root, args, input }
-        } else {
-            project::Request::GitAuthenticated {
-                root,
-                args,
-                credentials,
-            }
-        };
-        self.dispatch_tool(request, ToolJob::Git(job), ctx);
-    }
     /// Discover the repository root first, then refresh bounded NUL-delimited status metadata.
     pub(in crate::app) fn refresh_git(&mut self, ctx: &egui::Context) {
         if !self.feature(crate::extensions::Feature::Git) {
@@ -1067,7 +1052,7 @@ impl EditorApp {
         };
         self.git_command(args, GitJob::Tab, None, ctx);
     }
-    /// Require saved buffers and dispatch a stash action against its captured selector and object ID.
+    /// Dispatch an identity-checked stash operation through common Git admission.
     fn git_stash(
         &mut self,
         action: project::StashAction,
@@ -1075,80 +1060,17 @@ impl EditorApp {
         oid: String,
         ctx: &egui::Context,
     ) {
-        if self.workbench.git.git_busy || !self.project_ready() {
-            return;
-        }
-        if self.documents.iter().any(Document::dirty) {
-            self.notify(
-                "Save or close modified editor buffers before this Git operation.",
-                true,
-            );
-            return;
-        }
-        self.workbench.git.git_busy = true;
-        self.dispatch_tool(
-            project::Request::GitStash {
-                root: self.workbench.git.git_root.clone(),
-                action,
-                reference,
-                oid,
-            },
-            ToolJob::Git(GitJob::Mutate {
-                label: match action {
-                    project::StashAction::Apply => "Apply stash",
-                    project::StashAction::Pop => "Pop stash",
-                    project::StashAction::Drop => "Drop stash",
-                }
-                .into(),
-                clear_message: false,
-            }),
-            ctx,
-        );
+        self.git_operation(Operation::stash(action, reference, oid), ctx);
     }
-    /// Refuse source/index-changing commands while editor buffers are dirty, then dispatch
-    /// with a mutation label for refresh and commit-message acknowledgement handling.
+    /// Capture a mutation's literal arguments and display label. Its command effect,
+    /// including commit-draft acknowledgement, belongs to the operation controller.
     pub(in crate::app) fn git_mutate(
         &mut self,
         args: Vec<String>,
         label: &str,
         ctx: &egui::Context,
     ) {
-        let dirty = self.documents.iter().any(Document::dirty);
-        if dirty
-            && matches!(
-                args.first().map(String::as_str),
-                Some(
-                    "add"
-                        | "commit"
-                        | "switch"
-                        | "merge"
-                        | "rebase"
-                        | "stash"
-                        | "restore"
-                        | "pull"
-                        | "cherry-pick"
-                        | "revert"
-                        | "apply"
-                        | "reset"
-                        | "rm"
-                )
-            )
-        {
-            self.notify(
-                "Save or close modified editor buffers before this Git operation.",
-                true,
-            );
-            return;
-        }
-        self.git_command(
-            args,
-            GitJob::Mutate {
-                label: label.into(),
-                clear_message: label == "Commit",
-            },
-            None,
-            ctx,
-        );
+        self.git_operation(Operation::mutation(args, label), ctx);
     }
     /// Build the unstage command for a normal or unborn branch, optionally limiting it to one path.
     pub(in crate::app) fn unstage_args(&self, path: Option<&str>) -> Vec<String> {

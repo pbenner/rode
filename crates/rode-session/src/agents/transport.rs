@@ -73,7 +73,7 @@ impl rode_agent_core::Factory for Factory {
                 ))
                 .collect(),
         };
-        let output = rode_host_core::project::run_controlled(
+        let output = rode_host_core::command::run_controlled(
             command,
             serde_json::to_vec(&request)?,
             Duration::from_secs(10),

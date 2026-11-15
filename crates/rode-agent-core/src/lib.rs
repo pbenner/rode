@@ -9,6 +9,7 @@ pub mod attachment;
 pub mod controls;
 pub mod file_only;
 pub mod history;
+mod initialization;
 mod input_history;
 pub mod io;
 pub mod network;

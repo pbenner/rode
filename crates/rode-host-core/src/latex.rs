@@ -1,12 +1,13 @@
 //! Installed LaTeX tools on the project host. Sources stay under ordinary safe
 //! saves; explicit builds produce artifacts and never rewrite editor buffers.
+use crate::{command::program_argument as program, paths::resolve};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs,
     io::Read,
-    os::{fd::AsRawFd, unix::process::CommandExt},
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicBool, Ordering},
@@ -155,26 +156,11 @@ pub struct Reply {
     /// Output PDF path when a successful build produced it; file bytes are loaded separately.
     pub pdf: Option<String>,
     /// Compiler exit code and bounded stdout/stderr.
-    pub output: crate::project::Output,
+    pub output: crate::command::Output,
     /// Bounded clickable source issues.
     pub diagnostics: Vec<Issue>,
     /// Additional nonfatal build/preview explanation.
     pub note: String,
-}
-fn resolve(root: &Path, value: &str) -> PathBuf {
-    let path = crate::files::expand_home(value);
-    if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    }
-}
-fn program(root: &Path, value: &str) -> String {
-    if value.contains('/') || value.starts_with('~') {
-        resolve(root, value).to_string_lossy().into()
-    } else {
-        value.into()
-    }
 }
 /// Resolve the explicit main file or bounded TeX root-comment chain, rejecting cycles and
 /// invalid source paths.
@@ -305,19 +291,8 @@ pub fn run(invocation: &Invocation, cancel: &AtomicBool) -> Result<Reply> {
         .current_dir(parent)
         .env("NO_COLOR", "1")
         .env("LC_ALL", "C.UTF-8");
-    unsafe {
-        command.pre_exec(|| {
-            let limit = libc::rlimit {
-                rlim_cur: 64 * 1024 * 1024,
-                rlim_max: 64 * 1024 * 1024,
-            };
-            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let result = crate::project::run_controlled(
+    crate::command::limit_file_size(&mut command, 64 * 1024 * 1024);
+    let result = crate::command::run_controlled(
         command,
         vec![],
         Duration::from_secs(settings.timeout_seconds),
@@ -530,7 +505,7 @@ pub fn execute(command: Command, invocation: &Invocation, cancel: &AtomicBool) -
     invocation.settings.validate()?;
     let mut input = serde_json::to_vec(invocation)?;
     input.push(b'\n');
-    let result = crate::project::run_controlled_limited(
+    let result = crate::command::run_controlled_limited(
         command,
         input,
         Duration::from_secs(invocation.settings.timeout_seconds + 10),

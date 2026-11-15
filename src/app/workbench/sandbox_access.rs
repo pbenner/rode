@@ -40,7 +40,7 @@ pub(in crate::app) fn rules_ui(
                 let mut access = options.overrides.get(&path).copied().unwrap_or(default);
                 ui.push_id(("access", &path), |ui| {
                     row(ui, index, columns.height, palette, |ui| {
-                        cell_label(ui, columns.path_width(ui), columns.height, RichText::new(&path).monospace())
+                        layout::bounded_label(ui, RichText::new(&path).monospace(), columns.path_width(ui), columns.height)
                             .on_hover_text(format!("{path}\nDefault: {}", default.label()));
                         access_picker(ui, &mut access, columns, true);
                         ui.allocate_space(egui::vec2(columns.action, columns.height));
@@ -214,8 +214,8 @@ fn list(
         ui.set_width(ui.available_width().max(1.));
         ui.spacing_mut().item_spacing.y = 2.;
         row(ui, 0, 18., palette, |ui| {
-            cell_label(ui, columns.path_width(ui), 18., palette.tag("PATH"));
-            cell_label(ui, columns.access, 18., palette.tag("ACCESS"));
+            layout::bounded_label(ui, palette.tag("PATH"), columns.path_width(ui), 18.);
+            layout::bounded_label(ui, palette.tag("ACCESS"), columns.access, 18.);
             ui.allocate_space(egui::vec2(columns.action, 18.));
         });
         contents(ui);
@@ -245,18 +245,6 @@ fn row(
                 contents,
             );
         });
-}
-
-fn cell_label(ui: &mut egui::Ui, width: f32, height: f32, text: RichText) -> egui::Response {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width, height),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.set_min_size(egui::vec2(width, height));
-            ui.add(egui::Label::new(text).truncate())
-        },
-    )
-    .inner
 }
 
 fn access_picker(

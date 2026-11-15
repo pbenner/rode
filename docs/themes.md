@@ -1,10 +1,12 @@
 # Themes
 
 
-Click **Theme: …** at the bottom right, or choose **View → Color theme**. Seventeen built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
+Click **Theme: …** at the bottom right, or choose **View → Color theme**. Nineteen built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
+| SynthWave ’84 | `synthwave84` | Upstream purple surfaces, pink variables, cyan functions, yellow keywords and orange strings |
+| SynthWave ’84 — Neon Dreams | `synthwave84-neon` | SynthWave’s optional bright token cores, native glyph halos, pink-to-cyan tab/activity accents and subtle editor gradient |
 | Atelier Dark | `atelier-dark` | Neutral graphite surfaces, emerald accents, crisp white text and distinct semantic syntax |
 | Atelier Light | `atelier-light` | Matching cool-white surfaces, cobalt accents, deep ink text and a complete light terminal palette |
 | Phosphor | `phosphor` | Original charcoal and soft green; the default |
@@ -23,7 +25,7 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Se
 | Studio Neutral | `studio-neutral` | Studio’s rounded styling with neutral charcoal surfaces, silver accents, sage strings and sand keywords |
 | Studio Hacker | `studio-hacker` | Studio’s rounded styling with green-black surfaces, fresh green accents, mint text and green terminal prompts |
 
-Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, or One Half Dark code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
+Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, One Half Dark, or either SynthWave ’84 variant’s code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
 Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in Atelier Light). Carbon and Carbon Edge use warm-neutral prompt accents, Atelier Dark emerald, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier Light cool blue, Studio Neutral silver-blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
@@ -40,6 +42,8 @@ Empty input fields show examples and default behaviour in the theme's muted text
 The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber**, and the other built-in/custom choices. Changes apply immediately without restarting the session. An independently selected syntax theme keeps its code colors. UI selections are flushed to local preferences as soon as they change and restored on startup; closing the application is not required to save them. On Linux the preference file is `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`.
 
 ```sh
+./target/release/rode . --theme synthwave84 --syntax-theme ui
+./target/release/rode . --theme synthwave84-neon --syntax-theme ui
 ./target/release/rode . --theme atelier-dark
 ./target/release/rode . --theme atelier-light
 ./target/release/rode . --theme carbon
@@ -53,6 +57,24 @@ The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber*
 ./target/release/rode . --theme studio-neutral
 ./target/release/rode . --theme studio-hacker
 ```
+
+**SynthWave ’84** adapts [Robb Owen’s original theme](https://github.com/robb0wen/synthwave-vscode)
+at revision `ecfa2fe1279f7233663fa3f98a96e6756000567b`. Select **Follow UI theme**
+for its complete 88-rule syntax palette. **Neon Dreams** adds native static halos
+in source and notebook editors, the original bright token cores, gradient tab and
+activity accents, and an editor wash. Both are available as independent syntax
+choices too; explicitly chosen syntax colors remain independent of the interface.
+
+Neon effects use the existing font atlas, clip to visible code, and cap halo work
+at 4096 colored glyphs per editor. They create no animation timer, background
+service, CSS injection or extra text buffer. This is a native approximation of
+upstream CSS blur, rather than a pixel-identical VS Code renderer. Font weights
+follow RODE’s existing monospace renderer; upstream bold metadata is retained,
+while italics and underlines render directly. Bright ANSI red is lifted from
+`#fe4450` to `#fe4551` to retain RODE’s 4.5:1 bright-terminal contrast floor;
+normal ANSI red and the upstream syntax colors are preserved. The MIT notice is
+included in `rode --theme-licenses` and packaged third-party notices. See the
+[pinned source and adaptation notes](../themes/syntax/README.md).
 
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
 Both share compact 28-point controls, restrained corner radii, proportional UI

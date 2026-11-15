@@ -268,7 +268,7 @@ impl EditorApp {
                             "ENCRYPTED PROJECT · UNLOCKED"
                         },
                     );
-                    chrome::bounded_label(
+                    layout::bounded_label(
                         ui,
                         RichText::new(ssh::display_name(&info.cipherdir)).monospace(),
                         (ui.available_width() - 160.).clamp(40., 500.),

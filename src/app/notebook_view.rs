@@ -698,23 +698,15 @@ impl EditorApp {
                                 .and_then(|id| view.display_ids.get(id))
                                 .cloned()
                                 .unwrap_or_default();
-                            for (uid, version, index) in targets {
-                                if let Some(cell) = view
-                                    .book
-                                    .cells
-                                    .iter_mut()
-                                    .find(|c| c.uid == uid && c.version == version)
-                                    && let Some(old) = cell.data["outputs"]
-                                        .as_array_mut()
-                                        .and_then(|o| o.get_mut(index))
-                                {
-                                    *old = output.clone();
-                                    cell.outputs_version = cell.outputs_version.wrapping_add(1);
-                                    view.invalidate_pictures(uid);
-                                    changed = true;
-                                }
-                            }
-                            Ok(false)
+                            view.book
+                                .update_display_outputs(&targets, &output)
+                                .map(|uids| {
+                                    let changed = !uids.is_empty();
+                                    for uid in uids {
+                                        view.invalidate_pictures(uid);
+                                    }
+                                    changed
+                                })
                         } else {
                             let mut index = view
                                 .book

@@ -74,7 +74,14 @@ impl Reader {
             deadline: Instant::now(),
             error: None,
         };
-        reader.call("initialize", json!({"clientInfo":{"name":"rode","title":"RODE prompt history","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}), Call::Initialize)?;
+        reader.call(
+            "initialize",
+            crate::initialization::parameters(
+                reader.launch.config.provider,
+                crate::initialization::Role::PromptHistory,
+            ),
+            Call::Initialize,
+        )?;
         Ok(reader)
     }
 

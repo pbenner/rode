@@ -353,7 +353,7 @@ impl Mount {
     fn tool(&self, args: &[&str], password: &str) -> Result<()> {
         let mut command = Command::new(crate::files::expand_home(&self.settings.program));
         command.args(args).current_dir("/");
-        let result = crate::project::run_controlled_limited(
+        let result = crate::command::run_controlled_limited(
             command,
             password.as_bytes().to_vec(),
             Duration::from_secs(60),

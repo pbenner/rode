@@ -1,5 +1,4 @@
 //! Desktop discovery of the matching native session helper.
-use crate::project;
 use anyhow::{Context, Result, ensure};
 pub use rode_session::workspace::{Operation, Reply, fingerprint, initial_input};
 use std::path::PathBuf;
@@ -22,7 +21,7 @@ pub fn local(operation: &Operation) -> Result<Reply> {
     if let Some(path) = &standalone {
         let mut command = std::process::Command::new(path);
         command.arg("protocol");
-        let output = project::run_controlled_limited(
+        let output = rode_host_core::command::run_controlled_limited(
             command,
             vec![],
             std::time::Duration::from_secs(5),

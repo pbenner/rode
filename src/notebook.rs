@@ -15,6 +15,7 @@ pub mod kernel;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -23,11 +24,11 @@ use std::{
 pub const MAX_CELLS: usize = 1024;
 /// Maximum source size per cell in bytes.
 pub const MAX_SOURCE: usize = 256 * 1024;
-pub use rode_runtime_core::notebook::MAX_CODE;
-/// Maximum retained outputs per code cell.
-pub const MAX_OUTPUTS: usize = 256;
-/// Maximum serialized outputs per cell in bytes.
-pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+use rode_runtime_core::notebook::outputs;
+pub use rode_runtime_core::notebook::{
+    MAX_CODE,
+    outputs::{MAX_OUTPUT_BYTES, MAX_OUTPUTS},
+};
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Editable cell preserving unknown nbformat fields alongside runtime-only identity/version
@@ -227,6 +228,52 @@ impl Notebook {
         self.data["metadata"]["kernelspec"]["display_name"] = json!(name);
         Ok(())
     }
+    /// Replace display outputs addressed by `(cell UID, source version, output index)`.
+    /// Ignore obsolete targets and validate every affected cell before changing any.
+    /// Return changed UIDs so views can invalidate their own decoded-output caches.
+    pub fn update_display_outputs(
+        &mut self,
+        targets: &[(u64, u64, usize)],
+        output: &Value,
+    ) -> Result<Vec<u64>> {
+        let mut grouped = HashMap::<_, Vec<_>>::new();
+        for &(uid, version, index) in targets {
+            grouped.entry((uid, version)).or_default().push(index);
+        }
+        let mut candidates = Vec::new();
+        for (index, cell) in self.cells.iter().enumerate() {
+            let Some(mut indices) = grouped.remove(&(cell.uid, cell.version)) else {
+                continue;
+            };
+            let Some(current) = cell.data["outputs"].as_array() else {
+                continue;
+            };
+            indices.retain(|index| *index < current.len());
+            if indices.is_empty() {
+                continue;
+            }
+            outputs::validate(current.iter().enumerate().map(|(index, old)| {
+                if indices.contains(&index) {
+                    output
+                } else {
+                    old
+                }
+            }))?;
+            candidates.push((index, indices));
+        }
+        let mut changed = Vec::with_capacity(candidates.len());
+        for (index, indices) in candidates {
+            let cell = &mut self.cells[index];
+            let current = cell.data["outputs"].as_array_mut().unwrap();
+            for index in indices {
+                current[index] = output.clone();
+                cell.outputs_version = cell.outputs_version.wrapping_add(1);
+            }
+            changed.push(cell.uid);
+        }
+        Ok(changed)
+    }
+
     /// Apply output/count/clear only to the matching cell identity and source version. Returns
     /// `false` for stale/deleted cells and rolls back changes that exceed output/document
     /// limits.
@@ -257,15 +304,11 @@ impl Notebook {
             let outputs = cell.data["outputs"]
                 .as_array_mut()
                 .context("Cell outputs are invalid")?;
-            if outputs.len() >= MAX_OUTPUTS {
-                cell.data = old;
-                anyhow::bail!("Cell output limit reached.");
-            }
             outputs.push(output);
         }
-        if cell.data["outputs"].to_string().len() > MAX_OUTPUT_BYTES {
+        if let Err(error) = outputs::validate(cell.outputs()) {
             cell.data = old;
-            anyhow::bail!("Cell output exceeds 1 MiB; interrupt or clear outputs.");
+            return Err(error);
         }
         if let Err(error) = self.serialize() {
             self.cells[index].data = old;

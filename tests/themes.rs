@@ -699,8 +699,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 "{} green path",
                 builtin.id
             ),
-            "ice" | "code-dark" | "afterglow" | "knight-rider" | "hologram" | "studio"
-            | "studio-neutral" | "atelier-light" => {
+            "synthwave84" | "synthwave84-neon" | "ice" | "code-dark" | "afterglow"
+            | "knight-rider" | "hologram" | "studio" | "studio-neutral" | "atelier-light" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
@@ -922,7 +922,7 @@ fn malformed_or_excessive_syntax_themes_leave_presets_usable() {
     fs::write(syntax.join("00.json"), "invalid JSON").unwrap();
     let (mut themes, warnings) = Themes::load(&root.path().join("themes"), "carbon");
     assert!(!warnings.is_empty());
-    assert!(themes.syntax_entries.len() <= 38);
+    assert!(themes.syntax_entries.len() <= 40);
     themes.select_syntax("nord", &Default::default()).unwrap();
     assert_eq!(themes.active_syntax().id, "nord");
 }

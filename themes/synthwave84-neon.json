@@ -1,0 +1,10 @@
+{
+  "name": "SynthWave ’84 — Neon Dreams",
+  "base": "synthwave84",
+  "chrome": "neon",
+  "colors": {
+    "background": "#2a2139",
+    "editor_gradient": "#34294f"
+  },
+  "syntax_glow": true
+}

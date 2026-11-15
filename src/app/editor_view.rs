@@ -81,6 +81,7 @@ impl EditorApp {
             .frame(egui::Frame::new().fill(palette.background).inner_margin(if palette.chrome.is_decorated() { 8 } else { 0 }))
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
+                palette.paint_editor_background(ui);
                 if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() { ui.disable(); }
                 self.pane_ui(ui,navigation::Pane::Editor);
                 if ui.available_height() <= 1.0 {
@@ -108,7 +109,7 @@ impl EditorApp {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(18, 7))
                     .show(ui, |ui| {
-                        let response = chrome::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
+                        let response = layout::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
                             .on_hover_text(path);
                         if !self.documents[self.documents.active_index()].preview_loading() {
                             ui_probe::value(ui, "active-document", &response, path);
@@ -232,6 +233,7 @@ impl EditorApp {
                                 ui.memory_mut(|memory| memory.request_focus(id));
                                 ctx.request_repaint();
                             }
+                            let glow = themes.glow_layer(ui);
                             let mut output = doc.edit_source(|source| {
                                 egui::TextEdit::multiline(source)
                                 .id(id)
@@ -245,6 +247,7 @@ impl EditorApp {
                                 .layouter(&mut layouter)
                                 .show(ui)
                             });
+                            themes.paint_glow(ui, glow, &output.galley, output.galley_pos);
                             input.after_source(ui,doc.id,&mut output,&doc.text,palette);
                             ui_probe::button(ui, "source-editor", &output.response);
                             if output.cursor_range.is_some_and(|range| range.primary.index == 0 && range.secondary.index == 0) {

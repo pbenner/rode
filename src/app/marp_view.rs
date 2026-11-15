@@ -270,7 +270,7 @@ impl EditorApp {
         if reload {
             view.attempted = None;
         } else if let Some((page, entry)) = page {
-            self.marp_render_page(id, page, entry, ctx);
+            self.render_pdf_page(id, pdf_view::Target::Presentation, page, entry, ctx);
         }
     }
     /// Open the export destination picker for an explicitly selected presentation format.
@@ -547,64 +547,6 @@ impl EditorApp {
                 view.error = error.clone();
                 self.notify(error, true);
             }
-        }
-    }
-    fn marp_render_page(
-        &mut self,
-        id: u64,
-        page: usize,
-        entry: pdf_view::PageEntry,
-        ctx: &egui::Context,
-    ) {
-        let Some(doc) = self.documents.iter_mut().find(|doc| doc.id == id) else {
-            return;
-        };
-        let Some(pdf) = doc.marp.as_mut().and_then(|view| view.pdf.as_mut()) else {
-            return;
-        };
-        let Some((source, cancel, token)) = pdf.begin_page(page, entry) else {
-            return;
-        };
-        let version = doc.version();
-        let replies = self.workers.workspace(ctx);
-        let budget = self.image_budget.clone();
-        let limit = ctx.input(|i| i.max_texture_side);
-        let vault_work = self.vaults.work();
-        std::thread::spawn(move || {
-            let _vault_work = vault_work;
-            let _io = budget.io.lock().unwrap_or_else(|error| error.into_inner());
-            let result = source
-                .render(page, &budget, limit, &cancel)
-                .map_err(|error| format!("{error:#}"));
-            let _ = replies.send(WorkspaceEvent::MarpPage {
-                id,
-                version,
-                token,
-                page,
-                result,
-            });
-        });
-    }
-    /// Schedule a cancellable render of one page from the retained slide-preview PDF.
-    pub(super) fn marp_page(
-        &mut self,
-        id: u64,
-        version: u64,
-        token: u64,
-        page: usize,
-        result: Result<crate::images::Decoded, String>,
-    ) {
-        let Some(doc) = self
-            .documents
-            .iter_mut()
-            .find(|doc| doc.id == id && doc.version() == version)
-        else {
-            return;
-        };
-        if let Some(pdf) = doc.marp.as_mut().and_then(|view| view.pdf.as_mut())
-            && let Some(error) = pdf.complete_page(token, page, result)
-        {
-            self.notify(error, true);
         }
     }
 }

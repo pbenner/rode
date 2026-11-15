@@ -107,14 +107,9 @@ fn cleanup() {
     }
 }
 fn resolve(root: &std::path::Path, value: &str) -> String {
-    let path = crate::files::expand_home(value);
-    if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    }
-    .to_string_lossy()
-    .into()
+    crate::paths::resolve(root, value)
+        .to_string_lossy()
+        .into_owned()
 }
 fn prepare(start: &Start) -> Result<(Vec<String>, Value)> {
     super::Settings {

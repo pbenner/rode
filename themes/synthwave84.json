@@ -1,0 +1,71 @@
+{
+  "name": "SynthWave ’84",
+  "base": "phosphor",
+  "appearance": "dark",
+  "chrome": "plain",
+  "colors": {
+    "background": "#262335",
+    "panel": "#241b2f",
+    "raised": "#2a2139",
+    "border": "#495495",
+    "control_border": "#614d85",
+    "text": "#ffffff",
+    "muted": "#b6b1b1",
+    "accent": "#ff7edb",
+    "cursor": "#f97e72",
+    "activity_background": "#171520",
+    "frame_accent": "#fc28a8",
+    "heading": "#03edf9",
+    "success": "#72f1b8",
+    "error": "#fe4450",
+    "selection": "#413f4e",
+    "hover": "#332345",
+    "active": "#463465",
+    "gutter": "#888693",
+    "terminal_background": "#262335",
+    "terminal_foreground": "#ffffff",
+    "status_background": "#241b2f"
+  },
+  "syntax_theme": "synthwave84",
+  "ansi": [
+    "#241b2f",
+    "#fe4450",
+    "#72f1b8",
+    "#f3e70f",
+    "#03edf9",
+    "#ff7edb",
+    "#03edf9",
+    "#ffffff",
+    "#848bbd",
+    "#fe4551",
+    "#72f1b8",
+    "#fede5d",
+    "#03edf9",
+    "#ff7edb",
+    "#03edf9",
+    "#ffffff"
+  ],
+  "ui": {
+    "control_radius": 2,
+    "surface_radius": 3,
+    "popup_radius": 3,
+    "control_height": 28,
+    "button_padding": [
+      10,
+      5
+    ],
+    "item_spacing": [
+      8,
+      6
+    ],
+    "surface_padding": 12,
+    "popup_padding": 16,
+    "body_size": 14,
+    "button_size": 13,
+    "heading_size": 21,
+    "small_size": 11,
+    "border_width": 1,
+    "focus_width": 1,
+    "disabled_alpha": 0.5
+  }
+}

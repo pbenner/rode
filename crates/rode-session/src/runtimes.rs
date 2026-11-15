@@ -1,7 +1,7 @@
 //! Host-owned notebook queues and debugger controllers with exclusive UI leases.
 use super::*;
 use rode_runtime_core::{
-    debugger, notebook,
+    debugger, json_size, notebook,
     service::{
         self, Cell, Command as Action, DebugAction, Envelope, Info, Kind, Spec, Start,
         State as View, Update,
@@ -778,7 +778,6 @@ fn notebook_event(shared: &mut Shared, event: notebook::Event) -> Result<()> {
         Event::Output {
             output, display_id, ..
         } => {
-            ensure!(cell.outputs.len() < 256, "Cell output exceeded 256 records");
             cell.outputs.push(service::Output {
                 value: output,
                 display: display_id,
@@ -789,6 +788,7 @@ fn notebook_event(shared: &mut Shared, event: notebook::Event) -> Result<()> {
         Event::Done(_, status) => cell.done = Some(status),
         _ => {}
     }
+    notebook::outputs::validate(cell.outputs.iter().map(|output| &output.value))?;
     let size = json_size(&shared.cells)?;
     let size = if let Some(previous) = previous {
         size - json_size(previous)? + json_size(&cell)?
@@ -823,6 +823,24 @@ fn update_notebook_displays(
         }
     }
     check_notebook_budget(cells.len(), size)?;
+    // The retained host map also has a global wire budget, but each updated
+    // nbformat array must remain acceptable to a desktop reopening this kernel.
+    // No cell or revision changes until every proposed replacement passes.
+    for cell in cells.values() {
+        if cell
+            .outputs
+            .iter()
+            .any(|old| old.display.as_deref() == Some(id))
+        {
+            notebook::outputs::validate(cell.outputs.iter().map(|old| {
+                if old.display.as_deref() == Some(id) {
+                    output
+                } else {
+                    &old.value
+                }
+            }))?;
+        }
+    }
     for cell in cells.values_mut() {
         let mut changed = false;
         for old in &mut cell.outputs {
@@ -844,23 +862,6 @@ fn check_notebook_budget(cells: usize, size: usize) -> Result<()> {
     );
     Ok(())
 }
-fn json_size(value: &impl serde::Serialize) -> Result<usize> {
-    // Count encoded bytes without allocating another copy of retained outputs.
-    struct Counter(usize);
-    impl Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    serde_json::to_writer(&mut counter, value)?;
-    Ok(counter.0)
-}
-
 fn terminal_event_room(shared: &Shared) -> bool {
     !shared.view.info.attached
         || shared.events.len() < TERMINAL_EVENT_LIMIT

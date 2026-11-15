@@ -62,3 +62,13 @@ The editor embeds the pin and these notice snapshots so user installation works 
 Keep the native icon style, record sources for imported or adapted artwork, retain the exact upstream license and required credits, and check trademark conditions separately. Do not trace vendor icons or copy SVG paths into Rust and label them MIT merely because the representation changed. Prefer independently designed generic symbols over product logos. Review both source artwork and published screenshots when replacing an asset with uncertain provenance.
 
 This page records a technical source and notice review. Formal clearance of disputed designs requires qualified legal review.
+
+## SynthWave ’84 theme
+
+The SynthWave ’84 interface, terminal and syntax data adapt
+[Robb Owen’s original MIT-licensed theme](https://github.com/robb0wen/synthwave-vscode),
+pinned at `ecfa2fe1279f7233663fa3f98a96e6756000567b`. Native Neon Dreams
+decoration follows the original palette and CSS treatment, with no upstream
+extension code executed. The unchanged copyright/permission notice is embedded
+in `rode --theme-licenses` and included in packaged third-party notices. See
+[the source and adaptation record](../themes/syntax/README.md).

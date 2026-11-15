@@ -1,7 +1,7 @@
 //! Bounded client-owned command execution under an already enforced offline
 //! project plan. This entry point accepts no policy or executable from the
 //! model; controllers supply the original captured plan and environment.
-use crate::{project, sandbox::Plan};
+use crate::{command, sandbox::Plan};
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -54,7 +54,7 @@ pub fn run(
         .current_dir(&plan.root)
         .env_clear()
         .envs(environment);
-    let output = project::run_controlled_limited(
+    let output = command::run_controlled_limited(
         command,
         vec![],
         Duration::from_secs(args.timeout_seconds),

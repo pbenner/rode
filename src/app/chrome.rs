@@ -55,7 +55,7 @@ impl EditorApp {
             .exact_height(27.)
             .frame(
                 egui::Frame::new()
-                    .fill(palette.raised)
+                    .fill(palette.status_background.unwrap_or(palette.raised))
                     .inner_margin(egui::Margin::symmetric(12, 4)),
             )
             .show(ctx, |ui| {
@@ -799,24 +799,6 @@ fn elide(text: &str, limit: usize) -> String {
             .chain(std::iter::once('…'))
             .collect()
     }
-}
-
-/// Paint an elided label within the supplied width and retain full text in its tooltip.
-pub(super) fn bounded_label(
-    ui: &mut egui::Ui,
-    text: RichText,
-    width: f32,
-    height: f32,
-) -> egui::Response {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width, height),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.set_min_size(egui::vec2(width, height));
-            ui.add(egui::Label::new(text).truncate())
-        },
-    )
-    .inner
 }
 
 #[cfg(test)]

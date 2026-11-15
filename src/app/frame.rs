@@ -152,7 +152,7 @@ impl EditorApp {
                         } else {
                             "OFFLINE"
                         };
-                        chrome::bounded_label(
+                        layout::bounded_label(
                             ui,
                             RichText::new(format!("SSH {state}  ·  {host}"))
                                 .strong()
@@ -185,7 +185,7 @@ impl EditorApp {
                     }
                     ui.separator();
                     let path_width = (ui.available_width() - 410.0).clamp(60.0, 500.0);
-                    chrome::bounded_label(
+                    layout::bounded_label(
                         ui,
                         RichText::new(&root).monospace().size(12.0),
                         path_width,
@@ -250,7 +250,7 @@ impl EditorApp {
             .resizable(false)
             .frame(
                 egui::Frame::new()
-                    .fill(palette.panel)
+                    .fill(palette.activity_background.unwrap_or(palette.panel))
                     .inner_margin(egui::Margin::symmetric(7, 14)),
             )
             .show(ctx, |ui| {
@@ -317,13 +317,12 @@ impl EditorApp {
         );
         ui_probe::button(ui, &format!("activity:{}", definition.label), &response);
         if selected {
-            ui.painter().rect_filled(
+            palette.paint_activity(
+                ui.painter(),
                 egui::Rect::from_min_size(
                     egui::pos2(response.rect.left() - 7., response.rect.top() + 6.),
                     egui::vec2(2., response.rect.height() - 12.),
                 ),
-                0,
-                palette.accent,
             );
         }
         if response.clicked() {

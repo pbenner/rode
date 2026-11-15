@@ -7,13 +7,16 @@ use anyhow::{Result, bail};
 use std::{
     io::Read,
     path::PathBuf,
-    process::{Command, Output},
+    process::{Command, Output as ProcessOutput},
     sync::atomic::AtomicBool,
     time::Duration,
 };
 mod arguments;
 pub(crate) mod capture;
+mod tool;
 pub use arguments::{compact_pty, from_argv};
+pub(crate) use tool::OUTPUT_LIMIT;
+pub use tool::{Output, run, run_controlled, run_controlled_limited, run_controlled_stream};
 /// Quote one argument for a POSIX remote shell, including embedded single quotes.
 pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
@@ -64,7 +67,7 @@ pub fn capture_bounded(
     timeout: Duration,
     cancel: &AtomicBool,
     output_limit: usize,
-) -> Result<Output> {
+) -> Result<ProcessOutput> {
     capture::run(
         command,
         input,
@@ -94,6 +97,25 @@ pub fn new_session(command: &mut Command) {
     }
 }
 
+/// Apply the child's soft and hard per-file byte limit before execution.
+/// The post-fork hook captures only the numeric limit and calls `setrlimit`;
+/// output-capture budgets and renderer shutdown grace remain caller decisions.
+pub fn limit_file_size(command: &mut Command, bytes: libc::rlim_t) {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        command.pre_exec(move || {
+            let limit = libc::rlimit {
+                rlim_cur: bytes,
+                rlim_max: bytes,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Pin the running executable across replacement.
 pub fn current_executable() -> Result<PathBuf> {
     #[cfg(target_os = "linux")]
@@ -114,15 +136,23 @@ pub fn new_id() -> Result<String> {
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
     ))
 }
-/// Resolve literal program paths on the execution host, without a shell.
+/// Resolve an explicit program path while retaining bare names for the child's
+/// `PATH` lookup. This does not search for or pin an executable identity.
+pub fn program_argument(root: &std::path::Path, program: &str) -> String {
+    if program.contains('/') || program.starts_with('~') {
+        crate::paths::resolve(root, program)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        program.into()
+    }
+}
+
+/// Resolve executable identity on the execution host, including `PATH` search
+/// and the per-user executable fallback, without invoking a shell.
 pub fn resolve_program(root: &std::path::Path, program: &str) -> PathBuf {
     if program.contains('/') || program.starts_with('~') {
-        let path = crate::files::expand_home(program);
-        if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        }
+        crate::paths::resolve(root, program)
     } else {
         // Relative/empty PATH entries are relative to the child's working
         // directory, not this broker's current directory. Return an absolute

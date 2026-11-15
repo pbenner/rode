@@ -54,6 +54,8 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/execution.rs` | Shared captured host/project target, generation-bound reply endpoint and mount-work guard for file, tool and session workers; separate explicit host-mode Git preparation |
 | `src/app/agents/controller.rs`, `src/app/agents/view.rs` | Agent-owned lifecycle, queue and history admission; chat rendering receives immutable application facts and returns explicit cross-domain actions |
 | `src/app/sessions/controller.rs` | Terminal creation, retained attachment selection, bounded command routing and acknowledgement effects without access to the application coordinator |
+| `src/app/workbench/git/controller.rs` | Captured Git operations and one admission rule for commands, stash actions, patches and authentication retries; display labels do not determine mutation effects |
+| `src/app/pdf_view.rs` | Shared page-render jobs for PDF documents and slide previews, with explicit destinations and captured document/version/request identities |
 | `src/app/dialogs.rs`, `src/app/appearance.rs` | Guarded dialogs/notices, interface scale and theme preferences |
 | `src/app/chrome.rs`, `commands.rs`, `icons.rs`, `file_browser.rs` | Tabs/layout, typed palette actions, native icons and shared asynchronous pickers |
 | `src/app/layout.rs` | Shared bounded tool pages, responsive headings, themed cards/sections and empty states; reuses theme control/frame builders |
@@ -85,6 +87,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `crates/rode-session/src/attachment.rs` | Shared typed stdin-command forwarding and socket shutdown for agent/runtime attachments; each owner selects its frame budget and retains its output lifecycle |
 | `crates/rode-runtime-core/src/process/group.rs` | Shared process-group cancellation, delayed escalation and acknowledged cleanup for desktop, agent and runtime transports |
 | `crates/rode-runtime-core/src/process/wait.rs` | Nonreaping child-exit observation shared by transport ownership and synchronous capture guards |
+| `crates/rode-runtime-core/src/notebook/outputs.rs`, `crates/rode-runtime-core/src/json.rs` | Shared per-cell output budgets and allocation-free JSON byte accounting for desktop edits and retained host state |
 | `crates/rode-session/src/entry.rs` | Early helper dispatch shared by the installed and standalone/static executables; bubblewrap dispatch precedes all worker/runtime initialization |
 | `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `crates/rode-host-core/src/runtime_cache.rs`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
 | `crates/rode-host-core/src/runtime_cache/pins.rs` | Shared runtime artifact/notice model, pin/version validation, deterministic transfer order and uniform immutable cache identity |
@@ -178,10 +181,17 @@ A GUI/SSH attachment cannot own a shell that must outlive it. The headless nativ
 
 Agent history uses a separately supervised connection so failed or cancelled loading cannot replace the current conversation. Only explicit History starts it; opening the panel remains inert. The default list filters the current project. An explicit all-project view omits the backend's working-directory filter, within the same host, backend store and sandbox grants; it does not scan project folders. Foreign-project rows cannot restore into the current chat, and deletion requires the project-only view. Validated host/project metadata and current sandbox/permission settings precede replay. On success ownership transfers to the chat, with bounded recent messages and full context retained by the backend. RODE stores no duplicate transcript database. See `crates/rode-agent-core/src/history.rs`, `src/agent/history.rs`, `src/app/agents/history.rs` and [chat history](agents.md#chat-history).
 
+Conversation, history, catalog and prompt-history clients share the pure initialize
+payload builder in `crates/rode-agent-core/src/initialization.rs`. Each caller
+declares its role so existing protocol capabilities stay distinct. Transport,
+request IDs, deadlines and cancellation remain with each client.
+
 Synchronous host helpers and project commands share
 `rode_host_core::command::capture`. The binary wrapper keeps bytes intact and
-limits stderr separately; the project wrapper decodes UTF-8 and applies its
-configured per-stream limit. Capture owns a fresh session, streams/drains pipes
+limits stderr separately; `command::tool` owns UTF-8 tool output and the
+controlled-execution adapters. Project services re-export those APIs for callers,
+while host features use the command owner directly. Both adapters retain their
+existing per-stream budgets. Capture owns a fresh session, streams/drains pipes
 concurrently and stops the owned group on normal exit, timeout, overflow or
 error. Exit observation leaves the leader unreaped until the final group signal,
 so cleanup cannot address a reused PID. Stdin lifetime leases and renderer
@@ -222,9 +232,17 @@ and deployment tests protect compatibility with already installed runtimes.
 
 ### Document models and editing history
 
-Native image/PDF views avoid a viewer/browser runtime and remote rendering dependencies. Static/page-at-a-time rendering trades general viewer features for bounded resources. Shared leases account for old previews and worker snapshots during reload, while serialized image transfer/decode reduces temporary peaks at the cost of parallel loading. Separate text/byte/read-only paths prevent source formatting or saving from corrupting binary previews. See `src/images.rs`, [images](images.md), [PDFs](pdf.md) and [binary editing](binary.md).
+Native image/PDF views avoid a viewer/browser runtime and remote rendering dependencies. Static/page-at-a-time rendering trades general viewer features for bounded resources. Shared leases account for old previews and worker snapshots during reload, while serialized image transfer/decode reduces temporary peaks at the cost of parallel loading. PDF documents and slide previews share one page worker and completion path; the captured destination, document version and request token identify the view that may accept each reply. Separate text/byte/read-only paths prevent source formatting or saving from corrupting binary previews. See `src/images.rs`, [images](images.md), [PDFs](pdf.md) and [binary editing](binary.md).
 
 Notebook cells retain unknown JSON/metadata/output bundles so native editing does not silently destroy another tool's data. This duplicates some state within explicit size limits. Kernels start separately from parsing/saving, keeping execution dependencies and lifetime out of ordinary notebook viewing. Rationale lives in `src/notebook.rs`.
+
+Retained output arrays share one policy in `rode_runtime_core::notebook::outputs`:
+at most 256 records and 1 MiB of compact nbformat JSON per cell. Both host
+publication and desktop model edits validate candidate arrays with the same
+allocation-free byte counter. Display updates validate every affected cell before
+changing any output or revision, preserving the preceding state on failure.
+The host's separate 8 MiB retained-notebook budget includes wire metadata;
+the Python bridge's per-execution output budget remains a distinct limit.
 
 Shortcut styles translate commands through the existing TextEdit edit/undo path rather than introducing another buffer engine. The result shares native undo/save/version behavior but implements a documented subset of Emacs/Vim, not full emulation. Syntax themes are independent bounded color data: customization does not require executable theme code, and startup-only loading avoids idle file polling. Rationale lives in `src/app/navigation/editing.rs` and `src/theme.rs`.
 

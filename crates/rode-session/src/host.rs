@@ -94,7 +94,7 @@ fn local(request: &FileRequest, cancelled: &AtomicBool) -> Result<FileResponse> 
                         );
                         command.env("RODE_SESSION_DIR", directory);
                     }
-                    let text = project::run_controlled(
+                    let text = rode_host_core::command::run_controlled(
                         command,
                         serde_json::to_vec(operation)?,
                         Duration::from_secs(30),
@@ -278,7 +278,7 @@ impl Gateway {
                 };
                 let mut input = serde_json::to_vec(&request)?;
                 input.push(b'\n');
-                let output = project::run_controlled_limited(
+                let output = rode_host_core::command::run_controlled_limited(
                     command,
                     input,
                     Duration::from_secs(150),

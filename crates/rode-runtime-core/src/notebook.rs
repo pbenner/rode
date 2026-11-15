@@ -1,4 +1,5 @@
 //! On-demand stateful kernels over core workspace process transport.
+pub mod outputs;
 use crate::process;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};

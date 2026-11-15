@@ -168,7 +168,8 @@ impl InterfaceStyle {
         };
         visuals.window_shadow = shadow;
         visuals.popup_shadow = shadow;
-        visuals.text_cursor.stroke = Stroke::new(self.focus_width, palette.accent);
+        visuals.text_cursor.stroke =
+            Stroke::new(self.focus_width, palette.cursor.unwrap_or(palette.accent));
         // TextEdit paints keyboard focus with selection.stroke, rather than
         // widgets.active.bg_stroke. Keep both focus outlines consistent.
         visuals.selection.stroke = Stroke::new(self.focus_width, palette.accent);
@@ -248,6 +249,7 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style.visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.border);
     style.visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, palette.text);
     style.visuals.text_edit_bg_color = Some(palette.background);
+    style.visuals.text_cursor.stroke.color = palette.cursor.unwrap_or(palette.accent);
     style.visuals.hyperlink_color = palette.accent;
     style.visuals.warn_fg_color = palette.accent;
     style.visuals.error_fg_color = palette.error;

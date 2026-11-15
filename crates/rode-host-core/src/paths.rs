@@ -1,11 +1,27 @@
-//! Trust checks for executable-cache directories and their renameable ancestors.
+//! Host-local path resolution and trust checks for executable-cache ancestry.
 //!
 //! Protecting only a cache's final directory does not protect its pathname: a
 //! different user who can rename an ancestor can substitute code after hashing.
 //! Check both the supplied spelling and resolved path so symlinked homes remain
 //! usable without trusting an alias beneath a writable parent.
 use anyhow::{Context, Result, ensure};
-use std::{fs, os::unix::fs::MetadataExt, path::Path};
+use std::{
+    fs,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+};
+
+/// Expand the execution host's home shorthand and anchor relative paths to `root`.
+/// This preserves the supplied path components without canonicalizing, requiring
+/// existence or searching `PATH`; callers retain their own validation policy.
+pub fn resolve(root: &Path, value: &str) -> PathBuf {
+    let path = crate::files::expand_home(value);
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
+}
 
 /// Reject directory paths another user can substitute through an ancestor.
 /// Missing tails are allowed for publication; the closest existing directory

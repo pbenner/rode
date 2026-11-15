@@ -71,6 +71,7 @@ impl Editor<'_> {
             ui.fonts_mut(|fonts| fonts.layout_job(job))
         };
         let before = cell.source.clone();
+        let glow = self.themes.glow_layer(ui);
         let response = egui::TextEdit::multiline(&mut cell.source)
             .id(id)
             .code_editor()
@@ -78,8 +79,11 @@ impl Editor<'_> {
             .desired_width(f32::INFINITY)
             .desired_rows(3)
             .char_limit(notebook::MAX_SOURCE)
+            .frame(glow.is_none())
             .layouter(&mut layouter)
             .show(ui);
+        self.themes
+            .paint_glow(ui, glow, &response.galley, response.galley_pos);
         if focus {
             response.response.request_focus();
         }

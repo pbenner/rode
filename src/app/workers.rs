@@ -444,12 +444,13 @@ impl EditorApp {
             } => self.notebook_parsed(id, version, result, ctx),
             WorkspaceEvent::Session { job, result } => self.handle_session(job, result, ctx),
             WorkspaceEvent::PdfPage {
+                target,
                 id,
                 version,
                 token,
                 page,
                 result,
-            } => self.pdf_page(id, version, token, page, result),
+            } => self.pdf_page(target, id, version, token, page, result),
             WorkspaceEvent::Latex {
                 token,
                 preview,
@@ -463,13 +464,6 @@ impl EditorApp {
                 exporting,
                 result,
             } => self.marp_complete(id, version, token, exporting, *result, ctx),
-            WorkspaceEvent::MarpPage {
-                id,
-                version,
-                token,
-                page,
-                result,
-            } => self.marp_page(id, version, token, page, result),
             WorkspaceEvent::MarkdownImage {
                 id,
                 token,

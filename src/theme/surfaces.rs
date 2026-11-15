@@ -4,6 +4,7 @@ use super::Palette;
 use eframe::egui::{self, Color32, Rect, Shape, Stroke, pos2};
 use serde::Deserialize;
 mod brackets;
+mod neon;
 
 /// Optional native frame treatment inherited by custom themes.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -18,12 +19,14 @@ pub enum Chrome {
     Holographic,
     /// Open instrument frames with illuminated corner brackets and edge hatching.
     Bracketed,
+    /// Flat surfaces with static gradient tab and activity accents.
+    Neon,
 }
 
 impl Chrome {
     /// Whether native surfaces need space and styling for decorative frames.
     pub fn is_decorated(self) -> bool {
-        self != Self::Plain
+        matches!(self, Self::Chamfered | Self::Holographic | Self::Bracketed)
     }
 }
 
@@ -34,7 +37,7 @@ impl Palette {
             return self.heading;
         }
         match self.chrome {
-            Chrome::Plain => self.text,
+            Chrome::Plain | Chrome::Neon => self.text,
             Chrome::Chamfered | Chrome::Holographic | Chrome::Bracketed => self.heading,
         }
     }
@@ -54,7 +57,7 @@ impl Palette {
     /// A card's fill and trim can be inserted behind children once its final
     /// bounds are known. Geometry stays bounded regardless of the surface size.
     pub(crate) fn surface_shapes(self, rect: Rect, fill: Option<Color32>) -> Vec<Shape> {
-        if self.chrome == Chrome::Plain
+        if !self.chrome.is_decorated()
             || !rect.is_finite()
             || rect.width() < 16.
             || rect.height() < 16.
@@ -142,6 +145,10 @@ impl Palette {
 
     /// Existing tab hit regions and text remain unchanged.
     pub fn paint_tab(self, painter: &egui::Painter, rect: Rect, fill: Color32, active: bool) {
+        if self.chrome == Chrome::Neon {
+            neon::tab(self, painter, rect, fill, active);
+            return;
+        }
         painter.rect_filled(rect, 0, fill);
         if let Some(ui) = self.ui.filter(|_| self.chrome == Chrome::Plain) {
             painter.rect_filled(rect, 0, self.panel);
@@ -220,6 +227,22 @@ impl Palette {
                     Stroke::new(1_f32, self.border),
                 );
             }
+        }
+    }
+
+    /// Static editor wash; it owns no input region or repaint timer.
+    pub fn paint_editor_background(self, ui: &egui::Ui) {
+        if self.chrome == Chrome::Neon {
+            neon::editor(self, ui);
+        }
+    }
+
+    /// Paint the selected activity rail using the existing button's bounds.
+    pub fn paint_activity(self, painter: &egui::Painter, rect: Rect) {
+        if self.chrome == Chrome::Neon {
+            neon::activity(self, painter, rect);
+        } else {
+            painter.rect_filled(rect, 0, self.accent);
         }
     }
 }

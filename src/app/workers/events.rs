@@ -70,19 +70,13 @@ pub(in crate::app) enum WorkspaceEvent {
         exporting: bool,
         result: Box<Result<marp_view::Completed, String>>,
     },
-    MarpPage {
-        id: u64,
-        version: u64,
-        token: u64,
-        page: usize,
-        result: Result<crate::images::Decoded, String>,
-    },
     NotebookParsed {
         id: u64,
         version: u64,
         result: Result<crate::notebook::Notebook, String>,
     },
     PdfPage {
+        target: pdf_view::Target,
         id: u64,
         version: u64,
         token: u64,
