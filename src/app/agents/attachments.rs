@@ -95,8 +95,16 @@ impl State {
                                             file.name(),
                                         );
                                         let button = ui
-                                            .add_enabled(enabled, egui::Button::new("×").small())
+                                            .add_enabled(
+                                                enabled,
+                                                crate::keyboard::Button::new("×").small(),
+                                            )
                                             .on_hover_text("Remove attachment");
+                                        crate::keyboard::target(
+                                            ui,
+                                            &format!("Remove attachment: {}", file.name()),
+                                            &button,
+                                        );
                                         ui_probe::button(
                                             ui,
                                             &format!("agent-attachment-remove:{index}"),

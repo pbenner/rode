@@ -247,7 +247,7 @@ impl EditorApp {
         let mut open = None;
         let mut edit = None;
         let mut rename = None;
-        egui::CollapsingHeader::new("Saved projects").id_salt("project-bookmarks").default_open(true).show(ui, |ui| {
+        crate::keyboard::CollapsingHeader::new("Saved projects").id_salt("project-bookmarks").default_open(true).show(ui, |ui| {
             if self.foreign_modal(ctx) || self.dialog != Dialog::None || self.pending.modal() || self.exit_pending() { ui.disable(); }
             if let Some(error) = &self.project_bookmarks.error {
                 ui.colored_label(palette.error, error);
@@ -266,28 +266,28 @@ impl EditorApp {
                     let response = ui.add_sized([ui.available_width(), 30.], IconButton::new(if matches!(bookmark.project, Project::Local { .. }) { Icon::Folder } else { Icon::Remote }, &label).selected(current.as_ref() == Some(id)).truncate()).on_hover_text(format!("{}\n{}\nRight-click to rename or remove", bookmark.project.host(), bookmark.project.root()));
                     ui_probe::button(ui, &format!("saved-project:{id}"), &response);
                     if response.clicked() { open = Some(bookmark.clone()); }
-                    response.context_menu(|ui| {
-                        let change_name = ui.button("Rename bookmark…");
+                    crate::keyboard::context_menu(&response, |ui| {
+                        let change_name = crate::keyboard::button(ui, "Rename bookmark…");
                         ui_probe::button(ui, &format!("bookmark-rename:{id}"), &change_name);
                         if change_name.clicked() { rename = Some((id.clone(), bookmark.name.clone())); ui.close(); }
-                        let remove = ui.button(RichText::new("Remove bookmark").color(palette.error));
+                        let remove = crate::keyboard::button(ui, RichText::new("Remove bookmark").color(palette.error));
                         ui_probe::button(ui, &format!("bookmark-remove:{id}"), &remove);
                         if remove.clicked() { edit = Some(Edit::Remove(id.clone())); ui.close(); }
                     });
                 }
             });
             if let Some((id, name)) = &mut self.project_bookmarks.rename {
-                let field = ui.add(egui::TextEdit::singleline(name).hint_text("Project name").desired_width(ui.available_width()));
+                let field = ui.add(crate::keyboard::named("Project name", egui::TextEdit::singleline(name).hint_text("Project name").desired_width(ui.available_width())));
                 ui_probe::button(ui, "bookmark-name", &field);
                 ui_probe::value(ui, "bookmark-name-value", &field, name);
                 if std::mem::take(&mut self.project_bookmarks.rename_focus) { field.request_focus(); }
                 let enter = (field.has_focus() || field.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
                 let mut cancel = false;
                 ui.horizontal(|ui| {
-                    let save = ui.add_enabled(model::validate_name(name).is_ok(), egui::Button::new("Save name"));
+                    let save = ui.add_enabled(model::validate_name(name).is_ok(), crate::keyboard::Button::new("Save name"));
                     ui_probe::button(ui, "bookmark-name-save", &save);
                     if save.clicked() || (enter && model::validate_name(name).is_ok()) { edit = Some(Edit::Rename(id.clone(), name.trim().into())); }
-                    cancel = ui.button("Cancel").clicked();
+                    cancel = crate::keyboard::button(ui, "Cancel").clicked();
                 });
                 if cancel { self.project_bookmarks.rename = None; }
             }

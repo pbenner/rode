@@ -116,10 +116,13 @@ pub(super) fn ui(
         }
         let search = ui.add_sized(
             [ui.available_width(), 30.],
-            egui::TextEdit::singleline(filter)
-                .desired_width(f32::INFINITY)
-                .hint_text("Filter loaded conversations…")
-                .char_limit(256),
+            crate::keyboard::named(
+                "Filter loaded conversations…",
+                egui::TextEdit::singleline(filter)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Filter loaded conversations…")
+                    .char_limit(256),
+            ),
         );
         super::super::ui_probe::button(ui, "agent-history-filter", &search);
         ui.add_space(4.);
@@ -159,7 +162,7 @@ pub(super) fn ui(
             });
         }
         if !browser.diagnostics().is_empty() {
-            let details = egui::CollapsingHeader::new("Error details")
+            let details = crate::keyboard::CollapsingHeader::new("Error details")
                 .id_salt("history-backend-details")
                 .show(ui, |ui| {
                     egui::ScrollArea::vertical()
@@ -188,20 +191,21 @@ pub(super) fn ui(
             && !browser.backend_output().is_empty()
             && (!browser.diagnostics().is_empty() || !browser.can_resume)
         {
-            let output = egui::CollapsingHeader::new("Startup warnings and backend output")
-                .id_salt("history-backend-output")
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("history-backend-output-scroll")
-                        .max_height(120.)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(browser.backend_output())
-                                    .wrap()
-                                    .selectable(true),
-                            );
-                        });
-                });
+            let output =
+                crate::keyboard::CollapsingHeader::new("Startup warnings and backend output")
+                    .id_salt("history-backend-output")
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("history-backend-output-scroll")
+                            .max_height(120.)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(browser.backend_output())
+                                        .wrap()
+                                        .selectable(true),
+                                );
+                            });
+                    });
             ui_probe::button(ui, "agent-history-backend-output", &output.header_response);
             ui_probe::button(
                 ui,
@@ -320,7 +324,9 @@ pub(super) fn ui(
                             .small()
                             .color(palette.muted),
                         );
-                        if !query.is_empty() && ui.button("Clear filter").clicked() {
+                        if !query.is_empty()
+                            && crate::keyboard::button(ui, "Clear filter").clicked()
+                        {
                             filter.clear();
                         }
                     });
@@ -329,7 +335,7 @@ pub(super) fn ui(
                 if browser.more {
                     let more = ui.add_enabled(
                         !browser.busy,
-                        egui::Button::new("Load more conversations")
+                        crate::keyboard::Button::new("Load more conversations")
                             .min_size(egui::vec2(ui.available_width(), 30.)),
                     );
                     super::super::ui_probe::button(ui, "agent-history-more", &more);
@@ -362,7 +368,7 @@ fn scope_picker(ui: &mut egui::Ui, scope: Scope, enabled: bool) -> Option<Scope>
             let response = ui
                 .add_enabled(
                     enabled,
-                    egui::Button::new(choice.label()).selected(scope == choice),
+                    crate::keyboard::Button::new(choice.label()).selected(scope == choice),
                 )
                 .on_disabled_hover_text(
                     "Wait for history to load. Older host services need updating to change scope.",
@@ -394,7 +400,7 @@ fn toolbar(
 ) {
     let delete = ui.add_enabled(
         can_resume && browser.is_some_and(|b| b.scope == Scope::Project && b.can_delete && !b.busy),
-        egui::Button::new(RichText::new("Delete all…").color(palette.error)),
+        crate::keyboard::Button::new(RichText::new("Delete all…").color(palette.error)),
     ).on_hover_text("Delete saved chats for this host, project and backend, including unloaded pages. Open and active chats are kept.");
     ui_probe::button(ui, "agent-history-delete-all", &delete);
     if delete.clicked() {
@@ -422,7 +428,7 @@ fn toolbar(
         action.close = true;
     }
     if browser.is_some_and(|browser| !browser.diagnostics().is_empty()) {
-        let running = ui.button("Running agents…");
+        let running = crate::keyboard::button(ui, "Running agents…");
         ui_probe::button(ui, "agent-history-running", &running);
         if running.clicked() {
             action.running = true;
@@ -454,13 +460,13 @@ fn confirm(
             ui.add(egui::Label::new(RichText::new("Codex also deletes spawned child chats. This cannot be undone here.").small().color(palette.muted)).wrap());
             ui.add_space(4.);
             ui.horizontal_wrapped(|ui| {
-                let cancel = ui.button("Cancel deletion");
+                let cancel = crate::keyboard::button(ui, "Cancel deletion");
                 ui_probe::button(ui, "agent-history-cancel-delete", &cancel);
                 if cancel.clicked() {
                     *confirmation = None;
                 }
                 let confirm = ui.add_enabled(can_resume && browser.scope == Scope::Project && browser.can_delete && !browser.busy,
-                    egui::Button::new(RichText::new(match selected { Delete::All => "Confirm delete all", _ => "Confirm delete chat" }).color(palette.error)),
+                    crate::keyboard::Button::new(RichText::new(match selected { Delete::All => "Confirm delete all", _ => "Confirm delete chat" }).color(palette.error)),
                 );
                 ui_probe::button(ui, "agent-history-confirm-delete", &confirm);
                 if confirm.clicked() {
@@ -622,7 +628,7 @@ fn conversation(
         }
         let button = ui
             .add_enabled_ui(deletable, |ui| {
-                ui.add_sized([78., 28.], egui::Button::new("Delete…"))
+                ui.add_sized([78., 28.], crate::keyboard::Button::new("Delete…"))
             })
             .inner
             .on_disabled_hover_text(

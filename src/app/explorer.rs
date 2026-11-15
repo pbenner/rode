@@ -139,7 +139,7 @@ impl EditorApp {
         let ready = self.project_ready() && !self.explorer_state.busy;
         let writable = self.explorer_writable();
         let item = |ui: &mut egui::Ui, name: &str, label: &str, enabled| {
-            let response = ui.add_enabled(enabled, egui::Button::new(label));
+            let response = ui.add_enabled(enabled, crate::keyboard::Button::new(label));
             ui_probe::button(ui, name, &response);
             if response.clicked() {
                 ui.close();
@@ -267,12 +267,13 @@ impl EditorApp {
                 state.store(ctx, id);
                 self.dialog_focus = false;
             }
-            let response = ui.add(
+            let response = ui.add(crate::keyboard::named(
+                "File or folder name",
                 egui::TextEdit::singleline(&mut self.explorer_state.input)
                     .id(id)
                     .desired_width(f32::INFINITY)
                     .char_limit(255),
-            );
+            ));
             ui_probe::button(ui, "explorer-name", &response);
             if !valid_name(&self.explorer_state.input) {
                 ui.colored_label(
@@ -314,7 +315,7 @@ impl EditorApp {
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter));
         let mut apply = false;
         ui.horizontal(|ui| {
-            let button = ui.add_enabled(allowed, egui::Button::new(kind.title()));
+            let button = ui.add_enabled(allowed, crate::keyboard::Button::new(kind.title()));
             if kind == Kind::Delete
                 && (self.dialog_focus || ui.memory(|memory| memory.focused().is_none()))
             {
@@ -330,7 +331,7 @@ impl EditorApp {
                 );
             }
             apply = button.clicked() || enter;
-            let cancel = ui.button("Cancel");
+            let cancel = crate::keyboard::button(ui, "Cancel");
             ui_probe::button(ui, "explorer-cancel", &cancel);
             if cancel.clicked() {
                 self.dialog = Dialog::None;
@@ -512,7 +513,9 @@ impl EditorApp {
                     name: ssh::display_name(&root).into(),
                     dir: true,
                 };
-                root_response.context_menu(|ui| self.explorer_menu(ui, &root_entry, true, ctx));
+                crate::keyboard::context_menu(&root_response, |ui| {
+                    self.explorer_menu(ui, &root_entry, true, ctx)
+                });
                 if remote {
                     ui.label(palette.tag(if connected {
                         "● SSH WORKSPACE"
@@ -520,7 +523,7 @@ impl EditorApp {
                         "○ SSH PENDING / OFFLINE"
                     }));
                     if !connected
-                        && ui.button("Reconnect").clicked()
+                        && crate::keyboard::button(ui, "Reconnect").clicked()
                         && let Some(profile) = self
                             .workspace
                             .as_ref()
@@ -581,7 +584,7 @@ impl EditorApp {
                 ui.label(palette.tag("Loading…"));
             });
         } else if !self.explorer_state.directories.contains_key(root) {
-            if ui.button("Load folder").clicked() {
+            if crate::keyboard::button(ui, "Load folder").clicked() {
                 self.list(root.into(), ctx);
             }
         } else if self.explorer_state.tree_rows.is_empty() {
@@ -702,7 +705,14 @@ impl EditorApp {
                         self.explorer_state.selection.path = Some(entry.path.clone());
                         ctx.memory_mut(|memory| memory.request_focus(explorer_id));
                     }
-                    response.context_menu(|ui| self.explorer_menu(ui, &entry, false, ctx));
+                    let keyboard_selected = ctx.memory(|m| m.has_focus(explorer_id))
+                        && self.explorer_state.selection.path.as_deref()
+                            == Some(entry.path.as_str());
+                    crate::keyboard::context_menu_for(
+                        &response,
+                        keyboard_selected || response.has_focus(),
+                        |ui| self.explorer_menu(ui, &entry, false, ctx),
+                    );
                     let response = response.on_hover_text(&entry.path);
                     if response.clicked() {
                         self.explorer_state.selection.path = Some(entry.path.clone());

@@ -43,7 +43,7 @@ pub(super) fn persistence(
     let mode = chat.persistence();
     let mut selected = mode;
     let response = ui.add_enabled_ui(enabled && chat.persistence_ready(), |ui| {
-        egui::ComboBox::from_id_salt("agent-persistence")
+        crate::keyboard::ComboBox::new("agent-persistence", "Agent persistence")
             .width(100.)
             .selected_text(RichText::new(format!("Persist: {}", mode.label())).color(
                 if mode.enabled() { palette.accent } else { palette.text },
@@ -55,7 +55,7 @@ pub(super) fn persistence(
                         agent::Persistence::On => "Keep this agent running after its window closes, including while idle, until you explicitly end it.",
                         agent::Persistence::Off => "Stop this agent when its window closes or disconnects.",
                     };
-                    let option = ui.selectable_value(&mut selected, choice, choice.label()).on_hover_text(hint);
+                    let option = crate::keyboard::selectable_value(ui, &mut selected, choice, choice.label()).on_hover_text(hint);
                     super::super::ui_probe::button(ui, &format!("agent-persist-{}", choice.label().to_lowercase()), &option);
                 }
             })
@@ -113,7 +113,7 @@ impl EditorApp {
             |ui| {
                 let refresh = ui.add_enabled(
                     self.agents.running.pending.is_none(),
-                    egui::Button::new("Refresh"),
+                    crate::keyboard::Button::new("Refresh"),
                 );
                 super::super::ui_probe::button(ui, "agent-running-refresh", &refresh);
                 if refresh.clicked() {
@@ -142,13 +142,13 @@ impl EditorApp {
                 .wrap(),
             );
             ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
+                if crate::keyboard::button(ui, "Cancel").clicked() {
                     self.agents.running.confirm = None;
                 }
                 if ui
                     .add_enabled(
                         self.agents.running.pending.is_none(),
-                        egui::Button::new("Confirm end"),
+                        crate::keyboard::Button::new("Confirm end"),
                     )
                     .clicked()
                 {
@@ -234,7 +234,7 @@ impl EditorApp {
             self.dialog = Dialog::None;
             self.reveal_panel(Panel::Agent, ctx);
         }
-        if ui.button("Close").clicked() {
+        if crate::keyboard::button(ui, "Close").clicked() {
             self.dialog = Dialog::None;
         }
     }

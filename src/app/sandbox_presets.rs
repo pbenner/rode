@@ -82,49 +82,96 @@ impl State {
         options: &mut sandbox::Options,
         palette: theme::Palette,
     ) {
-        ui.collapsing("Reusable sandbox presets", |ui| {
+        crate::keyboard::collapsing(ui, "Reusable sandbox presets", |ui| {
             if let Some(error) = &self.load_error {
                 ui.colored_label(palette.error, error);
                 return;
             }
             ui.small("Reuse rules for your shell, tools and caches. ~/ refers to the project host's home. Loading changes this form; apply/open/connect to activate it.");
             let id = ui.id().with("sandbox-preset-draft");
-            let mut draft = ui.data_mut(|data| data.get_temp::<Draft>(id)).unwrap_or_default();
+            let mut draft = ui
+                .data_mut(|data| data.get_temp::<Draft>(id))
+                .unwrap_or_default();
             ui.horizontal_wrapped(|ui| {
-                egui::ComboBox::from_id_salt("sandbox-preset")
+                crate::keyboard::ComboBox::new("sandbox-preset", "Sandbox preset")
                     .width(180.)
                     .truncate()
-                    .selected_text(if draft.selected.is_empty() { "Choose preset…" } else { &draft.selected })
+                    .selected_text(if draft.selected.is_empty() {
+                        "Choose preset…"
+                    } else {
+                        &draft.selected
+                    })
                     .show_ui(ui, |ui| {
                         for name in self.entries.keys() {
-                            if ui.selectable_value(&mut draft.selected, name.clone(), name).changed() {
+                            if crate::keyboard::selectable_value(
+                                ui,
+                                &mut draft.selected,
+                                name.clone(),
+                                name,
+                            )
+                            .changed()
+                            {
                                 draft.name = name.clone();
                                 draft.feedback = None;
                             }
                         }
                     });
                 let selected = self.entries.get(&draft.selected);
-                if ui.add_enabled(selected.is_some(), egui::Button::new("Load into form")).clicked() {
+                if ui
+                    .add_enabled(
+                        selected.is_some(),
+                        crate::keyboard::Button::new("Load into form"),
+                    )
+                    .clicked()
+                {
                     *options = selected.unwrap().clone();
-                    draft.feedback = Some(("Preset loaded into this form. Review the rules before applying.".into(), false));
+                    draft.feedback = Some((
+                        "Preset loaded into this form. Review the rules before applying.".into(),
+                        false,
+                    ));
                 }
-                if ui.add_enabled(selected.is_some(), egui::Button::new("Delete preset")).clicked() {
+                if ui
+                    .add_enabled(
+                        selected.is_some(),
+                        crate::keyboard::Button::new("Delete preset"),
+                    )
+                    .clicked()
+                {
                     self.entries.remove(&draft.selected);
                     self.pending = true;
                     draft.selected.clear();
                     draft.name.clear();
-                    draft.feedback = Some(("Preset deleted. Current project rules are unchanged.".into(), false));
+                    draft.feedback = Some((
+                        "Preset deleted. Current project rules are unchanged.".into(),
+                        false,
+                    ));
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(180.).hint_text("Preset name").char_limit(128));
+                ui.add(crate::keyboard::named(
+                    "Preset name",
+                    egui::TextEdit::singleline(&mut draft.name)
+                        .desired_width(180.)
+                        .hint_text("Preset name")
+                        .char_limit(128),
+                ));
                 let name = draft.name.trim();
-                let label = if self.entries.contains_key(name) { "Replace saved preset" } else { "Save current rules" };
-                if ui.add_enabled(!name.is_empty(), egui::Button::new(label)).clicked() {
+                let label = if self.entries.contains_key(name) {
+                    "Replace saved preset"
+                } else {
+                    "Save current rules"
+                };
+                if ui
+                    .add_enabled(!name.is_empty(), crate::keyboard::Button::new(label))
+                    .clicked()
+                {
                     draft.feedback = Some(match self.save(name, options) {
                         Ok(()) => {
                             draft.selected = name.into();
-                            ("Preset saved for reuse in local and SSH projects.".into(), false)
+                            (
+                                "Preset saved for reuse in local and SSH projects.".into(),
+                                false,
+                            )
                         }
                         Err(error) => (format!("Cannot save preset: {error:#}"), true),
                     });

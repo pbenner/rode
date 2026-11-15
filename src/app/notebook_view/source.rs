@@ -82,6 +82,7 @@ impl Editor<'_> {
             .frame(glow.is_none())
             .layouter(&mut layouter)
             .show(ui);
+        crate::keyboard::editor_target(ui, "Notebook cell source", &response.response);
         self.themes
             .paint_glow(ui, glow, &response.galley, response.galley_pos);
         if focus {

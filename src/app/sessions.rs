@@ -528,7 +528,10 @@ impl EditorApp {
             .on_hover_text(host);
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!self.sessions.busy, egui::Button::new("New terminal"))
+                .add_enabled(
+                    !self.sessions.busy,
+                    crate::keyboard::Button::new("New terminal"),
+                )
                 .clicked()
             {
                 self.new_terminal(ctx);
@@ -536,21 +539,23 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     !self.sessions.busy,
-                    egui::Button::new("New persistent terminal"),
+                    crate::keyboard::Button::new("New persistent terminal"),
                 )
                 .clicked()
             {
                 self.new_persistent_terminal(ctx);
             }
-            if ui
-                .button("New temporary terminal")
+            if crate::keyboard::button(ui, "New temporary terminal")
                 .on_hover_text("Temporary terminals stop when this window or project closes.")
                 .clicked()
             {
                 self.new_temporary_terminal(ctx);
             }
             if ui
-                .add_enabled(!self.sessions.busy, egui::Button::new("Refresh sessions"))
+                .add_enabled(
+                    !self.sessions.busy,
+                    crate::keyboard::Button::new("Refresh sessions"),
+                )
                 .clicked()
             {
                 self.refresh_sessions(ctx);
@@ -588,16 +593,16 @@ impl EditorApp {
                                 "ENDED".into()
                             });
                             let compatible = self.compatible_session(&info);
-                            let attach = ui.add_enabled(compatible, egui::Button::new("Attach"))
+                            let attach = ui.add_enabled(compatible, crate::keyboard::Button::new("Attach"))
                                 .on_hover_text("Open this session's original project and sandbox policy to attach.");
                             super::ui_probe::button(ui, &format!("session-attach:{}", info.id), &attach);
                             if attach.clicked() {
                                 self.attach_info(info.clone(), ctx);
                             }
-                            if ui.add_enabled(compatible && !self.sessions.busy, egui::Button::new("Rename")).clicked() {
+                            if ui.add_enabled(compatible && !self.sessions.busy, crate::keyboard::Button::new("Rename")).clicked() {
                                 self.sessions.rename = Some((info.id.clone(), info.name.clone()));
                             }
-                            if ui.add_enabled(compatible && !self.sessions.busy, egui::Button::new(if info.alive { "End" } else { "Remove" })).clicked() {
+                            if ui.add_enabled(compatible && !self.sessions.busy, crate::keyboard::Button::new(if info.alive { "End" } else { "Remove" })).clicked() {
                                 self.sessions.confirm = Some(Confirm::End {
                                     id: info.id.clone(), policy: info.policy.clone(),
                                     name: info.name.clone(), clients: info.clients,
@@ -610,8 +615,8 @@ impl EditorApp {
                             && id == info.id
                         {
                             ui.horizontal_wrapped(|ui| {
-                                ui.add(egui::TextEdit::singleline(&mut name).char_limit(64));
-                                if ui.add_enabled(!self.sessions.busy, egui::Button::new("Save name")).clicked() {
+                                ui.add(crate::keyboard::named("Name", egui::TextEdit::singleline(&mut name).char_limit(64)));
+                                if ui.add_enabled(!self.sessions.busy, crate::keyboard::Button::new("Save name")).clicked() {
                                     self.session_request(service::Operation::Rename {
                                         id: id.clone(), policy: info.policy.clone(), name: name.clone(),
                                     }, Job::Rename, ctx);
@@ -619,7 +624,7 @@ impl EditorApp {
                                 } else {
                                     self.sessions.rename = Some((id, name));
                                 }
-                                if ui.button("Cancel rename").clicked() {
+                                if crate::keyboard::button(ui, "Cancel rename").clicked() {
                                     self.sessions.rename = None;
                                 }
                             });
@@ -636,7 +641,7 @@ impl EditorApp {
                 for (meta, alive) in local {
                     ui.horizontal(|ui| {
                         ui.label(format!("{}{}", meta.name, if alive { "" } else { " · view ended" }));
-                        if ui.button("Show").clicked() {
+                        if crate::keyboard::button(ui, "Show").clicked() {
                             if let Some(info) = meta.native.clone() {
                                 self.attach_info(info, ctx);
                             } else if let Some(index) = self.sessions.other.iter().position(|slot| slot.meta.key == meta.key) {
@@ -654,7 +659,7 @@ impl EditorApp {
                 layout::section(ui, "Notebook kernels & debuggers", palette, |ui| self.runtimes_ui(ui, ctx));
                 self.slurm_settings_ui(ui);
             });
-        if ui.button("Close").clicked() {
+        if crate::keyboard::button(ui, "Close").clicked() {
             self.dialog = Dialog::None;
         }
     }
@@ -692,7 +697,7 @@ impl EditorApp {
         };
         ui.colored_label(self.themes.active().palette.error, message);
         ui.horizontal(|ui| {
-            if ui.button("Cancel").clicked() {
+            if crate::keyboard::button(ui, "Cancel").clicked() {
                 self.sessions.confirm = None;
             }
             // Native session polling and Slurm run through independent workers.
@@ -702,7 +707,8 @@ impl EditorApp {
             } else {
                 !self.sessions.busy
             };
-            let response = ui.add_enabled(ready, egui::Button::new("Confirm · Alt+Enter"));
+            let response =
+                ui.add_enabled(ready, crate::keyboard::Button::new("Confirm · Alt+Enter"));
             super::ui_probe::button(ui, "session-confirm", &response);
             let confirm = response.clicked()
                 || ui.input_mut(|input| input.consume_key(egui::Modifiers::ALT, Key::Enter));
@@ -732,7 +738,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     !self.sessions.slurm_busy,
-                    egui::Button::new("Refresh allocations"),
+                    crate::keyboard::Button::new("Refresh allocations"),
                 )
                 .clicked()
             {
@@ -795,8 +801,10 @@ impl EditorApp {
                     } else {
                         "Release allocation"
                     };
-                    let release =
-                        ui.add_enabled(!self.sessions.slurm_busy, egui::Button::new(action));
+                    let release = ui.add_enabled(
+                        !self.sessions.slurm_busy,
+                        crate::keyboard::Button::new(action),
+                    );
                     super::ui_probe::button(ui, action, &release);
                     if release.clicked() {
                         self.sessions.confirm = Some(Confirm::Release(job.clone()));
@@ -828,7 +836,7 @@ impl EditorApp {
                             .active
                             .as_ref()
                             .is_some_and(|active| active.key == meta.key);
-                        if ui.selectable_label(selected, &meta.name).clicked()
+                        if crate::keyboard::selectable_label(ui, selected, &meta.name).clicked()
                             && self.sessions.select(&mut self.terminal, &meta.key)
                         {
                             self.show_terminal = true;
@@ -890,9 +898,8 @@ impl EditorApp {
                 ui.next_auto_id().with("terminal-new-arrow"),
                 egui::Vec2::splat(arrow_size),
             );
-            let menu = egui::containers::menu::MenuButton::from_button(
-                egui::Button::new(("New terminal", arrow)).small().min_size(egui::vec2(0., height))
-            ).ui(ui, |ui| {
+            let menu = crate::keyboard::MenuButton::from_button(
+                egui::Button::new(("New terminal", arrow)).small().min_size(egui::vec2(0., height)), "New terminal").ui(ui, |ui| {
                 ui.set_width(240.);
                 ui.label(RichText::new("Current terminal").small().color(palette.muted));
                 ui.add(egui::Label::new(RichText::new(&detail).strong()).wrap());

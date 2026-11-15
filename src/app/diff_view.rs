@@ -46,14 +46,15 @@ pub(super) fn show(
         .id_salt(ui.id().with("diff-scroll"))
         .max_height(max_height)
         .show(ui, |ui| {
-            ui.add(
+            ui.add(crate::keyboard::editor_named(
+                "Preview",
                 egui::TextEdit::multiline(&mut preview)
                     .code_editor()
                     .font(FontId::monospace(12.))
                     .desired_width(ui.available_width())
                     .desired_rows(16)
                     .layouter(&mut layouter),
-            )
+            ))
         })
         .inner
 }

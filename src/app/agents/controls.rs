@@ -16,13 +16,12 @@ use serde_json::Value;
 pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool) {
     let selected = config.personality;
     ui.add_enabled_ui(enabled, |ui| {
-        let (response, _) = egui::containers::menu::MenuButton::from_button(
-            egui::Button::new(selected.button()).selected(selected != Personality::Default),
-        ).ui(ui, |ui| {
+        let (response, _) = crate::keyboard::MenuButton::from_button(
+            egui::Button::new(selected.button()).selected(selected != Personality::Default), "Response personality").ui(ui, |ui| {
             ui.set_max_width(270.);
             ui.strong("Response personality");
             for choice in Personality::ALL {
-                let response = ui.selectable_value(&mut config.personality, choice, choice.label())
+                let response = crate::keyboard::selectable_value(ui, &mut config.personality, choice, choice.label())
                     .on_hover_text(choice.description());
                 crate::app::ui_probe::button(ui, &format!("agent-tone-choice-{}", choice.id()), &response);
             }
@@ -31,6 +30,7 @@ pub(super) fn personality(ui: &mut egui::Ui, config: &mut Config, enabled: bool)
         });
         let response = response.on_hover_text(format!("Response personality: {}\n{}", selected.label(), selected.description()));
         crate::app::ui_probe::button(ui, "agent-tone", &response);
+        crate::keyboard::target(ui, "Response personality", &response);
     });
 }
 
@@ -90,11 +90,12 @@ pub(super) fn buttons(
             } else {
                 "Model ID (blank uses the agent default)"
             });
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "Model ID",
                 egui::TextEdit::singleline(value)
                     .desired_width(f32::INFINITY)
                     .char_limit(256),
-            );
+            ));
             if config.provider == Provider::Codex {
                 if !models.is_empty() {
                     egui::ScrollArea::vertical()
@@ -102,12 +103,12 @@ pub(super) fn buttons(
                         .max_height(180.)
                         .show(ui, |ui| {
                             for model in models {
-                                let response = ui
-                                    .selectable_label(
-                                        config.model == model.value.id,
-                                        &model.value.name,
-                                    )
-                                    .on_hover_text(&model.value.description);
+                                let response = crate::keyboard::selectable_label(
+                                    ui,
+                                    config.model == model.value.id,
+                                    &model.value.name,
+                                )
+                                .on_hover_text(&model.value.description);
                                 crate::app::ui_probe::button(
                                     ui,
                                     &format!("agent-model-choice-{}", model.value.id),
@@ -142,7 +143,7 @@ pub(super) fn buttons(
                     if let Some(error) = &catalog.error {
                         ui.small(error);
                     }
-                    discover = ui.small_button("Retry model discovery").clicked();
+                    discover = crate::keyboard::small_button(ui, "Retry model discovery").clicked();
                 }
             } else {
                 ui.small("Enter a model installed on the configured local server.");
@@ -164,7 +165,12 @@ pub(super) fn buttons(
                     config.reasoning_effort.clone()
                 };
                 choices(ui, "agent-reasoning-menu", selected, |ui| {
-                    ui.selectable_value(&mut config.reasoning_effort, String::new(), "Default");
+                    crate::keyboard::selectable_value(
+                        ui,
+                        &mut config.reasoning_effort,
+                        String::new(),
+                        "Default",
+                    );
                     let model = models
                         .iter()
                         .find(|m| m.value.id == config.model())
@@ -177,13 +183,13 @@ pub(super) fn buttons(
                         });
                     if let Some(model) = model {
                         for effort in &model.efforts {
-                            let response = ui
-                                .selectable_value(
-                                    &mut config.reasoning_effort,
-                                    effort.id.clone(),
-                                    &effort.name,
-                                )
-                                .on_hover_text(&effort.description);
+                            let response = crate::keyboard::selectable_value(
+                                ui,
+                                &mut config.reasoning_effort,
+                                effort.id.clone(),
+                                &effort.name,
+                            )
+                            .on_hover_text(&effort.description);
                             crate::app::ui_probe::button(
                                 ui,
                                 &format!("agent-reasoning-{}", effort.id),
@@ -193,12 +199,13 @@ pub(super) fn buttons(
                     }
                 });
             } else {
-                ui.add(
+                ui.add(crate::keyboard::named(
+                    "Reasoning effort",
                     egui::TextEdit::singleline(&mut config.reasoning_effort)
                         .desired_width(f32::INFINITY)
                         .hint_text("Blank: default; or an effort ID supported by your model")
                         .char_limit(256),
-                );
+                ));
                 ui.small(
                     "Effort IDs depend on the model. Advertised choices appear when available.",
                 );
@@ -238,7 +245,7 @@ pub(super) fn buttons(
             if ui
                 .add_enabled(
                     choice == crate::agent::Network::Project || !config.provider.is_acp(),
-                    egui::Button::selectable(config.network == choice, choice.label()),
+                    crate::keyboard::Button::selectable(config.network == choice, choice.label()),
                 )
                 .on_disabled_hover_text("This provider cannot enforce offline native tools.")
                 .clicked()
@@ -257,7 +264,12 @@ pub(super) fn buttons(
             );
         } else {
             for choice in [Approval::Ask, Approval::Never] {
-                let response = ui.selectable_value(&mut config.approval, choice, choice.label());
+                let response = crate::keyboard::selectable_value(
+                    ui,
+                    &mut config.approval,
+                    choice,
+                    choice.label(),
+                );
                 crate::app::ui_probe::button(
                     ui,
                     &format!("agent-approval-{}", choice.label()),
@@ -295,7 +307,7 @@ fn codex_access(
         let response = ui
             .add_enabled(
                 !read_only,
-                egui::Button::selectable(
+                crate::keyboard::Button::selectable(
                     matches!(access, Access::Project | Access::Full),
                     "Use project sandbox",
                 ),
@@ -317,7 +329,7 @@ fn codex_access(
             .add_enabled(
                 !redundant
                     && (!read_only || matches!(choice, Access::ReadOnly | Access::FilesOnly)),
-                egui::Button::selectable(!redundant && access == choice, choice.label()),
+                crate::keyboard::Button::selectable(!redundant && access == choice, choice.label()),
             )
             .on_disabled_hover_text(if redundant {
                 "RODE already enforces the project sandbox. Choose Use project sandbox to avoid duplicate agent sandboxing."
@@ -353,16 +365,18 @@ fn menu(ui: &mut egui::Ui, name: &str, label: &str, width: f32, add: impl FnOnce
         egui::vec2(width, height),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            let response = egui::containers::menu::MenuButton::from_button(
+            let response = crate::keyboard::MenuButton::from_button(
                 egui::Button::new(label)
                     .min_size(egui::vec2(width, height))
                     .truncate(),
+                label,
             )
             .ui(ui, add)
             .0
             .on_hover_text(label);
             crate::app::ui_probe::button(ui, name, &response);
             crate::app::ui_probe::button(ui, label, &response);
+            crate::keyboard::target(ui, label, &response);
         },
     );
 }
@@ -413,8 +427,7 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
         .unwrap_or(&control.current);
     if control.boolean {
         let mut selected = value.as_bool().unwrap_or(false);
-        let response = ui
-            .checkbox(&mut selected, &control.name)
+        let response = crate::keyboard::checkbox(ui, &mut selected, &control.name)
             .on_hover_text(&control.description);
         crate::app::ui_probe::button(ui, &format!("agent-acp-option-{}", control.id), &response);
         if response.changed() {
@@ -437,9 +450,13 @@ fn option(ui: &mut egui::Ui, config: &mut Config, control: &Control) {
             name.to_owned(),
             |ui| {
                 for item in &control.options {
-                    let response = ui
-                        .selectable_value(&mut selected, item.id.clone(), &item.name)
-                        .on_hover_text(&item.description);
+                    let response = crate::keyboard::selectable_value(
+                        ui,
+                        &mut selected,
+                        item.id.clone(),
+                        &item.name,
+                    )
+                    .on_hover_text(&item.description);
                     crate::app::ui_probe::button(
                         ui,
                         &format!("agent-acp-choice-{}-{}", control.id, item.id),

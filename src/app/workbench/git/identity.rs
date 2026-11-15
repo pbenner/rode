@@ -267,7 +267,8 @@ impl EditorApp {
                     (Scope::Repository, "git-identity-repository"),
                     (Scope::Global, "git-identity-global"),
                 ] {
-                    let response = ui.selectable_label(state.scope == scope, scope.label());
+                    let response =
+                        crate::keyboard::selectable_label(ui, state.scope == scope, scope.label());
                     ui_probe::button(ui, name, &response);
                     if response.clicked() {
                         state.select_scope(scope);
@@ -279,22 +280,24 @@ impl EditorApp {
                 Scope::Global => "Applies to all repositories for your account on this host. Repository settings take precedence.",
             });
             ui.label("Name");
-            let name = ui.add(
+            let name = ui.add(crate::keyboard::named(
+                "Name",
                 egui::TextEdit::singleline(&mut state.name)
                     .desired_width(f32::INFINITY)
                     .char_limit(1024),
-            );
+            ));
             if name.changed() {
                 state.dirty = true;
                 state.notice.clear();
             }
             ui_probe::button(ui, "git-identity-name", &name);
             ui.label("Email");
-            let email = ui.add(
+            let email = ui.add(crate::keyboard::named(
+                "Email",
                 egui::TextEdit::singleline(&mut state.email)
                     .desired_width(f32::INFINITY)
                     .char_limit(1024),
-            );
+            ));
             if email.changed() {
                 state.dirty = true;
                 state.notice.clear();
@@ -302,15 +305,15 @@ impl EditorApp {
             ui_probe::button(ui, "git-identity-email", &email);
             let values = state.values();
             ui.horizontal_wrapped(|ui| {
-                let button = ui.add_enabled(state.snapshot.is_some() && values.is_ok(), egui::Button::new("Save identity"))
+                let button = ui.add_enabled(state.snapshot.is_some() && values.is_ok(), crate::keyboard::Button::new("Save identity"))
                     .on_disabled_hover_text(values.as_ref().err().map(ToString::to_string).unwrap_or_else(|| "Wait for Git settings to load.".into()));
                 ui_probe::button(ui, "git-identity-save", &button);
                 save = button.clicked();
-                let inherited = ui.add_enabled(state.snapshot.is_some(), egui::Button::new("Use inherited identity"))
+                let inherited = ui.add_enabled(state.snapshot.is_some(), crate::keyboard::Button::new("Use inherited identity"))
                     .on_hover_text("Remove name and email from the selected scope. Git will use values from its other configuration scopes.");
                 ui_probe::button(ui, "git-identity-inherit", &inherited);
                 inherit = inherited.clicked();
-                if ui.button("Discard edits").clicked() { state.reset_draft(); }
+                if crate::keyboard::button(ui, "Discard edits").clicked() { state.reset_draft(); }
             });
             if state.dirty {
                 ui.small("Unapplied identity changes");

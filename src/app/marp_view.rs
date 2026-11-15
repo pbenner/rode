@@ -157,13 +157,14 @@ impl EditorApp {
         {
             let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
             ui.horizontal_wrapped(|ui| {
-                let button = ui.add_enabled(!view.busy, egui::Button::new("Refresh slides"));
+                let button =
+                    ui.add_enabled(!view.busy, crate::keyboard::Button::new("Refresh slides"));
                 refresh = button.clicked();
                 refresh_button = Some(button);
                 if view.busy {
                     ui.spinner();
                     ui.label("Rendering Marp…");
-                    if ui.button("Cancel").clicked() {
+                    if crate::keyboard::button(ui, "Cancel").clicked() {
                         let attempted = view.attempted.clone();
                         view.stop_render();
                         view.attempted = attempted;
@@ -171,13 +172,13 @@ impl EditorApp {
                     }
                 }
                 ui.add_enabled_ui(!view.exporting, |ui| {
-                    ui.menu_button("Export", |ui| {
+                    crate::keyboard::menu_button(ui, "Export", |ui| {
                         for (format, label) in [
                             (Format::Html, "HTML"),
                             (Format::Pdf, "PDF"),
                             (Format::Pptx, "PowerPoint (.pptx)"),
                         ] {
-                            if ui.button(label).clicked() {
+                            if crate::keyboard::button(ui, label).clicked() {
                                 export = Some(format);
                                 ui.close();
                             }
@@ -187,20 +188,20 @@ impl EditorApp {
                 if view.exporting {
                     ui.spinner();
                     ui.label("Exporting snapshot…");
-                    if ui.button("Cancel export").clicked() {
+                    if crate::keyboard::button(ui, "Cancel export").clicked() {
                         view.export_cancel.store(true, Ordering::Release);
                         view.export_token = view.export_token.wrapping_add(1);
                         view.exporting = false;
                     }
                 }
-                settings = ui.button("Marp settings").clicked();
+                settings = crate::keyboard::button(ui, "Marp settings").clicked();
                 ui.label(palette.tag("PROJECT-HOST RENDERER"));
             });
             if !view.error.is_empty() {
                 ui.colored_label(palette.error, &view.error);
             }
             if !view.output.is_empty() {
-                ui.collapsing("Marp tool output", |ui| {
+                crate::keyboard::collapsing(ui, "Marp tool output", |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(100.)
                         .show(ui, |ui| {
@@ -300,22 +301,24 @@ impl EditorApp {
             "Export the current buffer on its project host. The Markdown source stays unsaved.",
             self.themes.active().palette,
         );
-        let input = ui.add(
+        let input = ui.add(crate::keyboard::named(
+            "Output path",
             egui::TextEdit::singleline(&mut self.dialog_input)
                 .desired_width(f32::INFINITY)
                 .hint_text("Output path"),
-        );
+        ));
         if self.dialog_focus {
             input.request_focus();
             self.dialog_focus = false;
         }
         ui_probe::button(ui, "marp-export-path", &input);
         ui_probe::value(ui, "marp-export-path-value", &input, &self.dialog_input);
-        let overwrite = ui.checkbox(&mut self.marp_overwrite, "Replace existing export");
+        let overwrite =
+            crate::keyboard::checkbox(ui, &mut self.marp_overwrite, "Replace existing export");
         ui_probe::button(ui, "marp-export-overwrite", &overwrite);
         ui.small("Existing exports are checked before conversion and replaced atomically; a concurrent change prevents replacement.");
         ui.horizontal(|ui| {
-            let export = ui.button("Export snapshot");
+            let export = crate::keyboard::button(ui, "Export snapshot");
             ui_probe::button(ui, "marp-export-submit", &export);
             if export.clicked()
                 || ((input.has_focus() || input.lost_focus())
@@ -329,7 +332,7 @@ impl EditorApp {
                 self.start_marp(id, format, Some(destination), ctx);
                 self.focus_editor(ctx);
             }
-            if ui.button("Cancel").clicked() {
+            if crate::keyboard::button(ui, "Cancel").clicked() {
                 self.dialog = Dialog::None;
                 self.focus_editor(ctx);
             }

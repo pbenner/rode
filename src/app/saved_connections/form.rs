@@ -21,12 +21,12 @@ impl State {
         );
         let mut selected = None;
         if !self.profiles.is_empty() || !self.aliases.is_empty() {
-            egui::ComboBox::from_id_salt("profiles")
+            crate::keyboard::ComboBox::new("profiles", "Saved SSH connection")
                 .selected_text("Load a saved connection or SSH alias")
                 .width(ui.available_width())
                 .show_ui(ui, |ui| {
                     for profile in &self.profiles {
-                        if ui.selectable_label(false, profile.label()).clicked() {
+                        if crate::keyboard::selectable_label(ui, false, profile.label()).clicked() {
                             selected = Some((profile.clone(), true));
                         }
                     }
@@ -34,9 +34,12 @@ impl State {
                         ui.separator();
                     }
                     for alias in &self.aliases {
-                        if ui
-                            .selectable_label(false, format!("SSH config / {alias}"))
-                            .clicked()
+                        if crate::keyboard::selectable_label(
+                            ui,
+                            false,
+                            format!("SSH config / {alias}"),
+                        )
+                        .clicked()
                         {
                             selected = Some((
                                 Profile {
@@ -122,14 +125,15 @@ impl State {
                             }
                             *focus = false;
                         }
-                        let response = ui.add(
+                        let response = ui.add(crate::keyboard::named(
+                            label,
                             egui::TextEdit::singleline(field)
                                 // Loading saved profiles can insert a dropdown above
                                 // these fields while the user is already typing.
                                 .id(id)
                                 .hint_text(hint)
                                 .desired_width(field_width),
-                        );
+                        ));
                         ui_probe::button(ui, &format!("ssh-field-{label}"), &response);
                         ui.end_row();
                     }
@@ -147,28 +151,34 @@ impl State {
                 route.port, route.host_key_alias
             ));
             ui.small("Host / alias and identity settings still describe the compute host. Jump host(s) reach the relay.");
-            if ui.button("Remove tunnel route").clicked() {
+            if crate::keyboard::button(ui, "Remove tunnel route").clicked() {
                 self.draft.tunnel = None;
             }
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.label("SSH client");
-            egui::ComboBox::from_id_salt("ssh-backend")
+            crate::keyboard::ComboBox::new("ssh-backend", "SSH backend")
                 .selected_text(match self.draft.backend {
                     ssh::Backend::Russh => "Rust (default)",
                     ssh::Backend::OpenSsh => "OpenSSH",
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
+                    crate::keyboard::selectable_value(
+                        ui,
                         &mut self.draft.backend,
                         ssh::Backend::Russh,
                         "Rust (default)",
                     );
-                    ui.selectable_value(&mut self.draft.backend, ssh::Backend::OpenSsh, "OpenSSH");
+                    crate::keyboard::selectable_value(
+                        ui,
+                        &mut self.draft.backend,
+                        ssh::Backend::OpenSsh,
+                        "OpenSSH",
+                    );
                 });
         });
-        ui.checkbox(
+        crate::keyboard::checkbox(ui,
             &mut self.draft.x11_forwarding,
             "Forward X11 when available",
         )
@@ -176,7 +186,7 @@ impl State {
         if self.draft.x11_forwarding {
             ui.horizontal_wrapped(|ui| {
                 ui.label("X11 trust");
-                egui::ComboBox::from_id_salt("ssh-x11-trust")
+                crate::keyboard::ComboBox::new("ssh-x11-trust", "X11 trust")
                     .selected_text(self.draft.x11_trust.label())
                     .show_ui(ui, |ui| {
                         for trust in [
@@ -184,7 +194,12 @@ impl State {
                             ssh::X11Trust::Untrusted,
                             ssh::X11Trust::Trusted,
                         ] {
-                            ui.selectable_value(&mut self.draft.x11_trust, trust, trust.label());
+                            crate::keyboard::selectable_value(
+                                ui,
+                                &mut self.draft.x11_trust,
+                                trust,
+                                trust.label(),
+                            );
                         }
                     });
             });
@@ -199,7 +214,7 @@ impl State {
         });
         workbench::sandbox_backend_ui(ui, &mut self.draft.sandbox);
         if self.draft.sandbox.enabled {
-            ui.collapsing("Sandbox access rules", |ui| {
+            crate::keyboard::collapsing(ui, "Sandbox access rules", |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(300.)
                     .show(ui, |ui| {
@@ -222,7 +237,7 @@ impl State {
             }
             let save = ui.add_enabled(
                 !self.saving,
-                egui::Button::new(if self.saving {
+                crate::keyboard::Button::new(if self.saving {
                     "Saving…"
                 } else {
                     "Save profile"
@@ -235,7 +250,7 @@ impl State {
                     Err(error) => FormIntent::Error(error.to_string()),
                 });
             }
-            if ui.button("Cancel").clicked() {
+            if crate::keyboard::button(ui, "Cancel").clicked() {
                 intent = Some(FormIntent::Cancel);
             }
         });

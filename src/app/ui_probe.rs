@@ -109,6 +109,7 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "size": [ctx.content_rect().width(), ctx.content_rect().height()],
                 "pointer": ctx.pointer_hover_pos().map(|pos| [pos.x, pos.y]),
                 "buttons": buttons,
+                "keyboard": super::keyboard::snapshot(ctx),
                 "session_ids": session_ids,
                 "ssh_master_socket": ssh_master_socket,
                 "notebook": notebook,

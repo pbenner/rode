@@ -85,14 +85,19 @@ impl EditorApp {
             ui.small("Uses mise installed on this project host, inside the current sandbox. Tool installation and configuration trust are explicit actions.");
             if !tasks {
                 let state = &mut self.workbench.environment;
-                ui.checkbox(&mut state.draft.mise, "Use mise for new project processes");
+                crate::keyboard::checkbox(
+                    ui,
+                    &mut state.draft.mise,
+                    "Use mise for new project processes",
+                );
                 ui.label("mise executable (blank: host PATH or ~/.local/bin/mise)");
-                ui.add(
+                ui.add(crate::keyboard::named(
+                    "mise executable",
                     egui::TextEdit::singleline(
                         state.draft.runtimes.entry("mise".into()).or_default(),
                     )
                     .hint_text("mise or /path/to/mise"),
-                );
+                ));
                 ui.small("Apply environment saves this choice. Explicit Rode variables and interpreter paths take precedence. Existing sessions keep their environment.");
             }
             let busy = self.workbench.environment.mise_busy;
@@ -103,7 +108,7 @@ impl EditorApp {
                     ("Trust project configuration", crate::mise::Action::Trust),
                     ("Install declared tools", crate::mise::Action::Install),
                 ] {
-                    let response = ui.add_enabled(!busy, egui::Button::new(label));
+                    let response = ui.add_enabled(!busy, crate::keyboard::Button::new(label));
                     ui_probe::button(ui, label, &response);
                     if response.clicked() {
                         action = Some(operation);
@@ -136,7 +141,7 @@ impl EditorApp {
                 if tasks {
                     for task in snapshot.tasks {
                         ui.horizontal_wrapped(|ui| {
-                        let response = ui.button(&task.name);
+                        let response = crate::keyboard::button(ui, &task.name);
                         ui_probe::button(ui, &format!("mise-task:{}", task.name), &response);
                         if response.clicked() {
                             let program = crate::mise::shell_program(&self.workbench.prefs.environment);
@@ -216,7 +221,8 @@ impl EditorApp {
                 }
                 for (program, label) in environment::TOOLS {
                     layout::field_label(ui, label, compact);
-                    let field = ui.add(
+                    let field = ui.add(crate::keyboard::named(
+                        label,
                         egui::TextEdit::singleline(
                             state.draft.runtimes.entry((*program).into()).or_default(),
                         )
@@ -225,7 +231,7 @@ impl EditorApp {
                         .min_size(egui::vec2(executable_width, 20.))
                         .char_limit(4096)
                         .hint_text(format!("auto ({program}) or /path/to/{program}")),
-                    );
+                    ));
                     ui_probe::button(ui, &format!("environment-runtime-{program}"), &field);
                     if compact {
                         ui.end_row();
@@ -286,7 +292,10 @@ impl EditorApp {
             let mut refresh = false;
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(!state.busy, egui::Button::new("Refresh runtime versions"))
+                    .add_enabled(
+                        !state.busy,
+                        crate::keyboard::Button::new("Refresh runtime versions"),
+                    )
                     .on_hover_text("Probe applied settings on the project host, inside its sandbox")
                     .clicked()
                 {
@@ -305,17 +314,18 @@ impl EditorApp {
             ui.small(
             "One NAME=value per line. Values are literal and saved in local project preferences.",
         );
-            let variables = ui.add(
+            let variables = ui.add(crate::keyboard::named(
+                "Project environment variables",
                 egui::TextEdit::multiline(&mut state.variables)
                     .desired_rows(4)
                     .desired_width(f32::INFINITY)
                     .char_limit(65536)
                     .hint_text("APP_MODE=development\nDATA_DIR=/scratch/data"),
-            );
+            ));
             ui_probe::button(ui, "environment-variables", &variables);
             let unapplied = state.unapplied(&self.workbench.prefs.environment);
             let apply = ui.horizontal_wrapped(|ui| {
-                let apply = ui.button("Apply environment");
+                let apply = crate::keyboard::button(ui, "Apply environment");
                 ui_probe::button(ui, "environment-apply", &apply);
                 let status = ui.label(RichText::new(if unapplied {
                     "Unapplied environment changes"
@@ -365,7 +375,7 @@ impl EditorApp {
                 } else {
                     "Python interpreter and virtual environments"
                 };
-                let section = egui::CollapsingHeader::new(title)
+                let section = crate::keyboard::CollapsingHeader::new(title)
                     .id_salt("environment-python")
                     .default_open(active_python)
                     .open(open.then_some(true))
@@ -401,7 +411,7 @@ impl EditorApp {
             ui.horizontal_wrapped(|ui| {
                 let run = ui.add_enabled(
                     language_tools && language.is_some_and(|l| l.run.is_some()),
-                    egui::Button::new("Run current file / project"),
+                    crate::keyboard::Button::new("Run current file / project"),
                 );
                 ui_probe::button(ui, "task-run-current", &run);
                 if run.clicked() {
@@ -410,7 +420,7 @@ impl EditorApp {
                 if ui
                     .add_enabled(
                         language_tools && language.is_some_and(|l| l.build.is_some()),
-                        egui::Button::new("Build project"),
+                        crate::keyboard::Button::new("Build project"),
                     )
                     .clicked()
                 {
@@ -427,7 +437,10 @@ impl EditorApp {
                 };
                 if let Some((program, arguments)) = test
                     && ui
-                        .add_enabled(language_tools, egui::Button::new("Run project tests"))
+                        .add_enabled(
+                            language_tools,
+                            crate::keyboard::Button::new("Run project tests"),
+                        )
                         .clicked()
                 {
                     if self.documents.iter().any(Document::dirty) {
@@ -460,13 +473,13 @@ impl EditorApp {
                 .active()
                 .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
             layout::card(ui, palette, |ui| {
-                egui::CollapsingHeader::new("Python tasks")
+                crate::keyboard::CollapsingHeader::new("Python tasks")
                     .default_open(language.is_some_and(|l| l.id == "python"))
                     .show(ui, |ui| self.python_tasks_ui(ui, ctx));
             });
             ui.add_space(12.);
         }
-        if ui.button("Open project terminal").clicked() {
+        if crate::keyboard::button(ui, "Open project terminal").clicked() {
             self.focus_pane(navigation::Pane::Terminal, ctx);
         }
         ui.small("Tasks may create build artifacts or download dependencies according to their tools. Save files first and use an idle terminal.");

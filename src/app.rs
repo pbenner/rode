@@ -21,7 +21,7 @@
 
 use crate::{
     files::{self, Entry, Request, Response},
-    sandbox,
+    keyboard, sandbox,
     ssh::{self, Profile, Remote},
     terminal::Terminal,
     theme,
@@ -248,6 +248,7 @@ impl EditorApp {
         startup: Startup,
         storage: Option<&dyn eframe::Storage>,
     ) -> Self {
+        keyboard::install(&cc.egui_ctx);
         ui_probe::install(&cc.egui_ctx);
         let requested_theme = startup
             .theme

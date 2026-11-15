@@ -258,7 +258,7 @@ impl Queue {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("Queued ({})", self.prompts.len())).strong())
                     .on_hover_text("Pending prompts belong to this agent. With Persist on, the host continues the queue and retains its attachments after detaching or closing Rode. Pause, Stop, failures and permission requests still hold work.");
-                let toggle = ui.add_enabled(!self.paused || can_resume, egui::Button::new(if self.paused { "Resume queue" } else { "Pause queue" }).small())
+                let toggle = ui.add_enabled(!self.paused || can_resume, crate::keyboard::Button::new(if self.paused { "Resume queue" } else { "Pause queue" }).small())
                     .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.");
                 ui_probe::button(ui, if self.paused { "agent-queue-resume" } else { "agent-queue-pause" }, &toggle);
                 if toggle.clicked() {
@@ -289,12 +289,12 @@ impl Queue {
                                 if later.clicked() {
                                     action = Some(Action::Move(prompt.id, false));
                                 }
-                                let edit = ui.add_enabled(self.edit.is_none(), egui::Button::new("Edit").small());
+                                let edit = ui.add_enabled(self.edit.is_none(), crate::keyboard::Button::new("Edit").small());
                                 ui_probe::button(ui, &format!("agent-queue-{index}-edit"), &edit);
                                 if edit.clicked() {
                                     action = Some(Action::Edit(prompt.id));
                                 }
-                                let delete = ui.small_button("Delete");
+                                let delete = crate::keyboard::small_button(ui, "Delete");
                                 ui_probe::button(ui, &format!("agent-queue-{index}-delete"), &delete);
                                 if delete.clicked() {
                                     action = Some(Action::Remove(prompt.id));
@@ -306,20 +306,20 @@ impl Queue {
                             });
                             if let Some(edit) = &mut self.edit
                                 && edit.id == prompt.id {
-                                let input = ui.add(egui::TextEdit::multiline(&mut edit.text)
+                                let input = ui.add(crate::keyboard::named("Queued prompt", egui::TextEdit::multiline(&mut edit.text)
                                     .id_salt(("queued-edit", edit.id))
                                     .desired_rows(3)
                                     .desired_width(f32::INFINITY)
-                                    .char_limit(crate::agent::PROMPT_LIMIT));
+                                    .char_limit(crate::agent::PROMPT_LIMIT)));
                                 ui_probe::button(ui, "agent-queue-edit-input", &input);
                                 ui_probe::value(ui, "agent-queue-edit-input-value", &input, &edit.text);
                                 ui.horizontal(|ui| {
-                                    let save = ui.add_enabled(valid(&edit.text) || edit.text.len() <= crate::agent::PROMPT_LIMIT && !prompt.files.is_empty(), egui::Button::new("Save prompt").small());
+                                    let save = ui.add_enabled(valid(&edit.text) || edit.text.len() <= crate::agent::PROMPT_LIMIT && !prompt.files.is_empty(), crate::keyboard::Button::new("Save prompt").small());
                                     ui_probe::button(ui, "agent-queue-save", &save);
                                     if save.clicked() {
                                         action = Some(Action::Save);
                                     }
-                                    let cancel = ui.small_button("Cancel edit");
+                                    let cancel = crate::keyboard::small_button(ui, "Cancel edit");
                                     ui_probe::button(ui, "agent-queue-cancel-edit", &cancel);
                                     if cancel.clicked() {
                                         action = Some(Action::Cancel);

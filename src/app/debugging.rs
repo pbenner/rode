@@ -473,15 +473,15 @@ impl EditorApp {
             let mut target = self.debugger.target.clone();
             let (queue, _) = self.slurm_programs();
             let runner = self.workbench.slurm_allocation().runner.clone();
-            egui::ComboBox::from_id_salt("debugger-execution-target")
+            crate::keyboard::ComboBox::new("debugger-execution-target", "Debugger execution target")
                 .selected_text(target.as_ref().map(|t| format!("Slurm job {}", t.id))
                     .unwrap_or_else(|| "Project host".into()))
                 .show_ui(ui, |ui| {
-                ui.selectable_value(&mut target, None, "Project host");
+                crate::keyboard::selectable_value(ui, &mut target, None, "Project host");
                 if let Some(snapshot) = &self.sessions.slurm {
                     for job in &snapshot.jobs {
                         if job.state == "RUNNING" && job.id.bytes().all(|b| b.is_ascii_digit()) {
-                            ui.selectable_value(
+                            crate::keyboard::selectable_value(ui,
                                 &mut target,
                                 Some(crate::slurm::Target {
                                     id: job.id.clone(), name: job.name.clone(),
@@ -502,13 +502,13 @@ impl EditorApp {
                     self.debugger.target = target;
                 }
             }
-            if ui.add_enabled(!self.sessions.slurm_busy, egui::Button::new("Refresh targets")).clicked() {
+            if ui.add_enabled(!self.sessions.slurm_busy, crate::keyboard::Button::new("Refresh targets")).clicked() {
                 self.refresh_slurm(None, ctx);
             }
             let on = self.debugger.client.as_ref().map_or(self.debugger.persistent, Client::persistent);
             let persist = ui.add_enabled(
                 self.debugger.client.as_ref().is_none_or(|c| !c.lifetime_pending()),
-                egui::Button::new(if on { "Persist debugger: on" } else { "Persist debugger: off" }),
+                crate::keyboard::Button::new(if on { "Persist debugger: on" } else { "Persist debugger: off" }),
             );
             ui_probe::button(ui, "debugger-persist", &persist);
             if persist.clicked() {
@@ -521,12 +521,12 @@ impl EditorApp {
                     self.debugger.persistent = !on;
                 }
             }
-            if ui.small_button("Running debuggers…").clicked() {
+            if crate::keyboard::small_button(ui, "Running debuggers…").clicked() {
                 self.open_sessions(ctx);
             }
             if on && ui.add_enabled(
                 self.debugger.client.as_ref().is_none_or(|c| !c.lifetime_pending()),
-                egui::Button::new("Detach debugger").small(),
+                crate::keyboard::Button::new("Detach debugger").small(),
             ).clicked() {
                 self.leave_debugger();
             }
@@ -537,7 +537,7 @@ impl EditorApp {
             .as_ref()
             .is_none_or(|c| c.phase == Phase::Ended)
         {
-            let reattach = ui.small_button("Reattach debugger");
+            let reattach = crate::keyboard::small_button(ui, "Reattach debugger");
             ui_probe::button(ui, "debugger-reattach", &reattach);
             if reattach.clicked() {
                 self.find_debugger_runtime(ctx);

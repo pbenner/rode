@@ -374,6 +374,12 @@ impl Router {
             let mut cut = None;
             for (index, event) in i.events.iter().enumerate() {
                 let navigation_command = navigation.command_event(event, cut_modifiers);
+                if navigation_command && !source_input {
+                    // A leading navigation sequence owns its following packet.
+                    // Its selector/hint letters are not source edits, and commands
+                    // after them must stay behind the navigation handoff.
+                    return Vec::new();
+                }
                 let global_command = (extension_prefix.is_some()
                     && matches!(event, egui::Event::Cut))
                     || matches!(event, egui::Event::Key {key, modifiers, pressed: true, ..}

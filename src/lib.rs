@@ -51,3 +51,5 @@ pub mod ssh;
 pub mod terminal;
 pub mod theme;
 pub mod vault;
+
+mod keyboard;

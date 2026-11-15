@@ -146,12 +146,34 @@ Choose **Standard**, **Emacs**, or **Vim** in **View → Keyboard shortcuts…**
 
 In a **terminal**, all presets use **Ctrl+Space** for pane commands so the shell keeps `Ctrl+X` and `Ctrl+W`. Terminal input, search/form fields, notebook cells, hex views and previews retain their existing editing controls. These are core editing presets with the commands listed below; text changes use RODE's native undo grouping and save protections. They run identically for local and SSH source files and do not load external editor plugins or configuration.
 
-The following table describes the **Standard** preset:
+For direct access to visible controls, press **Ctrl+Space**, release Ctrl, then
+**A**. Type the short label beside a button, field or menu to focus it. **Enter**
+or **Space** then uses that control's normal behavior; choosing a hint does not
+execute the action. **Backspace** edits a partial hint and **Escape** cancels.
+Hint labels remain assigned to the same controls while the mode is open.
 
-Use **Ctrl+Space**, release Ctrl, then press a command key. Defaults avoid Alt so they coexist with window managers such as Notion. A border marks the focused pane and a hint appears while the leader is active. **Escape** cancels; the sequence expires after five seconds.
+Use leader **G**, or **Find visible control** in the command palette, to search
+the current window's controls by name. Up/Down chooses a result, Enter focuses
+it, and Escape returns to the previous control. This searches rendered controls,
+not unloaded explorer entries or hidden panels. Open their pane or navigate the
+list first. Command search also accepts abbreviations through fuzzy matching.
+
+The same discovery bindings use the selected source-style leader. Dialogs and
+terminals use Ctrl+Space with Emacs/Vim styles to preserve native text editing.
+Discovery is local to the focused window and the current modal or popup.
+Existing custom bindings take precedence over newly added defaults; a conflicting
+new binding is left unassigned and can be edited in Keyboard shortcuts.
+
+Editor and tool workspace tab strips each have one Tab stop. Left/Right moves focus among their tabs;
+Enter/Space selects a tab. Shift+F10 opens a focused item's contextual menu.
+Editor tab menus include Move tab left/right and Move to new editor window.
+Text fields retain their native editing keys.
+
+The following table describes the **Standard** preset. Use **Ctrl+Space**, release Ctrl, then press a command key. Defaults avoid Alt so they coexist with window managers such as Notion. A border marks the focused pane and a hint appears while the leader is active. **Escape** cancels; the sequence expires after five seconds.
 
 | After the leader | Action |
 | --- | --- |
+| `a` / `g` | Show keyboard hints / find a visible control |
 | `h` / `j` / `k` / `l`, or arrows | Focus a visible pane left / below / above / right |
 | `Tab` / `Shift+Tab` | Next / previous visible pane |
 | `e` / `f` / `t` / `p` | Focus editor / explorer / terminal / project tools |

@@ -154,7 +154,7 @@ fn connection_rows(
                     }));
                 }
             }
-            response.context_menu(|ui| {
+            crate::keyboard::context_menu(&response, |ui| {
                 if ui
                     .add(IconButton::new(Icon::Settings, "Edit connection…"))
                     .clicked()

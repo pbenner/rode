@@ -79,7 +79,7 @@ impl EditorApp {
                     } else {
                         format!("{preset}%")
                     };
-                    let response = ui.selectable_label(percent == preset, label);
+                    let response = crate::keyboard::selectable_label(ui, percent == preset, label);
                     ui_probe::button(ui, &format!("interface-scale-{preset}"), &response);
                     if response.clicked() {
                         self.set_ui_scale(f32::from(preset) / 100., ctx);
@@ -108,7 +108,12 @@ impl EditorApp {
             .max_height(280.0)
             .show(ui, |ui| {
                 for entry in &self.themes.entries {
-                    let response = ui.radio_value(&mut selected, entry.id.clone(), &entry.name);
+                    let response = crate::keyboard::radio_value(
+                        ui,
+                        &mut selected,
+                        entry.id.clone(),
+                        &entry.name,
+                    );
                     ui_probe::button(ui, &format!("interface-theme:{}", entry.id), &response);
                 }
             });
@@ -127,7 +132,7 @@ impl EditorApp {
             .max_height(280.)
             .show(ui, |ui| {
                 for entry in &self.themes.syntax_entries {
-                    ui.radio_value(&mut selected, entry.id.clone(), &entry.name);
+                    crate::keyboard::radio_value(ui, &mut selected, entry.id.clone(), &entry.name);
                 }
             });
         if selected != self.themes.active_syntax().id {

@@ -66,7 +66,7 @@ impl EditorApp {
                 ),
             )
         };
-        ui.button(RichText::new(label).color(color))
+        crate::keyboard::button(ui, RichText::new(label).color(color))
             .on_hover_text(format!("Manage SSH tunnels on {host}.\n{details}"))
     }
 
@@ -95,26 +95,33 @@ impl EditorApp {
                 "Reconnect SSH to manage this host's tunnels.",
                 palette,
             );
-            if ui.button("Close").clicked() {
+            if crate::keyboard::button(ui, "Close").clicked() {
                 self.dialog = Dialog::None;
             }
             return;
         }
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
-            let list = ui.selectable_value(
+            let list = crate::keyboard::selectable_value(
+                ui,
                 &mut self.tunnels.page,
                 Page::Tunnels,
                 format!("Tunnels ({})", self.tunnels.available.len()),
             );
             ui_probe::button(ui, "tunnel-tab-list", &list);
-            let saved = ui.selectable_value(
+            let saved = crate::keyboard::selectable_value(
+                ui,
                 &mut self.tunnels.page,
                 Page::Saved,
                 format!("Saved ({})", self.tunnels.saved.entries.len()),
             );
             ui_probe::button(ui, "tunnel-tab-saved", &saved);
-            let new = ui.selectable_value(&mut self.tunnels.page, Page::New, "New tunnel");
+            let new = crate::keyboard::selectable_value(
+                ui,
+                &mut self.tunnels.page,
+                Page::New,
+                "New tunnel",
+            );
             ui_probe::button(ui, "tunnel-tab-new", &new);
         });
         ui.separator();
@@ -190,19 +197,19 @@ impl EditorApp {
                     ui.add(egui::Label::new(saved.host.label()).wrap());
                     layout::subtitle(ui, &format!("Relay {} · listener {} · {}", endpoint(&saved.spec.relay_host, saved.spec.relay_port), saved.spec.listener(), saved.spec.listen_on.label()), palette);
                     ui.horizontal_wrapped(|ui| {
-                        let load = ui.add_enabled(saved.host == host, egui::Button::new("Load setup"))
+                        let load = ui.add_enabled(saved.host == host, crate::keyboard::Button::new("Load setup"))
                             .on_disabled_hover_text(format!("Open {} before loading this setup.", saved.host.label()));
                         ui_probe::button(ui, &format!("tunnel-saved-load:{id}"), &load);
                         if load.clicked() { self.load_tunnel_configuration(&id); }
-                        if ui.button("Delete…").clicked() { self.tunnels.delete_saved = Some(id.clone()); }
+                        if crate::keyboard::button(ui, "Delete…").clicked() { self.tunnels.delete_saved = Some(id.clone()); }
                     });
                     if self.tunnels.delete_saved.as_deref() == Some(&id) {
                         ui.label("Delete this saved configuration? Running tunnels keep their current settings.");
                         ui.horizontal_wrapped(|ui| {
-                            if ui.button(RichText::new("Delete configuration").color(palette.error)).clicked() {
+                            if crate::keyboard::button(ui, RichText::new("Delete configuration").color(palette.error)).clicked() {
                                 self.delete_tunnel_configuration(&id);
                             }
-                            if ui.button("Cancel").clicked() { self.tunnels.delete_saved = None; }
+                            if crate::keyboard::button(ui, "Cancel").clicked() { self.tunnels.delete_saved = None; }
                         });
                     }
                 });
@@ -224,16 +231,25 @@ impl EditorApp {
                 palette,
             );
             ui.add_space(8.);
-            if ui.button("New tunnel").clicked() {
+            if crate::keyboard::button(ui, "New tunnel").clicked() {
                 self.tunnels.page = Page::New;
             }
             return;
         }
-        ui.collapsing("Return connection settings", |ui| {
-            layout::subtitle(ui, "Optional desktop SSH alias or jump chain. Leave blank to use each tunnel’s relay address.", palette);
+        crate::keyboard::collapsing(ui, "Return connection settings", |ui| {
+            layout::subtitle(
+                ui,
+                "Optional desktop SSH alias or jump chain. Leave blank to use each tunnel’s relay address.",
+                palette,
+            );
             ui.label("Desktop relay alias / jump chain");
-            ui.add(egui::TextEdit::singleline(&mut self.tunnels.relay_jump)
-                .id_salt("tunnel-desktop-relay").desired_width(f32::INFINITY).hint_text("From the tunnel’s relay settings"));
+            ui.add(crate::keyboard::named(
+                "Desktop relay alias / jump chain",
+                egui::TextEdit::singleline(&mut self.tunnels.relay_jump)
+                    .id_salt("tunnel-desktop-relay")
+                    .desired_width(f32::INFINITY)
+                    .hint_text("From the tunnel’s relay settings"),
+            ));
         });
         ui.add_space(8.);
         for info in self.tunnels.available.clone() {
@@ -321,7 +337,7 @@ impl EditorApp {
             );
             ui.add(egui::Label::new(RichText::new(&info.fingerprint).monospace()).wrap());
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Copy fingerprint").clicked() {
+                if crate::keyboard::button(ui, "Copy fingerprint").clicked() {
                     ctx.copy_text(info.fingerprint.clone());
                 }
                 ui.add_enabled_ui(!busy, |ui| {
@@ -330,7 +346,7 @@ impl EditorApp {
                     } else {
                         "Replace trusted relay key and restart"
                     };
-                    if ui.button(label).clicked() {
+                    if crate::keyboard::button(ui, label).clicked() {
                         let mut spec = info.spec.clone();
                         spec.relay_key = info.observed_key.clone();
                         self.tunnel_request(
@@ -368,13 +384,15 @@ impl EditorApp {
                 }
                 if !local
                     && info.spec.listen_on == ListenOn::AllInterfaces
-                    && ui.button("Copy connection details").clicked()
+                    && crate::keyboard::button(ui, "Copy connection details").clicked()
                 {
                     ctx.copy_text(self.tunnels.connection_details(info));
                 }
             });
             if info.status == Status::Attention
-                && ui.add_enabled(!busy, egui::Button::new("Retry")).clicked()
+                && ui
+                    .add_enabled(!busy, crate::keyboard::Button::new("Retry"))
+                    .clicked()
             {
                 self.tunnel_request(
                     Control::StartTunnel {
@@ -384,7 +402,7 @@ impl EditorApp {
                     ctx,
                 );
             }
-            if ui.button("Copy settings").clicked() {
+            if crate::keyboard::button(ui, "Copy settings").clicked() {
                 self.tunnels.spec = info.spec.clone();
                 self.tunnels.saved_id = None;
                 self.tunnels.draft_epoch += 1;
@@ -393,7 +411,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     self.tunnels.saved.error.is_none(),
-                    egui::Button::new(self.tunnel_save_label(&info.spec, false)),
+                    crate::keyboard::Button::new(self.tunnel_save_label(&info.spec, false)),
                 )
                 .clicked()
             {
@@ -402,7 +420,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     !busy,
-                    egui::Button::new(RichText::new("Stop…").color(palette.error)),
+                    crate::keyboard::Button::new(RichText::new("Stop…").color(palette.error)),
                 )
                 .clicked()
             {
@@ -417,7 +435,9 @@ impl EditorApp {
                 if ui
                     .add_enabled(
                         !busy,
-                        egui::Button::new(RichText::new("Stop tunnel").color(palette.error)),
+                        crate::keyboard::Button::new(
+                            RichText::new("Stop tunnel").color(palette.error),
+                        ),
                     )
                     .clicked()
                 {
@@ -429,7 +449,7 @@ impl EditorApp {
                     );
                     self.tunnels.stop = None;
                 }
-                if ui.button("Cancel").clicked() {
+                if crate::keyboard::button(ui, "Cancel").clicked() {
                     self.tunnels.stop = None;
                 }
             });
@@ -474,11 +494,11 @@ impl EditorApp {
                 form_grid(ui, "forwarding-fields", |ui, compact, _| {
                     port_field(ui, "Relay port", &mut spec.listen_port, compact);
                     layout::field_label(ui, "Relay access", compact);
-                    let access = egui::ComboBox::from_id_salt("tunnel-listen-on")
+                    let access = crate::keyboard::ComboBox::new("tunnel-listen-on", "Tunnel listener access")
                         .selected_text(spec.listen_on.label())
                         .show_ui(ui, |ui| {
                             for scope in [ListenOn::Loopback, ListenOn::AllInterfaces] {
-                                let option = ui.selectable_value(&mut spec.listen_on, scope, scope.label());
+                                let option = crate::keyboard::selectable_value(ui, &mut spec.listen_on, scope, scope.label());
                                 ui_probe::button(ui, if scope == ListenOn::Loopback { "tunnel-listen-loopback" } else { "tunnel-listen-all" }, &option);
                             }
                         });
@@ -500,7 +520,7 @@ impl EditorApp {
                     layout::subtitle(ui, "This setup retains the verified relay key.", palette);
                 }
             });
-            ui.collapsing("Connection requirements", |ui| {
+            crate::keyboard::collapsing(ui, "Connection requirements", |ui| {
                 ui.label("Use a literal relay hostname or IP. The relay must allow SSH forwarding, and the compute node must be able to reach it.");
                 ui.label("Default key files: ~/.ssh/id_rsa, ~/.ssh/id_ecdsa, then ~/.ssh/id_ed25519. Encrypted or hardware-backed keys require a persistent SSH agent.");
                 ui.label("Desktop credentials are not copied. A forwarded desktop agent disappears when that connection ends; use an agent owned by the compute host.");
@@ -558,14 +578,14 @@ impl EditorApp {
                 });
                 let save = ui.add_enabled(
                     validation.is_ok() && self.tunnels.saved.error.is_none(),
-                    egui::Button::new(self.tunnel_save_label(&self.tunnels.spec, true)),
+                    crate::keyboard::Button::new(self.tunnel_save_label(&self.tunnels.spec, true)),
                 );
                 ui_probe::button(ui, "tunnel-save", &save);
                 if save.clicked() {
                     self.save_tunnel_configuration(self.tunnels.spec.clone(), true);
                 }
             }
-            let close = ui.button("Close");
+            let close = crate::keyboard::button(ui, "Close");
             ui_probe::button(ui, "tunnel-close", &close);
             if close.clicked() {
                 self.dialog = Dialog::None;
@@ -584,7 +604,7 @@ fn tunnel_error(ui: &mut egui::Ui, ctx: &egui::Context, error: &str, color: egui
             .wrap()
             .selectable(true),
     );
-    if ui.small_button("Copy error").clicked() {
+    if crate::keyboard::small_button(ui, "Copy error").clicked() {
         ctx.copy_text(error.to_owned());
     }
 }
@@ -616,18 +636,22 @@ fn text_field(
     width: f32,
 ) {
     layout::field_label(ui, label, compact);
-    let field = ui.add(
+    let field = ui.add(crate::keyboard::named(
+        label,
         egui::TextEdit::singleline(value)
             .id_salt(label)
             .hint_text(hint)
             .char_limit(4096)
             .desired_width(width),
-    );
+    ));
     ui_probe::button(ui, &format!("tunnel-field-{label}"), &field);
     ui.end_row();
 }
 fn port_field(ui: &mut egui::Ui, label: &str, value: &mut u16, compact: bool) {
     layout::field_label(ui, label, compact);
-    ui.add(egui::DragValue::new(value).range(1..=65535));
+    ui.add(crate::keyboard::named(
+        label,
+        egui::DragValue::new(value).range(1..=65535),
+    ));
     ui.end_row();
 }

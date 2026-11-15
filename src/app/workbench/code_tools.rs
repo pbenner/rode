@@ -30,13 +30,13 @@ impl EditorApp {
         );
         layout::section(ui, "Code checks", palette, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Check file").clicked() {
+                if crate::keyboard::button(ui, "Check file").clicked() {
                     self.format_active(false, false, ctx);
                 }
-                if ui.button("Format").clicked() {
+                if crate::keyboard::button(ui, "Format").clicked() {
                     self.format_active(true, false, ctx);
                 }
-                if ui.button("Ruff safe fixes").clicked() {
+                if crate::keyboard::button(ui, "Ruff safe fixes").clicked() {
                     self.format_active(true, true, ctx);
                 }
             });
@@ -69,7 +69,7 @@ impl EditorApp {
                         };
                         if ui
                             .add(
-                                egui::Button::new(RichText::new(text).color(color))
+                                crate::keyboard::Button::new(RichText::new(text).color(color))
                                     .wrap()
                                     .frame(false),
                             )

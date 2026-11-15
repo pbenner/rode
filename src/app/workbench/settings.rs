@@ -130,9 +130,12 @@ impl EditorApp {
                 } else {
                     section.label().into()
                 };
-                let tab = ui
-                    .selectable_label(self.workbench.settings_section == section, label)
-                    .on_hover_text(section.description());
+                let tab = crate::keyboard::selectable_label(
+                    ui,
+                    self.workbench.settings_section == section,
+                    label,
+                )
+                .on_hover_text(section.description());
                 ui_probe::button(ui, &format!("settings-category-{}", section.label()), &tab);
                 if tab.clicked() {
                     self.workbench.settings_section = section;
@@ -151,7 +154,7 @@ impl EditorApp {
             };
             let save = ui.add_enabled(
                 enabled,
-                egui::Button::new(if sandbox {
+                crate::keyboard::Button::new(if sandbox {
                     "Apply sandbox settings"
                 } else {
                     "Save changes"
@@ -161,7 +164,7 @@ impl EditorApp {
             if save.clicked() {
                 self.save_settings_section(section, ctx);
             }
-            let discard = ui.add_enabled(changed, egui::Button::new("Discard changes"));
+            let discard = ui.add_enabled(changed, crate::keyboard::Button::new("Discard changes"));
             ui_probe::button(ui, "settings-discard", &discard);
             if discard.clicked() {
                 section.copy(&self.workbench.prefs, &mut self.workbench.draft);
@@ -192,8 +195,8 @@ impl EditorApp {
                         SettingsSection::Sandbox => self.sandbox_settings_ui(ui),
                         SettingsSection::Monitoring => {
                             layout::section(ui, "System monitor", palette, |ui| {
-                                ui.add(egui::Slider::new(&mut self.workbench.draft.monitor_interval, 1..=30)
-                                    .text("Refresh interval (s)"));
+                                ui.add(crate::keyboard::named("Refresh interval (s)", egui::Slider::new(&mut self.workbench.draft.monitor_interval, 1..=30)
+                                    .text("Refresh interval (s)")));
                                 layout::subtitle(ui, "Monitoring runs only while the monitor is visible. It reads the project host outside the sandbox.", palette);
                             });
                         }
@@ -251,27 +254,31 @@ impl EditorApp {
     fn code_settings_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         layout::section(ui, "Code tools", palette, |ui| {
-            let format = ui.checkbox(
+            let format = crate::keyboard::checkbox(
+                ui,
                 &mut self.workbench.draft.format_on_save,
                 "Format supported files on save",
             );
             ui_probe::button(ui, "settings-format-on-save", &format);
-            ui.checkbox(
+            crate::keyboard::checkbox(
+                ui,
                 &mut self.workbench.draft.check_on_save,
                 "Check supported files on save",
             );
-            ui.checkbox(
+            crate::keyboard::checkbox(
+                ui,
                 &mut self.workbench.draft.live_checks,
                 "Check supported files after typing pauses",
             );
         });
         layout::section(ui, "Python diagnostics and formatting", palette, |ui| {
             ui.label("Ruff command (blank: uvx ruff)");
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "Ruff executable",
                 egui::TextEdit::singleline(&mut self.workbench.draft.ruff)
                     .desired_width(f32::INFINITY)
                     .hint_text("uvx ruff, auto, ruff, or /path/to/ruff"),
-            )
+            ))
             .on_hover_text("Use auto to prefer Ruff from the selected Python environment.");
         });
     }
@@ -280,7 +287,7 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         layout::section(ui, "Build command", palette, |ui| {
             ui.label("Build preset (or edit the executable and arguments below)");
-            egui::ComboBox::from_id_salt("latex-preset")
+            crate::keyboard::ComboBox::new("latex-preset", "LaTeX preset")
                 .selected_text("Choose a preset…")
                 .show_ui(ui, |ui| {
                     for (title, driver, engine) in [
@@ -291,7 +298,7 @@ impl EditorApp {
                         ("XeLaTeX", "xelatex", "xelatex"),
                         ("LuaLaTeX", "lualatex", "lualatex"),
                     ] {
-                        if ui.selectable_label(false, title).clicked() {
+                        if crate::keyboard::selectable_label(ui, false, title).clicked() {
                             self.workbench.draft.latex.program = driver.into();
                             self.workbench.draft.latex.arguments =
                                 crate::latex::preset(driver, engine);
@@ -299,21 +306,23 @@ impl EditorApp {
                     }
                 });
             ui.label("Build executable");
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "LaTeX compiler",
                 egui::TextEdit::singleline(&mut self.workbench.draft.latex.program)
                     .desired_width(f32::INFINITY)
                     .hint_text("latexmk, another compiler, or /path/to/tool"),
-            );
+            ));
             ui.label("Arguments · one per line · {file}, {dir}, {root}, {outdir}");
             let mut args = self.workbench.draft.latex.arguments.join("\n");
             if ui
-                .add(
+                .add(crate::keyboard::editor_named(
+                    "LaTeX build arguments",
                     egui::TextEdit::multiline(&mut args)
                         .char_limit(32 * 1024)
                         .code_editor()
                         .desired_rows(6)
                         .desired_width(f32::INFINITY),
-                )
+                ))
                 .changed()
             {
                 self.workbench.draft.latex.arguments = if args.is_empty() {
@@ -353,16 +362,18 @@ impl EditorApp {
                 ),
             ] {
                 ui.label(label);
-                ui.add(
+                ui.add(crate::keyboard::named(
+                    label,
                     egui::TextEdit::singleline(value)
                         .desired_width(f32::INFINITY)
                         .hint_text(hint),
-                );
+                ));
             }
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "Build timeout (s)",
                 egui::Slider::new(&mut self.workbench.draft.latex.timeout_seconds, 1..=300)
                     .text("Build timeout (s)"),
-            );
+            ));
         });
     }
 
@@ -370,37 +381,42 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         layout::section(ui, "Marp presentations", palette, |ui| {
             ui.label("Marp CLI (blank: installed project node_modules/.bin/marp, then PATH)");
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "Marp executable",
                 egui::TextEdit::singleline(&mut self.workbench.draft.marp.program)
                     .desired_width(f32::INFINITY)
                     .hint_text("marp or /path/to/marp"),
-            );
+            ));
             ui.label("Browser executable (blank: Marp auto-detection)");
-            egui::ComboBox::from_id_salt("marp-browser-kind")
+            crate::keyboard::ComboBox::new("marp-browser-kind", "Presentation browser")
                 .selected_text(&self.workbench.draft.marp.browser_kind)
                 .show_ui(ui, |ui| {
                     for kind in ["auto", "chrome", "edge", "firefox"] {
-                        ui.selectable_value(
+                        crate::keyboard::selectable_value(
+                            ui,
                             &mut self.workbench.draft.marp.browser_kind,
                             kind.into(),
                             kind,
                         );
                     }
                 });
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "Browser executable",
                 egui::TextEdit::singleline(&mut self.workbench.draft.marp.browser)
                     .desired_width(f32::INFINITY)
                     .hint_text("/usr/bin/firefox or /usr/bin/chromium"),
-            );
+            ));
         });
         layout::section(ui, "Slide assets", palette, |ui| {
             ui.label("Additional theme CSS (optional project-host path)");
-            ui.add(
+            ui.add(crate::keyboard::named(
+                "Slide stylesheet",
                 egui::TextEdit::singleline(&mut self.workbench.draft.marp.theme_css)
                     .desired_width(f32::INFINITY)
                     .hint_text("themes/slides.css"),
-            );
-            ui.checkbox(
+            ));
+            crate::keyboard::checkbox(
+                ui,
                 &mut self.workbench.draft.marp.allow_local_files,
                 "Allow local slide assets within the current host/sandbox access",
             );
@@ -431,7 +447,7 @@ impl EditorApp {
                     ui.label("Probing updated sandbox…");
                 });
             }
-            if ui.button("Reset sandbox draft to defaults").clicked() {
+            if crate::keyboard::button(ui, "Reset sandbox draft to defaults").clicked() {
                 let enabled = self.workbench.draft.sandbox.enabled;
                 self.workbench.draft.sandbox = sandbox::Options {
                     enabled,
@@ -571,13 +587,19 @@ impl EditorApp {
     }
     /// Edit host-side Slurm executable/wrapper paths in the uncommitted project settings draft.
     pub(in crate::app) fn slurm_settings_ui(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing("Slurm executable paths / wrappers", |ui| {
+        crate::keyboard::collapsing(ui, "Slurm executable paths / wrappers", |ui| {
             ui.label("Programs on the project host; wrappers may load site modules.");
             ui.label("squeue");
-            ui.text_edit_singleline(&mut self.workbench.draft.slurm_queue);
+            ui.add(crate::keyboard::named(
+                "squeue executable",
+                egui::TextEdit::singleline(&mut self.workbench.draft.slurm_queue),
+            ));
             ui.label("scancel");
-            ui.text_edit_singleline(&mut self.workbench.draft.slurm_cancel);
-            if ui.button("Save Slurm settings").clicked() {
+            ui.add(crate::keyboard::named(
+                "scancel executable",
+                egui::TextEdit::singleline(&mut self.workbench.draft.slurm_cancel),
+            ));
+            if crate::keyboard::button(ui, "Save Slurm settings").clicked() {
                 self.workbench.prefs.slurm_queue = self.workbench.draft.slurm_queue.trim().into();
                 self.workbench.prefs.slurm_cancel = self.workbench.draft.slurm_cancel.trim().into();
                 self.workbench.save_preferences();

@@ -329,6 +329,7 @@ impl State {
             .on_hover_cursor(egui::CursorIcon::ResizeVertical)
             .on_hover_text("Drag to resize message input · Double-click to reset\nWhen focused: Up/Down to resize, Home to reset");
         crate::app::ui_probe::button(ui, "agent-composer-resize", &response);
+        crate::keyboard::target(ui, "Message input height", &response);
         if response.is_pointer_button_down_on() || response.dragged() {
             crate::app::ui_probe::button(ui, "agent-composer-resize-active", &response);
         }

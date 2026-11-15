@@ -66,13 +66,14 @@ pub(super) fn show(
     palette: Palette,
 ) -> Option<(String, Action)> {
     let commits: Vec<_> = data.lines().filter_map(Commit::parse).collect();
-    let filter = ui.add(
+    let filter = ui.add(crate::keyboard::named(
+        "Filter recent commits by message, author or hash",
         egui::TextEdit::singleline(&mut state.filter)
             .id_salt("git-history-filter")
             .desired_width(f32::INFINITY)
             .hint_text("Filter recent commits by message, author or hash")
             .char_limit(256),
-    );
+    ));
     ui_probe::button(ui, "git-history-filter", &filter);
     let query = state.filter.trim().to_lowercase();
     let visible: Vec<_> = commits
@@ -242,27 +243,26 @@ fn row(
             if details.clicked() {
                 action = Some(Action::Details);
             }
-            let more = egui::containers::menu::MenuButton::from_button(
+            let more = crate::keyboard::MenuButton::from_button(
                 Button::new("More").min_size(Vec2::new(widths[1], height)),
+                "Commit actions",
             )
             .ui(ui, |ui| {
-                let copy = ui.button("Copy commit hash");
+                let copy = crate::keyboard::button(ui, "Copy commit hash");
                 ui_probe::button(ui, "git-history-copy-hash", &copy);
                 if copy.clicked() {
                     ui.ctx().copy_text(commit.oid.into());
                     ui.close();
                 }
                 ui.separator();
-                if ui
-                    .button("Cherry-pick")
+                if crate::keyboard::button(ui, "Cherry-pick")
                     .on_hover_text("Apply this commit to the current branch")
                     .clicked()
                 {
                     action = Some(Action::CherryPick);
                     ui.close();
                 }
-                if ui
-                    .button("Revert…")
+                if crate::keyboard::button(ui, "Revert…")
                     .on_hover_text("Create a new commit reverting this change, after confirmation")
                     .clicked()
                 {

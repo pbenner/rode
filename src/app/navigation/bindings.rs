@@ -41,6 +41,8 @@ pub(in crate::app) enum Action {
     Find,
     NextMatch,
     PreviousMatch,
+    Hints,
+    Controls,
 }
 pub(super) const ACTIONS: &[(Action, &str, &str, &str)] = &[
     (
@@ -155,6 +157,13 @@ pub(super) const ACTIONS: &[(Action, &str, &str, &str)] = &[
         "previous_match",
         "Previous search match",
         "",
+    ),
+    (Action::Hints, "hints", "Show keyboard hints", "Leader+a"),
+    (
+        Action::Controls,
+        "controls",
+        "Find visible control",
+        "Leader+g",
     ),
 ];
 
@@ -309,11 +318,11 @@ impl Bindings {
     pub fn ui(&mut self, ui: &mut egui::Ui, focus: bool) {
         ui.horizontal(|ui| {
             ui.label("Shortcut style");
-            egui::ComboBox::from_id_salt("keyboard-style")
+            crate::keyboard::ComboBox::new("keyboard-style", "Keyboard style")
                 .selected_text(self.draft.name())
                 .show_ui(ui, |ui| {
                     for style in Style::ALL {
-                        ui.selectable_value(&mut self.draft, style, style.name());
+                        crate::keyboard::selectable_value(ui, &mut self.draft, style, style.name());
                     }
                 });
         });
@@ -451,6 +460,46 @@ impl Profile {
                 String::new()
             },
         };
+        // New defaults cannot invalidate an older, valid user profile. Test
+        // additions independently, preserving explicit saved choices.
+        let additions: Vec<_> = result
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let id = match entry.action {
+                    Action::Hints => "hints",
+                    Action::Controls => "controls",
+                    _ => return None,
+                };
+                storage
+                    .filter(|s| s.get_string(&style.key(id)).is_some())
+                    .is_none()
+                    .then(|| (index, entry.value.clone()))
+            })
+            .collect();
+        if result.compile().is_err() && !additions.is_empty() {
+            for (index, _) in &additions {
+                result.entries[*index].value.clear();
+                result.entries[*index].draft.clear();
+            }
+            if result.compile().is_ok() {
+                for (index, value) in additions {
+                    result.entries[index].draft = value.clone();
+                    result.entries[index].value = value;
+                    if result.compile().is_err() {
+                        result.entries[index].value.clear();
+                        result.entries[index].draft.clear();
+                        result.error = "A new navigation shortcut conflicts with your saved bindings and was left unassigned.".into();
+                    }
+                }
+            } else {
+                for (index, value) in additions {
+                    result.entries[index].draft = value.clone();
+                    result.entries[index].value = value;
+                }
+            }
+        }
         if let Err(error) = result.compile() {
             // Invalid saved data must not trap keyboard users. Keep the error
             // visible in settings, with the documented safe defaults active.
@@ -591,11 +640,12 @@ impl Profile {
         ui.label("Use Leader+h, direct Ctrl+Shift+Left, or comma-separated alternatives. Empty fields disable an action. Release the leader modifiers before its next key.");
         ui.horizontal(|ui| {
             ui.label("Leader key");
-            let response = ui.add(
+            let response = ui.add(crate::keyboard::named(
+                "Leader key",
                 egui::TextEdit::singleline(&mut self.leader_draft)
                     .char_limit(80)
                     .desired_width(240.),
-            );
+            ));
             if focus {
                 response.request_focus();
             }
@@ -628,7 +678,10 @@ impl Profile {
                             .on_hover_text(spec.2);
                             let response = ui.add_sized(
                                 [ui.available_width(), 24.],
-                                egui::TextEdit::singleline(&mut entry.draft).char_limit(256),
+                                crate::keyboard::named(
+                                    spec.2,
+                                    egui::TextEdit::singleline(&mut entry.draft).char_limit(256),
+                                ),
                             );
                             if response.gained_focus() {
                                 response.scroll_to_me(Some(Align::Center));
@@ -641,7 +694,7 @@ impl Profile {
             ui.colored_label(ui.visuals().error_fg_color, &self.error);
         }
         ui.horizontal(|ui| {
-            if ui.button("Apply bindings · Ctrl+Enter").clicked() || apply_key {
+            if crate::keyboard::button(ui, "Apply bindings · Ctrl+Enter").clicked() || apply_key {
                 match self.apply() {
                     Ok(()) => {
                         self.error.clear();
@@ -650,7 +703,7 @@ impl Profile {
                     Err(error) => self.error = error,
                 }
             }
-            if ui.button("Restore preset bindings").clicked() {
+            if crate::keyboard::button(ui, "Restore preset bindings").clicked() {
                 self.leader_draft = self.style.leader().into();
                 for (entry, spec) in self.entries.iter_mut().zip(ACTIONS) {
                     entry.draft = self.style.binding(entry.action, spec.3).into();
@@ -770,6 +823,31 @@ mod tests {
             ),
             Some(Action::Down)
         );
+    }
+
+    #[test]
+    fn new_discovery_defaults_preserve_valid_preexisting_custom_shortcuts() {
+        let mut storage = Storage::default();
+        storage.0.insert("keyboard.left".into(), "Leader+a".into());
+        let loaded = Profile::load(Some(&storage), Style::Standard);
+        assert_eq!(
+            loaded.action(Key::A, egui::Modifiers::NONE, true),
+            Some(Action::Left)
+        );
+        assert_eq!(
+            loaded.action(Key::G, egui::Modifiers::NONE, true),
+            Some(Action::Controls)
+        );
+        assert_eq!(
+            loaded
+                .entries
+                .iter()
+                .find(|e| e.action == Action::Hints)
+                .unwrap()
+                .value,
+            ""
+        );
+        assert_eq!(storage.0.len(), 1);
     }
 }
 

@@ -74,23 +74,23 @@ impl State {
                     ui.strong("Changes since last commit");
                     ui.label(format!("{} / {}", index + 1, changes.hunks.len()));
                     let previous =
-                        ui.add_enabled(changes.hunks.len() > 1, egui::Button::new("Previous"));
+                        ui.add_enabled(changes.hunks.len() > 1, crate::keyboard::Button::new("Previous"));
                     ui_probe::button(ui, "git-peek-previous", &previous);
                     if previous.clicked() {
                         next = (index + changes.hunks.len() - 1) % changes.hunks.len();
                     }
                     let following =
-                        ui.add_enabled(changes.hunks.len() > 1, egui::Button::new("Next"));
+                        ui.add_enabled(changes.hunks.len() > 1, crate::keyboard::Button::new("Next"));
                     ui_probe::button(ui, "git-peek-next", &following);
                     if following.clicked() {
                         next = (index + 1) % changes.hunks.len();
                     }
                     let restore = ui
-                        .add_enabled(self.baseline.is_some(), egui::Button::new("Revert change"))
+                        .add_enabled(self.baseline.is_some(), crate::keyboard::Button::new("Revert change"))
                         .on_hover_text("Restore this block from the last commit in the editor. Save to update the file. Undo restores your change.");
                     ui_probe::button(ui, "git-peek-revert", &restore);
                     revert = restore.clicked();
-                    let dismiss = ui.button("Close");
+                    let dismiss = crate::keyboard::button(ui, "Close");
                     ui_probe::button(ui, "git-peek-close", &dismiss);
                     close = dismiss.clicked();
                 });

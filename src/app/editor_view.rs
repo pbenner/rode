@@ -250,6 +250,7 @@ impl EditorApp {
                             themes.paint_glow(ui, glow, &output.galley, output.galley_pos);
                             input.after_source(ui,doc.id,&mut output,&doc.text,palette);
                             ui_probe::button(ui, "source-editor", &output.response);
+                            keyboard::editor_target(ui, "Source editor", &output.response);
                             if output.cursor_range.is_some_and(|range| range.primary.index == 0 && range.secondary.index == 0) {
                                 ui_probe::button(ui, "source-editor-at-start", &output.response);
                             }
@@ -461,28 +462,30 @@ impl EditorApp {
                     } else {
                         180.
                     };
-                    let response = ui.add(
+                    let response = ui.add(crate::keyboard::named(
+                        "Find in file",
                         egui::TextEdit::singleline(&mut self.editor.find)
                             .hint_text("Find in file")
                             .desired_width(field_width),
-                    );
+                    ));
                     if self.editor.find_focus {
                         response.request_focus();
                         self.editor.find_focus = false;
                     }
                     ui_probe::button(ui, "source-find", &response);
                     ui_probe::value(ui, "source-find-value", &response, &self.editor.find);
-                    next = ui.button("Next ↓").clicked()
+                    next = crate::keyboard::button(ui, "Next ↓").clicked()
                         || ((response.has_focus() || response.lost_focus())
                             && ui.input(|i| i.key_pressed(Key::Enter)));
-                    ui.checkbox(&mut self.editor.case_sensitive, "Aa");
+                    crate::keyboard::checkbox(ui, &mut self.editor.case_sensitive, "Aa");
                     if !compact {
-                        ui.add(
+                        ui.add(crate::keyboard::named(
+                            "Replace with",
                             egui::TextEdit::singleline(&mut self.editor.replacement)
                                 .hint_text("Replace with")
                                 .desired_width(140.),
-                        );
-                        replace = ui.button("Replace all").clicked();
+                        ));
+                        replace = crate::keyboard::button(ui, "Replace all").clicked();
                     }
                     if ui
                         .add_sized(
@@ -496,12 +499,13 @@ impl EditorApp {
                 });
                 if compact {
                     ui.horizontal(|ui| {
-                        ui.add(
+                        ui.add(crate::keyboard::named(
+                            "Replace with",
                             egui::TextEdit::singleline(&mut self.editor.replacement)
                                 .hint_text("Replace with")
                                 .desired_width((ui.available_width() - 108.).max(70.)),
-                        );
-                        replace = ui.button("Replace all").clicked();
+                        ));
+                        replace = crate::keyboard::button(ui, "Replace all").clicked();
                     });
                 }
             });

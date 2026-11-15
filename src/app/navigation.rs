@@ -96,6 +96,7 @@ pub(super) struct State {
     remembered: std::collections::HashMap<egui::ViewportId, [Option<egui::Id>; 5]>,
     pub list: List,
     modal: bool,
+    restricted: bool,
 }
 impl State {
     /// Restore validated shortcut profiles and initialize transient focus/layout state. No pane or
@@ -117,6 +118,7 @@ impl State {
             remembered: Default::default(),
             list: Default::default(),
             modal: false,
+            restricted: false,
         }
     }
     /// Begin root layout measurements for this frame. Child viewport measurements remain available
@@ -199,7 +201,11 @@ impl State {
     }
     /// Consume only command events, before TextEdit and the PTY see them. In
     /// particular, a prefix is not a terminal mode that remaps ordinary typing.
+    #[cfg(test)]
     fn input(&mut self, ctx: &egui::Context) -> Vec<NavAction> {
+        self.input_in(ctx, false)
+    }
+    fn input_in(&mut self, ctx: &egui::Context, restricted: bool) -> Vec<NavAction> {
         if self
             .leader
             .is_some_and(|at| at.elapsed() > Duration::from_secs(5))
@@ -208,11 +214,21 @@ impl State {
         }
         let mut actions = vec![];
         let terminal_focus = Terminal::focused(ctx);
-        let prefix = self.bindings.prefix(terminal_focus);
+        let prefix = self.bindings.prefix(terminal_focus || restricted);
         ctx.input_mut(|input| {
             let cut_prefix=prefix.key==Key::X && (input.modifiers.matches_exact(prefix.modifiers)||input.events.iter().any(|event|matches!(event,egui::Event::Key {key:Key::X,modifiers,..} if modifiers.matches_exact(prefix.modifiers))));
             let mut swallow_text = self.leader.is_some();
+            let mut discovery = false;
+            let mut tail = false;
             input.events.retain(|event| {
+                if tail { return true; }
+                if discovery {
+                    if matches!(event, egui::Event::Key { pressed: true, .. }) {
+                        tail = true;
+                        return true;
+                    }
+                    return !matches!(event, egui::Event::Text(_) | egui::Event::Key { .. });
+                }
                 match event {
                 egui::Event::Key {
                     key,
@@ -231,15 +247,18 @@ impl State {
                         if !repeat {
                             if *key != Key::Escape
                                 && let Some(action) = self.bindings.action(*key, *modifiers, true)
+                                && (!restricted || matches!(action, NavAction::Hints | NavAction::Controls))
                             {
+                                discovery = matches!(action, NavAction::Hints | NavAction::Controls);
                                 actions.push(action);
                             }
                             self.leader = None;
                         }
                         swallow_text = true;
                         false
-                    } else if let Some(action) = self.bindings.action(*key, *modifiers, false) {
+                    } else if let Some(action) = self.bindings.action(*key, *modifiers, false).filter(|action| !restricted || matches!(action, NavAction::Hints | NavAction::Controls)) {
                         if !repeat {
+                            discovery = matches!(action, NavAction::Hints | NavAction::Controls);
                             actions.push(action);
                         }
                         swallow_text = true;
@@ -333,17 +352,17 @@ impl EditorApp {
         if !ctx.input(|i| i.focused) {
             return;
         }
-        if self.dialog != Dialog::None
+        let restricted = self.dialog != Dialog::None
             || self.pending.modal()
             || self.workbench_modal()
             || self.exit_pending()
             || self.vaults.locking()
-            || egui::Popup::is_any_open(ctx)
-        {
-            self.navigation.leader = None;
-            return;
+            || egui::Popup::is_any_open(ctx);
+        if restricted != self.navigation.restricted {
+            self.navigation.cancel_input();
+            self.navigation.restricted = restricted;
         }
-        for action in self.navigation.input(ctx) {
+        for action in self.navigation.input_in(ctx, restricted) {
             self.navigate(action, ctx);
         }
     }
@@ -353,6 +372,7 @@ impl EditorApp {
         self.navigation.used = true;
         self.editor.input.cancel_sequence();
         match action {
+            Hints | Controls => self.start_keyboard_controls(action == Controls, ctx),
             Left | Right | Up | Down => {
                 let current = self.navigation.active;
                 self.set_pane_zoom(ctx.viewport_id(), None);
@@ -640,6 +660,9 @@ impl EditorApp {
         }
         let host_id = pane.id_in(ctx.viewport_id());
         let host = ui.interact(rect, host_id, Sense::focusable_noninteractive());
+        if pane == Pane::Explorer {
+            keyboard::field_target(ui, "Explorer tree", &host);
+        }
         ui_probe::button(ui, &format!("pane-{pane:?}"), &host);
         if zoom == Some(pane) {
             ui_probe::button(ui, &format!("pane-maximized-{pane:?}"), &host);
@@ -749,20 +772,21 @@ impl EditorApp {
                             ));
                             ui_probe::button(ui, "navigation-leader", &hint);
                             ui.set_max_width(680.);
-                            for (action, label, keys) in self.navigation.bindings.commands() {
-                                if matches!(
-                                    action,
-                                    NavAction::Editor
-                                        | NavAction::Explorer
-                                        | NavAction::Terminal
-                                        | NavAction::Tools
-                                        | NavAction::Help
-                                ) {
-                                    ui.small(format!("{keys} · {label}"));
+                            ui.columns(2, |columns| {
+                                for (index, (_, label, keys)) in self
+                                    .navigation
+                                    .bindings
+                                    .commands()
+                                    .filter(|(_, _, keys)| !keys.is_empty())
+                                    .enumerate()
+                                {
+                                    columns[index % 2].small(format!("{keys} · {label}"));
                                 }
-                            }
+                            });
                         });
                 });
         }
+        let palette = self.themes.active().palette;
+        keyboard::finish(ctx, palette.background, palette.text);
     }
 }

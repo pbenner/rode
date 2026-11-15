@@ -198,7 +198,25 @@ impl EditorApp {
     pub(super) fn route_input(&mut self, ctx: &egui::Context) {
         self.prepare_editor_input(ctx);
         self.navigation.bind_input(ctx);
+        keyboard::prepare(ctx, self.keyboard_scope());
+        keyboard::resume(ctx);
+        // Discovery already owns this packet. Source admission must not move a
+        // later Save ahead of text waiting in the focus handoff.
+        if keyboard::capture(ctx) {
+            self.finish_input(ctx);
+            return;
+        }
         let context = self.input_context(ctx);
+        if context.source.is_none() {
+            let prefix = self
+                .navigation
+                .bindings
+                .prefix(Terminal::focused(ctx) || self.dialog != Dialog::None);
+            keyboard::fence(
+                ctx,
+                |event| matches!(event, egui::Event::Key { key, modifiers, pressed: true, .. } if prefix.matches(*key,*modifiers,false)),
+            );
+        }
         let frame = self
             .editor
             .input
@@ -207,6 +225,11 @@ impl EditorApp {
             self.navigation.cancel_input();
         }
         self.navigation_shortcuts(ctx);
+        if keyboard::capture(ctx) {
+            self.editor.input.finish(frame);
+            self.finish_input(ctx);
+            return;
+        }
         if !self
             .editor
             .input
@@ -266,6 +289,9 @@ impl EditorApp {
     }
 
     fn finish_input(&mut self, ctx: &egui::Context) {
+        if let Some(notice) = keyboard::take_notice(ctx) {
+            self.notify(notice, true);
+        }
         if self.editor.input.pending() {
             ctx.request_repaint();
         }
@@ -362,3 +388,34 @@ impl EditorApp {
 
 #[cfg(test)]
 mod tests;
+
+impl EditorApp {
+    pub(super) fn start_keyboard_controls(&mut self, search: bool, ctx: &egui::Context) {
+        keyboard::prepare(ctx, self.keyboard_scope());
+        keyboard::start(ctx, search);
+    }
+    pub(super) fn keyboard_scope(&self) -> egui::Id {
+        egui::Id::new((
+            self.workers.generation(),
+            self.documents.active().map(|d| (d.id, d.version())),
+            (
+                std::mem::discriminant(&self.dialog),
+                match self.dialog {
+                    Dialog::Save(id) | Dialog::MarpExport(id, _) => id,
+                    _ => 0,
+                },
+            ),
+            self.pending.modal(),
+            self.pending.presentation().map(|(decision, _)| decision),
+            self.workbench_modal(),
+            self.exit_pending(),
+            self.vaults.locking(),
+            self.dialog_viewport,
+            self.sessions
+                .active
+                .as_ref()
+                .map(|active| active.key.as_str()),
+            self.navigation.bindings.style().name(),
+        ))
+    }
+}

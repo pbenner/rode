@@ -97,8 +97,11 @@ pub(super) fn show(
                                 let mut selected_option = false;
                                 for (option_index, option) in question.options.iter().enumerate() {
                                     let selected = question.answer == *option;
-                                    let response =
-                                        ui.add(egui::Button::new(option).selected(selected).wrap());
+                                    let response = ui.add(
+                                        crate::keyboard::Button::new(option)
+                                            .selected(selected)
+                                            .wrap(),
+                                    );
                                     ui_probe::button(
                                         ui,
                                         &format!("agent-question-{index}-option-{option_index}"),
@@ -154,6 +157,11 @@ pub(super) fn show(
                                     .char_limit(8192);
                                 let mut output = editor.show(ui);
                                 let response = output.response;
+                                crate::keyboard::field_target(
+                                    ui,
+                                    &format!("Answer to question {}", index + 1),
+                                    &response,
+                                );
                                 if editable && (selected_option || focus_next) {
                                     response.request_focus();
                                     focus_next = false;
@@ -184,7 +192,7 @@ pub(super) fn show(
         let send = ui
             .add_enabled(
                 enabled && !prompt.sending && result.is_some(),
-                egui::Button::new(if prompt.sending {
+                crate::keyboard::Button::new(if prompt.sending {
                     "Sending answers…"
                 } else {
                     "Send answers"
@@ -204,7 +212,7 @@ pub(super) fn show(
         let stop = ui
             .add_enabled(
                 enabled && (working || !prompt.sending || !prompt.error.is_empty()),
-                egui::Button::new(if working { "Stop" } else { "Dismiss question" }),
+                crate::keyboard::Button::new(if working { "Stop" } else { "Dismiss question" }),
             )
             .on_hover_text(if working {
                 "Cancel the questions and stop the current turn."

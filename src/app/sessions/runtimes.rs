@@ -180,7 +180,7 @@ impl EditorApp {
         if ui
             .add_enabled(
                 self.sessions.runtimes.pending.is_none(),
-                egui::Button::new("Refresh kernels and debuggers"),
+                crate::keyboard::Button::new("Refresh kernels and debuggers"),
             )
             .clicked()
         {
@@ -201,10 +201,10 @@ impl EditorApp {
             let info = request.info.clone();
             ui.colored_label(self.themes.active().palette.error,format!("End '{}' and discard its retained state? Its kernel or launched debuggee will stop. Its Slurm allocation is released separately.",info.name));
             ui.horizontal(|ui| {
-                if ui.button("Cancel end").clicked() {
+                if crate::keyboard::button(ui, "Cancel end").clicked() {
                     self.sessions.runtimes.confirm = None;
                 }
-                if ui.button("Confirm end runtime").clicked() {
+                if crate::keyboard::button(ui, "Confirm end runtime").clicked() {
                     let request = self.sessions.runtimes.confirm.as_ref().unwrap().clone();
                     let wake = ctx.clone();
                     let endings =
@@ -240,11 +240,11 @@ impl EditorApp {
                     let ending = self.sessions.runtimes.endings.as_ref().is_some_and(|q| q.contains(&info.id));
                     if ui.add_enabled(
                         !ending && compatible && (!info.attached || current),
-                        egui::Button::new(if current { "Show" } else { "Attach runtime" }),
+                        crate::keyboard::Button::new(if current { "Show" } else { "Attach runtime" }),
                     ).on_disabled_hover_text("Open the original project and policy; detach the controlling view in another window first").clicked() {
                         self.show_background_runtime(info.clone(), current, ctx);
                     }
-                    if ui.add_enabled(compatible && !ending, egui::Button::new(if ending { "Ending…" } else { "End runtime" })).clicked() {
+                    if ui.add_enabled(compatible && !ending, crate::keyboard::Button::new(if ending { "Ending…" } else { "End runtime" })).clicked() {
                         self.sessions.runtimes.confirm = Some(ending::Request { info: info.clone(), plan: plan.clone(), remote: self.session_remote() });
                     }
                 });

@@ -180,6 +180,7 @@ impl EditorApp {
 
     /// Closing a tab window reattaches it; it never closes the underlying session.
     pub(in crate::app) fn reattach_tool_tab(&mut self, tab: ToolTab, ctx: &egui::Context) {
+        keyboard::forget(ctx, tab.viewport());
         self.workbench
             .floating_tabs
             .retain(|candidate| *candidate != tab);
@@ -255,6 +256,7 @@ impl EditorApp {
             self.remember_tool_tab();
             if self.workbench.detached {
                 self.workbench.tools_hidden = true;
+                keyboard::forget(ctx, Self::tools_viewport());
                 ctx.send_viewport_cmd_to(
                     Self::tools_viewport(),
                     egui::ViewportCommand::Visible(false),
@@ -329,6 +331,7 @@ impl EditorApp {
     }
 
     fn dock_tools(&mut self, ctx: &egui::Context) {
+        keyboard::forget(ctx, Self::tools_viewport());
         self.workbench.detached = false;
         self.workbench.tools_hidden = false;
         if self.dialog_viewport == Self::tools_viewport() {
@@ -355,60 +358,64 @@ impl EditorApp {
             ui.disable();
         }
         ui.horizontal_wrapped(|ui| {
-            let code_selected = !child && (self.workbench.detached || !self.tool_surface());
-            let code = ui.selectable_label(code_selected, "Code");
-            ui_probe::button(ui, "workspace-code", &code);
-            if code_selected {
-                ui_probe::button(ui, "workspace-code-selected", &code);
-            }
-            if code.clicked() {
-                self.focus_editor(ctx);
-                self.editor_intent();
-            }
-            for tab in ToolTab::ALL {
-                if matches!(tab, ToolTab::Panel(panel) if !self.panel_enabled(panel)) {
-                    continue;
+            keyboard::group(ui, "workspace-tabs", |ui| {
+                let code_selected = !child && (self.workbench.detached || !self.tool_surface());
+                let code = crate::keyboard::selectable_label(ui, code_selected, "Code");
+                ui_probe::button(ui, "workspace-code", &code);
+                if code_selected {
+                    ui_probe::button(ui, "workspace-code-selected", &code);
                 }
-                let detached = self.tab_detached(tab);
-                let selected = self.tool_surface()
-                    && self.selected_tool_tab() == Some(tab)
-                    && (!self.workbench.detached || child);
-                let response =
-                    ui.add_enabled(!detached, egui::Button::selectable(selected, tab.label()));
-                ui_probe::button(ui, &format!("workspace-tab:{}", tab.label()), &response);
-                if detached {
-                    response.on_disabled_hover_text(format!(
-                        "{} is open in its own window. Reattach it there or close that window.",
-                        tab.label()
-                    ));
-                    continue;
+                if code.clicked() {
+                    self.focus_editor(ctx);
+                    self.editor_intent();
                 }
-                response.context_menu(|ui| {
-                    if ui.button("Detach tab").clicked() {
-                        self.detach_tab(tab, ctx);
-                        ui.close();
+                for tab in ToolTab::ALL {
+                    if matches!(tab, ToolTab::Panel(panel) if !self.panel_enabled(panel)) {
+                        continue;
                     }
-                });
-                if response.clicked() {
-                    match tab {
-                        ToolTab::Terminal => self.focus_pane(navigation::Pane::Terminal, ctx),
-                        ToolTab::Panel(panel) if !selected => self.toggle_panel(panel, ctx),
-                        _ => {}
+                    let detached = self.tab_detached(tab);
+                    let selected = self.tool_surface()
+                        && self.selected_tool_tab() == Some(tab)
+                        && (!self.workbench.detached || child);
+                    let response = ui.add_enabled(
+                        !detached,
+                        crate::keyboard::Button::selectable(selected, tab.label()),
+                    );
+                    ui_probe::button(ui, &format!("workspace-tab:{}", tab.label()), &response);
+                    if detached {
+                        response.on_disabled_hover_text(format!(
+                            "{} is open in its own window. Reattach it there or close that window.",
+                            tab.label()
+                        ));
+                        continue;
                     }
-                    if tab == ToolTab::Panel(Panel::Agent) {
-                        self.agents.focus = true;
+                    crate::keyboard::context_menu(&response, |ui| {
+                        if crate::keyboard::button(ui, "Detach tab").clicked() {
+                            self.detach_tab(tab, ctx);
+                            ui.close();
+                        }
+                    });
+                    if response.clicked() {
+                        match tab {
+                            ToolTab::Terminal => self.focus_pane(navigation::Pane::Terminal, ctx),
+                            ToolTab::Panel(panel) if !selected => self.toggle_panel(panel, ctx),
+                            _ => {}
+                        }
+                        if tab == ToolTab::Panel(Panel::Agent) {
+                            self.agents.focus = true;
+                        }
                     }
                 }
-            }
+            });
             ui.separator();
             if self.workbench.detached {
-                let dock = ui.button("Dock back");
+                let dock = crate::keyboard::button(ui, "Dock back");
                 ui_probe::button(ui, "workspace-dock", &dock);
                 if dock.clicked() {
                     self.dock_tools(ctx);
                 }
             } else if self.tool_surface() {
-                let detach = ui.button("Detach");
+                let detach = crate::keyboard::button(ui, "Detach");
                 ui_probe::button(ui, "workspace-detach", &detach);
                 if detach.clicked() {
                     self.workbench.detached = true;
@@ -419,8 +426,7 @@ impl EditorApp {
             if self.tool_surface()
                 && let Some(tab) = self.selected_tool_tab()
             {
-                let detach = ui
-                    .button("Detach tab")
+                let detach = crate::keyboard::button(ui, "Detach tab")
                     .on_hover_text(format!("Open {} in its own window", tab.label()));
                 ui_probe::button(
                     ui,
@@ -602,7 +608,7 @@ impl EditorApp {
         ui.horizontal(|ui| {
             ui.strong(tab.label());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let reattach = ui.button("Reattach");
+                let reattach = crate::keyboard::button(ui, "Reattach");
                 ui_probe::button(
                     ui,
                     &format!("workspace-reattach:{}", tab.label()),

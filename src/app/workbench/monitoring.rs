@@ -214,7 +214,7 @@ impl EditorApp {
                 );
             }
         });
-        ui.collapsing("Per-core activity", |ui| {
+        crate::keyboard::collapsing(ui, "Per-core activity", |ui| {
             let columns = if ui.available_width() >= 650. {
                 4
             } else if ui.available_width() >= 330. {
@@ -240,7 +240,7 @@ impl EditorApp {
                     }
                 });
         });
-        ui.collapsing("Processes · CPU lifetime average", |ui| {
+        crate::keyboard::collapsing(ui, "Processes · CPU lifetime average", |ui| {
             let command_width = (ui.available_width() - 165.).max(30.);
             egui::Grid::new("process-table")
                 .striped(true)

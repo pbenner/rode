@@ -64,11 +64,10 @@ impl EditorApp {
                     let label = elide(&full_theme, if roomy { 26 } else { 18 });
                     // The compact footer has 19 points of content height; normal
                     // menu-button padding would extend below the window edge.
-                    let appearance = egui::containers::menu::MenuButton::from_button(
+                    let appearance = crate::keyboard::MenuButton::from_button(
                         egui::Button::new(palette.tag(label))
                             .small()
-                            .min_size(egui::vec2(0., 19.)),
-                    )
+                            .min_size(egui::vec2(0., 19.)), "Appearance")
                         .ui(ui, |ui| self.appearance_menu(ui, ctx))
                         .0
                         .on_hover_text(format!(
@@ -135,7 +134,7 @@ impl EditorApp {
                             if ui
                                 .add_sized(
                                     [host_width, 19.],
-                                    egui::Button::new(
+                                    crate::keyboard::Button::new(
                                         RichText::new(&connection)
                                             .monospace()
                                             .size(11.)
@@ -181,7 +180,7 @@ impl EditorApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let native = self.terminal.as_ref().is_some_and(|t| t.native && t.is_alive());
                 let persistent = self.terminal.as_ref().is_some_and(Terminal::persistent);
-                let mut persist_button = egui::Button::new(
+                let mut persist_button = crate::keyboard::Button::new(
                     RichText::new(if persistent { "Persist: on" } else { "Persist: off" })
                         .color(if persistent { palette.background } else { palette.text }),
                 ).selected(persistent).small().min_size(egui::vec2(84., height));
@@ -210,7 +209,7 @@ impl EditorApp {
                 }
                 if wide {
                     let copy = ui
-                        .add(egui::Button::new("Copy").small().min_size(egui::vec2(0., height)))
+                        .add(crate::keyboard::Button::new("Copy").small().min_size(egui::vec2(0., height)))
                         .on_hover_text("Copy selected text, or visible terminal contents when nothing is selected");
                     super::ui_probe::button(ui, "terminal-copy-output", &copy);
                     if copy.clicked() {
@@ -218,22 +217,22 @@ impl EditorApp {
                     }
                 }
                 if wide && ui
-                    .add(egui::Button::new("Sessions").small().min_size(egui::vec2(0., height)))
+                    .add(crate::keyboard::Button::new("Sessions").small().min_size(egui::vec2(0., height)))
                     .on_hover_text("Reattach native terminals / Slurm allocations")
                     .clicked()
                 {
                     self.open_sessions(ctx);
                 }
                 if !wide {
-                    egui::containers::menu::MenuButton::from_button(egui::Button::new("More").small().min_size(egui::vec2(0., height))).ui(ui, |ui| {
-                        if ui.button("Sessions and Slurm allocations").clicked() {
+                    crate::keyboard::MenuButton::from_button(egui::Button::new("More").small().min_size(egui::vec2(0., height)), "Terminal actions").ui(ui, |ui| {
+                        if crate::keyboard::button(ui, "Sessions and Slurm allocations").clicked() {
                             self.open_sessions(ctx); ui.close();
                         }
-                        if ui.button("Copy terminal output").clicked() {
+                        if crate::keyboard::button(ui, "Copy terminal output").clicked() {
                             self.copy_terminal_output(ctx);
                             ui.close();
                         }
-                        if ui.add_enabled(self.terminal.as_ref().is_some_and(Terminal::persistent), egui::Button::new("Detach session"))
+                        if ui.add_enabled(self.terminal.as_ref().is_some_and(Terminal::persistent), crate::keyboard::Button::new("Detach session"))
                             .on_hover_text("Enable Persist before detaching a terminal.").clicked() {
                             self.detach_terminal(ctx);
                             ui.close();
@@ -244,7 +243,7 @@ impl EditorApp {
                     .terminal
                     .as_ref()
                     .is_some_and(|terminal| terminal.native)
-                    && ui.add_enabled(persistent, egui::Button::new("Detach session").small().min_size(egui::vec2(0., height)))
+                    && ui.add_enabled(persistent, crate::keyboard::Button::new("Detach session").small().min_size(egui::vec2(0., height)))
                         .on_hover_text("Enable Persist to detach and keep this terminal running.").clicked()
                 {
                     self.detach_terminal(ctx);
@@ -443,6 +442,12 @@ impl EditorApp {
         let mut selected = None;
         let mut transfer = None;
         let destinations = self.editor_tab_destinations();
+        let tab_order: Vec<_> = self
+            .documents
+            .iter()
+            .filter(|doc| self.documents.in_viewport(doc.id))
+            .map(|doc| doc.id)
+            .collect();
         let reveal = self.editor.tabs.reveal.take();
         let old_offset = self.editor.tabs.offset;
         let output = ui
@@ -455,195 +460,254 @@ impl EditorApp {
                     .horizontal_scroll_offset(old_offset)
                     .max_height(TAB_HEIGHT)
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            for (index, doc) in self
-                                .documents
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, doc)| self.documents.in_viewport(doc.id))
-                            {
-                                let is_active = index == self.documents.active_index();
-                                let (rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(widths[index], TAB_HEIGHT),
-                                    Sense::hover(),
-                                );
-                                let close_rect = egui::Rect::from_center_size(
-                                    egui::pos2(rect.right() - 17.0, rect.center().y),
-                                    egui::vec2(24., 24.),
-                                );
-                                let body = egui::Rect::from_min_max(
-                                    rect.min,
-                                    egui::pos2(close_rect.left() - 2., rect.bottom()),
-                                );
-                                let response = ui.interact(
-                                    body,
-                                    ui.id().with(("tab", doc.id)),
-                                    Sense::click_and_drag(),
-                                );
-                                if let Some(path) = &doc.path {
-                                    ui_probe::value(ui, "editor-tab", &response, path);
-                                }
-                                let hovered = rect.contains(
-                                    ui.input(|i| i.pointer.hover_pos().unwrap_or_default()),
-                                );
-                                let fill = if is_active {
-                                    palette.background
-                                } else if hovered {
-                                    palette.hover
-                                } else {
-                                    palette.panel
-                                };
-                                let painter =
-                                    ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
-                                palette.paint_tab(&painter, rect, fill, is_active);
-                                painter.text(
-                                    egui::pos2(rect.left() + 12., rect.center().y),
-                                    egui::Align2::LEFT_CENTER,
-                                    file_icon(&doc.name()),
-                                    FontId::monospace(11.),
-                                    if is_active {
-                                        palette.accent
+                        keyboard::group(ui, "editor-tab-group", |ui| {
+                            ui.horizontal(|ui| {
+                                for (index, doc) in self
+                                    .documents
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, doc)| self.documents.in_viewport(doc.id))
+                                {
+                                    let is_active = index == self.documents.active_index();
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(widths[index], TAB_HEIGHT),
+                                        Sense::hover(),
+                                    );
+                                    let close_rect = egui::Rect::from_center_size(
+                                        egui::pos2(rect.right() - 17.0, rect.center().y),
+                                        egui::vec2(24., 24.),
+                                    );
+                                    let body = egui::Rect::from_min_max(
+                                        rect.min,
+                                        egui::pos2(close_rect.left() - 2., rect.bottom()),
+                                    );
+                                    let response = ui.interact(
+                                        body,
+                                        ui.id().with(("tab", doc.id)),
+                                        keyboard::button_sense(
+                                            ui,
+                                            &format!("Editor tab: {}", labels[index]),
+                                            Sense::click_and_drag(),
+                                        ),
+                                    );
+                                    keyboard::target(
+                                        ui,
+                                        &format!("Editor tab: {}", labels[index]),
+                                        &response,
+                                    );
+                                    if let Some(path) = &doc.path {
+                                        ui_probe::value(ui, "editor-tab", &response, path);
+                                    }
+                                    let hovered = rect.contains(
+                                        ui.input(|i| i.pointer.hover_pos().unwrap_or_default()),
+                                    );
+                                    let fill = if is_active {
+                                        palette.background
+                                    } else if hovered {
+                                        palette.hover
                                     } else {
-                                        palette.muted
-                                    },
-                                );
-                                let label_rect = egui::Rect::from_min_max(
-                                    egui::pos2(rect.left() + 34., rect.top()),
-                                    egui::pos2(rect.right() - 50., rect.bottom()),
-                                );
-                                let mut job = egui::text::LayoutJob::simple(
-                                    labels[index].clone(),
-                                    font.clone(),
-                                    if is_active {
+                                        palette.panel
+                                    };
+                                    let painter =
+                                        ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
+                                    palette.paint_tab(&painter, rect, fill, is_active);
+                                    if response.has_focus() {
+                                        painter.rect_stroke(
+                                            body.shrink(2.),
+                                            2.,
+                                            Stroke::new(1.0_f32, palette.accent),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                    }
+                                    painter.text(
+                                        egui::pos2(rect.left() + 12., rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        file_icon(&doc.name()),
+                                        FontId::monospace(11.),
+                                        if is_active {
+                                            palette.accent
+                                        } else {
+                                            palette.muted
+                                        },
+                                    );
+                                    let label_rect = egui::Rect::from_min_max(
+                                        egui::pos2(rect.left() + 34., rect.top()),
+                                        egui::pos2(rect.right() - 50., rect.bottom()),
+                                    );
+                                    let mut job = egui::text::LayoutJob::simple(
+                                        labels[index].clone(),
+                                        font.clone(),
+                                        if is_active {
+                                            palette.text
+                                        } else {
+                                            palette.muted
+                                        },
+                                        label_rect.width(),
+                                    );
+                                    job.wrap.max_rows = 1;
+                                    job.wrap.break_anywhere = true;
+                                    let galley = ui.fonts_mut(|f| f.layout_job(job));
+                                    painter.galley(
+                                        egui::pos2(
+                                            label_rect.left(),
+                                            rect.center().y - galley.size().y / 2.,
+                                        ),
+                                        galley,
+                                        palette.text,
+                                    );
+                                    if doc.dirty() {
+                                        painter.circle_filled(
+                                            egui::pos2(rect.right() - 42., rect.center().y),
+                                            3.,
+                                            palette.accent,
+                                        );
+                                    }
+                                    let close_response = ui
+                                        .interact(
+                                            close_rect,
+                                            ui.id().with(("close-tab", doc.id)),
+                                            Sense::click()
+                                                .difference(Sense::focusable_noninteractive()),
+                                        )
+                                        .on_hover_text(format!(
+                                            "Close {} · {} / middle click\n{}",
+                                            labels[index],
+                                            self.editing_hint("Ctrl+W"),
+                                            doc.display_path().unwrap_or("Unsaved file")
+                                        ));
+                                    if close_response.hovered() {
+                                        painter.rect_filled(close_rect, 3, palette.raised);
+                                    }
+                                    // The close target always occupies the same space, even
+                                    // when the dirty marker appears or hover changes.
+                                    let color = if close_response.hovered() {
                                         palette.text
                                     } else {
                                         palette.muted
-                                    },
-                                    label_rect.width(),
-                                );
-                                job.wrap.max_rows = 1;
-                                job.wrap.break_anywhere = true;
-                                let galley = ui.fonts_mut(|f| f.layout_job(job));
-                                painter.galley(
-                                    egui::pos2(
-                                        label_rect.left(),
-                                        rect.center().y - galley.size().y / 2.,
-                                    ),
-                                    galley,
-                                    palette.text,
-                                );
-                                if doc.dirty() {
-                                    painter.circle_filled(
-                                        egui::pos2(rect.right() - 42., rect.center().y),
-                                        3.,
-                                        palette.accent,
-                                    );
-                                }
-                                let close_response = ui
-                                    .interact(
-                                        close_rect,
-                                        ui.id().with(("close-tab", doc.id)),
-                                        Sense::click(),
-                                    )
-                                    .on_hover_text(format!(
-                                        "Close {} · {} / middle click\n{}",
-                                        labels[index],
-                                        self.editing_hint("Ctrl+W"),
-                                        doc.display_path().unwrap_or("Unsaved file")
-                                    ));
-                                if close_response.hovered() {
-                                    painter.rect_filled(close_rect, 3, palette.raised);
-                                }
-                                // The close target always occupies the same space, even
-                                // when the dirty marker appears or hover changes.
-                                let color = if close_response.hovered() {
-                                    palette.text
-                                } else {
-                                    palette.muted
-                                };
-                                let center = close_rect.center();
-                                painter.line_segment(
-                                    [center + egui::vec2(-3., -3.), center + egui::vec2(3., 3.)],
-                                    Stroke::new(1.0_f32, color),
-                                );
-                                painter.line_segment(
-                                    [center + egui::vec2(-3., 3.), center + egui::vec2(3., -3.)],
-                                    Stroke::new(1.0_f32, color),
-                                );
-                                // A busy window can batch an earlier release with a
-                                // new press. egui hit-tests that click at the latest
-                                // pointer position; don't select a tab while the new
-                                // press is still held and may become a drag.
-                                if response.clicked() && !ui.input(|i| i.pointer.primary_down()) {
-                                    selected = Some(index);
-                                }
-                                if response.clicked_by(egui::PointerButton::Middle)
-                                    || close_response.clicked_by(egui::PointerButton::Middle)
-                                    || close_response.clicked()
-                                {
-                                    close = Some(doc.id);
-                                }
-                                let response = response.on_hover_text(format!(
-                                    "{}{}\nDrag to reorder · middle click to close",
-                                    doc.display_path().unwrap_or("Unsaved file"),
-                                    if doc.dirty() { "\nUnsaved changes" } else { "" }
-                                ));
-                                response.dnd_set_drag_payload(TabDrag(doc.id));
-                                if let Some(payload) = response.dnd_hover_payload::<TabDrag>()
-                                    && payload.0 != doc.id
-                                {
-                                    let after = ui.input(|i| {
-                                        i.pointer.hover_pos().is_some_and(|p| p.x > rect.center().x)
-                                    });
-                                    let x = if after { rect.right() } else { rect.left() };
+                                    };
+                                    let center = close_rect.center();
                                     painter.line_segment(
                                         [
-                                            egui::pos2(x, rect.top() + 3.),
-                                            egui::pos2(x, rect.bottom() - 3.),
+                                            center + egui::vec2(-3., -3.),
+                                            center + egui::vec2(3., 3.),
                                         ],
-                                        Stroke::new(2.0_f32, palette.accent),
+                                        Stroke::new(1.0_f32, color),
                                     );
-                                    if let Some(payload) = response.dnd_release_payload::<TabDrag>()
+                                    painter.line_segment(
+                                        [
+                                            center + egui::vec2(-3., 3.),
+                                            center + egui::vec2(3., -3.),
+                                        ],
+                                        Stroke::new(1.0_f32, color),
+                                    );
+                                    // A busy window can batch an earlier release with a
+                                    // new press. egui hit-tests that click at the latest
+                                    // pointer position; don't select a tab while the new
+                                    // press is still held and may become a drag.
+                                    if response.clicked() && !ui.input(|i| i.pointer.primary_down())
                                     {
-                                        move_tab = Some((payload.0, doc.id, after));
+                                        selected = Some(index);
                                     }
-                                }
-                                response.context_menu(|ui| {
-                                    let detach = ui.button("Move to new editor window");
-                                    ui_probe::button(ui, "editor-tab-detach", &detach);
-                                    if detach.clicked() {
-                                        transfer = Some((doc.id, None));
-                                        ui.close();
+                                    if response.clicked_by(egui::PointerButton::Middle)
+                                        || close_response.clicked_by(egui::PointerButton::Middle)
+                                        || close_response.clicked()
+                                    {
+                                        close = Some(doc.id);
                                     }
-                                    for (viewport, label) in &destinations {
-                                        let move_to = ui.button(format!("Move to {label}"));
-                                        ui_probe::button(
-                                            ui,
-                                            &format!("editor-tab-move:{label}"),
-                                            &move_to,
+                                    let response = response.on_hover_text(format!(
+                                        "{}{}\nDrag to reorder · middle click to close",
+                                        doc.display_path().unwrap_or("Unsaved file"),
+                                        if doc.dirty() { "\nUnsaved changes" } else { "" }
+                                    ));
+                                    response.dnd_set_drag_payload(TabDrag(doc.id));
+                                    if let Some(payload) = response.dnd_hover_payload::<TabDrag>()
+                                        && payload.0 != doc.id
+                                    {
+                                        let after = ui.input(|i| {
+                                            i.pointer
+                                                .hover_pos()
+                                                .is_some_and(|p| p.x > rect.center().x)
+                                        });
+                                        let x = if after { rect.right() } else { rect.left() };
+                                        painter.line_segment(
+                                            [
+                                                egui::pos2(x, rect.top() + 3.),
+                                                egui::pos2(x, rect.bottom() - 3.),
+                                            ],
+                                            Stroke::new(2.0_f32, palette.accent),
                                         );
-                                        if move_to.clicked() {
-                                            transfer = Some((doc.id, Some(*viewport)));
-                                            ui.close();
+                                        if let Some(payload) =
+                                            response.dnd_release_payload::<TabDrag>()
+                                        {
+                                            move_tab = Some((payload.0, doc.id, after));
                                         }
                                     }
-                                    if ui.add(IconButton::new(Icon::Close, "Close tab")).clicked() {
-                                        close = Some(doc.id);
-                                        ui.close();
-                                    }
-                                    if let Some(path) = &doc.path
-                                        && ui
-                                            .add(IconButton::new(Icon::Copy, "Copy file path"))
+                                    crate::keyboard::context_menu(&response, |ui| {
+                                        let position =
+                                            tab_order.iter().position(|id| *id == doc.id).unwrap();
+                                        for (step, label) in
+                                            [(-1_isize, "Move tab left"), (1, "Move tab right")]
+                                        {
+                                            let neighbor = position
+                                                .checked_add_signed(step)
+                                                .and_then(|index| tab_order.get(index));
+                                            if ui
+                                                .add_enabled(
+                                                    neighbor.is_some(),
+                                                    crate::keyboard::Button::new(label),
+                                                )
+                                                .clicked()
+                                            {
+                                                move_tab =
+                                                    Some((doc.id, *neighbor.unwrap(), step > 0));
+                                                ui.close();
+                                            }
+                                        }
+                                        let detach = crate::keyboard::button(
+                                            ui,
+                                            "Move to new editor window",
+                                        );
+                                        ui_probe::button(ui, "editor-tab-detach", &detach);
+                                        if detach.clicked() {
+                                            transfer = Some((doc.id, None));
+                                            ui.close();
+                                        }
+                                        for (viewport, label) in &destinations {
+                                            let move_to = crate::keyboard::button(
+                                                ui,
+                                                format!("Move to {label}"),
+                                            );
+                                            ui_probe::button(
+                                                ui,
+                                                &format!("editor-tab-move:{label}"),
+                                                &move_to,
+                                            );
+                                            if move_to.clicked() {
+                                                transfer = Some((doc.id, Some(*viewport)));
+                                                ui.close();
+                                            }
+                                        }
+                                        if ui
+                                            .add(IconButton::new(Icon::Close, "Close tab"))
                                             .clicked()
-                                    {
-                                        ctx.copy_text(path.clone());
-                                        ui.close();
+                                        {
+                                            close = Some(doc.id);
+                                            ui.close();
+                                        }
+                                        if let Some(path) = &doc.path
+                                            && ui
+                                                .add(IconButton::new(Icon::Copy, "Copy file path"))
+                                                .clicked()
+                                        {
+                                            ctx.copy_text(path.clone());
+                                            ui.close();
+                                        }
+                                    });
+                                    if reveal == Some(doc.id) || response.gained_focus() {
+                                        ui.scroll_to_rect(rect, Some(Align::Center));
                                     }
-                                });
-                                if reveal == Some(doc.id) {
-                                    ui.scroll_to_rect(rect, Some(Align::Center));
                                 }
-                            }
+                            });
                         });
                     })
             })
@@ -696,17 +760,17 @@ impl EditorApp {
                                 .enumerate()
                                 .filter(|(_, doc)| self.documents.in_viewport(doc.id))
                             {
-                                if ui
-                                    .selectable_label(
-                                        index == self.documents.active_index(),
-                                        format!(
-                                            "{}{}",
-                                            labels[index],
-                                            if doc.dirty() { "  •" } else { "" }
-                                        ),
-                                    )
-                                    .on_hover_text(doc.path.as_deref().unwrap_or("Unsaved file"))
-                                    .clicked()
+                                if crate::keyboard::selectable_label(
+                                    ui,
+                                    index == self.documents.active_index(),
+                                    format!(
+                                        "{}{}",
+                                        labels[index],
+                                        if doc.dirty() { "  •" } else { "" }
+                                    ),
+                                )
+                                .on_hover_text(doc.path.as_deref().unwrap_or("Unsaved file"))
+                                .clicked()
                                 {
                                     selected = Some(index);
                                     self.editor.tabs.reveal = Some(doc.id);

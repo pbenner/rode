@@ -73,7 +73,7 @@ fn provider(ui: &mut egui::Ui, config: &mut Config, width: f32, busy: bool, queu
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.set_width(width);
-            let menu = egui::ComboBox::from_id_salt("agent-provider")
+            let menu = crate::keyboard::ComboBox::new("agent-provider", "Agent provider")
                 .width(width)
                 .truncate()
                 .selected_text(config.provider.label())
@@ -83,7 +83,7 @@ fn provider(ui: &mut egui::Ui, config: &mut Config, width: f32, busy: bool, queu
                             && !queued
                             && !(provider.is_acp() && config.native_tools());
                         let option = ui.add_enabled_ui(enabled, |ui| {
-                            ui.selectable_value(&mut config.provider, provider, provider.label())
+                            crate::keyboard::selectable_value(ui, &mut config.provider, provider, provider.label())
                         });
                         ui_probe::button(ui, &format!("agent-provider-{provider:?}"), &option.inner);
                         option.response.on_disabled_hover_text("File-only and model-connection-only tools require Codex. Change those access/network settings before switching to Claude Code or ACP.");
@@ -109,7 +109,7 @@ fn actions(
     ui_probe::button(ui, "agent-settings", &settings);
     result.settings = settings.clicked();
     let new_chat = ui
-        .add_enabled(new_chat_enabled, egui::Button::new("New chat"))
+        .add_enabled(new_chat_enabled, crate::keyboard::Button::new("New chat"))
         .on_hover_text("Start a fresh conversation")
         .on_disabled_hover_text(
             "Wait for the agent to become idle. Use Stop to interrupt active work.",

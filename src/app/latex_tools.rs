@@ -257,29 +257,32 @@ impl EditorApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(self.themes.active().palette.tag("LATEX"));
                     if ui
-                        .add_enabled(!self.latex.busy, egui::Button::new("Build PDF"))
+                        .add_enabled(!self.latex.busy, crate::keyboard::Button::new("Build PDF"))
                         .clicked()
                     {
                         self.build_latex(false, ctx);
                     }
                     if ui
-                        .add_enabled(!self.latex.busy, egui::Button::new("Build & preview"))
+                        .add_enabled(
+                            !self.latex.busy,
+                            crate::keyboard::Button::new("Build & preview"),
+                        )
                         .clicked()
                     {
                         self.build_latex(true, ctx);
                     }
-                    if ui.button("Open PDF").clicked() {
+                    if crate::keyboard::button(ui, "Open PDF").clicked() {
                         self.open_latex_pdf(ctx);
                     }
-                    if ui.button("Output").clicked() {
+                    if crate::keyboard::button(ui, "Output").clicked() {
                         self.latex.output_open = true;
                     }
-                    if ui.button("Settings").clicked() {
+                    if crate::keyboard::button(ui, "Settings").clicked() {
                         self.reveal_settings(workbench::SettingsSection::Latex, ctx);
                     }
                     if self.latex.busy {
                         ui.spinner();
-                        if ui.button("Stop").clicked() {
+                        if crate::keyboard::button(ui, "Stop").clicked() {
                             self.stop_latex();
                         }
                     }
@@ -329,17 +332,18 @@ impl EditorApp {
                     if self.latex.busy {
                         ui.spinner();
                         ui.label("Building on the project host…");
-                        if ui.button("Stop build").clicked() {
+                        if crate::keyboard::button(ui, "Stop build").clicked() {
                             self.stop_latex();
                         }
                     }
-                    if !self.latex.busy && ui.button("Build & preview").clicked() {
+                    if !self.latex.busy && crate::keyboard::button(ui, "Build & preview").clicked()
+                    {
                         self.build_latex(true, ctx);
                     }
-                    if ui.button("Open PDF").clicked() {
+                    if crate::keyboard::button(ui, "Open PDF").clicked() {
                         self.open_latex_pdf(ctx);
                     }
-                    if ui.button("Close output").clicked() {
+                    if crate::keyboard::button(ui, "Close output").clicked() {
                         self.latex.output_open = false;
                     }
                 });
@@ -373,7 +377,7 @@ impl EditorApp {
                                 if ui
                                     .add_sized(
                                         [ui.available_width(), row_height],
-                                        egui::Button::new(format!(
+                                        crate::keyboard::Button::new(format!(
                                             "{}:{}  {}",
                                             issue.path,
                                             issue.diagnostic.row,
@@ -394,16 +398,17 @@ impl EditorApp {
                             }
                         },
                     );
-                    if ui.button("Copy full output").clicked() {
+                    if crate::keyboard::button(ui, "Copy full output").clicked() {
                         ctx.copy_text(format!("{}\n{}", reply.output.stdout, reply.output.stderr));
                     }
                     egui::ScrollArea::both().max_height(340.).show(ui, |ui| {
-                        ui.add(
+                        ui.add(crate::keyboard::named(
+                            "View output",
                             egui::TextEdit::multiline(&mut self.latex.view_output)
                                 .font(egui::TextStyle::Monospace)
                                 .interactive(false)
                                 .desired_width(f32::INFINITY),
-                        );
+                        ));
                     });
                 }
             });

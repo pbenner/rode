@@ -84,12 +84,19 @@ fn action_button(ui: &mut Ui, file: &GitFile, action: Action, size: Vec2) -> egu
     } else {
         "Wait for the current Git operation to finish."
     };
-    ui.add_enabled(
-        action.enabled(file),
-        Button::new(action.label(file)).min_size(size),
-    )
-    .on_hover_text(action.hint())
-    .on_disabled_hover_text(disabled_hint)
+    let response = ui
+        .add_enabled(
+            action.enabled(file),
+            Button::new(action.label(file)).min_size(size),
+        )
+        .on_hover_text(action.hint())
+        .on_disabled_hover_text(disabled_hint);
+    crate::keyboard::target(
+        ui,
+        &format!("{}: {}", action.label(file), file.path),
+        &response,
+    );
+    response
 }
 
 /// Render virtualized file rows with measured stable action columns; return the selected
@@ -206,8 +213,9 @@ pub(super) fn show(
                                     }
                                 }
                                 if compact {
-                                    egui::containers::menu::MenuButton::from_button(
+                                    crate::keyboard::MenuButton::from_button(
                                         Button::new("More").min_size(Vec2::new(widths[5], height)),
+                                        "File actions",
                                     )
                                     .ui(ui, |ui| {
                                         for action in

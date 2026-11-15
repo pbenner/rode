@@ -507,6 +507,7 @@ fn render_message_layout(
         .desired_rows(1)
         .layouter(&mut layouter)
         .show(ui);
+    crate::keyboard::field_target(ui, "Message text", &output.response);
     // TextEdit moves the caret on any pointer press, including a context-menu click.
     if output.response.contains_pointer()
         && let Some(selection) = previous_selection
@@ -535,7 +536,7 @@ fn render_message_layout(
     if copy_response {
         ui.ctx().copy_text(layout.copy(0..job.text.chars().count()));
     }
-    output.response.context_menu(|ui| {
+    crate::keyboard::context_menu(&output.response, |ui| {
         // The popup can take keyboard focus; use the stored, clamped selection.
         let selection = output
             .state
@@ -543,7 +544,10 @@ fn render_message_layout(
             .range(&output.galley)
             .filter(|range| !range.is_empty());
         if ui
-            .add_enabled(selection.is_some(), egui::Button::new("Copy selection"))
+            .add_enabled(
+                selection.is_some(),
+                crate::keyboard::Button::new("Copy selection"),
+            )
             .clicked()
         {
             if let Some(selection) = selection {

@@ -6,6 +6,8 @@ use super::super::*;
 /// presentation, while this enum selects behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) enum Command {
+    KeyboardHints,
+    FindControl,
     New,
     NewEditorWindow,
     BookmarkProject,
@@ -100,6 +102,7 @@ impl Command {
         Self::BookmarkProject,
         Self::Open,
         Self::Folder,
+        Self::LocalFolder,
         Self::Connect,
         Self::Tunnels,
         Self::Reconnect,
@@ -160,6 +163,14 @@ impl Command {
         Self::MarpExport(crate::marp::Format::Pdf),
         Self::MarpExport(crate::marp::Format::Pptx),
         Self::NotebookSource,
+        Self::KeyboardHints,
+        Self::FindControl,
+        Self::SaveAll,
+        Self::Quit,
+        Self::DebugPause,
+        Self::DebugOver,
+        Self::DebugIn,
+        Self::DebugOut,
     ];
     pub(in crate::app) const PANELS: &'static [Self] = &[
         Self::Panel(Panel::Git),
@@ -174,6 +185,8 @@ impl Command {
     /// Return shared command presentation metadata without executing or enabling the action.
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
+            Self::KeyboardHints => Definition::new("Show keyboard hints", Icon::Search),
+            Self::FindControl => Definition::new("Find visible control", Icon::Search),
             Self::NewEditorWindow => Definition::new("New editor window", Icon::Files),
             Self::BookmarkProject => Definition::new("Bookmark current project", Icon::Bookmark)
                 .palette("Projects: Toggle current project bookmark"),
@@ -358,7 +371,28 @@ impl Command {
             return consume_extensions_shortcut(ctx);
         }
         self.shortcut()
-            .is_some_and(|shortcut| ctx.input_mut(|input| input.consume_shortcut(&shortcut)))
+            .is_some_and(|shortcut| {
+                ctx.input_mut(|input| {
+                    if self == Self::DebugOver {
+                        // Shift+F10 belongs to contextual menus. egui's relaxed
+                        // modifier matching would otherwise consume it as F10.
+                        let mut consumed = false;
+                        input.events.retain(|event| {
+                            if matches!(event, egui::Event::Key { key, modifiers, pressed: true, .. }
+                                if *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers))
+                            {
+                                consumed = true;
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        consumed
+                    } else {
+                        input.consume_shortcut(&shortcut)
+                    }
+                })
+            })
     }
 }
 
@@ -407,6 +441,8 @@ impl EditorApp {
     /// window/tab mutations use the shared input-ordered coordinator.
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
+            Command::KeyboardHints => self.start_keyboard_controls(false, ctx),
+            Command::FindControl => self.start_keyboard_controls(true, ctx),
             Command::New => self.submit_editor_operation(
                 editor_operations::Operation::Create {
                     viewport: self.command_editor(ctx),

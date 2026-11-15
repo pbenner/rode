@@ -21,7 +21,7 @@ impl EditorApp {
                         ui.heading("Finishing submitted work");
                         ui.spinner();
                         ui.label(reason.message());
-                        let cancel = ui.button("Keep editing");
+                        let cancel = crate::keyboard::button(ui, "Keep editing");
                         ui_probe::button(ui, "guard-keep-editing", &cancel);
                         if cancel.clicked() {
                             self.cancel_guarded_decision(decision);
@@ -42,8 +42,10 @@ impl EditorApp {
                             self.cancel_guarded_decision(decision);
                             self.focus_editor(ctx);
                         }
-                        let discard =
-                            ui.button(RichText::new("Discard changes").color(palette.error));
+                        let discard = crate::keyboard::button(
+                            ui,
+                            RichText::new("Discard changes").color(palette.error),
+                        );
                         ui_probe::button(ui, "guard-discard", &discard);
                         if discard.clicked() {
                             self.discard_guarded_action(decision, ctx);
@@ -218,7 +220,7 @@ impl EditorApp {
         let focus = std::mem::take(&mut self.dialog_focus);
         self.navigation.bindings.ui(ui, focus);
         ui.add_space(8.0);
-        ui.collapsing("Standard editor shortcuts", |ui| {
+        crate::keyboard::collapsing(ui, "Standard editor shortcuts", |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("editor-shortcut-reference")
                 .max_height(180.)
@@ -261,7 +263,7 @@ impl EditorApp {
         });
         ui.add_space(12.0);
         ui.label(RichText::new("On macOS use Command for editor shortcuts. Terminal keys go to the shell when it has focus. Use the Copy button to copy terminal output.").small().color(palette.muted));
-        if ui.button("Done").clicked() {
+        if crate::keyboard::button(ui, "Done").clicked() {
             self.dialog = Dialog::None;
         }
     }

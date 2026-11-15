@@ -268,11 +268,15 @@ impl Preview {
             self.appearance = Some(appearance);
         }
         if !self.warnings.is_empty() {
-            ui.collapsing(format!("{} image notice(s)", self.warnings.len()), |ui| {
-                for warning in &self.warnings {
-                    ui.label(warning);
-                }
-            });
+            crate::keyboard::collapsing(
+                ui,
+                format!("{} image notice(s)", self.warnings.len()),
+                |ui| {
+                    for warning in &self.warnings {
+                        ui.label(warning);
+                    }
+                },
+            );
         }
         ui.style_mut()
             .text_styles
@@ -575,9 +579,7 @@ impl EditorApp {
         let mut slides = was_slides;
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_label(!preview.showing && !slides, "Edit")
-                .clicked()
+            if crate::keyboard::selectable_label(ui, !preview.showing && !slides, "Edit").clicked()
             {
                 preview.showing = false;
                 slides = false;
@@ -585,7 +587,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     markdown_enabled,
-                    egui::Button::selectable(preview.showing && !slides, "Preview"),
+                    crate::keyboard::Button::selectable(preview.showing && !slides, "Preview"),
                 )
                 .on_hover_text("Toggle Markdown preview · Ctrl+Shift+R")
                 .clicked()
@@ -594,7 +596,7 @@ impl EditorApp {
                 slides = false;
             }
             if preview.showing {
-                reload = ui.button("Reload images").clicked();
+                reload = crate::keyboard::button(ui, "Reload images").clicked();
                 ui.label(self.themes.active().palette.tag(if dirty {
                     "UNSAVED BUFFER"
                 } else {
@@ -602,7 +604,10 @@ impl EditorApp {
                 }));
             }
             if ui
-                .add_enabled(marp_enabled, egui::Button::selectable(slides, "Slides"))
+                .add_enabled(
+                    marp_enabled,
+                    crate::keyboard::Button::selectable(slides, "Slides"),
+                )
                 .on_hover_text("Preview the current buffer with Marp on the project host")
                 .clicked()
             {

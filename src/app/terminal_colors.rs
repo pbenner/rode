@@ -134,8 +134,8 @@ impl State {
                         let settings = self.themes.entry(theme.id.clone()).or_default();
                         ui.add_space(8.);
                         ui.label("Minimum text contrast");
-                        if ui.add(egui::Slider::new(&mut palette.terminal_minimum_contrast, 1.0..=21.0)
-                            .step_by(0.5).suffix(":1")).changed() {
+                        if ui.add(crate::keyboard::named("Terminal minimum contrast", egui::Slider::new(&mut palette.terminal_minimum_contrast, 1.0..=21.0)
+                            .step_by(0.5).suffix(":1"))).changed() {
                             settings.minimum_contrast = Some(palette.terminal_minimum_contrast);
                             self.pending.insert(key(&theme.id, "minimum_contrast"), palette.terminal_minimum_contrast.to_string());
                         }
@@ -149,7 +149,9 @@ impl State {
                             ] {
                                 ui.label(label);
                                 let mut rgb = [color.r(), color.g(), color.b()];
-                                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                let response = ui.color_edit_button_srgb(&mut rgb);
+                                crate::keyboard::target(ui, &format!("Terminal {label} color"), &response);
+                                if response.changed() {
                                     let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                                     *saved = Some(color);
                                     self.pending.insert(key(&theme.id, field), hex(color));
@@ -157,7 +159,7 @@ impl State {
                                 ui.end_row();
                             }
                         });
-                        ui.collapsing("ANSI colors", |ui| {
+                        crate::keyboard::collapsing(ui, "ANSI colors", |ui| {
                             ui.small("Bold ANSI / PS1 colors use bright swatches (8–15).");
                             egui::Grid::new("terminal-ansi-colors").num_columns(4).show(ui, |ui| {
                                 for i in 0..8 {
@@ -165,7 +167,9 @@ impl State {
                                         ui.label(NAMES[index]);
                                         let c = palette.ansi[index];
                                         let mut rgb = [c.r(), c.g(), c.b()];
-                                        if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                        let response = ui.color_edit_button_srgb(&mut rgb);
+                                        crate::keyboard::target(ui, &format!("ANSI {} color", NAMES[index]), &response);
+                                        if response.changed() {
                                             let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                                             settings.ansi[index] = Some(color);
                                             self.pending.insert(key(&theme.id, &format!("ansi.{index}")), hex(color));
@@ -176,7 +180,7 @@ impl State {
                             });
                         });
                         ui.separator();
-                        if ui.button("Reset to theme defaults").clicked() { self.reset(&theme.id); }
+                        if crate::keyboard::button(ui, "Reset to theme defaults").clicked() { self.reset(&theme.id); }
                     });
             });
         self.open = open;

@@ -46,7 +46,7 @@ impl EditorApp {
                 ui.horizontal_wrapped(|ui| {
                     if view.source_mode {
                         ui.label(palette.tag("JSON SOURCE"));
-                        if ui.button("Back to cells").clicked() {
+                        if crate::keyboard::button(ui, "Back to cells").clicked() {
                             action = Some(Action::Source);
                         }
                         return;
@@ -59,40 +59,40 @@ impl EditorApp {
                         action = Some(Action::Run(false));
                     }
                     if ui
-                        .add_enabled(!busy, egui::Button::new("Run all"))
+                        .add_enabled(!busy, crate::keyboard::Button::new("Run all"))
                         .clicked()
                     {
                         action = Some(Action::Run(true));
                     }
                     if ui
-                        .add_enabled(view.kernel.is_some(), egui::Button::new("Interrupt"))
+                        .add_enabled(view.kernel.is_some(), crate::keyboard::Button::new("Interrupt"))
                         .clicked()
                     {
                         action = Some(Action::Interrupt);
                     }
                     ui.separator();
                     let insert_at = view.active_index().map_or(view.book.cells.len(), |at| at + 1);
-                    let code = ui.button("+ Code cell").on_hover_text("Insert a code cell below the selected cell");
+                    let code = crate::keyboard::button(ui, "+ Code cell").on_hover_text("Insert a code cell below the selected cell");
                     ui_probe::button(ui, "notebook-add-code", &code);
                     if code.clicked() {
                         action = Some(Action::Add("code", insert_at));
                     }
-                    let markdown = ui.button("+ Markdown cell").on_hover_text("Insert a text cell below the selected cell");
+                    let markdown = crate::keyboard::button(ui, "+ Markdown cell").on_hover_text("Insert a text cell below the selected cell");
                     ui_probe::button(ui, "notebook-add-markdown", &markdown);
                     if markdown.clicked() {
                         action = Some(Action::Add("markdown", insert_at));
                     }
-                    ui.menu_button("Notebook…", |ui| {
-                        if ui.button("Clear all outputs").clicked() {
+                    crate::keyboard::menu_button(ui, "Notebook…", |ui| {
+                        if crate::keyboard::button(ui, "Clear all outputs").clicked() {
                             action = Some(Action::Clear(None));
                             ui.close();
                         }
-                        if ui.add_enabled(view.kernel.is_some(), egui::Button::new("Shut down kernel")).clicked() {
+                        if ui.add_enabled(view.kernel.is_some(), crate::keyboard::Button::new("Shut down kernel")).clicked() {
                             action = Some(Action::Shutdown);
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Edit JSON source").clicked() {
+                        if crate::keyboard::button(ui, "Edit JSON source").clicked() {
                             action = Some(Action::Source);
                             ui.close();
                         }
@@ -108,7 +108,7 @@ impl EditorApp {
                             view.execution_target.as_ref().map(|t| format!("Slurm job {}", t.id)).unwrap_or_else(|| "Project host".into()));
                         ui.label(egui::RichText::new(execution).small().color(palette.muted));
                     });
-                    let settings = egui::CollapsingHeader::new("Kernel settings")
+                    let settings = crate::keyboard::CollapsingHeader::new("Kernel settings")
                         .id_salt(("notebook-settings", id))
                         .show(ui, |ui| {
 
@@ -116,7 +116,7 @@ impl EditorApp {
                         let on = view.kernel.as_ref().map_or(view.persistent, Kernel::persistent);
                         let persistence = ui.add_enabled(
                             view.kernel.as_ref().is_none_or(|k| !k.pending()),
-                            egui::Button::new(if on { "Persist kernel: on" } else { "Persist kernel: off" }),
+                            crate::keyboard::Button::new(if on { "Persist kernel: on" } else { "Persist kernel: off" }),
                         ).on_hover_text("Keep the kernel, queued cells and outputs on the project host after closing this notebook, exiting RODE or losing SSH. Reattach from Sessions with the same project and sandbox.");
                         ui_probe::button(ui, "notebook-persistence", &persistence);
                         if persistence.clicked() {
@@ -131,11 +131,11 @@ impl EditorApp {
                                 view.persistent = !on;
                             }
                         }
-                        if ui.button("Running kernels…").clicked() {
+                        if crate::keyboard::button(ui, "Running kernels…").clicked() {
                             self.open_sessions(ctx);
                         }
                         if view.kernel.is_none() {
-                            let reattach = ui.button("Reattach kernel");
+                            let reattach = crate::keyboard::button(ui, "Reattach kernel");
                             ui_probe::button(ui, "notebook-reattach", &reattach);
                             if reattach.clicked() {
                             if let Some(path) = &self.documents[index].path {
@@ -148,7 +148,7 @@ impl EditorApp {
                         if view.kernel.as_ref().is_some_and(Kernel::persistent)
                             && ui.add_enabled(
                                 view.kernel.as_ref().is_none_or(|k| !k.pending()),
-                                egui::Button::new("Detach kernel"),
+                                crate::keyboard::Button::new("Detach kernel"),
                             ).clicked()
                         {
                             view.detach("Kernel detached · Reattach from Sessions");
@@ -159,14 +159,14 @@ impl EditorApp {
                         let mut selected = view.execution_target.clone();
                         let (queue, _) = self.slurm_programs();
                         let runner = self.workbench.slurm_allocation().runner.clone();
-                        let target = egui::ComboBox::from_id_salt(("notebook-execution", id))
+                        let target = crate::keyboard::ComboBox::new(("notebook-execution", id), "Notebook execution target")
                             .selected_text(
                                 selected.as_ref()
                                     .map(|t| format!("Slurm job {}", t.id))
                                     .unwrap_or_else(|| "Project host".into()),
                             )
                             .show_ui(ui, |ui| {
-                                let host = ui.selectable_value(&mut selected, None, "Project host");
+                                let host = crate::keyboard::selectable_value(ui, &mut selected, None, "Project host");
                                 ui_probe::button(ui, "notebook-target:host", &host);
                                 if let Some(snapshot) = &self.sessions.slurm {
                                     for job in &snapshot.jobs {
@@ -179,7 +179,7 @@ impl EditorApp {
                                                 queue: queue.clone(),
                                                 runner: runner.clone(),
                                             };
-                                            let job_response = ui.selectable_value(
+                                            let job_response = crate::keyboard::selectable_value(ui,
                                                 &mut selected, Some(target),
                                                 format!("Job {} · {} · {}", job.id, job.nodes, job.name),
                                             );
@@ -195,7 +195,7 @@ impl EditorApp {
                         view.set_execution_target(selected);
                         let refresh = ui.add_enabled(
                             !self.sessions.slurm_busy,
-                            egui::Button::new("Refresh Slurm targets"),
+                            crate::keyboard::Button::new("Refresh Slurm targets"),
                         );
                         ui_probe::button(ui, "notebook-refresh-targets", &refresh);
                         if !self.sessions.slurm_busy && self.sessions.slurm.is_some() {
@@ -204,7 +204,7 @@ impl EditorApp {
                         if refresh.clicked() {
                             self.refresh_slurm(None, ctx);
                         }
-                        if ui.button("Allocate…").clicked() {
+                        if crate::keyboard::button(ui, "Allocate…").clicked() {
                             self.open_slurm(ctx);
                         }
                         if let Some(kernel) = &view.kernel {
@@ -223,7 +223,7 @@ impl EditorApp {
                             view.kernel_name = "python3".into();
                             action = Some(Action::Kernel);
                         }
-                        if ui.add_enabled(!self.python_environment_busy(), egui::Button::new("Refresh kernels")).clicked() {
+                        if ui.add_enabled(!self.python_environment_busy(), crate::keyboard::Button::new("Refresh kernels")).clicked() {
                             self.refresh_environment(false, ctx);
                         }
                         if self.python_environment_busy() { ui.spinner(); }
@@ -238,7 +238,7 @@ impl EditorApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Kernel");
                         let previous = view.kernel_name.clone();
-                        egui::ComboBox::from_id_salt(("notebook-kernel", id))
+                        crate::keyboard::ComboBox::new(("notebook-kernel", id), "Notebook kernel")
                             .width(300.)
                             .selected_text(if view.kernel_name == "python3" {
                                 "Python · selected environment".into()
@@ -249,11 +249,11 @@ impl EditorApp {
                                     .unwrap_or_else(|| view.kernel_name.clone())
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut view.kernel_name, "python3".into(), "Python · selected environment");
+                                crate::keyboard::selectable_value(ui, &mut view.kernel_name, "python3".into(), "Python · selected environment");
                                 if let Some(env) = self.python_environments() {
                                     for kernel in &env.kernels {
                                         if kernel.name != "python3" {
-                                            ui.selectable_value(&mut view.kernel_name, kernel.name.clone(), format!("{} ({})", kernel.display_name, kernel.name));
+                                            crate::keyboard::selectable_value(ui, &mut view.kernel_name, kernel.name.clone(), format!("{} ({})", kernel.display_name, kernel.name));
                                         }
                                     }
                                 }
@@ -264,18 +264,16 @@ impl EditorApp {
                     ui_probe::button(ui, "notebook-settings", &settings.header_response);
                     if self.editor.show_find {
                         ui.horizontal(|ui| {
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut self.editor.find)
+                            let response = ui.add(crate::keyboard::named("Find in cell sources…", egui::TextEdit::singleline(&mut self.editor.find)
                                     .hint_text("Find in cell sources…")
-                                    .desired_width(220.),
-                            );
+                                    .desired_width(220.)));
                             if self.editor.find_focus {
                                 response.request_focus();
                                 self.editor.find_focus = false;
                             }
                             ui_probe::button(ui, "notebook-find", &response);
                             ui_probe::value(ui, "notebook-find-value", &response, &self.editor.find);
-                            if (ui.button("Next").clicked()
+                            if (crate::keyboard::button(ui, "Next").clicked()
                                 || (response.has_focus() || response.lost_focus())
                                     && ui.input(|i| i.key_pressed(Key::Enter)))
                                 && !self.editor.find.is_empty()
@@ -304,7 +302,7 @@ impl EditorApp {
                                     view.cells.entry(cell.uid).or_default().previewing = false;
                                 }
                             }
-                            if ui.button("Close").clicked() {
+                            if crate::keyboard::button(ui, "Close").clicked() {
                                 self.editor.show_find = false;
                             }
                         });
@@ -362,17 +360,17 @@ impl EditorApp {
                         ui.set_min_width(ui.available_width());
                         ui.push_id(("notebook-cell", id, uid), |ui| {
                             cell_toolbar(ui, |ui| {
-                                if ui.add(egui::Button::new(format!("Cell {}", at + 1))
+                                if ui.add(crate::keyboard::Button::new(format!("Cell {}", at + 1))
                                     .selected(active).frame(false).min_size(egui::vec2(52., 28.))).clicked()
                                 {
                                     view.active = uid;
                                     view.focus = Some(uid);
                                 }
                                 let mut kind = cell.kind().to_owned();
-                                egui::ComboBox::from_id_salt("kind").width(108.).selected_text(&kind)
+                                crate::keyboard::ComboBox::new("kind", "Cell type").width(108.).selected_text(&kind)
                                     .show_ui(ui, |ui| {
                                         for value in ["code", "markdown", "raw"] {
-                                            ui.selectable_value(&mut kind, value.into(), value);
+                                            crate::keyboard::selectable_value(ui, &mut kind, value.into(), value);
                                         }
                                     });
                                 if kind != cell.kind() { action = Some(Action::Kind(at, kind)); }
@@ -385,7 +383,7 @@ impl EditorApp {
                                         action = Some(Action::Run(false));
                                     }
                                 } else if cell.kind() == "markdown" {
-                                    if ui.add(egui::Button::new(if state.previewing { "Edit" } else { "Preview" })
+                                    if ui.add(crate::keyboard::Button::new(if state.previewing { "Edit" } else { "Preview" })
                                         .min_size(egui::vec2(68., 28.))).clicked()
                                     {
                                         state.previewing = !state.previewing;
@@ -395,16 +393,16 @@ impl EditorApp {
                                 } else {
                                     ui.allocate_space(egui::vec2(68., 28.));
                                 }
-                                if ui.add_enabled(at > 0, egui::Button::new("Up"))
+                                if ui.add_enabled(at > 0, crate::keyboard::Button::new("Up"))
                                     .on_hover_text("Move cell up").clicked()
                                 { action = Some(Action::Move(at, -1)); }
-                                if ui.add_enabled(at + 1 < cell_count, egui::Button::new("Down"))
+                                if ui.add_enabled(at + 1 < cell_count, crate::keyboard::Button::new("Down"))
                                     .on_hover_text("Move cell down").clicked()
                                 { action = Some(Action::Move(at, 1)); }
-                                if ui.button("Delete").on_hover_text("Delete cell").clicked()
+                                if crate::keyboard::button(ui, "Delete").on_hover_text("Delete cell").clicked()
                                 { action = Some(Action::Delete(at)); }
                                 if cell.kind() == "code" {
-                                    if ui.button("Clear").on_hover_text("Clear cell outputs").clicked()
+                                    if crate::keyboard::button(ui, "Clear").on_hover_text("Clear cell outputs").clicked()
                                     { action = Some(Action::Clear(Some(at))); }
                                     let running = view.kernel.as_ref().is_some_and(|k| k.running_uid() == Some(uid));
                                     ui.label(palette.tag(if running { "[*]".into() } else {
@@ -505,9 +503,9 @@ impl EditorApp {
                         egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 18, top: 4, bottom: 8 })
                             .show(ui, |ui| {
                                 cell_toolbar(ui, |ui| {
-                                    if ui.button("+ Code cell").on_hover_text("Insert a code cell here").clicked()
+                                    if crate::keyboard::button(ui, "+ Code cell").on_hover_text("Insert a code cell here").clicked()
                                     { action = Some(Action::Add("code", at + 1)); }
-                                    let markdown = ui.button("+ Markdown cell").on_hover_text("Insert a text cell here");
+                                    let markdown = crate::keyboard::button(ui, "+ Markdown cell").on_hover_text("Insert a text cell here");
                                     ui_probe::button(ui, &format!("notebook-insert-markdown:{at}"), &markdown);
                                     if markdown.clicked()
                                     { action = Some(Action::Add("markdown", at + 1)); }

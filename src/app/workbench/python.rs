@@ -50,7 +50,7 @@ impl EditorApp {
         ctx: &egui::Context,
     ) {
         let mut selected = self.workbench.prefs.python.clone();
-        egui::ComboBox::from_id_salt("python-environment")
+        crate::keyboard::ComboBox::new("python-environment", "Python environment")
             .width(ui.available_width().min(380.))
             .selected_text(if selected == "auto" {
                 "Auto · project .venv, then system"
@@ -60,16 +60,23 @@ impl EditorApp {
                 &selected
             })
             .show_ui(ui, |ui| {
-                ui.selectable_value(
+                crate::keyboard::selectable_value(
+                    ui,
                     &mut selected,
                     "auto".into(),
                     "Auto · detect project environment",
                 );
-                ui.selectable_value(&mut selected, String::new(), "System Python");
+                crate::keyboard::selectable_value(
+                    ui,
+                    &mut selected,
+                    String::new(),
+                    "System Python",
+                );
                 if let Some(environment) = &self.workbench.python.env {
                     for candidate in &environment.candidates {
                         if !candidate.python.is_empty() {
-                            ui.selectable_value(
+                            crate::keyboard::selectable_value(
+                                ui,
                                 &mut selected,
                                 candidate.python.clone(),
                                 &candidate.name,
@@ -96,16 +103,17 @@ impl EditorApp {
         ui.label(RichText::new("Project interpreter").size(15.).strong());
         self.python_environment_picker(ui, ctx);
         ui.label("Custom interpreter or environment folder (on this host)");
-        ui.add(
+        ui.add(crate::keyboard::named(
+            "Python interpreter or environment",
             egui::TextEdit::singleline(&mut self.workbench.draft.python)
                 .desired_width(f32::INFINITY)
                 .hint_text(".venv or /path/to/bin/python"),
-        );
+        ));
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     !self.workbench.python.env_busy,
-                    egui::Button::new("Select interpreter"),
+                    crate::keyboard::Button::new("Select interpreter"),
                 )
                 .clicked()
             {
@@ -120,7 +128,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     !self.workbench.python.env_busy,
-                    egui::Button::new("Refresh"),
+                    crate::keyboard::Button::new("Refresh"),
                 )
                 .clicked()
             {
@@ -151,7 +159,7 @@ impl EditorApp {
         if ui
             .add_enabled(
                 self.workbench.python.env.is_some() && self.terminal.is_some(),
-                egui::Button::new("Activate in current shell"),
+                crate::keyboard::Button::new("Activate in current shell"),
             )
             .on_hover_text(
                 "Send activation to an idle shell. Use Restart shell for a fresh terminal.",
@@ -163,17 +171,24 @@ impl EditorApp {
         ui.add_space(12.);
         ui.label(RichText::new("Create environment").size(15.).strong());
         ui.label("Folder inside project");
-        ui.text_edit_singleline(&mut self.workbench.python.venv_path);
+        ui.add(crate::keyboard::named(
+            "Virtual environment folder",
+            egui::TextEdit::singleline(&mut self.workbench.python.venv_path),
+        ));
         ui.label("Base Python executable");
-        ui.text_edit_singleline(&mut self.workbench.python.venv_python);
-        ui.checkbox(
+        ui.add(crate::keyboard::named(
+            "Base Python executable",
+            egui::TextEdit::singleline(&mut self.workbench.python.venv_python),
+        ));
+        crate::keyboard::checkbox(
+            ui,
             &mut self.workbench.python.venv_with_pip,
             "Include pip (requires ensurepip on the host)",
         );
         if ui
             .add_enabled(
                 !self.workbench.python.venv_busy,
-                egui::Button::new("Create with python -m venv"),
+                crate::keyboard::Button::new("Create with python -m venv"),
             )
             .clicked()
         {
@@ -208,7 +223,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     self.workbench.python.env.is_some(),
-                    egui::Button::new("Python REPL"),
+                    crate::keyboard::Button::new("Python REPL"),
                 )
                 .clicked()
             {
@@ -224,7 +239,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     self.workbench.python.env.is_some(),
-                    egui::Button::new("Run pytest"),
+                    crate::keyboard::Button::new("Run pytest"),
                 )
                 .clicked()
             {
@@ -240,7 +255,7 @@ impl EditorApp {
             if ui
                 .add_enabled(
                     self.workbench.python.env.is_some(),
-                    egui::Button::new("List packages"),
+                    crate::keyboard::Button::new("List packages"),
                 )
                 .clicked()
             {

@@ -101,6 +101,7 @@ impl EditorApp {
                 username.state.clear_undoer();
                 username.state.store(ctx, username.response.id);
                 ui_probe::button(ui, "git-auth-username", &username.response);
+                crate::keyboard::field_target(ui, "Git username", &username.response);
                 ui.label("Password or access token");
                 let mut password = egui::TextEdit::singleline(&mut prompt.entry.password)
                     .id(egui::Id::new("git-auth-password"))
@@ -111,14 +112,15 @@ impl EditorApp {
                 password.state.clear_undoer();
                 password.state.store(ctx, password.response.id);
                 ui_probe::button(ui, "git-auth-password", &password.response);
+                crate::keyboard::field_target(ui, "Git password or access token", &password.response);
                 ui.add(egui::Label::new("Used for this operation only. Rode does not save these values; credential stores are bypassed for the retry.").wrap());
                 if !prompt.error.is_empty() { ui.colored_label(palette.error, &prompt.error); }
                 ui.horizontal(|ui| {
                     let button = ui.add_enabled(!self.workbench.git.git_busy && self.project_ready()
-                        && !prompt.entry.username.is_empty() && !prompt.entry.password.is_empty(), egui::Button::new("Retry operation"));
+                        && !prompt.entry.username.is_empty() && !prompt.entry.password.is_empty(), crate::keyboard::Button::new("Retry operation"));
                     ui_probe::button(ui, "git-auth-submit", &button);
                     submit = button.clicked();
-                    let button = ui.button("Cancel");
+                    let button = crate::keyboard::button(ui, "Cancel");
                     ui_probe::button(ui, "git-auth-cancel", &button);
                     cancel = button.clicked();
                 });

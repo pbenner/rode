@@ -522,13 +522,13 @@ fn bytes(value: u64) -> String {
 
 /// Compact shared selector for project opening, SSH profiles and saved access rules.
 pub(super) fn sandbox_backend_ui(ui: &mut egui::Ui, options: &mut sandbox::Options) {
-    ui.checkbox(&mut options.enabled, "Sandbox project when available");
+    crate::keyboard::checkbox(ui, &mut options.enabled, "Sandbox project when available");
     ui.add_enabled_ui(options.enabled, |ui| {
-        egui::ComboBox::from_id_salt(ui.id().with("sandbox-backend"))
+        crate::keyboard::ComboBox::new(ui.id().with("sandbox-backend"), "Sandbox backend")
             .selected_text(options.backend.label())
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut options.backend, sandbox::Backend::Bwrap, "bwrap");
-                ui.selectable_value(&mut options.backend, sandbox::Backend::Landlock, "Landlock");
+                crate::keyboard::selectable_value(ui, &mut options.backend, sandbox::Backend::Bwrap, "bwrap");
+                crate::keyboard::selectable_value(ui, &mut options.backend, sandbox::Backend::Landlock, "Landlock");
             }).response.on_hover_text("bwrap isolates namespaces. Landlock restricts file access without root or user namespaces, but does not hide host processes or file metadata. See the sandbox access rules for its limits.");
     });
 }

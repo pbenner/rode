@@ -189,11 +189,12 @@ pub(super) fn rows(
     let height = (ctx.content_rect().height() - 390.)
         .clamp(70., 220.)
         .min(ui.available_height().max(1.));
-    ui.interact(
+    let response = ui.interact(
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height)),
         host,
         Sense::focusable_noninteractive(),
     );
+    crate::keyboard::field_target(ui, "Files and folders", &response);
     let mut action = if parent {
         Some(Choice::Parent)
     } else if activate {
@@ -396,16 +397,22 @@ impl EditorApp {
             Dialog::AgentAttachLocal | Dialog::AgentAttachHost
         ) {
             ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(self.dialog == Dialog::AgentAttachLocal, "This computer")
-                    .clicked()
+                if crate::keyboard::selectable_label(
+                    ui,
+                    self.dialog == Dialog::AgentAttachLocal,
+                    "This computer",
+                )
+                .clicked()
                 {
                     self.set_dialog(Dialog::AgentAttachLocal);
                 }
                 if self.workspace.as_ref().is_some_and(|w| w.remote.is_some())
-                    && ui
-                        .selectable_label(self.dialog == Dialog::AgentAttachHost, "Project host")
-                        .clicked()
+                    && crate::keyboard::selectable_label(
+                        ui,
+                        self.dialog == Dialog::AgentAttachHost,
+                        "Project host",
+                    )
+                    .clicked()
                 {
                     self.set_dialog(Dialog::AgentAttachHost);
                 }
@@ -436,7 +443,8 @@ impl EditorApp {
         } else {
             (0, false)
         };
-        let response = ui.add(
+        let response = ui.add(crate::keyboard::named(
+            "Path or command",
             egui::TextEdit::singleline(&mut self.dialog_input)
                 .id(path_id)
                 .desired_width(f32::INFINITY)
@@ -445,7 +453,7 @@ impl EditorApp {
                 } else {
                     "File name, search, or path…"
                 }),
-        );
+        ));
         ui_probe::button(ui, "file-dialog-path", &response);
         ui_probe::value(ui, "file-dialog-path-value", &response, &self.dialog_input);
         if response.changed() {
@@ -456,16 +464,17 @@ impl EditorApp {
         ui.add_space(4.);
         let mut browse = None;
         ui.horizontal(|ui| {
-            let up = ui.button("Up");
+            let up = crate::keyboard::button(ui, "Up");
             ui_probe::button(ui, "file-dialog-up", &up);
             if up.clicked() {
                 browse = Some(parent(&self.file_browser.directory));
             }
-            let location = ui.add(
+            let location = ui.add(crate::keyboard::named(
+                "Folder path",
                 egui::TextEdit::singleline(&mut self.file_browser.location)
                     .desired_width((ui.available_width() - 155.).max(80.))
                     .hint_text("Folder path"),
-            );
+            ));
             ui_probe::button(ui, "file-dialog-location", &location);
             ui_probe::value(
                 ui,
@@ -486,10 +495,10 @@ impl EditorApp {
                 self.file_browser.loading = false;
             }
             let enter = location.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if ui.button("Browse").clicked() || enter {
+            if crate::keyboard::button(ui, "Browse").clicked() || enter {
                 browse = Some(self.picker_path(&self.file_browser.location));
             }
-            if ui.checkbox(&mut self.show_hidden, "Hidden").changed() {
+            if crate::keyboard::checkbox(ui, &mut self.show_hidden, "Hidden").changed() {
                 self.explorer_state.tree_dirty = true;
             }
         });
@@ -612,7 +621,7 @@ impl EditorApp {
                     }
                 }
             }
-            if ui.button("Cancel").clicked() {
+            if crate::keyboard::button(ui, "Cancel").clicked() {
                 self.dialog = Dialog::None;
             }
         });

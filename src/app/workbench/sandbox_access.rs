@@ -30,8 +30,8 @@ pub(in crate::app) fn rules_ui(
 ) {
     ui.add_enabled_ui(options.enabled, |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut options.share_network, "Allow network access");
-            ui.checkbox(&mut options.project_read_only, "Project is read only");
+            crate::keyboard::checkbox(ui, &mut options.share_network, "Allow network access");
+            crate::keyboard::checkbox(ui, &mut options.project_read_only, "Project is read only");
         });
         ui.add_space(8.);
         let columns = Columns::new(ui);
@@ -70,10 +70,8 @@ pub(in crate::app) fn rules_ui(
                 ui.scope_builder(egui::UiBuilder::new().id(draft_id.with(grant.serial)), |ui| {
                     row(ui, index, columns.height, palette, |ui| {
                         ui.add_sized(
-                            [columns.path_width(ui), columns.height],
-                            egui::TextEdit::singleline(&mut grant.path).font(egui::TextStyle::Monospace)
-                                .desired_width(0.).vertical_align(Align::Center).hint_text("/path or ~/folder"),
-                        ).on_hover_text(grant.path.as_str());
+                            [columns.path_width(ui), columns.height],crate::keyboard::named("Sandbox access path", egui::TextEdit::singleline(&mut grant.path).font(egui::TextStyle::Monospace)
+                                .desired_width(0.).vertical_align(Align::Center).hint_text("/path or ~/folder"))).on_hover_text(grant.path.as_str());
                         access_picker(ui, &mut grant.access, columns, false);
                         if ui.add_sized(
                             [columns.action, columns.height],
@@ -89,7 +87,7 @@ pub(in crate::app) fn rules_ui(
             draft.rows.remove(index);
         }
         ui.add_space(6.);
-        if ui.button("+ Add folder or file").clicked() {
+        if crate::keyboard::button(ui, "+ Add folder or file").clicked() {
             draft.push(String::new(), sandbox::Access::ReadOnly);
         }
         ui.small("Add any custom shell setup, tool installation or cache needed on this host. Paths are literal (absolute or ~/); use Read only for configuration and Read + write for tool state.");
@@ -258,7 +256,7 @@ fn access_picker(
         Layout::top_down(Align::Min),
         |ui| {
             ui.set_min_size(egui::vec2(columns.access, columns.height));
-            egui::ComboBox::from_id_salt("mode")
+            crate::keyboard::ComboBox::new("mode", "Execution mode")
                 .width(columns.access)
                 .truncate()
                 .selected_text(access.label())
@@ -269,7 +267,7 @@ fn access_picker(
                         sandbox::Access::ReadWrite,
                     ] {
                         if allow_hidden || value != sandbox::Access::Hidden {
-                            ui.selectable_value(access, value, value.label());
+                            crate::keyboard::selectable_value(ui, access, value, value.label());
                         }
                     }
                 });

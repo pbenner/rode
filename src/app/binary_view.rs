@@ -367,7 +367,7 @@ fn render_editor(
             (View::Exports, "Exports"),
             (View::Disassembly, "Disassembly"),
         ] {
-            let tab = ui.selectable_label(view.mode == mode, name);
+            let tab = crate::keyboard::selectable_label(ui, view.mode == mode, name);
             ui_probe::button(ui, &format!("binary-tab:{name}"), &tab);
             if tab.clicked() {
                 view.mode = mode;
@@ -377,14 +377,15 @@ fn render_editor(
     let mut reload = false;
     ui.horizontal_wrapped(|ui| {
         ui.label("Offset (hex)");
-        let jump = ui.add(
+        let jump = ui.add(crate::keyboard::named(
+            "Byte offset (hex)",
             egui::TextEdit::singleline(&mut view.offset_text)
                 .desired_width(90.)
                 .char_limit(16),
-        );
+        ));
         ui_probe::button(ui, "hex-offset", &jump);
         ui_probe::value(ui, "hex-offset-value", &jump, &view.offset_text);
-        let go = ui.button("Go");
+        let go = crate::keyboard::button(ui, "Go");
         ui_probe::button(ui, "hex-go", &go);
         if go.clicked() || (jump.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
             match usize::from_str_radix(view.offset_text.trim().trim_start_matches("0x"), 16) {
@@ -398,14 +399,14 @@ fn render_editor(
         }
         let analyze = ui.add_enabled(
             view.worker.is_none(),
-            egui::Button::new("Analyze / decode here"),
+            crate::keyboard::Button::new("Analyze / decode here"),
         );
         ui_probe::button(ui, "hex-analyze", &analyze);
         if analyze.clicked() {
             view.analyze(ctx);
         }
         if ui
-            .add_enabled(!dirty && !saving, egui::Button::new("Reload"))
+            .add_enabled(!dirty && !saving, crate::keyboard::Button::new("Reload"))
             .clicked()
         {
             reload = true;
@@ -419,18 +420,19 @@ fn render_editor(
     });
     if view.mode == View::Hex {
         ui.horizontal_wrapped(|ui| {
-            let edit = ui.checkbox(&mut view.editing, "Edit bytes");
+            let edit = crate::keyboard::checkbox(ui, &mut view.editing, "Edit bytes");
             ui_probe::button(ui, "hex-edit", &edit);
             ui.add_enabled_ui(view.editing, |ui| {
-                let patch = ui.add(
+                let patch = ui.add(crate::keyboard::named(
+                    "Patch bytes",
                     egui::TextEdit::singleline(&mut view.patch)
                         .desired_width(150.)
                         .hint_text("90 90 C3")
                         .char_limit(12288),
-                );
+                ));
                 ui_probe::button(ui, "hex-patch", &patch);
                 ui_probe::value(ui, "hex-patch-value", &patch, &view.patch);
-                let overwrite = ui.button("Overwrite");
+                let overwrite = crate::keyboard::button(ui, "Overwrite");
                 ui_probe::button(ui, "hex-overwrite", &overwrite);
                 if overwrite.clicked() {
                     match binary::parse_hex(&view.patch)
@@ -443,30 +445,31 @@ fn render_editor(
                         Err(error) => view.error = format!("{error:#}"),
                     }
                 }
-                if ui.button("Undo").clicked() {
+                if crate::keyboard::button(ui, "Undo").clicked() {
                     view.buffer.undo();
                     view.version += 1;
                 }
-                if ui.button("Redo").clicked() {
+                if crate::keyboard::button(ui, "Redo").clicked() {
                     view.buffer.redo();
                     view.version += 1;
                 }
             });
-            if ui.button("Copy byte").clicked()
+            if crate::keyboard::button(ui, "Copy byte").clicked()
                 && let Some(byte) = view.buffer.bytes().get(view.offset)
             {
                 ctx.copy_text(format!("{byte:02X}"));
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut view.search_hex, "Hex search");
-            ui.add(
+            crate::keyboard::checkbox(ui, &mut view.search_hex, "Hex search");
+            ui.add(crate::keyboard::named(
+                "Bytes or UTF-8 text",
                 egui::TextEdit::singleline(&mut view.search)
                     .desired_width(180.)
                     .hint_text("Bytes or UTF-8 text")
                     .char_limit(4096),
-            );
-            if ui.button("Find next").clicked() {
+            ));
+            if crate::keyboard::button(ui, "Find next").clicked() {
                 let needle = if view.search_hex {
                     binary::parse_hex(&view.search)
                 } else {
@@ -486,7 +489,7 @@ fn render_editor(
                     Err(error) => view.error = format!("{error:#}"),
                 }
             }
-            ui.checkbox(&mut view.little, "Little endian");
+            crate::keyboard::checkbox(ui, &mut view.little, "Little endian");
             let remaining = &view.buffer.bytes()[view.offset.min(view.buffer.bytes().len())..];
             if let Some(&byte) = remaining.first() {
                 ui.monospace(format!("u8 {byte} / i8 {}", byte as i8));
@@ -506,9 +509,9 @@ fn render_editor(
     } else if view.mode == View::Disassembly {
         ui.horizontal_wrapped(|ui| {
             for bits in [16, 32, 64] {
-                ui.selectable_value(&mut view.bits, bits, format!("x86 {bits}"));
+                crate::keyboard::selectable_value(ui, &mut view.bits, bits, format!("x86 {bits}"));
             }
-            if ui.button("Entry point").clicked()
+            if crate::keyboard::button(ui, "Entry point").clicked()
                 && let Some(offset) = view.report.entry_offset
             {
                 view.select(offset);
@@ -520,11 +523,12 @@ fn render_editor(
             ui.colored_label(palette.accent,"This object is not x86. Hex/tables work; x86 decoding here is an explicit raw interpretation.");
         }
     } else if view.mode != View::Overview {
-        ui.add(
+        ui.add(crate::keyboard::named(
+            "Filter table…",
             egui::TextEdit::singleline(&mut view.filter)
                 .hint_text("Filter table…")
                 .char_limit(256),
-        );
+        ));
     }
     if !view.error.is_empty() {
         ui.colored_label(palette.error, &view.error);
@@ -536,14 +540,17 @@ fn render_editor(
         if view.buffer.bytes().len() > HEX_WINDOW_BYTES {
             ui.horizontal_wrapped(|ui| {
                 let range = hex_window(view.offset, view.buffer.bytes().len());
-                let previous = ui.add_enabled(range.start > 0, egui::Button::new("Previous page"));
+                let previous = ui.add_enabled(
+                    range.start > 0,
+                    crate::keyboard::Button::new("Previous page"),
+                );
                 ui_probe::button(ui, "hex-previous-page", &previous);
                 if previous.clicked() {
                     view.select(range.start - HEX_WINDOW_BYTES);
                 }
                 let next = ui.add_enabled(
                     range.end < view.buffer.bytes().len(),
-                    egui::Button::new("Next page"),
+                    crate::keyboard::Button::new("Next page"),
                 );
                 ui_probe::button(ui, "hex-next-page", &next);
                 if next.clicked() {
@@ -598,7 +605,7 @@ fn render_editor(
                         let changed = view.buffer.saved().get(offset) != Some(&byte);
                         let byte_button = ui.add_sized(
                             [23., row_height],
-                            egui::Button::new(
+                            crate::keyboard::Button::new(
                                 RichText::new(format!("{byte:02X}"))
                                     .font(font.clone())
                                     .color(if changed {
@@ -720,7 +727,10 @@ fn render_editor(
                 for index in range {
                     let (line, offset) = &rows[index];
                     if ui
-                        .add(egui::Button::new(RichText::new(line).font(font.clone())).frame(false))
+                        .add(
+                            crate::keyboard::Button::new(RichText::new(line).font(font.clone()))
+                                .frame(false),
+                        )
                         .clicked()
                         && let Some(offset) = offset
                     {

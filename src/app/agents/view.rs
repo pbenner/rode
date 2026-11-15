@@ -174,10 +174,10 @@ impl Agents {
                             let claude = agents.config.provider == Provider::Claude;
                             ui.label(if claude { "Claude ACP adapter on this host" } else { "ACP executable on this host" });
                             let program = if claude { &mut agents.config.claude_program } else { &mut agents.config.acp_program };
-                            let executable = ui.add(egui::TextEdit::singleline(program).desired_width(f32::INFINITY).hint_text(if claude { rode_agent_core::CLAUDE_ACP } else { "agent executable or absolute path" }).char_limit(4096));
+                            let executable = ui.add(crate::keyboard::named("Agent executable", egui::TextEdit::singleline(program).desired_width(f32::INFINITY).hint_text(if claude { rode_agent_core::CLAUDE_ACP } else { "agent executable or absolute path" }).char_limit(4096)));
                             ui_probe::button(ui, if claude { "agent-claude-executable" } else { "agent-acp-executable" }, &executable);
                             ui.label("Arguments (JSON array)");
-                            if ui.add(egui::TextEdit::singleline(&mut agents.arguments).desired_width(f32::INFINITY).hint_text("[\"acp\"]").char_limit(16384)).changed() {
+                            if ui.add(crate::keyboard::named("Agent arguments", egui::TextEdit::singleline(&mut agents.arguments).desired_width(f32::INFINITY).hint_text("[\"acp\"]").char_limit(16384))).changed() {
                                 match serde_json::from_str::<Vec<String>>(&agents.arguments) {
                                     Ok(args) => { *agents.config.acp_arguments_mut()=args; agents.argument_error.clear(); }
                                     Err(_) => agents.argument_error="Use a JSON array of argument strings.".into(),
@@ -187,9 +187,10 @@ impl Agents {
                             ui.label(palette.tag("Agent must provide its own file and command tools."));
                             if claude {
                                 ui.add(egui::Label::new("Install claude-agent-acp and authenticate Claude on this project host. The adapter uses your Claude login or ANTHROPIC_API_KEY from the host environment.").wrap());
-                                ui.hyperlink_to("Claude adapter setup", "https://github.com/agentclientprotocol/claude-agent-acp");
+                                let setup = ui.hyperlink_to("Claude adapter setup", "https://github.com/agentclientprotocol/claude-agent-acp");
+                                crate::keyboard::target(ui, "Claude adapter setup", &setup);
                             }
-                            if ui.small_button("Reset saved agent controls").clicked() {
+                            if crate::keyboard::small_button(ui, "Reset saved agent controls").clicked() {
                                 agents.config.acp_options_mut().clear();
                                 agents.queue.clear();
                                 agents.chat.disconnect();
@@ -197,17 +198,17 @@ impl Agents {
                             }
                         } else {
                             ui.label("Codex executable (auto: discover)");
-                            let executable = ui.add(egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096)).on_hover_text("Use Install Codex below, the optional rode-codex package or an installed executable. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
+                            let executable = ui.add(crate::keyboard::named("Codex executable", egui::TextEdit::singleline(&mut agents.config.codex).desired_width(f32::INFINITY).hint_text("auto, or /path/to/codex").char_limit(4096))).on_hover_text("Use Install Codex below, the optional rode-codex package or an installed executable. Sign in locally with rode --codex login. SSH projects use Codex and credentials on that host.");
                             ui_probe::button(ui, "agent-codex-executable", &executable);
                             if agents.config.provider == Provider::Local {
                                 ui.label("Local model API base URL");
-                                ui.add(egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048)).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");
+                                ui.add(crate::keyboard::named("Local model server URL", egui::TextEdit::singleline(&mut agents.config.local_url).desired_width(f32::INFINITY).char_limit(2048))).on_hover_text("An Ollama /v1 or compatible Responses endpoint reachable from the project host. localhost means this host.");
                                 ui.label("Installed model name");
-                                let model = ui.add(egui::TextEdit::singleline(&mut agents.config.local_model).desired_width(f32::INFINITY).hint_text("Model already available on the local server").char_limit(256));
+                                let model = ui.add(crate::keyboard::named("Installed model name", egui::TextEdit::singleline(&mut agents.config.local_model).desired_width(f32::INFINITY).hint_text("Model already available on the local server").char_limit(256)));
                                 ui_probe::button(ui, "agent-local-model", &model);
                             } else {
                                 ui.label("Model (blank: Codex default)");
-                                ui.add(egui::TextEdit::singleline(&mut agents.config.model).desired_width(f32::INFINITY).char_limit(256));
+                                ui.add(crate::keyboard::named("Model", egui::TextEdit::singleline(&mut agents.config.model).desired_width(f32::INFINITY).char_limit(256)));
                             }
                             agents.runtime.ui(ui, remote.as_ref(), install_enabled, codex_available);
                         }
@@ -216,13 +217,13 @@ impl Agents {
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let history = ui.add_enabled(!offline && !installing && !answering,egui::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations for this project or other projects on this host");
+                let history = ui.add_enabled(!offline && !installing && !answering,crate::keyboard::Button::new("History").selected(agents.history_open)).on_hover_text("Browse saved conversations for this project or other projects on this host");
                 ui_probe::button(ui, "agent-history", &history);
                 if history.clicked() {
                     agents.history_open = !agents.history_open;
                     if agents.history_open {history_action.refresh=true;} else {agents.browser=None;}
                 }
-                if ui.add_enabled(!offline, egui::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
+                if ui.add_enabled(!offline, crate::keyboard::Button::new("Running")).on_hover_text("Reattach or stop background agent sessions on this host").clicked() { running = true; }
                 ui.add(egui::Label::new(RichText::new(if agents.chat.status.is_empty() {"Ready to start"} else {&agents.chat.status}).size(12.).color(if offline {palette.error}else{palette.accent})).truncate());
             }); });
             if let Some(status) = agents.chat.response_style_status(agents.config.personality) {
@@ -232,7 +233,7 @@ impl Agents {
                 ui_probe::button(ui, if mismatch { "agent-tone-mismatch" } else { "agent-tone-pending" }, &response);
                 if let agent::response_style::Status::Mismatch { applied, .. } = status {
                     let accept = ui.add_enabled(!agents.chat.busy && !offline && !modal,
-                        egui::Button::new(format!("Use {} tone", applied.label())));
+                        crate::keyboard::Button::new(format!("Use {} tone", applied.label())));
                     ui_probe::button(ui, "agent-tone-use-host", &accept);
                     if accept.clicked() { use_host_tone = Some(applied); }
                 }
@@ -264,11 +265,11 @@ impl Agents {
                             ui.add(egui::Label::new(RichText::new(&prompt.summary).monospace().size(12.)).wrap().selectable(true));
                         }
                         if prompt.questions.is_empty() {
-                            ui.collapsing("Details",|ui| { ui.add(egui::Label::new(RichText::new(&prompt.detail).monospace().size(11.)).wrap().selectable(true)); });
+                            crate::keyboard::collapsing(ui, "Details",|ui| { ui.add(egui::Label::new(RichText::new(&prompt.detail).monospace().size(11.)).wrap().selectable(true)); });
                         }
                         ui.horizontal_wrapped(|ui| {
                             for (index, choice) in prompt.choices.iter().enumerate() {
-                                let response = ui.button(&choice.label);
+                                let response = crate::keyboard::button(ui, &choice.label);
                                 ui_probe::button(ui, &format!("agent-permission-choice-{index}"), &response);
                                 if response.clicked() {answer=Some(choice.result.clone());}
                             }
@@ -293,7 +294,7 @@ impl Agents {
                 for message in &agents.chat.messages {
                     ui.push_id(&message.id,|ui| {
                         if message.role == Role::Tool {
-                            ui.collapsing(RichText::new(&message.title).monospace().size(12.).color(palette.muted),|ui| {
+                            crate::keyboard::collapsing(ui, RichText::new(&message.title).monospace().size(12.).color(palette.muted),|ui| {
                                 ui.add(egui::Label::new(RichText::new(&message.text).monospace().size(11.)).wrap().selectable(true));
                             });
                         } else {
@@ -352,7 +353,7 @@ impl Agents {
                             .size(11.)
                             .color(palette.accent),
                     );
-                    if ui.small_button("Save all").clicked() {
+                    if crate::keyboard::small_button(ui, "Save all").clicked() {
                         save = true;
                     }
                 });
@@ -386,6 +387,7 @@ impl Agents {
                 }
             }
             ui_probe::button(ui, "agent-composer", &response);
+            crate::keyboard::field_target(ui, "Message", &response);
             if agents.draft.len() <= 64 * 1024 {
                 ui_probe::value(ui, "agent-composer-value", &response, &agents.draft);
             }
@@ -432,7 +434,7 @@ impl Agents {
                                 && (!agents.config.provider.is_acp()
                                     || agents.argument_error.is_empty());
                             let send_button = ui
-                                .add_enabled(enabled, egui::Button::new(if agents.chat.busy || agents.queue.waiting_for_reply() || !agents.queue.is_empty() { "Queue" } else { "Send" }))
+                                .add_enabled(enabled, crate::keyboard::Button::new(if agents.chat.busy || agents.queue.waiting_for_reply() || !agents.queue.is_empty() { "Queue" } else { "Send" }))
                                 .on_hover_text("Enter sends when idle or queues a follow-up while working.\nShift+Enter inserts a new line.");
                             ui_probe::button(ui, "agent-send", &send_button);
                             if send_button.clicked()
@@ -441,7 +443,7 @@ impl Agents {
                                 send = true;
                             }
                             if agents.chat.busy {
-                                let button = ui.button(if agents.chat.stopping() {
+                                let button = crate::keyboard::button(ui, if agents.chat.stopping() {
                                         "Close process"
                                     } else {
                                         "Stop"
@@ -452,7 +454,7 @@ impl Agents {
                             if !agents.chat.busy
                                 && agents.chat.connected()
                                 && ui
-                                    .add_enabled(!agents.chat.work_pending(), egui::Button::new(if agents.chat.persistent() {
+                                    .add_enabled(!agents.chat.work_pending(), crate::keyboard::Button::new(if agents.chat.persistent() {
                                         "Detach"
                                     } else {
                                         "Disconnect"
@@ -470,7 +472,7 @@ impl Agents {
                         .notice("Agent disconnected. The next message starts a new conversation.");
                             }
                             let attach_button = ui.add_enabled(!offline && !modal && !agents.history_open && !agents.files.pending && agents.files.files.len() < rode_agent_core::attachment::MAX_ATTACHMENTS,
-                                egui::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.");
+                                crate::keyboard::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.");
                             ui_probe::button(ui, "agent-attach", &attach_button);
                             if attach_button.clicked() { attach = true; }
                             if ui.available_width() > 100. {

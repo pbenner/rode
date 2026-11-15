@@ -5,7 +5,7 @@ use crate::app::{documents::Changes, vaults::Barrier};
 
 /// Opaque identity for the current confirmation or wait presentation. A callback must present this
 /// identity before it can approve or cancel an intent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::app) struct DecisionId(u64);
 
 /// Acknowledgement barrier that currently delays an ownership change. Input waits remain nonmodal

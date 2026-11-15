@@ -496,7 +496,7 @@ impl Widget for IconButton<'_> {
             Button::new((icon, text))
         }
         .selected(self.selected)
-        .sense(self.sense)
+        .sense(super::keyboard::button_sense(ui, self.label, self.sense))
         .min_size(self.min_size);
         if self.truncate {
             button = button.truncate();
@@ -545,6 +545,7 @@ impl Widget for IconButton<'_> {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), self.label)
         });
+        super::keyboard::target(ui, self.label, &response);
         if self.icon_only {
             response.on_hover_text(self.label)
         } else {
@@ -578,6 +579,7 @@ pub(super) fn submenu<R>(
         Icon::ChevronRight.paint(ui.painter(), rect, color);
     }
     super::ui_probe::button(ui, &format!("submenu:{label}"), &output.response);
+    super::keyboard::target(ui, label, &output.response);
     // SubMenu tests hover against the trigger rectangle, independently of the
     // scroll clip. Hidden rows must not open beneath the menu bar on reopening.
     let mut trigger = output.response;
@@ -591,10 +593,11 @@ pub(super) fn submenu<R>(
 /// Render the open-editors overflow menu with a stable accessible button label.
 pub(super) fn overflow(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Response {
     let id = ui.next_auto_id().with("editors-menu-icon");
-    let (response, _) = egui::containers::menu::MenuButton::from_button(
+    let (response, _) = crate::keyboard::MenuButton::from_button(
         Button::new(Atom::custom(id, Vec2::splat(16.)))
             .min_size(egui::vec2(32., 36.))
             .frame(false),
+        "All open editors",
     )
     .ui(ui, contents);
     Icon::More.paint(
@@ -609,5 +612,6 @@ pub(super) fn overflow(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Response 
             "All open editors",
         )
     });
+    super::keyboard::target(ui, "All open editors", &response);
     response
 }

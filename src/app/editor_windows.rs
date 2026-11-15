@@ -260,6 +260,7 @@ impl EditorApp {
     pub(super) fn reattach_editor(&mut self, viewport: egui::ViewportId, ctx: &egui::Context) {
         self.documents.reattach(viewport);
         self.navigation.forget_viewport(viewport);
+        keyboard::forget(ctx, viewport);
         self.explorer_state.selection.scroll.remove(&viewport);
         self.editors
             .windows

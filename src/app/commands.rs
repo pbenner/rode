@@ -27,12 +27,13 @@ impl EditorApp {
             ui.memory_mut(|memory| memory.request_focus(input_id));
             self.dialog_focus = false;
         }
-        let input = ui.add(
+        let input = ui.add(crate::keyboard::named(
+            "Type a command…",
             egui::TextEdit::singleline(&mut self.dialog_input)
                 .id(input_id)
                 .desired_width(f32::INFINITY)
                 .hint_text("Type a command…"),
-        );
+        ));
         super::ui_probe::button(ui, "command-palette-input", &input);
         super::ui_probe::value(
             ui,
@@ -94,12 +95,13 @@ impl EditorApp {
             )
         }));
         let query = self.dialog_input.to_lowercase();
-        let filtered: Vec<_> = commands
+        let mut matches: Vec<_> = commands
             .iter()
             .enumerate()
-            .filter(|(_, (_, name, _))| name.to_lowercase().contains(&query))
-            .map(|(i, _)| i)
+            .filter_map(|(i, (_, name, _))| keyboard::rank(&query, name).map(|score| (score, i)))
             .collect();
+        matches.sort_by_key(|(score, _)| *score);
+        let filtered: Vec<_> = matches.into_iter().map(|(_, index)| index).collect();
         let reveal = self
             .navigation
             .list
@@ -117,7 +119,7 @@ impl EditorApp {
                     let (_, name, shortcut) = &commands[index];
                     let response = ui.add_sized(
                         [ui.available_width(), 30.],
-                        egui::Button::new(format!("{name}     {shortcut}"))
+                        crate::keyboard::Button::new(format!("{name}     {shortcut}"))
                             .selected(row == self.navigation.list.index),
                     );
                     // A fixture may submit only after the complete query has
@@ -158,6 +160,33 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debugger_step_over_preserves_shift_f10_for_context_menus() {
+        let ctx = egui::Context::default();
+        let event = |modifiers| egui::Event::Key {
+            key: Key::F10,
+            physical_key: None,
+            modifiers,
+            pressed: true,
+            repeat: false,
+        };
+        let shifted = event(egui::Modifiers::SHIFT);
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![shifted.clone(), event(egui::Modifiers::NONE)],
+                ..Default::default()
+            },
+            |ctx| {
+                assert!(Command::DebugOver.consume(ctx));
+                assert_eq!(
+                    ctx.input(|input| input.events.clone()),
+                    vec![shifted.clone()]
+                );
+                assert!(!Command::DebugOver.consume(ctx));
+            },
+        );
+    }
 
     #[test]
     fn a_new_document_accepts_text_on_its_first_focused_frame() {

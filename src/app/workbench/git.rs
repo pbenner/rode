@@ -119,7 +119,10 @@ impl EditorApp {
         ui.horizontal_wrapped(|ui| {
             self.git_execution_control(ui, ctx);
             if ui
-                .add_enabled(!self.workbench.git.git_busy, egui::Button::new("Refresh"))
+                .add_enabled(
+                    !self.workbench.git.git_busy,
+                    crate::keyboard::Button::new("Refresh"),
+                )
                 .clicked()
             {
                 self.refresh_git(ctx);
@@ -131,7 +134,7 @@ impl EditorApp {
             ] {
                 let button = ui.add_enabled(
                     !self.workbench.git.git_busy && !self.workbench.git.git_root.is_empty(),
-                    egui::Button::new(label),
+                    crate::keyboard::Button::new(label),
                 );
                 ui_probe::button(ui, &format!("git-network-{label}"), &button);
                 if button.clicked() {
@@ -150,7 +153,7 @@ impl EditorApp {
                 let configure = ui
                     .add_enabled(
                         !self.workbench.git.git_busy,
-                        egui::Button::new("Configure Git identity"),
+                        crate::keyboard::Button::new("Configure Git identity"),
                     )
                     .on_disabled_hover_text("Wait for the current Git request to finish.");
                 ui_probe::button(ui, "git-configure-identity", &configure);
@@ -160,12 +163,15 @@ impl EditorApp {
                 }
             }
             if self.workbench.git.git_root.is_empty() {
-                if ui.button("Initialize Git repository").clicked() {
+                if crate::keyboard::button(ui, "Initialize Git repository").clicked() {
                     self.git_mutate(strings(&["init"]), "Initialize repository", ctx);
                 }
                 ui.label("Clone into this folder (must be empty)");
-                ui.text_edit_singleline(&mut self.workbench.git.clone_url);
-                if ui.button("Clone repository").clicked()
+                ui.add(crate::keyboard::named(
+                    "Clone repository URL",
+                    egui::TextEdit::singleline(&mut self.workbench.git.clone_url),
+                ));
+                if crate::keyboard::button(ui, "Clone repository").clicked()
                     && !self.workbench.git.clone_url.is_empty()
                 {
                     self.git_mutate(
@@ -214,7 +220,7 @@ impl EditorApp {
             ] {
                 let button = ui.add_enabled(
                     !self.workbench.git.git_busy,
-                    egui::Button::selectable(self.workbench.git.git_tab == tab, label),
+                    crate::keyboard::Button::selectable(self.workbench.git.git_tab == tab, label),
                 );
                 if tab == GitTab::Settings {
                     ui_probe::button(ui, "git-tab-settings", &button);
@@ -262,25 +268,25 @@ impl EditorApp {
                 GitTab::Stash => self.git_stash_ui(ui,ctx),
                 GitTab::Remotes => {
                     ui.monospace(&self.workbench.git.git_tab_data);
-                    ui.label("Remote name"); ui.text_edit_singleline(&mut self.workbench.git.remote_name);
-                    ui.label("URL"); ui.text_edit_singleline(&mut self.workbench.git.remote_url);
+                    ui.label("Remote name"); ui.add(crate::keyboard::named("Remote name", egui::TextEdit::singleline(&mut self.workbench.git.remote_name)));
+                    ui.label("URL"); ui.add(crate::keyboard::named("Remote URL", egui::TextEdit::singleline(&mut self.workbench.git.remote_url)));
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Add remote").clicked() { self.git_mutate(vec!["remote".into(),"add".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Add remote",ctx); }
-                        if ui.button("Set URL").clicked() { self.git_mutate(vec!["remote".into(),"set-url".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Set remote URL",ctx); }
-                        if ui.button("Remove").clicked() { self.workbench.git.confirm = Some(("Remove remote configuration?".into(),vec!["remote".into(),"remove".into(),self.workbench.git.remote_name.clone()].into())); }
-                        if ui.button("Push + set upstream").clicked() { self.git_mutate(vec!["push".into(),"--set-upstream".into(),self.workbench.git.remote_name.clone(),"HEAD".into()],"Set upstream",ctx); }
+                        if crate::keyboard::button(ui, "Add remote").clicked() { self.git_mutate(vec!["remote".into(),"add".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Add remote",ctx); }
+                        if crate::keyboard::button(ui, "Set URL").clicked() { self.git_mutate(vec!["remote".into(),"set-url".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Set remote URL",ctx); }
+                        if crate::keyboard::button(ui, "Remove").clicked() { self.workbench.git.confirm = Some(("Remove remote configuration?".into(),vec!["remote".into(),"remove".into(),self.workbench.git.remote_name.clone()].into())); }
+                        if crate::keyboard::button(ui, "Push + set upstream").clicked() { self.git_mutate(vec!["push".into(),"--set-upstream".into(),self.workbench.git.remote_name.clone(),"HEAD".into()],"Set upstream",ctx); }
                     });
                 }
                 GitTab::Tags => {
                     for tag in self.workbench.git.git_tab_data.clone().lines() { ui.horizontal_wrapped(|ui| {
                         ui.monospace(tag);
-                        if ui.small_button("Checkout").clicked() { self.git_mutate(vec!["switch".into(),"--detach".into(),tag.into()],"Checkout tag",ctx); }
-                        if ui.small_button("Delete").clicked() { self.workbench.git.confirm = Some((format!("Delete local tag {tag}?"),vec!["tag".into(),"-d".into(),tag.into()].into())); }
+                        if crate::keyboard::small_button(ui, "Checkout").clicked() { self.git_mutate(vec!["switch".into(),"--detach".into(),tag.into()],"Checkout tag",ctx); }
+                        if crate::keyboard::small_button(ui, "Delete").clicked() { self.workbench.git.confirm = Some((format!("Delete local tag {tag}?"),vec!["tag".into(),"-d".into(),tag.into()].into())); }
                     }); }
-                    ui.text_edit_singleline(&mut self.workbench.git.tag_input);
+                    ui.add(crate::keyboard::named("Tag name", egui::TextEdit::singleline(&mut self.workbench.git.tag_input)));
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Create tag at HEAD").clicked() { self.git_mutate(vec!["tag".into(),self.workbench.git.tag_input.clone()],"Create tag",ctx); }
-                        if ui.button("Push tags").clicked() { self.git_mutate(strings(&["push","--tags"]),"Push tags",ctx); }
+                        if crate::keyboard::button(ui, "Create tag at HEAD").clicked() { self.git_mutate(vec!["tag".into(),self.workbench.git.tag_input.clone()],"Create tag",ctx); }
+                        if crate::keyboard::button(ui, "Push tags").clicked() { self.git_mutate(strings(&["push","--tags"]),"Push tags",ctx); }
                     });
                 }
                 GitTab::Worktrees => {
@@ -290,14 +296,14 @@ impl EditorApp {
                         layout::card(ui, palette, |ui| {
                             ui.monospace(path);
                             if let Some(branch) = worktree.lines().find_map(|line|line.strip_prefix("branch refs/heads/")) { ui.label(branch); }
-                            if ui.small_button("Open project").clicked() {
+                            if crate::keyboard::small_button(ui, "Open project").clicked() {
                                 let remote = self.workspace.as_ref().is_some_and(|w|w.remote.is_some());
                                 let options = self.saved_sandbox_for(path,remote).unwrap_or_else(||self.workspace.as_ref().map(|w|w.sandbox_options.clone()).unwrap_or_default());
                                 self.guarded(Action::Project { path:path.into(),remote,options },ctx);
                             }
                             if self.workspace.as_ref().is_some_and(|w|w.sandbox_options.enabled)
                                 && let Some(metadata) = &metadata
-                                && ui.small_button("Open + share main .git").on_hover_text(format!("Grant read/write access to {metadata} so Git works in the linked worktree sandbox.")).clicked()
+                                && crate::keyboard::small_button(ui, "Open + share main .git").on_hover_text(format!("Grant read/write access to {metadata} so Git works in the linked worktree sandbox.")).clicked()
                             {
                                 let remote = self.workspace.as_ref().is_some_and(|w|w.remote.is_some());
                                 let mut options = self.saved_sandbox_for(path,remote).unwrap_or_else(||self.workspace.as_ref().map(|w|w.sandbox_options.clone()).unwrap_or_default());
@@ -309,36 +315,35 @@ impl EditorApp {
                         });
                     }
                     ui.label(RichText::new("Linked worktrees need access to the main repository's .git directory. Grant it in Sandbox access when opening a separate sandbox.").small());
-                    ui.label("Worktree path (must be accessible in the sandbox)"); ui.text_edit_singleline(&mut self.workbench.git.worktree_path);
-                    ui.label("Branch"); ui.text_edit_singleline(&mut self.workbench.git.worktree_branch);
-                    ui.checkbox(&mut self.workbench.git.worktree_new_branch,"Create new branch");
+                    ui.label("Worktree path (must be accessible in the sandbox)"); ui.add(crate::keyboard::named("Worktree path", egui::TextEdit::singleline(&mut self.workbench.git.worktree_path)));
+                    ui.label("Branch"); ui.add(crate::keyboard::named("Worktree branch", egui::TextEdit::singleline(&mut self.workbench.git.worktree_branch)));
+                    crate::keyboard::checkbox(ui, &mut self.workbench.git.worktree_new_branch,"Create new branch");
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Add worktree").clicked() {
+                        if crate::keyboard::button(ui, "Add worktree").clicked() {
                             let mut args = strings(&["worktree","add"]);
                             if self.workbench.git.worktree_new_branch { args.extend(["-b".into(),self.workbench.git.worktree_branch.clone()]); }
                             args.extend(["--".into(),self.workbench.git.worktree_path.clone()]);
                             if !self.workbench.git.worktree_new_branch && !self.workbench.git.worktree_branch.is_empty() { args.push(self.workbench.git.worktree_branch.clone()); }
                             self.git_mutate(args,"Add worktree",ctx);
                         }
-                        if ui.button("Remove worktree").clicked() { self.workbench.git.confirm = Some(("Remove this worktree directory? Git will refuse if it has changes.".into(),vec!["worktree".into(),"remove".into(),"--".into(),self.workbench.git.worktree_path.clone()].into())); }
-                        if ui.button("Prune metadata").clicked() { self.git_mutate(strings(&["worktree","prune"]),"Prune worktrees",ctx); }
+                        if crate::keyboard::button(ui, "Remove worktree").clicked() { self.workbench.git.confirm = Some(("Remove this worktree directory? Git will refuse if it has changes.".into(),vec!["worktree".into(),"remove".into(),"--".into(),self.workbench.git.worktree_path.clone()].into())); }
+                        if crate::keyboard::button(ui, "Prune metadata").clicked() { self.git_mutate(strings(&["worktree","prune"]),"Prune worktrees",ctx); }
                     });
                 }
                 GitTab::Submodules => {
                     ui.monospace(&self.workbench.git.git_tab_data);
-                    if ui.button("Initialize / update recursively").clicked() { self.git_mutate(strings(&["submodule","update","--init","--recursive"]),"Update submodules",ctx); }
-                    if ui.button("Sync URLs").clicked() { self.git_mutate(strings(&["submodule","sync","--recursive"]),"Sync submodules",ctx); }
+                    if crate::keyboard::button(ui, "Initialize / update recursively").clicked() { self.git_mutate(strings(&["submodule","update","--init","--recursive"]),"Update submodules",ctx); }
+                    if crate::keyboard::button(ui, "Sync URLs").clicked() { self.git_mutate(strings(&["submodule","sync","--recursive"]),"Sync submodules",ctx); }
                 }
             }
             });
         });
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Git output").clicked() {
+            if crate::keyboard::button(ui, "Git output").clicked() {
                 self.workbench.git.show_output = true;
             }
-            if ui
-                .button("Git terminal")
+            if crate::keyboard::button(ui, "Git terminal")
                 .on_hover_text("Interactive authentication and all Git commands")
                 .clicked()
             {
@@ -372,10 +377,10 @@ impl EditorApp {
             && !self.workbench.git.auth.open()
             && self.workbench.git.confirm.is_none();
         ui.add_enabled_ui(ready, |ui| {
-            let menu = ui.menu_button(label, |ui| {
+            let menu = crate::keyboard::menu_button(ui, label, |ui| {
                 ui.label("Runs on the project host.");
                 for (choice, title) in [(false, "Outside sandbox"), (true, "Use project sandbox")] {
-                    let response = ui.selectable_label(sandboxed == choice, title);
+                    let response = crate::keyboard::selectable_label(ui, sandboxed == choice, title);
                     ui_probe::button(ui, if choice { "git-use-sandbox" } else { "git-use-host" }, &response);
                     if response.clicked() {
                         self.set_git_sandbox(choice, ctx);
@@ -436,7 +441,10 @@ impl EditorApp {
             .any(project::GitFile::staged);
         ui.horizontal_wrapped(|ui| {
             let stage = ui
-                .add_enabled(ready && stageable, egui::Button::new("Stage all"))
+                .add_enabled(
+                    ready && stageable,
+                    crate::keyboard::Button::new("Stage all"),
+                )
                 .on_disabled_hover_text(if ready {
                     "No unstaged or untracked changes to stage."
                 } else {
@@ -447,7 +455,7 @@ impl EditorApp {
                 self.git_mutate(strings(&["add", "--all"]), "Stage all", ctx);
             }
             if ui
-                .add_enabled(ready && staged, egui::Button::new("Unstage all"))
+                .add_enabled(ready && staged, crate::keyboard::Button::new("Unstage all"))
                 .on_disabled_hover_text(if ready {
                     "No staged changes to unstage."
                 } else {
@@ -505,10 +513,13 @@ impl EditorApp {
         ui.label("Commit message");
         let message = ui.add_enabled(
             !self.workbench.git.committing,
-            egui::TextEdit::multiline(&mut self.workbench.git.commit_message)
-                .id(egui::Id::new(("git-commit-message", &self.workbench.key)))
-                .desired_rows(3)
-                .desired_width(f32::INFINITY),
+            crate::keyboard::named(
+                "Commit message",
+                egui::TextEdit::multiline(&mut self.workbench.git.commit_message)
+                    .id(egui::Id::new(("git-commit-message", &self.workbench.key)))
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            ),
         );
         ui_probe::button(ui, "git-commit-message", &message);
         let conflicts = self
@@ -535,7 +546,7 @@ impl EditorApp {
             let commit = ui
                 .add_enabled(
                     ready && !conflicts && !self.workbench.git.commit_message.trim().is_empty(),
-                    egui::Button::new("Commit staged"),
+                    crate::keyboard::Button::new("Commit staged"),
                 )
                 .on_disabled_hover_text(hint);
             ui_probe::button(ui, "git-commit", &commit);
@@ -562,19 +573,19 @@ impl EditorApp {
             );
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(ready, egui::Button::new("Continue merge"))
+                    .add_enabled(ready, crate::keyboard::Button::new("Continue merge"))
                     .clicked()
                 {
                     self.git_mutate(strings(&["merge", "--continue"]), "Continue merge", ctx);
                 }
                 if ui
-                    .add_enabled(ready, egui::Button::new("Continue rebase"))
+                    .add_enabled(ready, crate::keyboard::Button::new("Continue rebase"))
                     .clicked()
                 {
                     self.git_mutate(strings(&["rebase", "--continue"]), "Continue rebase", ctx);
                 }
                 if ui
-                    .add_enabled(ready, egui::Button::new("Abort merge"))
+                    .add_enabled(ready, crate::keyboard::Button::new("Abort merge"))
                     .clicked()
                 {
                     self.workbench.git.confirm = Some((
@@ -583,7 +594,7 @@ impl EditorApp {
                     ));
                 }
                 if ui
-                    .add_enabled(ready, egui::Button::new("Abort rebase"))
+                    .add_enabled(ready, crate::keyboard::Button::new("Abort rebase"))
                     .clicked()
                 {
                     self.workbench.git.confirm = Some((
@@ -672,7 +683,7 @@ impl EditorApp {
             }
         }
         if let Some(path) = self.documents.active().and_then(|d| d.path.clone())
-            && ui.button("Blame current file").clicked()
+            && crate::keyboard::button(ui, "Blame current file").clicked()
         {
             self.git_command(
                 vec!["blame".into(), "--".into(), path],
@@ -697,7 +708,7 @@ impl EditorApp {
             }
             ui.horizontal_wrapped(|ui| {
                 ui.monospace(fields[0]);
-                if ui.small_button("Switch").clicked() {
+                if crate::keyboard::small_button(ui, "Switch").clicked() {
                     let args = if remote {
                         vec!["switch".into(), "--track".into(), fields[0].into()]
                     } else {
@@ -705,20 +716,20 @@ impl EditorApp {
                     };
                     self.git_mutate(args, "Switch branch", ctx);
                 }
-                if ui.small_button("Merge").clicked() {
+                if crate::keyboard::small_button(ui, "Merge").clicked() {
                     self.git_mutate(
                         vec!["merge".into(), "--no-edit".into(), fields[0].into()],
                         "Merge branch",
                         ctx,
                     );
                 }
-                if ui.small_button("Rebase onto").clicked() {
+                if crate::keyboard::small_button(ui, "Rebase onto").clicked() {
                     self.workbench.git.confirm = Some((
                         format!("Rebase the current branch onto {}?", fields[0]),
                         vec!["rebase".into(), fields[0].into()].into(),
                     ));
                 }
-                if !remote && ui.small_button("Delete").clicked() {
+                if !remote && crate::keyboard::small_button(ui, "Delete").clicked() {
                     self.workbench.git.confirm = Some((
                         format!(
                             "Delete branch {}? Git will refuse if it is not merged.",
@@ -731,10 +742,16 @@ impl EditorApp {
         }
         ui.separator();
         ui.label("New branch name");
-        ui.text_edit_singleline(&mut self.workbench.git.branch_input);
+        ui.add(crate::keyboard::named(
+            "New branch name",
+            egui::TextEdit::singleline(&mut self.workbench.git.branch_input),
+        ));
         ui.label("Start point (blank: HEAD)");
-        ui.text_edit_singleline(&mut self.workbench.git.branch_target);
-        if ui.button("Create and switch").clicked() {
+        ui.add(crate::keyboard::named(
+            "Branch start point",
+            egui::TextEdit::singleline(&mut self.workbench.git.branch_target),
+        ));
+        if crate::keyboard::button(ui, "Create and switch").clicked() {
             let mut args = vec![
                 "switch".into(),
                 "-c".into(),
@@ -748,8 +765,11 @@ impl EditorApp {
     }
     /// Render cached stash selector/object identities; destructive operations retain both for confirmation.
     pub(in crate::app) fn git_stash_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.text_edit_singleline(&mut self.workbench.git.stash_message);
-        if ui.button("Stash changes + untracked files").clicked() {
+        ui.add(crate::keyboard::named(
+            "Stash message",
+            egui::TextEdit::singleline(&mut self.workbench.git.stash_message),
+        ));
+        if crate::keyboard::button(ui, "Stash changes + untracked files").clicked() {
             self.git_mutate(
                 vec![
                     "stash".into(),
@@ -771,7 +791,7 @@ impl EditorApp {
             };
             ui.label(message);
             ui.horizontal(|ui| {
-                if ui.small_button("Apply").clicked() {
+                if crate::keyboard::small_button(ui, "Apply").clicked() {
                     self.git_stash(
                         project::StashAction::Apply,
                         reference.into(),
@@ -779,10 +799,10 @@ impl EditorApp {
                         ctx,
                     );
                 }
-                if ui.small_button("Pop").clicked() {
+                if crate::keyboard::small_button(ui, "Pop").clicked() {
                     self.git_stash(project::StashAction::Pop, reference.into(), oid.into(), ctx);
                 }
-                if ui.small_button("Drop").clicked() {
+                if crate::keyboard::small_button(ui, "Drop").clicked() {
                     self.workbench.git.confirm = Some((
                         format!("Permanently drop {reference}: {message}?"),
                         Mutation::Stash {
@@ -837,7 +857,7 @@ impl EditorApp {
                         if ui
                             .add_enabled(
                                 !self.workbench.git.git_busy && available,
-                                egui::Button::new(if diff.staged {
+                                crate::keyboard::Button::new(if diff.staged {
                                     "Unstage file"
                                 } else if conflict {
                                     "Mark resolved"
@@ -854,7 +874,7 @@ impl EditorApp {
                             };
                             self.git_mutate(args, "Stage/unstage file", ctx);
                         }
-                        if ui.button("Open file").clicked() {
+                        if crate::keyboard::button(ui, "Open file").clicked() {
                             self.open_file(
                                 format!("{}/{}", self.workbench.git.git_root, diff.path),
                                 ctx,
@@ -870,12 +890,12 @@ impl EditorApp {
                     .iter()
                     .any(|s| diff.text.contains(s));
                     if simple {
-                        ui.collapsing("Stage / unstage individual hunks", |ui| {
+                        crate::keyboard::collapsing(ui, "Stage / unstage individual hunks", |ui| {
                             for (label, patch) in project::hunk_patches(&diff.text) {
                                 if ui
                                     .add_enabled(
                                         !self.workbench.git.git_busy && available && !conflict,
-                                        egui::Button::new(format!(
+                                        crate::keyboard::Button::new(format!(
                                             "{} {label}",
                                             if diff.staged { "Unstage" } else { "Stage" }
                                         )),
@@ -915,7 +935,7 @@ impl EditorApp {
                     let output =
                         ui.scope(|ui| diff_view(ui, &self.workbench.git.git_output, palette));
                     ui_probe::button(ui, "git-output-view", &output.response);
-                    let dismiss = ui.button("Close");
+                    let dismiss = crate::keyboard::button(ui, "Close");
                     ui_probe::button(ui, "git-output-close", &dismiss);
                     close = dismiss.clicked();
                 });
@@ -931,7 +951,7 @@ impl EditorApp {
                     ui.heading("Confirm Git operation");
                     ui.label(message);
                     ui.horizontal(|ui| {
-                        if ui.button("Continue").clicked() {
+                        if crate::keyboard::button(ui, "Continue").clicked() {
                             self.workbench.git.confirm = None;
                             match mutation {
                                 Mutation::Command(args) => {
@@ -944,7 +964,7 @@ impl EditorApp {
                                 } => self.git_stash(action, reference, oid, ctx),
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        if crate::keyboard::button(ui, "Cancel").clicked() {
                             self.workbench.git.confirm = None;
                         }
                     });

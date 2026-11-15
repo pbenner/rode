@@ -1,5 +1,78 @@
 use super::*;
 
+#[test]
+fn discovery_handoff_keeps_batched_source_edit_before_save() {
+    for already_open in [true, false] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        let render = |app: &mut EditorApp, events| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1380., 900.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.route_input(ctx);
+                    app.editor(ctx);
+                    app.navigation_finish(ctx);
+                },
+            );
+        };
+        render(&mut app, vec![]);
+        app.start_keyboard_controls(false, &ctx);
+        let code = keyboard::snapshot(&ctx)["hints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["label"] == "Source editor")
+            .unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut events = vec![];
+        if !already_open {
+            render(&mut app, vec![key(Key::Escape, egui::Modifiers::NONE)]);
+            render(&mut app, vec![]);
+            events.extend([
+                key(Key::Space, egui::Modifiers::CTRL),
+                key(Key::A, egui::Modifiers::NONE),
+                egui::Event::Text("a".into()),
+            ]);
+        }
+        for c in code.chars() {
+            events.push(key(
+                Key::from_name(&c.to_ascii_uppercase().to_string()).unwrap(),
+                egui::Modifiers::NONE,
+            ));
+            events.push(egui::Event::Text(c.to_string()));
+        }
+        events.extend([
+            egui::Event::Text("edit".into()),
+            key(Key::S, egui::Modifiers::COMMAND),
+        ]);
+        render(&mut app, events);
+        for _ in 0..8 {
+            if app.documents.active().unwrap().text == "edit" {
+                break;
+            }
+            render(&mut app, vec![]);
+        }
+        assert_eq!(app.documents.active().unwrap().text, "edit");
+        assert!(
+            app.dialog == Dialog::None,
+            "Save must wait for the native edit acknowledgement"
+        );
+        render(&mut app, vec![]);
+        assert!(matches!(app.dialog, Dialog::Save(_)));
+    }
+}
+
 fn key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
     egui::Event::Key {
         key,

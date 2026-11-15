@@ -273,7 +273,7 @@ impl State {
                         palette,
                     );
                 }
-                let options = egui::CollapsingHeader::new("Access rules and presets")
+                let options = crate::keyboard::CollapsingHeader::new("Access rules and presets")
                     .id_salt("project-access-options")
                     .show(ui, |ui| {
                         ui.push_id("folder-sandbox-presets", |ui| {
@@ -317,7 +317,7 @@ impl State {
                         });
                     }
                 }
-                let cancel = ui.button("Cancel");
+                let cancel = crate::keyboard::button(ui, "Cancel");
                 ui_probe::button(ui, "project-dialog-cancel", &cancel);
                 if cancel.clicked() {
                     intents.push(Intent::Cancel);
@@ -364,16 +364,22 @@ impl State {
                     (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(1.);
                 let path = ui.add_sized(
                     [width, height],
-                    egui::TextEdit::singleline(&mut self.path)
-                        .id(input_id)
-                        .vertical_align(Align::Center)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("Project folder"),
+                    crate::keyboard::named(
+                        "Project folder",
+                        egui::TextEdit::singleline(&mut self.path)
+                            .id(input_id)
+                            .vertical_align(Align::Center)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Project folder"),
+                    ),
                 );
                 ui_probe::button(ui, "project-dialog-path", &path);
                 let enter = (path.has_focus() || path.lost_focus())
                     && ui.input(|i| i.key_pressed(Key::Enter));
-                let button = ui.add_sized([browse_width, height], egui::Button::new("Browse"));
+                let button = ui.add_sized(
+                    [browse_width, height],
+                    crate::keyboard::Button::new("Browse"),
+                );
                 ui_probe::button(ui, "project-dialog-browse", &button);
                 if button.clicked() || enter {
                     browse = Some(self.path.clone());
@@ -412,7 +418,7 @@ impl State {
                         ui.label(palette.tag(format!("FOLDERS · {count}")));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let hidden = ui.checkbox(show_hidden, "Show hidden");
+                        let hidden = crate::keyboard::checkbox(ui, show_hidden, "Show hidden");
                         ui_probe::button(ui, "project-dialog-show-hidden", &hidden);
                     });
                 });

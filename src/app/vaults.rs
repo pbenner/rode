@@ -275,7 +275,7 @@ impl EditorApp {
                         20.,
                     )
                     .on_hover_text(&info.cipherdir);
-                    if ui.button("Encryption / Lock…").clicked() {
+                    if crate::keyboard::button(ui, "Encryption / Lock…").clicked() {
                         self.encrypted_dialog();
                     }
                 });
@@ -663,7 +663,7 @@ impl EditorApp {
         if self.vaults.locking {
             ui.spinner();
             ui.label("Waiting for operations or the project host…");
-            if !self.vaults.lock_sent && ui.button("Keep unlocked").clicked() {
+            if !self.vaults.lock_sent && crate::keyboard::button(ui, "Keep unlocked").clicked() {
                 self.vaults.locking = false;
                 self.vaults.quit_after_lock = false;
                 self.dialog = Dialog::None;
@@ -682,10 +682,10 @@ impl EditorApp {
             );
             ui.label(format!("Project view: {}", info.mountpoint));
             ui.small("Stop terminal jobs before locking. Other RODE windows must release this project first. Locking closes tabs after unsaved-change checks.");
-            if ui.button("Stop project tools & lock").clicked() {
+            if crate::keyboard::button(ui, "Stop project tools & lock").clicked() {
                 self.guarded(Action::LockEncrypted, ctx);
             }
-            if ui.button("Close").clicked() {
+            if crate::keyboard::button(ui, "Close").clicked() {
                 self.dialog = Dialog::None;
             }
             if !self.vaults.lost {
@@ -696,7 +696,7 @@ impl EditorApp {
         ui.add_enabled_ui(
             self.vaults.pending.is_none() && self.vaults.staged.is_none(),
             |ui| {
-                ui.checkbox(&mut self.vaults.remote, "On the connected SSH host");
+                crate::keyboard::checkbox(ui, &mut self.vaults.remote, "On the connected SSH host");
                 for (label, value, hint) in [
                     (
                         "Encrypted storage folder",
@@ -715,11 +715,12 @@ impl EditorApp {
                     ),
                 ] {
                     ui.label(label);
-                    let response = ui.add(
+                    let response = ui.add(crate::keyboard::named(
+                        label,
                         egui::TextEdit::singleline(value)
                             .desired_width(f32::INFINITY)
                             .hint_text(hint),
-                    );
+                    ));
                     let name = if label == "Encrypted storage folder" {
                         "vault-folder"
                     } else if label == "gocryptfs executable" {
@@ -734,32 +735,41 @@ impl EditorApp {
                         self.dialog_focus = false;
                     }
                 }
-                ui.checkbox(
+                crate::keyboard::checkbox(
+                    ui,
                     &mut self.vaults.create,
                     "Create new encrypted storage (empty folder only)",
                 );
                 ui.label("Password (blank reuses an already-unlocked RODE mount)");
-                password_field(ui, &mut self.vaults.password, "vault-password");
+                password_field(ui, &mut self.vaults.password, "vault-password", "Password");
                 if self.vaults.create {
                     ui.label("Confirm new password");
-                    password_field(ui, &mut self.vaults.confirmation, "vault-confirmation");
+                    password_field(
+                        ui,
+                        &mut self.vaults.confirmation,
+                        "vault-confirmation",
+                        "Confirm new password",
+                    );
                 }
-                ui.checkbox(
+                crate::keyboard::checkbox(
+                    ui,
                     &mut self.vaults.options.enabled,
                     "Sandbox the unlocked project when available",
                 );
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(if self.vaults.create {
+                    if crate::keyboard::button(
+                        ui,
+                        if self.vaults.create {
                             "Create & unlock"
                         } else {
                             "Unlock & open"
-                        })
-                        .clicked()
+                        },
+                    )
+                    .clicked()
                     {
                         self.open_encrypted(false, ctx);
                     }
-                    if ui.button("Lock existing mount").clicked() {
+                    if crate::keyboard::button(ui, "Lock existing mount").clicked() {
                         self.open_encrypted(true, ctx);
                     }
                 });
@@ -771,13 +781,15 @@ impl EditorApp {
                 ui.label("Finishing encrypted-project cleanup…");
             }
         }
-        if ui
-            .button(if self.vaults.pending.is_some() {
+        if crate::keyboard::button(
+            ui,
+            if self.vaults.pending.is_some() {
                 "Cancel unlock"
             } else {
                 "Close"
-            })
-            .clicked()
+            },
+        )
+        .clicked()
         {
             self.cancel_encrypted_dialog();
             self.dialog = Dialog::None;
@@ -785,13 +797,14 @@ impl EditorApp {
     }
 }
 
-fn password_field(ui: &mut egui::Ui, value: &mut String, id: &str) {
+fn password_field(ui: &mut egui::Ui, value: &mut String, id: &str, label: &str) {
     let mut output = egui::TextEdit::singleline(value)
         .id_salt(id)
         .password(true)
         .char_limit(1000)
         .desired_width(f32::INFINITY)
         .show(ui);
+    crate::keyboard::field_target(ui, label, &output.response);
     output.state.clear_undoer();
     output.state.store(ui.ctx(), output.response.id);
 }

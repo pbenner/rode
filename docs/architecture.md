@@ -12,6 +12,23 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-it
 
 The entry points are `target/doc/rode/index.html`, `target/doc/rode_agent_core/index.html`, `target/doc/rode_runtime_core/index.html`, `target/doc/rode_session/index.html`, `target/doc/rode_host_core/index.html`, `target/doc/rode_host_protocol/index.html` and `target/doc/rode_bwrap/index.html`. Public items document input/output contracts; module comments explain private state and ownership. [Development](development.md) lists validation commands and test fixtures; the [release checklist](release.md) distinguishes ordinary checks from platform and package validation.
 
+## Keyboard discovery
+
+Keyboard discovery is presentation state scoped to each native viewport.
+`keyboard` collects explicit names and native widget identities independently
+of the fixture probe. Only accepted layout passes publish visible, interactive
+targets; modal and popup layers restrict their scope. Hint codes remain bound to
+those identities until cancellation, while control search retains its originating
+snapshot across its own modal. Neither path owns executable action callbacks.
+
+Choosing a hint or search result requests native focus. Enter, Space and editing
+then run through the existing widget and domain handlers. A bounded input handoff
+retains later events until focus is acknowledged, releasing them before source
+admission so editing still precedes Save. Workspace/document/modal changes and
+window removal invalidate transient discovery state. Button-only groups own one
+Tab stop and use arrows to move focus without activating their commands. Source,
+terminal, tree and field input retain their respective navigation rules.
+
 ## Completion ownership
 
 `EditorApp` owns a `workers::Inbox`, which owns the completion channel and the
@@ -45,6 +62,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
 | `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
 | `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
+| `src/keyboard.rs`, `src/keyboard/` | Window-local control metadata, native focus handoffs, hints/search and button-only focus groups |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
 | `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers, change peeks and editor-only hunk reverts; document/version/baseline admission rejects stale changes |

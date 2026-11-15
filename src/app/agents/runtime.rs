@@ -145,7 +145,7 @@ impl Runtime {
             return;
         }
         ui.horizontal(|ui| {
-            let install = ui.add_enabled(enabled && !working && self.retired.len() < 4, egui::Button::new("Install Codex").small())
+            let install = ui.add_enabled(enabled && !working && self.retired.len() < 4, crate::keyboard::Button::new("Install Codex").small())
                 .on_hover_text(format!("Install pinned Codex {} for your user. No root, Python or npm required.\nLocation: {}\n{}",
                     install::version(), install::directory().map(|p| p.display().to_string()).unwrap_or_else(|| "Set HOME or XDG_DATA_HOME".into()),
                     if remote.is_some() {"Downloads on this computer for the SSH host's architecture. Chat deploys it over the existing SSH connection."}
@@ -164,7 +164,7 @@ impl Runtime {
             }
             if let Some(install::State::Working { .. }) = &state {
                 let cancelling = self.job.as_ref().is_some_and(install::Job::cancelling);
-                let cancel = ui.add_enabled(!cancelling, egui::Button::new(if cancelling {"Cancelling…"} else {"Cancel"}).small());
+                let cancel = ui.add_enabled(!cancelling, crate::keyboard::Button::new(if cancelling {"Cancelling…"} else {"Cancel"}).small());
                 super::super::ui_probe::button(ui, "Cancel Codex installation", &cancel);
                 if cancel.clicked()
                     && let Some(job) = &self.job {job.cancel();}

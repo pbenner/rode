@@ -225,7 +225,7 @@ fn buttons(
     if ui
         .add_sized(
             [60., height],
-            egui::Button::new(RichText::new("End").color(palette.error)),
+            crate::keyboard::Button::new(RichText::new("End").color(palette.error)),
         )
         .on_hover_text("Stop this agent and its tools after confirmation")
         .clicked()
@@ -236,7 +236,7 @@ fn buttons(
         .add_enabled_ui(attachment.enabled, |ui| {
             ui.add_sized(
                 [104., height],
-                egui::Button::new(if attachment.current {
+                crate::keyboard::Button::new(if attachment.current {
                     "Show chat"
                 } else {
                     "Attach"

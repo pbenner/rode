@@ -178,13 +178,14 @@ impl EditorApp {
             palette,
         );
         ui.small(format!("Manifests: {}", api::directory().display()));
-        let filter = ui.add(
+        let filter = ui.add(crate::keyboard::named(
+            "Filter extensions by name or ID",
             egui::TextEdit::singleline(&mut self.dialog_input)
                 .id_salt("extension-filter")
                 .hint_text("Filter extensions by name or ID")
                 .desired_width(f32::INFINITY)
                 .char_limit(256),
-        );
+        ));
         ui_probe::button(ui, "extension-filter", &filter);
         ui_probe::value(ui, "extension-filter-value", &filter, &self.dialog_input);
         if self.dialog_focus {
@@ -231,7 +232,7 @@ impl EditorApp {
                     layout::card(ui, palette, |ui| {
                         let mut enabled = self.extensions.registry.enabled(&entry.id);
                         ui.horizontal_wrapped(|ui| {
-                            let checkbox = ui.checkbox(&mut enabled, &entry.name);
+                            let checkbox = crate::keyboard::checkbox(ui, &mut enabled, &entry.name);
                             ui_probe::button(
                                 ui,
                                 &format!("extension-toggle:{}", entry.id),
@@ -247,7 +248,7 @@ impl EditorApp {
                             });
                             if (entry.manifest.is_some()
                                 || entry.feature == Some(Feature::ProjectBookmarks))
-                                && ui.small_button("Settings").clicked()
+                                && crate::keyboard::small_button(ui, "Settings").clicked()
                             {
                                 settings = Some(entry.id.clone());
                             }
@@ -287,13 +288,14 @@ impl EditorApp {
                 "{} settings (JSON object)",
                 self.extensions.settings_id
             ));
-            ui.add(
+            ui.add(crate::keyboard::editor_named(
+                "Extension settings JSON",
                 egui::TextEdit::multiline(&mut self.extensions.settings_text)
                     .code_editor()
                     .desired_rows(4)
                     .char_limit(32 * 1024),
-            );
-            if ui.button("Save extension settings").clicked() {
+            ));
+            if crate::keyboard::button(ui, "Save extension settings").clicked() {
                 match serde_json::from_str::<std::collections::BTreeMap<String, serde_json::Value>>(
                     &self.extensions.settings_text,
                 ) {
@@ -318,19 +320,19 @@ impl EditorApp {
         ui.small("Enabling an installed adapter permits it to run on the project host with the project's current sandbox/access. Programs must already be installed there. No automatic upload or tool installation.");
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.extensions.install_path).hint_text("Desktop path to extension.json").desired_width(ui.available_width().min(320.)));
-            if ui.button("Install manifest").clicked() {
+            ui.add(crate::keyboard::named("Desktop path to extension.json", egui::TextEdit::singleline(&mut self.extensions.install_path).hint_text("Desktop path to extension.json").desired_width(ui.available_width().min(320.))));
+            if crate::keyboard::button(ui, "Install manifest").clicked() {
                 match api::install(&files::expand_home(&self.extensions.install_path), &api::directory()) {
                     Ok(()) => { self.reload_extensions(); self.notify("Extension manifest installed, initially disabled. Review it before enabling.",false); }
                     Err(error) => self.notify(format!("{error:#}"),true),
                 }
             }
-            if ui.button("Reload").clicked() { self.reload_extensions(); }
+            if crate::keyboard::button(ui, "Reload").clicked() { self.reload_extensions(); }
         });
         for warning in &self.extensions.registry.warnings {
             ui.colored_label(self.themes.active().palette.error, warning);
         }
-        if ui.button("Close").clicked() {
+        if crate::keyboard::button(ui, "Close").clicked() {
             self.dialog = Dialog::None;
             self.focus_editor(ctx);
         }
@@ -406,11 +408,12 @@ impl EditorApp {
                         self.themes.active().palette,
                     );
                     egui::ScrollArea::both().show(ui, |ui| {
-                        let output = ui.add(
+                        let output = ui.add(crate::keyboard::editor_named(
+                            "Extension output",
                             egui::TextEdit::multiline(&mut self.extensions.output.as_str())
                                 .code_editor()
                                 .desired_width(f32::INFINITY),
-                        );
+                        ));
                         ui_probe::value(
                             ui,
                             "extension-output-value",

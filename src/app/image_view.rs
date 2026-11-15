@@ -93,29 +93,34 @@ impl ImageView {
         }
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
-            let fit = ui.selectable_label(self.zoom.is_none(), "Fit");
+            let fit = crate::keyboard::selectable_label(ui, self.zoom.is_none(), "Fit");
             super::ui_probe::button(ui, "image-fit", &fit);
             if fit.clicked() {
                 self.zoom = None;
                 self.reset_scroll = Some(ScrollOrigin::Start);
             }
-            if ui
-                .button("100%")
+            if crate::keyboard::button(ui, "100%")
                 .on_hover_text("Actual size in image pixels")
                 .clicked()
             {
                 self.zoom = Some(1.);
                 self.reset_scroll = Some(ScrollOrigin::Start);
             }
-            if ui.button("−").on_hover_text("Zoom out").clicked() {
+            if crate::keyboard::button(ui, "−")
+                .on_hover_text("Zoom out")
+                .clicked()
+            {
                 self.zoom_by(1. / 1.25);
             }
-            if ui.button("+").on_hover_text("Zoom in").clicked() {
+            if crate::keyboard::button(ui, "+")
+                .on_hover_text("Zoom in")
+                .clicked()
+            {
                 self.zoom_by(1.25);
             }
             ui.label(palette.tag(format!("{:.0}%", self.displayed_zoom * 100.)));
             if ui
-                .add_enabled(!self.loading, egui::Button::new("Reload"))
+                .add_enabled(!self.loading, crate::keyboard::Button::new("Reload"))
                 .clicked()
             {
                 reload = true;

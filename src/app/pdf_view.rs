@@ -154,13 +154,14 @@ impl PdfView {
                     page = Some(self.page - 1);
                 }
                 ui.label(kind);
-                let page_response = ui.add(
+                let page_response = ui.add(crate::keyboard::named(
+                    "Page number",
                     egui::DragValue::new(&mut self.requested)
                         .range(1..=self.source.pages)
                         .speed(0.1),
-                );
+                ));
                 ui.label(format!("of {}", self.source.pages));
-                if ui.button("Go").clicked()
+                if crate::keyboard::button(ui, "Go").clicked()
                     || (page_response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
                 {
                     page = Some(self.requested);

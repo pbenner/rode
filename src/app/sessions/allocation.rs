@@ -77,7 +77,7 @@ impl EditorApp {
         } else {
             "Slurm…".into()
         };
-        let mut button = egui::Button::new(RichText::new(label).color(if active {
+        let mut button = crate::keyboard::Button::new(RichText::new(label).color(if active {
             palette.background
         } else {
             palette.text
@@ -116,7 +116,7 @@ impl EditorApp {
             && ui
                 .add_enabled(
                     ready && !self.sessions.slurm_busy,
-                    egui::Button::new("Cancel queued")
+                    crate::keyboard::Button::new("Cancel queued")
                         .small()
                         .min_size(egui::vec2(0., height)),
                 )
@@ -148,7 +148,7 @@ impl EditorApp {
                 if ui
                     .add_enabled(
                         !self.sessions.slurm_busy,
-                        egui::Button::new(if job.state == "PENDING" {
+                        crate::keyboard::Button::new(if job.state == "PENDING" {
                             "Cancel pending allocation"
                         } else {
                             "Release allocation"
@@ -182,7 +182,10 @@ impl EditorApp {
                         .spacing([12., 6.])
                         .show(ui, |ui| {
                             layout::field_label(ui, "GPUs (total)", compact);
-                            ui.add(egui::DragValue::new(&mut draft.gpus).range(0..=65536));
+                            ui.add(crate::keyboard::named(
+                                "GPUs (total)",
+                                egui::DragValue::new(&mut draft.gpus).range(0..=65536),
+                            ));
                             ui.end_row();
                             for (label, value, hint) in [
                                 (
@@ -197,16 +200,17 @@ impl EditorApp {
                                 ),
                             ] {
                                 layout::field_label(ui, label, compact);
-                                ui.add(
+                                ui.add(crate::keyboard::named(
+                                    label,
                                     egui::TextEdit::singleline(value)
                                         .hint_text(hint)
                                         .char_limit(1024)
                                         .desired_width(ui.available_width().min(300.)),
-                                );
+                                ));
                                 ui.end_row();
                             }
                         });
-                    ui.collapsing("Advanced resources / site settings", |ui| {
+                    crate::keyboard::collapsing(ui, "Advanced resources / site settings", |ui| {
                         egui::Grid::new("slurm-advanced")
                             .num_columns(if compact { 1 } else { 2 })
                             .spacing([12., 6.])
@@ -228,26 +232,39 @@ impl EditorApp {
                                     ),
                                 ] {
                                     layout::field_label(ui, label, compact);
-                                    ui.add(
+                                    ui.add(crate::keyboard::named(
+                                        label,
                                         egui::TextEdit::singleline(value)
                                             .hint_text(hint)
                                             .char_limit(1024)
                                             .desired_width(ui.available_width().min(320.)),
-                                    );
+                                    ));
                                     ui.end_row();
                                 }
                                 layout::field_label(ui, "Nodes", compact);
-                                ui.add(egui::DragValue::new(&mut draft.nodes).range(1..=4096));
+                                ui.add(crate::keyboard::named(
+                                    "Nodes",
+                                    egui::DragValue::new(&mut draft.nodes).range(1..=4096),
+                                ));
                                 ui.end_row();
                                 layout::field_label(ui, "CPUs per task", compact);
-                                ui.add(egui::DragValue::new(&mut draft.cpus).range(1..=65536));
+                                ui.add(crate::keyboard::named(
+                                    "CPUs per task",
+                                    egui::DragValue::new(&mut draft.cpus).range(1..=65536),
+                                ));
                                 ui.end_row();
                             });
                         ui.label("Launch executables / site wrappers");
                         ui.label("salloc");
-                        ui.text_edit_singleline(&mut draft.allocator);
+                        ui.add(crate::keyboard::named(
+                            "salloc executable",
+                            egui::TextEdit::singleline(&mut draft.allocator),
+                        ));
                         ui.label("srun");
-                        ui.text_edit_singleline(&mut draft.runner);
+                        ui.add(crate::keyboard::named(
+                            "srun executable",
+                            egui::TextEdit::singleline(&mut draft.runner),
+                        ));
                     });
                     self.slurm_settings_ui(ui);
                 });
@@ -263,13 +280,13 @@ impl EditorApp {
             let interactive = ui
                 .add_enabled(
                     !self.session_busy(),
-                    egui::Button::new("Allocate in new terminal"),
+                    crate::keyboard::Button::new("Allocate in new terminal"),
                 )
                 .clicked();
             let reserve = ui
                 .add_enabled(
                     !self.session_busy(),
-                    egui::Button::new("Reserve for notebooks"),
+                    crate::keyboard::Button::new("Reserve for notebooks"),
                 )
                 .clicked();
             if interactive || reserve {
@@ -291,7 +308,7 @@ impl EditorApp {
                     Err(error) => self.sessions.allocation_error = error.to_string(),
                 }
             }
-            if ui.button("Close").clicked() {
+            if crate::keyboard::button(ui, "Close").clicked() {
                 self.dialog = Dialog::None;
             }
         });

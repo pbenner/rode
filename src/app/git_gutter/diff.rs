@@ -239,6 +239,11 @@ pub(super) fn paint(
             &format!("git-change-{name}:{}", marker.line + 1),
             &response,
         );
+        crate::keyboard::target(
+            ui,
+            &format!("Git change at line {}", marker.line + 1),
+            &response,
+        );
         if response.clicked() {
             clicked = Some(index);
         }

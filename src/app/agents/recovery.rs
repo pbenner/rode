@@ -17,12 +17,12 @@ pub(super) fn ui(ui: &mut egui::Ui, chat: &Chat, enabled: bool, config: &Config)
         }
         ui.horizontal_wrapped(|ui| {
             let ready = enabled && !chat.busy && !chat.stopping() && !chat.queue_pending();
-            if ui.add_enabled(ready && !fresh_required, egui::Button::new("Recover agent")).on_hover_text(
+            if ui.add_enabled(ready && !fresh_required, crate::keyboard::Button::new("Recover agent")).on_hover_text(
                 "Reopen the backend and reconnect its saved conversation. No prompt is sent.",
             ).clicked() { action = Some(false); }
-            egui::containers::menu::MenuButton::from_button(egui::Button::new("Recovery options"))
+            crate::keyboard::MenuButton::from_button(egui::Button::new("Recovery options"), "Recovery options")
                 .ui(ui, |ui| {
-                    if ui.add_enabled(ready, egui::Button::new("Start new context · keep queue")).on_hover_text(
+                    if ui.add_enabled(ready, crate::keyboard::Button::new("Start new context · keep queue")).on_hover_text(
                         "Use when the saved conversation cannot be resumed. Earlier messages stay visible, but are not sent to the new agent. Queued prompts and attachments are kept.",
                     ).clicked() { action = Some(true); ui.close(); }
                     if config.native_tools() {

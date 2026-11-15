@@ -49,8 +49,10 @@ impl EditorApp {
                     if ui
                         .add_sized(
                             [workspace_width, 28.],
-                            egui::Button::new(RichText::new(&label).color(palette.muted))
-                                .truncate(),
+                            crate::keyboard::Button::new(
+                                RichText::new(&label).color(palette.muted),
+                            )
+                            .truncate(),
                         )
                         .on_hover_text(format!("{label}\nOpen command palette · Ctrl+Shift+P"))
                         .clicked()
@@ -95,7 +97,7 @@ impl EditorApp {
                             ui.label(RichText::new("NORMAL MODE").monospace().size(11.0))
                                 .on_hover_text("No project is open. File access is not sandboxed; project sandbox preferences are unchanged.");
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.button("Open project…").clicked() {
+                                if crate::keyboard::button(ui, "Open project…").clicked() {
                                     self.open_local_folder_dialog();
                                 }
                             });
@@ -196,7 +198,7 @@ impl EditorApp {
                         ui.spinner();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Open project…").clicked() {
+                        if crate::keyboard::button(ui, "Open project…").clicked() {
                             self.set_dialog(Dialog::Folder);
                         }
                         ui.label(
@@ -361,6 +363,7 @@ impl EditorApp {
                 && let Some(active) = &self.sessions.active
             {
                 super::ui_probe::button(ui, &format!("terminal-input:{}", active.key), &response);
+                keyboard::editor_target(ui, "Terminal input", &response);
                 if active.native.is_none() {
                     super::ui_probe::button(ui, "temporary-terminal-input", &response);
                 }
@@ -408,7 +411,7 @@ impl EditorApp {
                     if ui
                         .add_sized(
                             action_size,
-                            egui::Button::new(
+                            crate::keyboard::Button::new(
                                 RichText::new("Connect via SSH")
                                     .color(palette.background)
                                     .strong(),

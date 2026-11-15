@@ -163,31 +163,31 @@ fn configuration_ui(
     sandbox: bool,
     actions: &mut Actions,
 ) {
-    egui::CollapsingHeader::new("Launch / attach configuration")
+    crate::keyboard::CollapsingHeader::new("Launch / attach configuration")
         .default_open(editable).open(if collapse{Some(false)}else{None})
         .show(ui,|ui|{
             ui.small("Installed project-host adapters: Python (debugpy), C/C++/Rust (lldb-dap), or custom stdio DAP. No automatic tool installation.");
             ui.add_enabled_ui(editable,|ui|{
                 if let Some(config)=&mut draft.parsed {
                     let mut changed=false;
-                    egui::ComboBox::from_id_salt("debug-backend").selected_text(config.backend.label()).show_ui(ui,|ui|{
-                        for backend in [Backend::Python,Backend::Lldb,Backend::Custom]{changed|=ui.selectable_value(&mut config.backend,backend,backend.label()).changed();}
+                    crate::keyboard::ComboBox::new("debug-backend", "Debugger backend").selected_text(config.backend.label()).show_ui(ui,|ui|{
+                        for backend in [Backend::Python,Backend::Lldb,Backend::Custom]{changed|=crate::keyboard::selectable_value(ui, &mut config.backend,backend,backend.label()).changed();}
                     });
                     ui.label("Adapter executable (blank: preset default)");
-                    changed|=ui.add(egui::TextEdit::singleline(&mut config.adapter).desired_width(f32::INFINITY).char_limit(4096)).changed();
+                    changed|=ui.add(crate::keyboard::named("Adapter", egui::TextEdit::singleline(&mut config.adapter).desired_width(f32::INFINITY).char_limit(4096))).changed();
                     ui.label("Program (native code: compiled executable)");
-                    changed|=ui.add(egui::TextEdit::singleline(&mut config.program).desired_width(f32::INFINITY).char_limit(4096)).changed();
+                    changed|=ui.add(crate::keyboard::named("Program", egui::TextEdit::singleline(&mut config.program).desired_width(f32::INFINITY).char_limit(4096))).changed();
                     ui.horizontal(|ui|{
-                        changed|=ui.checkbox(&mut config.stop_on_entry,"Stop on entry").changed();
-                        changed|=ui.checkbox(&mut config.attach,"Attach").changed();
+                        changed|=crate::keyboard::checkbox(ui, &mut config.stop_on_entry,"Stop on entry").changed();
+                        changed|=crate::keyboard::checkbox(ui, &mut config.attach,"Attach").changed();
                     });
                     if changed{draft.reformat();}
                 }
-                egui::CollapsingHeader::new("Arguments, adapter and advanced JSON").show(ui,|ui|{
+                crate::keyboard::CollapsingHeader::new("Arguments, adapter and advanced JSON").show(ui,|ui|{
                     ui.small("Arguments are arrays of literal strings. Placeholders: {root}, {file}, {dir}, {stem}, {python}. Extra DAP arguments override presets. Attach needs backend-specific extra arguments (e.g. processId).");
-                    if ui.add(egui::TextEdit::multiline(&mut draft.text).code_editor().desired_rows(12).desired_width(f32::INFINITY).char_limit(64*1024)).changed(){draft.parse();}
+                    if ui.add(crate::keyboard::editor_named("Debugger configuration JSON", egui::TextEdit::multiline(&mut draft.text).code_editor().desired_rows(12).desired_width(f32::INFINITY).char_limit(64*1024))).changed(){draft.parse();}
                 });
-                if ui.button("Save configuration").clicked(){
+                if crate::keyboard::button(ui, "Save configuration").clicked(){
                     match draft.validated(){
                         Ok(config)=>{settings.config=config.clone();actions.settings_changed=true;actions.config_saved=true;}
                         Err(error)=>actions.errors.push(error.to_string()),
@@ -198,18 +198,18 @@ fn configuration_ui(
         });
 }
 fn stack_ui(ui: &mut egui::Ui, client: &Client, actions: &mut Actions) {
-    egui::CollapsingHeader::new("Threads & call stack")
+    crate::keyboard::CollapsingHeader::new("Threads & call stack")
         .default_open(true)
         .show(ui, |ui| {
             ui.add_enabled_ui(client.phase == Phase::Paused, |ui| {
                 for thread in &client.threads {
                     if let Some(id) = thread["id"].as_i64()
-                        && ui
-                            .selectable_label(
-                                client.thread == Some(id),
-                                thread["name"].as_str().unwrap_or("Thread"),
-                            )
-                            .clicked()
+                        && crate::keyboard::selectable_label(
+                            ui,
+                            client.thread == Some(id),
+                            thread["name"].as_str().unwrap_or("Thread"),
+                        )
+                        .clicked()
                     {
                         actions.commands.push(Action::Thread(id));
                     }
@@ -223,7 +223,7 @@ fn stack_ui(ui: &mut egui::Ui, client: &Client, actions: &mut Actions) {
                         );
                         if ui
                             .add(
-                                egui::Button::selectable(
+                                crate::keyboard::Button::selectable(
                                     client.frame == Some(id),
                                     egui::RichText::new(label).monospace(),
                                 )
@@ -244,15 +244,17 @@ fn stack_ui(ui: &mut egui::Ui, client: &Client, actions: &mut Actions) {
         });
 }
 fn scopes_ui(ui: &mut egui::Ui, client: &Client, actions: &mut Actions) {
-    egui::CollapsingHeader::new("Variables")
+    crate::keyboard::CollapsingHeader::new("Variables")
         .default_open(true)
         .show(ui, |ui| {
             for scope in &client.scopes {
                 if let Some(id) = scope["variablesReference"].as_i64() {
-                    egui::CollapsingHeader::new(scope["name"].as_str().unwrap_or("Scope"))
-                        .id_salt(("debug-scope", id))
-                        .default_open(scope["expensive"] != true)
-                        .show(ui, |ui| variables_ui(ui, client, id, 0, actions));
+                    crate::keyboard::CollapsingHeader::new(
+                        scope["name"].as_str().unwrap_or("Scope"),
+                    )
+                    .id_salt(("debug-scope", id))
+                    .default_open(scope["expensive"] != true)
+                    .show(ui, |ui| variables_ui(ui, client, id, 0, actions));
                 }
             }
             if client.phase != Phase::Paused {
@@ -280,7 +282,7 @@ fn variables_ui(ui: &mut egui::Ui, client: &Client, id: i64, depth: usize, actio
         );
         let reference = value["variablesReference"].as_i64().unwrap_or(0);
         if reference > 0 {
-            egui::CollapsingHeader::new(egui::RichText::new(&label).monospace())
+            crate::keyboard::CollapsingHeader::new(egui::RichText::new(&label).monospace())
                 .id_salt(("debug-var", id, index))
                 .show(ui, |ui| {
                     variables_ui(ui, client, reference, depth + 1, actions)
@@ -305,7 +307,7 @@ fn watches_ui(
     palette: theme::Palette,
     actions: &mut Actions,
 ) {
-    egui::CollapsingHeader::new("Watches")
+    crate::keyboard::CollapsingHeader::new("Watches")
         .default_open(true)
         .show(ui, |ui| {
             let mut remove = None;
@@ -332,16 +334,20 @@ fn watches_ui(
             }
             ui.horizontal(|ui| {
                 let height = crate::app::layout::control_height(ui);
-                ui.add(
+                ui.add(crate::keyboard::named(
+                    "Watch expression",
                     egui::TextEdit::singleline(expression)
                         .min_size(egui::vec2(0., height))
                         .vertical_align(egui::Align::Center)
                         .hint_text("Watch expression")
                         .char_limit(4096)
                         .desired_width((ui.available_width() - 72.).max(60.)),
-                );
+                ));
                 if ui
-                    .add_sized([48., height], egui::Button::new("Add").truncate())
+                    .add_sized(
+                        [48., height],
+                        crate::keyboard::Button::new("Add").truncate(),
+                    )
                     .clicked()
                     && !expression.trim().is_empty()
                     && settings.watches.len() < 32
@@ -359,18 +365,18 @@ fn breakpoints_ui(
     client: Option<&Client>,
     actions: &mut Actions,
 ) {
-    egui::CollapsingHeader::new("Breakpoints").default_open(true).show(ui,|ui|{
-        if ui.button("Toggle at cursor · F9").clicked(){actions.commands.push(Action::ToggleBreakpoint);}
+    crate::keyboard::CollapsingHeader::new("Breakpoints").default_open(true).show(ui,|ui|{
+        if crate::keyboard::button(ui, "Toggle at cursor · F9").clicked(){actions.commands.push(Action::ToggleBreakpoint);}
         ui.small("Click the left gutter to toggle. Right-click a breakpoint below for conditions and logpoints.");
         let mut remove=None;
         for(path,items)in &mut settings.breakpoints {
             if items.is_empty(){continue;}
-            egui::CollapsingHeader::new(ssh::display_name(path)).id_salt(("debug-source",path)).show(ui,|ui|{
+            crate::keyboard::CollapsingHeader::new(ssh::display_name(path)).id_salt(("debug-source",path)).show(ui,|ui|{
                 ui.small(path);let mut enabled_index=0;
                 for(index,bp)in items.iter_mut().enumerate(){
                     ui.horizontal(|ui|{
                         let was_enabled=bp.enabled;
-                        let response=ui.checkbox(&mut bp.enabled,format!("Line {}",bp.line));
+                        let response=crate::keyboard::checkbox(ui, &mut bp.enabled,format!("Line {}",bp.line));
                         let mut changed=response.changed();
                         if was_enabled&&let Some(client)=client.filter(|c|c.phase!=Phase::Ended){
                             let verified=client.breakpoints.get(path).and_then(|b|b.get(enabled_index));
@@ -379,9 +385,9 @@ fn breakpoints_ui(
                             });
                         }
                         if was_enabled{enabled_index+=1;}
-                        response.context_menu(|ui|{
+                        crate::keyboard::context_menu(&response, |ui|{
                             for(label,value)in[("Condition",&mut bp.condition),("Hit condition",&mut bp.hit_condition),("Log message (logpoint)",&mut bp.log_message)]{
-                                ui.label(label);changed|=ui.add(egui::TextEdit::singleline(value).char_limit(1024)).changed();
+                                ui.label(label);changed|=ui.add(crate::keyboard::named(label, egui::TextEdit::singleline(value).char_limit(1024))).changed();
                             }
                         });
                         if changed{actions.settings_changed=true;actions.breakpoints.insert(path.clone());}
@@ -405,13 +411,16 @@ fn exceptions_ui(
     else {
         return;
     };
-    egui::CollapsingHeader::new("Exceptions (next launch)").show(ui, |ui| {
+    crate::keyboard::CollapsingHeader::new("Exceptions (next launch)").show(ui, |ui| {
         for filter in filters.iter().take(32) {
             if let Some(id) = filter["filter"].as_str() {
                 let mut selected = settings.exceptions.iter().any(|s| s == id);
-                if ui
-                    .checkbox(&mut selected, filter["label"].as_str().unwrap_or(id))
-                    .changed()
+                if crate::keyboard::checkbox(
+                    ui,
+                    &mut selected,
+                    filter["label"].as_str().unwrap_or(id),
+                )
+                .changed()
                 {
                     settings.exceptions.retain(|s| s != id);
                     if selected {
@@ -448,17 +457,20 @@ fn console_ui(
         let paused = client.phase == Phase::Paused;
         let response = ui.add_enabled(
             paused,
-            egui::TextEdit::singleline(expression)
-                .min_size(egui::vec2(0., height))
-                .vertical_align(egui::Align::Center)
-                .hint_text("Evaluate in selected frame")
-                .char_limit(4096)
-                .desired_width((ui.available_width() - 72.).max(60.)),
+            crate::keyboard::named(
+                "Evaluate in selected frame",
+                egui::TextEdit::singleline(expression)
+                    .min_size(egui::vec2(0., height))
+                    .vertical_align(egui::Align::Center)
+                    .hint_text("Evaluate in selected frame")
+                    .char_limit(4096)
+                    .desired_width((ui.available_width() - 72.).max(60.)),
+            ),
         );
         if ui
             .add_enabled(
                 paused,
-                egui::Button::new("Eval")
+                crate::keyboard::Button::new("Eval")
                     .min_size(egui::vec2(48., height))
                     .truncate(),
             )

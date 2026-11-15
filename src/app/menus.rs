@@ -33,7 +33,7 @@ fn top(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) -> egui:
         .scope(|ui| {
             egui::containers::menu::menu_style(ui.style_mut());
             ui.spacing_mut().button_padding = egui::vec2(10., 6.);
-            egui::containers::menu::MenuButton::new(label)
+            crate::keyboard::MenuButton::new(label)
                 .config(
                     egui::containers::menu::MenuConfig::new()
                         .style(style)
@@ -83,6 +83,7 @@ fn check(ui: &mut egui::Ui, label: &str, shortcut: &str, selected: bool) -> bool
         egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), selected, label)
     });
     ui_probe::button(ui, &format!("menu-item:{label}"), &output.response);
+    keyboard::target(ui, label, &output.response);
     output.response.clicked()
 }
 
