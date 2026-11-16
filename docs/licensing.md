@@ -2,11 +2,16 @@
 
 RODE's own code is covered by the repository's [MIT license](https://github.com/pbenner/rode/blob/main/LICENSE). Bundled fonts, parser grammars, syntax themes and other dependencies retain their own terms.
 
-The Sumi-e pine-and-crane illustration is original artwork generated for RODE
-with the built-in image-generation tool. Its source PNG and generation prompt
-are retained under `assets/themes/`; it does not incorporate an imported artist's
-image. The editor derives a transparent ink mask from that embedded asset and
-tints it for the light and dark palettes.
+The Sumi-e pine/crane, bamboo/bird and plum-blossom illustrations are original
+artwork generated for RODE with the built-in image-generation tool. Their source
+PNGs and generation prompts are retained under `assets/themes/`; none incorporate
+an imported artist's image. The editor derives transparent ink masks from those
+embedded assets and tints them for the light and dark palettes.
+
+The Sumi-e icon treatment is native drawing code written for RODE: pressure-varied
+strokes on the existing icon grid, with paper and ink-brush motifs. No external
+icon images, fonts or paths were imported for this treatment. It uses the same
+RODE license as the native outline renderer.
 
 ## Icon source review
 

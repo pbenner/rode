@@ -90,18 +90,26 @@ terminal contrast setting. Keyboard hints inherit the same control styling.
 Select **Follow UI theme** for matching syntax, or keep an independent code
 palette.
 
-An original ink-wash vignette adds a windswept pine, crane, rocky shore and
-distant mountains to unused space at the source editor's lower right. Its ink
-tint follows the light/dark palette. The illustration shrinks or disappears
-when source rows occupy that space, and hides while text is selected; code,
-carets, gutters, previews and terminal output retain their existing backgrounds.
-It is static, embedded in the application and cached across editor windows,
-with no network access or animation. Custom variants can set `"artwork": "none"`
-to retain the palette without the illustration; see the [theme format](theme-format.md).
+Three original ink-wash illustrations share the light/dark palette: pine and a
+crane at the source editor's lower right, bamboo and a small bird below the
+Explorer's file tree, and plum blossom on the welcome and empty-editor screens.
+They use spare space, shrink or disappear when content needs it, and stay visible
+while text is selected. Code, carets, gutters, previews and terminal output retain
+their existing backgrounds. Embedded textures are cached across editor windows,
+with no network access or animation.
+
+Sumi-e also uses native brush-stroke icons, with tapered ink lines, open-circle
+strokes, folded paper documents and an ink-brush palette symbol. Familiar action
+shapes, accessible labels, keyboard shortcuts and click targets are preserved.
+Switching themes updates the icons in menus, toolbars and all editor windows.
+Custom variants can set `"artwork": "none"` and `"icons": "outline"` independently;
+see the [theme format](theme-format.md).
 
 | Sumi-e Light | Sumi-e Dark |
 | --- | --- |
-| ![Sumi-e Light illustrated editor](../assets/sumie-illustrated-light.png) | ![Sumi-e Dark illustrated editor](../assets/sumie-illustrated-dark.png) |
+| ![Sumi-e Light with bamboo and ink icons](../assets/sumie-expanded-light.png) | ![Sumi-e Dark with bamboo and ink icons](../assets/sumie-expanded-dark.png) |
+
+![Sumi-e welcome screen with plum blossom](../assets/sumie-expanded-welcome.png)
 
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
 Both share compact 28-point controls, restrained corner radii, proportional UI

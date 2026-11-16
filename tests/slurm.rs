@@ -282,6 +282,44 @@ fn allocation_fields_are_literal_and_compute_sandbox_failure_never_falls_back() 
 
 #[test]
 fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy() {
+    // Exercise Cargo's fallback even when a local validation shell supplies a
+    // smaller release helper. Keep environment changes in isolated children.
+    if std::env::var_os("RODE_SLURM_NOTEBOOK_HELPER_CHILD").is_none() {
+        let mut sources = vec![
+            ("Cargo fallback", None),
+            (
+                "explicit Cargo artifact",
+                Some(native_peer::binary().into()),
+            ),
+        ];
+        if let Some(source) = std::env::var_os("RODE_TEST_SESSION_HELPER") {
+            sources.push(("configured artifact", Some(source)));
+        }
+        for (case, source) in sources {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("RODE_SLURM_NOTEBOOK_HELPER_CHILD", "1")
+                .env_remove("RODE_TEST_SESSION_HELPER")
+                .env_remove("RODE_SESSION_HELPER")
+                .env_remove("RODE_HOST_HELPER");
+            if let Some(source) = source {
+                command.env("RODE_TEST_SESSION_HELPER", source);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let tools = root.path().join("tools");
     fs::create_dir(&tools).unwrap();
@@ -302,11 +340,17 @@ fn notebook_steps_revalidate_identity_preserve_stdio_and_enforce_compute_policy(
         queue: "tools/squeue".into(),
         runner: "tools/srun".into(),
     };
-    let source =
-        std::env::var("RODE_TEST_SESSION_HELPER").unwrap_or_else(|_| native_peer::binary().into());
+    let source = std::env::var_os("RODE_TEST_SESSION_HELPER")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| native_peer::binary().into());
+    let original_digest = rode::files::digest(&fs::read(&source).unwrap());
     let helper = root.path().join("compute-helper");
-    fs::copy(source, &helper).unwrap();
-    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    native_peer::copy_deployable(&source, &helper).unwrap();
+    assert_eq!(
+        rode::files::digest(&fs::read(&source).unwrap()),
+        original_digest
+    );
+    assert!(helper.metadata().unwrap().len() <= rode_host_protocol::helper::MAX_EXECUTABLE);
     let plan = rode::sandbox::Plan {
         root: root.path().to_string_lossy().into(),
         native_helper: Some(helper.to_string_lossy().into()),

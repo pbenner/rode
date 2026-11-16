@@ -1,0 +1,7 @@
+Original artwork generated for RODE with the built-in image_gen tool.
+Asset: sumie-plum.png (original transparent output, unchanged).
+The native renderer derives ink coverage from luminance and alpha and tints its
+cached mask for light and dark palettes. No external artwork was supplied.
+
+Generation prompt:
+Use case: illustration-story. Asset type: original production transparent PNG corner illustration for a Japanese sumi-e themed editor's welcome screen. A single graceful old plum branch grows from the lower right, curving to the left with a few delicate five-petalled plum blossoms, buds and a little softly washed moon-like ink circle above the distant branch. Japanese ink-wash fine art, refined negative space, expressive tapered strokes, subtle dry-brush texture, understated translucent ink washes. Horizontal 3:2 composition, all strokes within the image with generous margins; the upper left is genuinely empty transparent space so this can sit beside interface text. Black and neutral grayscale ink only with variable alpha; petals are negative space with sparse dark outlines. No white paper or white opaque fill, no colored paint, no background rectangle, no frame, no signature, seal, calligraphy, letters or watermark. Gallery quality, quiet and restrained, legible at 400 pixels wide, not cartoon or vector clip art. Background must be genuinely transparent. Companion to an existing pine-and-crane ink vignette, not a replacement.

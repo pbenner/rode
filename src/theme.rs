@@ -15,7 +15,7 @@
 //! `palette` owns color roles and defaults; `definition` resolves bounded preset
 //! data and inheritance. `interface` applies shared egui styling, `components`
 //! builds reusable controls/frames, `surfaces` draws optional decoration, and
-//! `artwork` places embedded illustrations outside the visible source rows.
+//! `artwork` places embedded illustrations in unused interface space.
 //! `syntax` owns independent code palettes and cached highlighting. This module
 //! coordinates selection and startup loading; views consume roles, not preset IDs.
 use anyhow::{Context, Result};
@@ -39,7 +39,7 @@ pub use artwork::Artwork;
 pub(crate) use components::{PANEL_MARGIN, control_height_for_style};
 pub use components::{card_frame, compact_control_height, control_height, dialog_frame, frame};
 use definition::{MAX_CUSTOM_THEMES, MAX_THEME_BYTES};
-pub use interface::{InterfaceStyle, install};
+pub use interface::{IconStyle, InterfaceStyle, install};
 pub use palette::{Palette, parse_color};
 pub use surfaces::Chrome;
 

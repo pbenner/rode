@@ -1,6 +1,8 @@
 //! Bounded interface-preset parsing and inheritance. Catalog order controls the
 //! menu only; resolving a base follows identifiers and rejects cycles.
-use super::{Artwork, Chrome, Palette, Theme, interface, parse_color, syntax::syntax_color};
+use super::{
+    Artwork, Chrome, IconStyle, Palette, Theme, interface, parse_color, syntax::syntax_color,
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -72,6 +74,7 @@ struct ThemeFile {
     terminal: Option<TerminalSettings>,
     chrome: Option<Chrome>,
     artwork: Option<Artwork>,
+    icons: Option<IconStyle>,
     ui: Option<interface::Overrides>,
 }
 
@@ -128,6 +131,9 @@ impl ThemeFile {
         }
         if let Some(artwork) = file.artwork {
             theme.palette.artwork = artwork;
+        }
+        if let Some(icons) = file.icons {
+            theme.palette.icons = icons;
         }
         if let Some(ui) = file.ui {
             theme.palette.ui = Some(theme.palette.ui.unwrap_or_default().merge(ui)?);

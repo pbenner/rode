@@ -711,9 +711,18 @@ fn notebook_reservations_survive_view_and_kernel_closure_until_explicit_release(
     };
     let mut running = None;
     if let Ok(python) = std::env::var("RODE_TEST_JUPYTER") {
+        // The compute step verifies a deployable image, rather than Cargo's
+        // potentially oversized executable or an optional cached static build.
+        let source = std::env::var_os("RODE_SESSION_HELPER")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| native_peer::binary().into());
+        let helper = fixture.root.path().join("compute-helper");
+        native_peer::copy_deployable(&source, &helper).unwrap();
+        let mut kernel_plan = plan.clone();
+        kernel_plan.native_helper = Some(helper.to_string_lossy().into());
         let start_kernel = || {
             Kernel::start_on(
-                plan.clone(),
+                kernel_plan.clone(),
                 None,
                 python.clone(),
                 "python3".into(),

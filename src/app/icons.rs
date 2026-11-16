@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! A small native outline icon set. All glyphs use the same 24-unit grid and
+//! Native outline and Sumi-e ink icons. All glyphs use the same 24-unit grid and
 //! scale with the UI; no icon font, image decoder, texture, or theme I/O is needed.
 //! See docs/licensing.md for the source review and artwork policy. Importing or
 //! tracing an upstream icon requires recording its own license and attribution;
@@ -8,6 +8,8 @@ use eframe::egui::{
     self, Atom, Button, Color32, Painter, Pos2, Rect, Response, RichText, Shape, Stroke,
     StrokeKind, Ui, Vec2, Widget,
 };
+
+mod ink;
 
 #[derive(Clone, Copy)]
 /// Repository-native vector icon identity; glyphs render consistently without icon-font dependencies.
@@ -55,15 +57,61 @@ pub(super) enum Icon {
 impl Icon {
     /// Paint this icon into the supplied logical-point rectangle using a single themed stroke color.
     pub(super) fn paint(self, painter: &Painter, rect: Rect, color: Color32) {
+        if !rect.is_finite() || !rect.is_positive() {
+            return;
+        }
+        let brush =
+            crate::theme::IconStyle::current(painter.ctx()) == crate::theme::IconStyle::SumiE;
+        // Ink caps and washes must fit the existing icon slot, including at
+        // fractional scale. Neither treatment allocates a new input region.
+        let clipped = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+        let painter = &clipped;
         let size = rect.width().min(rect.height());
+        let grid_size = if brush { size * 0.9 } else { size };
         let canvas = Canvas {
             painter,
-            origin: rect.center() - Vec2::splat(size / 2.),
-            scale: size / 24.,
+            origin: rect.center() - Vec2::splat(grid_size / 2.),
+            scale: grid_size / 24.,
             stroke: Stroke::new((size / 15.).clamp(1.2, 1.8), color),
+            brush,
         };
         let c = &canvas;
         match self {
+            Self::Files if brush => {
+                // A folded folio: retain the familiar document silhouette.
+                c.path(&[[6., 5.], [6., 2.5], [20., 2.5], [20., 18.]]);
+                c.path(&[[4., 5.], [17., 5.], [17., 21.], [4., 21.], [4., 5.]]);
+                c.path(&[[7., 10.], [14., 10.]]);
+                c.path(&[[7., 14.], [12., 14.]]);
+            }
+            Self::Chat if brush => {
+                c.path(&[
+                    [3., 4.],
+                    [21., 4.],
+                    [21., 17.],
+                    [10., 17.],
+                    [5., 21.],
+                    [5., 17.],
+                    [3., 17.],
+                    [3., 4.],
+                ]);
+                c.path(&[[7., 8.5], [17., 8.5]]);
+                c.path(&[[7., 12.5], [14., 12.5]]);
+            }
+            Self::Palette if brush => {
+                // Ink brush and stone, rather than a Western paint palette.
+                c.path(&[
+                    [6., 17.],
+                    [5., 20.],
+                    [17., 20.],
+                    [20., 17.],
+                    [8., 17.],
+                    [6., 17.],
+                ]);
+                c.path(&[[10., 12.], [18., 3.]]);
+                c.path(&[[11.5, 13.], [20., 4.]]);
+                c.path(&[[10., 12.], [6., 15.], [11.5, 13.]]);
+            }
             Self::Bookmark => {
                 c.path(&[
                     [6., 3.],
@@ -369,12 +417,17 @@ struct Canvas<'a> {
     origin: Pos2,
     scale: f32,
     stroke: Stroke,
+    brush: bool,
 }
 impl Canvas<'_> {
     fn point(&self, [x, y]: [f32; 2]) -> Pos2 {
         self.origin + egui::vec2(x, y) * self.scale
     }
     fn path(&self, points: &[[f32; 2]]) {
+        if self.brush {
+            ink::path(self, points);
+            return;
+        }
         self.painter.add(Shape::line(
             points.iter().map(|p| self.point(*p)).collect(),
             self.stroke,
@@ -389,6 +442,10 @@ impl Canvas<'_> {
         }
     }
     fn rect(&self, [x1, y1, x2, y2]: [f32; 4], radius: f32) {
+        if self.brush {
+            self.path(&[[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]]);
+            return;
+        }
         self.painter.rect_stroke(
             Rect::from_min_max(self.point([x1, y1]), self.point([x2, y2])),
             radius * self.scale,
@@ -397,10 +454,18 @@ impl Canvas<'_> {
         );
     }
     fn circle(&self, center: [f32; 2], radius: f32) {
+        if self.brush {
+            ink::circle(self, center, radius);
+            return;
+        }
         self.painter
             .circle_stroke(self.point(center), radius * self.scale, self.stroke);
     }
     fn dot(&self, center: [f32; 2]) {
+        if self.brush {
+            ink::dot(self, center);
+            return;
+        }
         self.painter.circle_filled(
             self.point(center),
             self.stroke.width * 0.8,

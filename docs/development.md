@@ -943,6 +943,14 @@ The interactive Slurm fixture additionally waits for an explicit grant, starts a
 
 Notebook reservation tests detach the persistent progress view without ending its allocation. With `RODE_TEST_JUPYTER` set to an installed environment containing `jupyter_client` and `ipykernel`, `cargo test --test sessions --test notebooks --test slurm` additionally runs real kernels in fixture steps, checks GPU/job environment, interruption, kernel shutdown preserving the reservation, and allocation release ending a live kernel. `RODE_TEST_JUPYTER=/path/to/python RODE_SSH_TEST_FILTER=slurm_notebooks scripts/test-ssh.sh` runs kernels through direct SSH and ProxyJump and verifies expiry cleanup preserves the SSH master. The runtimes CI suite includes these checks. Mandatory stdio tests also exercise exact UID-filtered ID/name/state revalidation, stale inherited scheduler overrides, literal arguments, missing jobs and compute-policy refusal through native and Python-peer transports. No real scheduler job is submitted.
 
+The notebook-step fixture checks both the matching Cargo helper and an explicit
+helper override in isolated children, so a configured release helper cannot hide
+a broken fallback. Both this fixture and the real notebook reservation fixture
+publish private copies within the production deployment size bound, using
+binutils `strip` only for oversized images. Cargo's original and caller-supplied
+helpers remain unchanged; these fixtures' fallback never selects an optional
+cached static build.
+
 `RODE_TEST_JUPYTER=/path/to/python cargo test --test runtimes` exercises real native-service queues surviving loss of their controlling view, source-bound output retention, kernel-variable continuity, exclusive attachments, policy rejection, acknowledged persistence changes and last-view cleanup. The deterministic DAP case retains pause/stack/scope/variable state, rejects an obsolete inspection epoch and steps after reattachment. `RODE_TEST_JUPYTER=/path/to/python RODE_SSH_TEST_FILTER=persistent_slurm_runtimes scripts/test-ssh.sh` repeats kernel and debugger reattachment after dropping complete SSH connections, directly and through ProxyJump, with scheduler fixtures. Ended debugger cleanup must preserve the independent kernel. Use a current release/stripped native helper for remote tests; debug helpers containing symbols can exceed the existing 24 MiB upload limit.
 
 Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-slurm-ui.py` for the allocation form, pending/active fill beside Persist, actual shell variables, compact layout and persistence/reattachment. Artifacts go to `target/slurm-ui/`. It uses installed executable fixtures and never submits a real scheduler job.

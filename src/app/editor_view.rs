@@ -13,33 +13,37 @@ impl EditorApp {
     /// Keep the empty state independent of tab-strip cursor placement and pane width.
     fn empty_editor(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
+        let canvas = ui.available_rect_before_wrap();
         let top = ((ui.available_height() - 230.) / 2.).max(20.);
-        egui::ScrollArea::vertical()
+        let occupied = egui::ScrollArea::vertical()
             .id_salt("empty-editor")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(top);
                 ui.vertical_centered(|ui| {
-                    ui.label(
+                    let title = ui.label(
                         RichText::new("Start editing")
                             .size(24.)
                             .strong()
                             .color(palette.heading),
                     );
                     ui.add_space(8.);
-                    ui.label(palette.tag("Choose a file in Explorer to start editing."));
+                    let hint = ui.label(palette.tag("Choose a file in Explorer to start editing."));
                     ui.add_space(16.);
-                    ui.label(palette.tag(format!(
+                    let shortcuts = ui.label(palette.tag(format!(
                         "{} · Open file    {} · New file",
                         self.command_hint(Command::Open),
                         self.command_hint(Command::New)
                     )));
-                });
+                    title.rect.union(hint.rect).union(shortcuts.rect)
+                })
+                .inner
             });
+        palette.paint_welcome_artwork(ui, canvas, occupied.inner);
     }
 
     /// Keep the landing page's document actions in one aligned group.
-    pub(super) fn empty_editor_actions(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn empty_editor_actions(&mut self, ui: &mut egui::Ui) -> egui::Rect {
         let width = (ui.available_width() - 32.).clamp(0., 320.);
         let ctx = ui.ctx().clone();
         let new = ui.add_sized(
@@ -58,6 +62,7 @@ impl EditorApp {
         if open.clicked() {
             self.set_dialog(Dialog::Open);
         }
+        new.rect.union(open.rect)
     }
 
     /// Render the active specialized or source document, retaining native edit/cursor/undo

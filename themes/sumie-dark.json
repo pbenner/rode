@@ -4,6 +4,7 @@
   "appearance": "dark",
   "chrome": "plain",
   "artwork": "sumi_e",
+  "icons": "sumi_e",
   "colors": {
     "background": "#17191A",
     "panel": "#1E2222",

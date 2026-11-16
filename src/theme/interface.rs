@@ -4,6 +4,29 @@ use anyhow::{Result, ensure};
 use eframe::egui::{self, FontFamily, FontId, Stroke, TextStyle};
 use serde::Deserialize;
 
+/// Native icon treatment, inherited separately from colors and illustrations.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IconStyle {
+    /// Uniform outline symbols used by the standard interface.
+    #[default]
+    Outline,
+    /// Tapered ink strokes and scroll-inspired symbols for Sumi-e themes.
+    SumiE,
+}
+
+impl IconStyle {
+    fn key() -> egui::Id {
+        egui::Id::new("theme-icon-style")
+    }
+
+    /// Read the context's installed treatment, including detached viewports.
+    pub(crate) fn current(ctx: &egui::Context) -> Self {
+        ctx.data(|data| data.get_temp(Self::key()))
+            .unwrap_or_default()
+    }
+}
+
 /// Shared interface dimensions in logical points; editor and terminal fonts stay independent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InterfaceStyle {
@@ -198,6 +221,7 @@ impl InterfaceStyle {
 
 /// Install palette colors, spacing and typography into the native egui context.
 pub fn install(ctx: &egui::Context, palette: Palette) {
+    ctx.data_mut(|data| data.insert_temp(IconStyle::key(), palette.icons));
     let mut style = (*ctx.style()).clone();
     // Explicit palette selection owns appearance across every native viewport;
     // an OS appearance notification must not replace its installed widget style.

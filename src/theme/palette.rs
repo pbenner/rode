@@ -1,5 +1,5 @@
 //! Interface and terminal color roles. Preset colors are data; rendering is shared.
-use super::{Artwork, Chrome, InterfaceStyle};
+use super::{Artwork, Chrome, IconStyle, InterfaceStyle};
 use anyhow::{Result, bail};
 use eframe::egui::Color32;
 
@@ -12,8 +12,10 @@ pub struct Palette {
     pub ui: Option<InterfaceStyle>,
     /// Static native surface treatment, independent of interface colors.
     pub chrome: Chrome,
-    /// Optional embedded source-editor illustration, independent of frame treatment.
+    /// Optional embedded interface illustrations, independent of frame treatment.
     pub artwork: Artwork,
+    /// Native icon stroke treatment, independent of optional illustrations.
+    pub icons: IconStyle,
     /// Decorative frame color, independent of interactive/focus emphasis.
     pub frame_accent: Color32,
     /// Section heading color in decorated themes.
@@ -71,6 +73,7 @@ impl Default for Palette {
             ui: None,
             chrome: Chrome::Plain,
             artwork: Artwork::None,
+            icons: IconStyle::Outline,
             frame_accent: Color32::from_rgb(125, 235, 164),
             heading: Color32::from_rgb(205, 218, 216),
             background: Color32::from_rgb(13, 18, 20),

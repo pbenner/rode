@@ -375,84 +375,95 @@ impl EditorApp {
     /// Render local/SSH project entry points when no document surface is selected.
     pub(super) fn welcome(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
+        let canvas = ui.available_rect_before_wrap();
         let compact = ui.available_height() < 620.;
         let top = if compact {
             16.
         } else {
             ((ui.available_height() - 500.) / 2.).max(24.)
         };
-        egui::ScrollArea::vertical()
+        let occupied = egui::ScrollArea::vertical()
             .id_salt("welcome-page")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.add_space(top);
                 ui.vertical_centered(|ui| {
-                    ui.label(
+                    let mark = ui.label(
                         RichText::new("[ r ]")
                             .monospace()
                             .size(if compact { 44. } else { 64. })
                             .color(palette.accent),
                     );
                     ui.add_space(12.0);
-                    ui.label(
+                    let title = ui.label(
                         RichText::new("RODE")
                             .size(if compact { 28. } else { 34. })
                             .strong()
                             .color(palette.text),
                     );
-                    ui.label(
+                    let subtitle = ui.label(
                         RichText::new("Small footprint. Far reach.")
                             .size(18.0)
                             .color(palette.muted),
                     );
                     ui.add_space(12.0);
-                    ui.label(palette.tag("RUST EDITOR  /  OPENSSH NATIVE  /  REMOTE READY"));
+                    let hint =
+                        ui.label(palette.tag("RUST EDITOR  /  OPENSSH NATIVE  /  REMOTE READY"));
                     ui.add_space(if compact { 20. } else { 32. });
                     let action_size = egui::vec2((ui.available_width() - 32.).clamp(0., 320.), 32.);
-                    if ui
-                        .add_sized(
-                            action_size,
-                            crate::keyboard::Button::new(
-                                RichText::new("Connect via SSH")
-                                    .color(palette.background)
-                                    .strong(),
-                            )
-                            .fill(palette.accent),
+                    let connect = ui.add_sized(
+                        action_size,
+                        crate::keyboard::Button::new(
+                            RichText::new("Connect via SSH")
+                                .color(palette.background)
+                                .strong(),
                         )
-                        .clicked()
-                    {
+                        .fill(palette.accent),
+                    );
+                    if connect.clicked() {
                         self.set_dialog(Dialog::Connect);
                     }
                     ui.add_space(8.0);
-                    if ui
-                        .add_sized(
-                            action_size,
-                            IconButton::new(Icon::Folder, "Open project folder")
-                                .shortcut("Ctrl+Shift+O"),
-                        )
-                        .clicked()
-                    {
+                    let folder = ui.add_sized(
+                        action_size,
+                        IconButton::new(Icon::Folder, "Open project folder")
+                            .shortcut("Ctrl+Shift+O"),
+                    );
+                    if folder.clicked() {
                         self.set_dialog(Dialog::Folder);
                     }
-                    self.empty_editor_actions(ui);
+                    let documents = self.empty_editor_actions(ui);
                     ui.add_space(if compact { 16. } else { 28. });
-                    ui.label(
+                    let privacy = ui.label(
                         RichText::new("Your SSH config. Your keys. Your machine.")
                             .color(palette.muted)
                             .size(12.0),
                     );
                     ui.add_space(18.0);
-                    if ui
-                        .link(
-                            RichText::new("Keyboard shortcuts")
-                                .color(palette.accent)
-                                .size(12.0),
-                        )
-                        .clicked()
-                    {
+                    let shortcuts = ui.link(
+                        RichText::new("Keyboard shortcuts")
+                            .color(palette.accent)
+                            .size(12.0),
+                    );
+                    if shortcuts.clicked() {
                         self.set_dialog(Dialog::Shortcuts);
                     }
-                });
+                    [
+                        mark.rect,
+                        title.rect,
+                        subtitle.rect,
+                        hint.rect,
+                        connect.rect,
+                        folder.rect,
+                        documents,
+                        privacy.rect,
+                        shortcuts.rect,
+                    ]
+                    .into_iter()
+                    .fold(egui::Rect::NOTHING, egui::Rect::union)
+                })
+                .inner
             });
+        palette.paint_welcome_artwork(ui, canvas, occupied.inner);
     }
 }

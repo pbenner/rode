@@ -586,6 +586,7 @@ impl EditorApp {
                     );
                 }
             }
+            palette.paint_explorer_artwork(ui);
         });
     }
 

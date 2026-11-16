@@ -1,0 +1,7 @@
+Original artwork generated for RODE with the built-in image_gen tool.
+Asset: sumie-bamboo.png (original transparent output, unchanged).
+The native renderer derives ink coverage from luminance and alpha and tints its
+cached mask for light and dark palettes. No external artwork was supplied.
+
+Generation prompt:
+Use case: illustration-story. Asset type: production transparent PNG vignette for the empty lower space of a Japanese sumi-e code editor's narrow explorer sidebar. Create original, refined Japanese ink-wash fine art: a small cluster of elegant bamboo stalks and expressive leaves rising from the lower right, one delicate small bird perched on a branch. Upright 2:3 composition with transparent negative space towards top and left; all strokes safely within the image with generous margin. Authentic varied brush pressure, dry-brush edges, soft translucent ink washes; sparse, gallery-quality, readable at 160 pixels wide. Use only neutral black and grayscale ink with variable alpha, no colored paint, no white fill, no paper, no frame, no calligraphy, no text, no signatures, no seals, no watermark. The background must be genuinely transparent. This is a companion to an existing pine-and-crane ink vignette, not a replacement.
