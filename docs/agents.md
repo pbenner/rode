@@ -172,7 +172,7 @@ Codex and Codex local-model history use the agent's saved threads, including con
 
 Listing/loading starts a separate, short-lived agent process without requesting model inference. A successful restore replaces the current chat process; a failure or cancellation leaves it intact. Closing history/the agent panel or changing project, host, sandbox, interpreter or agent settings stops the browser. The current Codex access/approval policy overrides the saved thread's policy; current explicit model/effort choices apply when you continue. ACP controls are applied before the next prompt, using the session's advertised capabilities. The outer project sandbox always remains in force.
 
-RODE displays up to 32 recent Codex turns, 128 messages and 512 KiB of replay; the agent retains the full conversation context. Metadata browsing is limited to 256 conversations, 32 pages and 1 MiB of retained rows, including project paths. History connections accept protocol lines up to 2 MiB, including after resuming; oversized replies fail visibly. ACP replay shares the display limits. Agents must already have readable saved history; RODE cannot recover conversations that were never persisted by the agent or were deleted. Archiving stays in the agent's own tools.
+RODE displays up to 32 recent Codex turns, 128 messages and 512 KiB of replay; the agent retains the full conversation context. Metadata browsing is limited to 256 conversations, 32 pages and 1 MiB of retained rows, including project paths. History connections use the same 32 MiB incoming protocol-line budget as live chats, including after resuming; larger replies fail visibly without truncating protocol data. ACP replay shares the display limits. Agents must already have readable saved history; RODE cannot recover conversations that were never persisted by the agent or were deleted. Archiving stays in the agent's own tools.
 
 ## Providers
 
@@ -274,4 +274,27 @@ If an agent exits unexpectedly or exceeds a transport limit, RODE stops its conn
 
 If the backend cannot restore the conversation, choose **Recovery options → Start new context · keep queue**. Earlier messages remain visible but are not sent as context to the new conversation; your draft and queued work remain available. ACP reconnection requires the backend's `loadSession` capability. File-only agents require a new context to verify their configuration again and recreate their confined file tools. **New chat** and **End** retain their existing lifecycle behavior.
 
-Typed messages are limited to 32 KiB, agent protocol lines to 4 MiB (2 MiB for history connections), stderr diagnostic lines to 1 MiB, and displayed history to 128 messages / 512 KiB. Line limits include the trailing newline. RODE retains up to 8 KiB of stderr diagnostics for error reporting. File payloads have the separate limits described above. Large tool output is truncated explicitly. Interactive login in chat is not implemented. Transport tests use deterministic peers; a real Codex compatibility test is available in the [development guide](development.md).
+Typed messages are limited to 32 KiB, outgoing agent protocol lines to 4 MiB,
+incoming lines to 32 MiB, and displayed history to 128 messages / 512 KiB. Line
+limits include the trailing newline. These limits apply to every backend and to
+both fresh and restored conversations. Large replies use a single queued event
+slot rather than multiplying their memory budget by a fixed queue length.
+Protocol messages are decoded completely or rejected; identifiers, permissions
+and tool arguments are never silently shortened. Displayed tool output is
+explicitly truncated to 16 KiB independently of the incoming frame budget.
+
+Stderr is a diagnostic stream, not JSON-RPC. RODE reads it in bounded UTF-8
+chunks without waiting for a newline and retains the latest 8 KiB for failure
+reporting. Large or unterminated log entries do not end the conversation. Original
+line breaks and characters split across pipe reads are preserved. Backend tool
+failures such as `apply_patch verification failed` remain errors for the agent
+to resolve against the current source; RODE does not force a conflicting edit or
+automatically repeat a tool that may already have changed files.
+
+After updating RODE, end and restart older persistent agents to use the updated
+transport. Older installed native helpers without streaming agent-output support
+are rejected during compatibility checks; update `rode-sessiond` or allow normal
+helper deployment. File payloads have the separate limits described above.
+Interactive login in chat is not implemented. Transport tests use deterministic
+peers; a real Codex compatibility test is available in the
+[development guide](development.md).

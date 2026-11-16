@@ -29,10 +29,12 @@ use std::{collections::BTreeMap, sync::Arc};
 pub const AUTO_CODEX: &str = "@rode/codex";
 /// Installed Claude Agent SDK adapter, using ACP v1 over stdio.
 pub const CLAUDE_ACP: &str = "claude-agent-acp";
-/// Bounded agent JSON line limit, including submitted image content.
+/// Maximum outgoing agent JSON line, including submitted images and newline.
 pub const LINE_LIMIT: usize = 4 * 1024 * 1024;
-/// Maximum diagnostic stderr line size, including its trailing newline.
-pub const STDERR_LINE_LIMIT: usize = 1024 * 1024;
+/// Maximum incoming agent JSON line, including its newline. Tool results and
+/// replayed turns can be much larger than an individual submitted prompt.
+/// History connections retain this same budget when transferred into a chat.
+pub const OUTPUT_LINE_LIMIT: usize = 32 * 1024 * 1024;
 /// Maximum submitted chat prompt size in bytes.
 pub const PROMPT_LIMIT: usize = 32 * 1024;
 
@@ -419,7 +421,7 @@ pub enum Event {
     Started,
     /// One complete JSON-RPC message.
     Message(Value),
-    /// Bounded stderr text.
+    /// A bounded UTF-8 stderr chunk, including its original line breaks.
     Stderr(String),
     /// Process or transport failure.
     Error(String),

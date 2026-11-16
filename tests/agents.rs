@@ -940,6 +940,40 @@ fn malformed_or_oversized_output_stops_the_process_and_reports_an_error() {
 }
 
 #[test]
+fn large_tool_results_and_unterminated_diagnostics_keep_all_agent_backends_connected() {
+    for provider in Provider::ALL {
+        let (_temp, root, program) = fixture();
+        let mut launch = launch(&root, &program, provider, false);
+        launch.config.local_model = "fixture-local".into();
+        let mut chat = Chat::default();
+        submit(&mut chat, launch.clone(), "large-output");
+        wait(&mut chat, |c| c.completed == 1 && !c.busy);
+        assert!(chat.connected(), "{:?}", chat.messages);
+        assert!(chat.last_turn_succeeded);
+        assert!(
+            chat.messages.iter().any(|m| m.role == Role::Tool
+                && m.text.contains("apply_patch verification failed")
+                && m.text.ends_with("[… truncated]")),
+            "{:?}",
+            chat.messages
+        );
+        assert!(chat.messages.iter().map(|m| m.text.len()).sum::<usize>() < 512 * 1024);
+
+        // The latest diagnostic survives noisy startup and is reported if this
+        // same process subsequently exits; a successful turn does not erase it.
+        submit(&mut chat, launch, "exit");
+        wait(&mut chat, |c| !c.connected());
+        assert!(
+            chat.messages.iter().any(|m| m.role == Role::Notice
+                && m.text
+                    .contains("apply_patch verification failed: source changed 界🦀")),
+            "{:?}",
+            chat.messages
+        );
+    }
+}
+
+#[test]
 fn local_provider_uses_only_the_configured_endpoint_and_no_cloud_credentials() {
     let config = Config {
         provider: Provider::Local,

@@ -38,6 +38,9 @@ pub const CAPABILITIES: &[&str] = &[
     "agent_private_state",
     "agent_async_questions",
     "agent_partial_answers",
+    // History transfers keep the live reply budget and stderr is streamed rather
+    // than treating an oversized diagnostic line as a fatal protocol violation.
+    "agent_streaming_output",
     "bundled_bwrap",
     "compact_sandbox_arguments",
     "explorer_mutations",
@@ -176,6 +179,18 @@ impl Installed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn helpers_without_streaming_agent_output_require_an_upgrade() {
+        let mut info = Info::current("test", 11);
+        info.capabilities
+            .retain(|capability| capability != "agent_streaming_output");
+        assert!(
+            info.validate(std::env::consts::OS, std::env::consts::ARCH, 11)
+                .unwrap_err()
+                .contains("agent_streaming_output")
+        );
+    }
+
     #[test]
     fn helpers_without_private_home_temporary_storage_require_an_upgrade() {
         let mut info = Info::current("test", 11);

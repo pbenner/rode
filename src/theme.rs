@@ -13,7 +13,7 @@
 //! # Module boundaries
 //!
 //! `palette` owns color roles and defaults; `definition` resolves bounded preset
-//! data and inheritance. `interface` applies shared egui styling, `components`
+//! data and inheritance. `interface` validates metrics, `install` applies egui styling, `components`
 //! builds reusable controls/frames, `surfaces` draws optional decoration, and
 //! `artwork` places embedded illustrations in unused interface space.
 //! `syntax` owns independent code palettes and cached highlighting. This module
@@ -68,16 +68,17 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Construct the original embedded Phosphor theme.
+    /// Construct the embedded Phosphor theme with coordinated semantic syntax.
     pub fn phosphor() -> Self {
-        Self {
+        let base = Self {
             id: "phosphor".into(),
             name: "Phosphor".into(),
             palette: Palette::default(),
             syntax: BTreeMap::new(),
             syntax_base: None,
             syntax_glow: false,
-        }
+        };
+        definition::phosphor(&base)
     }
 
     /// Construct the screenshot-inspired embedded Carbon theme.

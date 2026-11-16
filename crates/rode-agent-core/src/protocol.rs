@@ -450,7 +450,7 @@ impl Chat {
                 Event::Started => self.initialize(),
                 Event::Message(value) => self.receive(value),
                 Event::Stderr(line) => {
-                    append_bounded(&mut self.last_stderr, &(line + "\n"), 8192);
+                    super::io::append_diagnostic(&mut self.last_stderr, &line);
                     Ok(())
                 }
                 Event::Error(error) => {
@@ -1539,7 +1539,22 @@ impl Chat {
 
 use anyhow::Context;
 fn pretty(value: &Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_default()
+    // This is display text, never a protocol reply. Stop serialization at the
+    // tool/detail budget instead of allocating a full multi-megabyte preview
+    // only to clip it in replace() or the permission card afterwards.
+    const LIMIT: usize = 16384;
+    let mut bytes = [0; LIMIT + 1];
+    let mut output = std::io::Cursor::new(bytes.as_mut_slice());
+    let truncated = serde_json::to_writer_pretty(&mut output, value).is_err();
+    let len = output.position() as usize;
+    let bytes = &bytes[..len];
+    let text = std::str::from_utf8(bytes)
+        .unwrap_or_else(|error| std::str::from_utf8(&bytes[..error.valid_up_to()]).unwrap());
+    if truncated {
+        clip(&format!("{text}{TRUNCATED_SUFFIX}"), LIMIT)
+    } else {
+        clip(text, LIMIT)
+    }
 }
 /// Truncate UTF-8 text to a byte budget without splitting a character.
 pub fn clip(text: &str, limit: usize) -> String {

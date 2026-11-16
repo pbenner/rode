@@ -7,8 +7,9 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Bu
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
+| Samurai | `samurai` | Obsidian-gray surfaces, silver-steel controls, gold details and four original samurai illustrations |
 | Sumi-e Light | `sumie-light` | Warm washi-paper surfaces, deep ink text, vermilion accents and an original pine-and-crane ink illustration |
-| Sumi-e Dark | `sumie-dark` | Neutral charcoal-ink surfaces, paper-white text and the same illustration in pale ink |
+| Sumi-e Dark | `sumie-dark` | Neutral sumi-black surfaces, paper-white text, restrained gold accents and pale ink illustrations |
 | SynthWave ’84 | `synthwave84` | Upstream purple surfaces, pink variables, cyan functions, yellow keywords and orange strings |
 | SynthWave ’84 — Neon Dreams | `synthwave84-neon` | SynthWave’s optional bright token cores, native glyph halos, pink-to-cyan tab/activity accents and subtle editor gradient |
 | Atelier Dark | `atelier-dark` | Neutral graphite surfaces, mint accents, crisp white text and distinct semantic syntax; the initial default |
@@ -37,19 +38,37 @@ provides a compact workspace/command control, and the welcome page groups the
 main project actions. Command results use flat rows with labels on the left and
 shortcuts in a separate trailing column. Workbench forms share padded input
 fields with the project dialogs. Editor and terminal text keep their independent monospace
-font and size. Sumi-e artwork and decorated themes retain their own character.
+font and size. Sumi-e and Samurai artwork and decorated themes retain their own character.
 Inter is included in the binary with its [font license](licensing.md), with no
 font installation or network access required.
 
+Every built-in palette uses separate quiet divider and input-boundary colors.
+Enabled control text meets 7:1 contrast; secondary labels, line numbers and
+semantic status text meet 4.5:1 on their intended surfaces. Input outlines meet
+3:1 in normal, hover, focused and open states. Filled primary actions use a
+contrasting foreground and an inset focus ring: 7:1 in native palettes and 4.5:1
+with SynthWave's preserved accent. These checks cover all presets,
+including the decorated themes, and preserve the same spacing and interaction
+targets when switching palettes.
+
+Native matching syntax palettes also keep comments and code readable over both
+the editor and selection fills, with a 4.5:1 target checked across Rust, Python,
+JavaScript and Markdown. Phosphor has coordinated mint, jade and soft-gold code
+colors; Carbon retains teal keywords and red functions with stronger contrast.
+The credited SynthWave scope palettes retain their original token colors; some
+of those colors have lower contrast. Its quieter selection fill improves
+readability while preserving the imported palette. Independent syntax choices
+and saved custom terminal colors remain explicit user choices.
+
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, One Half Dark, or either SynthWave ’84 variant’s code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
-Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in light themes). Carbon and Carbon Edge use warm-neutral prompt accents, Atelier Dark emerald, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier Light cool blue, Studio Neutral silver-blue, Neon violet, Telemetry turquoise, and Sumi-e muted indigo. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
+Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in light themes). Carbon and Carbon Edge use warm-neutral prompt accents, Atelier Dark emerald, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier Light cool blue, Studio Neutral silver-blue, Neon violet, Telemetry turquoise, Sumi-e muted indigo, and Samurai silver-blue. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
 Bash prompt colors come from `PS1` in the shell's own configuration. RODE honors bold ANSI foreground colors using the theme's bright variants: `\e[1;30m` uses bright black and `\e[1;34m` uses bright blue. Existing prompts therefore follow the selected terminal palette without editing `.bashrc`; see [prompt rendering](terminals.md#bash-prompts-and-colors).
 
 Choose **View → Terminal colors…**, or **Terminal: Colors and contrast** in the command palette, to adjust the terminal foreground, background and 16 ANSI colors. Settings are saved immediately, separately for each interface theme. **Reset to theme defaults** removes that theme's overrides.
 
-**Minimum text contrast** is optional. Atelier and Sumi-e default to **4.5:1**; the other built-in themes use **1:1** (off), preserving shell colors. Increase it, for example to **4.5:1**, if you want additional readability protection for terminal text, including 256-color and explicit RGB text. Correction changes only rendered text, against each cell's actual background; backgrounds, Powerline separators and box/block graphics keep their colors. A requested ratio may be impossible against a midtone background; RODE then uses the most readable black/white foreground. These settings apply to all terminal text, including local, SSH, debugger and retained error views, without changing shell configuration or restarting commands. Custom themes can set their own contrast default in the [theme format](../themes/README.md).
+**Minimum text contrast** is optional. Atelier, Sumi-e and Samurai default to **4.5:1**; the other built-in themes use **1:1** (off), preserving shell colors. Increase it, for example to **4.5:1**, if you want additional readability protection for terminal text, including 256-color and explicit RGB text. Correction changes only rendered text, against each cell's actual background; backgrounds, Powerline separators and box/block graphics keep their colors. A requested ratio may be impossible against a midtone background; RODE then uses the most readable black/white foreground. These settings apply to all terminal text, including local, SSH, debugger and retained error views, without changing shell configuration or restarting commands. Custom themes can set their own contrast default in the [theme format](../themes/README.md).
 
 Navigation, command menus, and toolbar controls share a theme-aware outline icon style. Icon-only controls show descriptive tooltips; menus retain text labels and aligned keyboard shortcuts. Icons are drawn directly in Rust without an icon font or additional runtime dependencies.
 
@@ -94,11 +113,45 @@ normal ANSI red and the upstream syntax colors are preserved. The MIT notice is
 included in `rode --theme-licenses` and packaged third-party notices. See the
 [pinned source and adaptation notes](../themes/syntax/README.md).
 
+RODE's SynthWave interface uses lighter input boundaries and line numbers,
+rose diagnostic labels and a subdued violet selection fill. These interface
+adjustments leave the original scope colors and ANSI red intact.
+
+**Samurai** is a dark Japanese armor-and-ink theme with neutral obsidian surfaces,
+silver-steel focus accents, aged-gold details, ivory text and a coordinated code
+and terminal palette. Four original transparent illustrations are embedded: an
+armored samurai beneath a pine, a kabuto helmet, a castle landscape and an
+openwork tsuba sword guard. The visual direction draws on Japanese
+[iron, silver and gold sword fittings](https://www.metmuseum.org/art/collection/search/29535).
+
+The editor pairs the warrior landscape with a small gold-tinted sword guard;
+Explorer shows the kabuto beneath the file tree; the welcome and empty-editor
+screens pair the castle with a larger sword-guard ornament. Artwork avoids actual
+text, controls and other artwork, and shrinks or disappears in compact or dense
+views. Text selection preserves it. Assets are cached per UI context, with no
+runtime downloads, animation or additional input targets. Samurai reuses the
+native brush icons and shared controls. Select **Theme: Samurai**, or launch
+`rode --theme samurai --syntax-theme ui` for matching code colors. Custom variants
+can set `"artwork": "none"` or `"icons": "outline"` independently.
+
+The original PNGs and exact generation prompts are stored together in
+`assets/themes/`: `samurai-warrior`, `samurai-kabuto`, `samurai-castle` and
+`samurai-tsuba`, each with a `.png` and `.prompt.txt` file. They were generated
+with the built-in imagegen tool, with no external reference images supplied.
+
+| Samurai editor | Samurai welcome |
+| --- | --- |
+| ![Samurai editor with warrior, helmet and sword-guard artwork](../assets/samurai-editor.png) | ![Samurai welcome with castle and armor artwork](../assets/samurai-welcome.png) |
+
 **Sumi-e Light** and **Sumi-e Dark** are an original Japanese fine-art-inspired
-family. Light uses warm washi-paper surfaces and dark ink; Dark uses neutral
-charcoal and paper-white text. Vermilion focus outlines, pine strings, indigo
-functions, ochre numbers and subdued plum constants distinguish code without
-turning the interface into a bright multicolor surface. Both use crisp, lightly
+family. Light uses warm washi-paper surfaces, dark ink and vermilion emphasis.
+Dark pairs neutral sumi-black and charcoal surfaces with paper-white text and
+restrained gold focus outlines and active-tab accents, inspired by Japanese
+[ink-and-gold screens](https://asia-archive.si.edu/object/F1906.231-232/).
+Its backgrounds, hover states and selections use neutral
+grays; indigo, celadon and pale violet distinguish syntax. Muted ink illustrations
+and brush icons share the paper-and-charcoal palette. Red and green retain their
+semantic error/success roles. Both use crisp, lightly
 rounded controls, quiet dividers, matching ANSI palettes and the existing 4.5:1
 terminal contrast setting. Keyboard hints inherit the same control styling.
 Select **Follow UI theme** for matching syntax, or keep an independent code

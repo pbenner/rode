@@ -113,7 +113,7 @@ impl rode_agent_core::Factory for Factory {
             });
         }
         let (input, incoming) = mpsc::sync_channel::<Vec<u8>>(32);
-        let (output, events) = mpsc::sync_channel::<rode_agent_core::Event>(16);
+        let (output, events) = rode_agent_core::io::event_channel();
         let control = Arc::new(ProcessGroup::default());
         let pipe = Pipe {
             input,
@@ -136,11 +136,6 @@ impl rode_agent_core::Factory for Factory {
                 output.clone(),
                 control.clone(),
                 wake.clone(),
-                if history {
-                    2 * 1024 * 1024
-                } else {
-                    rode_agent_core::LINE_LIMIT
-                },
             );
             if let Err(error) = result {
                 emit(
@@ -159,7 +154,7 @@ impl rode_agent_core::Factory for Factory {
 /// Bounded agent input/event channels; the spawning worker retains actual child ownership.
 struct Pipe {
     input: mpsc::SyncSender<Vec<u8>>,
-    events: mpsc::Receiver<rode_agent_core::Event>,
+    events: rode_agent_core::io::EventReceiver,
     control: Arc<ProcessGroup>,
 }
 impl rode_agent_core::Transport for Pipe {
@@ -175,29 +170,28 @@ impl rode_agent_core::Transport for Pipe {
             .context("Agent input queue is full or disconnected")
     }
     fn poll(&self) -> Option<rode_agent_core::Event> {
-        self.events.try_recv().ok()
+        self.events.poll()
     }
     fn stop(&self) {
         self.control.stop();
     }
 }
 fn emit(
-    output: &mpsc::SyncSender<rode_agent_core::Event>,
+    output: &rode_agent_core::io::EventSender,
     wake: &Arc<dyn Fn() + Send + Sync>,
     event: rode_agent_core::Event,
 ) -> bool {
     wake();
-    let sent = output.send(event).is_ok();
+    let sent = output.send(event);
     wake();
     sent
 }
 fn run(
     mut command: ProcessCommand,
     input: mpsc::Receiver<Vec<u8>>,
-    output: mpsc::SyncSender<rode_agent_core::Event>,
+    output: rode_agent_core::io::EventSender,
     control: Arc<ProcessGroup>,
     wake: Arc<dyn Fn() + Send + Sync>,
-    limit: usize,
 ) -> Result<()> {
     let until = Instant::now() + Duration::from_secs(1);
     let mut child = loop {
@@ -229,20 +223,24 @@ fn run(
         let control = control.clone();
         readers.push(std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
-            loop {
-                let (bound, stream) = if rpc { (limit, "Agent stdout JSON-RPC") }
-                    else { (rode_agent_core::STDERR_LINE_LIMIT, "Agent stderr diagnostics") };
-                match rode_agent_core::io::read_line(&mut reader, bound, stream) {
-                    Ok(None) => break,
-                    Ok(Some(bytes)) => {
-                        let event = if rpc {
-                            if bytes.iter().all(u8::is_ascii_whitespace) { continue; }
-                            match serde_json::from_slice(&bytes) { Ok(value) => rode_agent_core::Event::Message(value), Err(_) => { emit(&output, &wake, rode_agent_core::Event::Error("Agent stdout is not JSON-RPC. Check the selected protocol and arguments.".into())); control.stop(); break; } }
-                        } else { rode_agent_core::Event::Stderr(String::from_utf8_lossy(&bytes).trim_end().to_owned()) };
-                        if !emit(&output, &wake, event) { break; }
-                    }
-                    Err(error) => { emit(&output, &wake, rode_agent_core::Event::Error(error.to_string())); control.stop(); break; }
-                }
+            let send = |event| emit(&output, &wake, event);
+            let result = if rpc {
+                rode_agent_core::io::read_messages(
+                    &mut reader,
+                    rode_agent_core::OUTPUT_LINE_LIMIT,
+                    "Agent stdout JSON-RPC",
+                    send,
+                )
+            } else {
+                rode_agent_core::io::read_diagnostics(&mut reader, send)
+            };
+            if let Err(error) = result {
+                emit(
+                    &output,
+                    &wake,
+                    rode_agent_core::Event::Error(format!("{error:#}")),
+                );
+                control.stop();
             }
         }));
     }

@@ -18,7 +18,8 @@ pub enum Event {
     Started,
     /// One complete protocol message.
     Message(Value),
-    /// Bounded diagnostic line.
+    /// Bounded diagnostic text, preserving original line breaks. Adapters may
+    /// deliver partial lines; consumers must not add separators between chunks.
     Stderr(String),
     /// Transport failure.
     Error(String),
@@ -222,9 +223,7 @@ pub fn spawn(mut command: Command) -> Result<Session> {
                                         }
                                     }
                                 }
-                                Ok(_) => {
-                                    Event::Stderr(String::from_utf8_lossy(&bytes).trim_end().into())
-                                }
+                                Ok(_) => Event::Stderr(String::from_utf8_lossy(&bytes).into()),
                                 Err(error) => {
                                     control.stop();
                                     Event::Error(error.to_string())
@@ -250,4 +249,37 @@ pub fn spawn(mut command: Command) -> Result<Session> {
         control.finish();
     });
     Ok(Session::new(pipe))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn native_stderr_preserves_line_breaks_and_the_unterminated_tail() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf 'Traceback:\\nImportError: broken dependency' >&2; exit 1",
+        ]);
+        let session = spawn(command).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut diagnostic = String::new();
+        loop {
+            match session.poll() {
+                Some(Event::Stderr(text)) => diagnostic.push_str(&text),
+                Some(Event::Error(error)) => panic!("{error}"),
+                Some(Event::Exited(code)) => {
+                    assert_eq!(code, Some(1));
+                    break;
+                }
+                _ => {
+                    assert!(Instant::now() < deadline, "Native process did not exit");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+        }
+        assert_eq!(diagnostic, "Traceback:\nImportError: broken dependency");
+    }
 }

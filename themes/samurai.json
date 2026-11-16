@@ -1,0 +1,37 @@
+{
+  "name": "Samurai",
+  "base": "sumie-dark",
+  "appearance": "dark",
+  "chrome": "plain",
+  "artwork": "samurai",
+  "icons": "sumi_e",
+  "colors": {
+    "background": "#131313",
+    "panel": "#1B1B1B",
+    "raised": "#272727",
+    "border": "#424242",
+    "control_border": "#858585",
+    "text": "#ECEAE4",
+    "muted": "#B5B7BB",
+    "accent": "#BBCBDB",
+    "frame_accent": "#D4BD87",
+    "heading": "#F4EEE0",
+    "selection": "#3B3B3B",
+    "hover": "#303030",
+    "active": "#373737",
+    "gutter": "#969696",
+    "terminal_background": "#111111",
+    "terminal_foreground": "#ECEAE4"
+  },
+  "syntax": {
+    "keyword": "#D4BD87",
+    "function": "#BBCBDB",
+    "variable": "#ECEAE4"
+  },
+  "ansi": [
+    "#303030", "#CA8E88", "#A4B598", "#C8B47D",
+    "#9FAEC5", "#B5A6C4", "#9CB9B4", "#ECEAE4",
+    "#9D9B95", "#E0A09A", "#BCCCB1", "#E2CEA1",
+    "#BBCBDB", "#D0C1DF", "#BDD6CF", "#F4EEE0"
+  ]
+}

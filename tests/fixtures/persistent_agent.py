@@ -95,15 +95,13 @@ def work(message, number, prompt):
             return
     if cancelled.is_set():
         return
-    if prompt.startswith("overflow-") and not (root / "overflowed").exists():
+    if prompt == "overflow-stdout" and not (root / "overflowed").exists():
         snapshot("overflowed", prompt)
-        output = sys.stderr if prompt == "overflow-stderr" else sys.stdout
-        limit = 1024 * 1024 if output is sys.stderr else 4 * 1024 * 1024
-        output.write("x" * (limit + 1) + "\n")
-        output.flush()
+        sys.stdout.write("x" * (32 * 1024 * 1024 + 1) + "\n")
+        sys.stdout.flush()
         return
     if prompt == "long-stderr":
-        sys.stderr.write("d" * (1024 * 1024 - 1) + "\n")
+        sys.stderr.write("d" * (2 * 1024 * 1024) + "\npatch verification failed: source changed")
         sys.stderr.flush()
     snapshot("work-done", str(number))
     failed = number == 1 and (root / "fail-first").exists()

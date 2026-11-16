@@ -188,22 +188,22 @@ impl Session {
     /// startup errors.
     pub fn start(launch: Launch, wake: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<Self> {
         let argv = launch.config.argv()?;
-        Self::with_arguments(launch, argv, LINE_LIMIT, wake)
+        Self::with_arguments(launch, argv, wake)
     }
-    /// Start a separately supervised metadata/history connection with its smaller line budget;
-    /// this path omits conversation-start arguments and never submits a prompt.
+    /// Start a separately supervised metadata/history connection. It retains the
+    /// live output budget because restoration can transfer it into a conversation.
+    /// This path omits conversation-start arguments and never submits a prompt.
     pub(crate) fn history(
         launch: Launch,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
         let argv = launch.config.arguments(false)?;
-        Self::with_arguments(launch, argv, 2 * 1024 * 1024, wake)
+        Self::with_arguments(launch, argv, wake)
     }
-    /// Start the shared supervised process transport using captured arguments and protocol line bound.
+    /// Start the shared supervised process transport using captured arguments.
     fn with_arguments(
         mut launch: Launch,
         argv: Vec<String>,
-        limit: usize,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self> {
         if launch.config.native_tools() {
@@ -224,7 +224,7 @@ impl Session {
                 remote: launch.remote,
                 python: launch.python,
                 python_program: false,
-                line_limit: limit,
+                line_limit: rode_agent_core::OUTPUT_LINE_LIMIT,
             },
             wake,
         )
@@ -232,7 +232,7 @@ impl Session {
     }
     /// Queue one bounded JSON-RPC message without blocking the UI.
     pub fn send(&self, message: &Value) -> Result<()> {
-        self.0.send(message)
+        self.0.writer().with_limit(LINE_LIMIT).send(message)
     }
     /// Take an available transport event without waiting.
     pub fn poll(&self) -> Option<Event> {

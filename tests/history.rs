@@ -843,6 +843,36 @@ fn local_history_does_not_require_a_model_and_read_only_wins_over_saved_access()
 }
 
 #[test]
+fn large_history_pages_and_later_tool_results_share_the_live_reply_budget() {
+    for provider in Provider::ALL {
+        let (temp, mut launch) = fixture(provider, false);
+        launch.config.local_model = "fixture-local".into();
+        options(
+            temp.path(),
+            serde_json::json!({"replay_bytes": 5 * 1024 * 1024}),
+        );
+        let mut browser = Browser::open(launch.clone(), Arc::new(|| {})).unwrap();
+        wait(&mut browser);
+        browser.resume("saved-1").unwrap();
+        wait(&mut browser);
+        let mut chat = Chat::default();
+        chat.restore(
+            browser
+                .take_restored()
+                .unwrap_or_else(|| panic!("{}", browser.status)),
+        );
+        chat.submit(launch, "large-output".into(), Arc::new(|| {}))
+            .unwrap();
+        wait_chat(&mut chat);
+        assert!(chat.connected(), "{:?}", chat.messages);
+        assert!(chat.last_turn_succeeded);
+        assert!(chat.messages.iter().any(|m| m.role == Role::Tool
+            && m.text.contains("apply_patch verification failed")));
+        assert!(chat.messages.iter().map(|m| m.text.len()).sum::<usize>() < 512 * 1024);
+    }
+}
+
+#[test]
 fn restored_prompts_continue_beyond_the_display_budget_and_32_turns() {
     for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let (temp, launch) = fixture(provider, false);

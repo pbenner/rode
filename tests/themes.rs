@@ -33,9 +33,13 @@ fn color_for(layout: &egui::text::LayoutJob, token: &str) -> Color32 {
 
 #[test]
 fn artwork_and_icons_inherit_independently_and_can_be_disabled() {
-    for base in ["sumie-light", "sumie-dark"] {
+    for (base, artwork) in [
+        ("sumie-light", Artwork::SumiE),
+        ("sumie-dark", Artwork::SumiE),
+        ("samurai", Artwork::Samurai),
+    ] {
         let builtin = Theme::builtin(base).unwrap();
-        assert_eq!(builtin.palette.artwork, Artwork::SumiE);
+        assert_eq!(builtin.palette.artwork, artwork);
         assert_eq!(builtin.palette.icons, IconStyle::SumiE);
         assert_eq!(builtin.palette.chrome, Chrome::Plain);
         let inherited = Theme::from_json(
@@ -104,10 +108,10 @@ fn switching_recolors_cached_source_and_restores_original() {
     );
     assert_eq!(
         color_for(&carbon, "comment"),
-        parse_color("#808080").unwrap()
+        parse_color("#969696").unwrap()
     );
-    assert_eq!(color_for(&carbon, "pub"), parse_color("#129b78").unwrap());
-    assert_eq!(color_for(&carbon, "run"), parse_color("#cb3834").unwrap());
+    assert_eq!(color_for(&carbon, "pub"), parse_color("#35AE8C").unwrap());
+    assert_eq!(color_for(&carbon, "run"), parse_color("#E87870").unwrap());
     assert_eq!(
         color_for(&carbon, "String"),
         parse_color("#e6b93c").unwrap()
@@ -435,16 +439,9 @@ fn component_controls_have_consistent_height_at_multiple_scales() {
 
 #[test]
 fn component_themes_keep_controls_and_secondary_labels_readable_in_every_state() {
-    for theme in [
-        "studio",
-        "studio-neutral",
-        "studio-hacker",
-        "atelier-dark",
-        "atelier-light",
-        "sumie-light",
-        "sumie-dark",
-    ] {
-        let palette = Theme::builtin(theme).unwrap().palette;
+    for theme in Theme::builtins() {
+        let palette = theme.palette;
+        let id = &theme.id;
         let ctx = egui::Context::default();
         rode::theme::install(&ctx, palette);
         let style = ctx.style();
@@ -458,37 +455,61 @@ fn component_themes_keep_controls_and_secondary_labels_readable_in_every_state()
             ("focused/pressed", style.visuals.widgets.active),
             ("open", style.visuals.widgets.open),
         ] {
-            assert!(contrast(palette.text, widget.bg_fill) >= 7., "{name} text");
+            assert!(
+                contrast(palette.text, widget.bg_fill) >= 7.,
+                "{id}: {name} text"
+            );
             assert!(
                 contrast(palette.muted, widget.bg_fill) >= 4.5,
-                "{name} secondary text"
+                "{id}: {name} secondary text"
             );
             for background in [widget.bg_fill, palette.panel, palette.raised] {
                 assert!(
                     contrast(widget.bg_stroke.color, background) >= 3.,
-                    "{name} control boundary"
+                    "{id}: {name} control boundary"
+                );
+            }
+        }
+        // Preserve the original SynthWave accent. Every other primary action
+        // meets the stronger 7:1 target; SynthWave still exceeds normal-text 4.5:1.
+        let primary_minimum = if id.starts_with("synthwave84") {
+            4.5
+        } else {
+            7.
+        };
+        assert!(
+            contrast(palette.background, palette.accent) >= primary_minimum,
+            "{id}: primary action text"
+        );
+        for fill in [
+            palette.background,
+            palette.panel,
+            palette.raised,
+            palette.hover,
+            palette.active,
+        ] {
+            for (name, color) in [
+                ("accent", palette.accent),
+                ("success", palette.success),
+                ("error", palette.error),
+            ] {
+                assert!(
+                    contrast(color, fill) >= 4.5,
+                    "{id}: {name} on enabled surfaces"
                 );
             }
         }
         assert!(
-            contrast(palette.background, palette.accent) >= 7.,
-            "Primary action text"
+            contrast(palette.gutter, palette.background) >= 4.5,
+            "{id}: line numbers"
         );
     }
 }
 
 #[test]
 fn component_themes_draw_visible_keyboard_focus_on_inputs_and_primary_actions() {
-    for theme in [
-        "studio",
-        "studio-neutral",
-        "studio-hacker",
-        "atelier-dark",
-        "atelier-light",
-        "sumie-light",
-        "sumie-dark",
-    ] {
-        let palette = Theme::builtin(theme).unwrap().palette;
+    for theme in Theme::builtins() {
+        let palette = theme.palette;
         let ctx = egui::Context::default();
         rode::theme::install(&ctx, palette);
         let mut text = String::from("Editable value");
@@ -519,10 +540,64 @@ fn component_themes_draw_visible_keyboard_focus_on_inputs_and_primary_actions() 
                 output.shapes.iter().any(|shape| matches!(&shape.shape,
                     egui::Shape::Rect(rect) if rect.rect == bounds.get()
                         && rect.stroke.color == color
-                        && rect.stroke.width >= palette.ui.unwrap().focus_width
+                        && rect.stroke.width >= palette.ui.unwrap_or_default().focus_width
                 )),
                 "Missing visible keyboard focus for control {target}"
             );
+        }
+    }
+}
+
+#[test]
+fn native_syntax_keeps_comments_and_tokens_readable_when_selected() {
+    let directory = tempfile::tempdir().unwrap();
+    let ctx = egui::Context::default();
+    let sources = [
+        (
+            "rs",
+            "// Notes\n#[derive(Debug)]\nstruct Packet { label: String }\npub fn dispatch(packet: Packet) -> Option<String> { let count = 42; println!(\"Ready\"); Some(packet.label) }\n",
+        ),
+        (
+            "py",
+            "# Notes\nfrom pathlib import Path\nclass Garden:\n    def describe(self, count: int = 3) -> str:\n        return f\"Garden {count}: ready\"\nprint(Garden().describe())\n",
+        ),
+        (
+            "js",
+            "// Notes\nimport { readFile } from 'node:fs';\nexport class Session extends Parent { async open(path) { const retries = 3; return await readFile(path); } }\n",
+        ),
+        (
+            "md",
+            "# Heading\n\nA **strong** and *quiet* note with [a link](https://example.org).\n\n- One\n- Two\n\n> Quote\n\n`inline code`\n",
+        ),
+    ];
+    let (mut themes, warnings) = Themes::load(directory.path(), "phosphor");
+    assert!(warnings.is_empty());
+    for theme in Theme::builtins() {
+        themes.select(&theme.id, &ctx).unwrap();
+        // Imported SynthWave scopes retain upstream colors; its darkest orange
+        // is intentionally lower contrast. Native palettes meet 4.5:1 in both states.
+        let minimum = if theme.id.starts_with("synthwave84") {
+            3.
+        } else {
+            4.5
+        };
+        for (language, source) in sources {
+            let layout = themes.highlight_with_style(&ctx, &ctx.style(), source, language, 14.);
+            for section in &layout.sections {
+                if source[section.byte_range.clone()].trim().is_empty() {
+                    continue;
+                }
+                for background in [theme.palette.background, theme.palette.selection] {
+                    assert!(
+                        contrast(section.format.color, background) >= minimum,
+                        "{} {language}: {:?} with {:?} on {:?}",
+                        theme.id,
+                        &source[section.byte_range.clone()],
+                        section.format.color,
+                        background
+                    );
+                }
+            }
         }
     }
 }
@@ -574,7 +649,7 @@ fn custom_theme_inherits_carbon_and_loads_by_stable_filename() {
         color_for(&layout, "comment"),
         parse_color("#a08bb4").unwrap()
     );
-    assert_eq!(color_for(&layout, "pub"), parse_color("#129b78").unwrap());
+    assert_eq!(color_for(&layout, "pub"), parse_color("#35AE8C").unwrap());
 }
 
 #[test]
@@ -770,7 +845,7 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
             ),
             "synthwave84" | "synthwave84-neon" | "ice" | "code-dark" | "afterglow"
             | "knight-rider" | "hologram" | "studio" | "studio-neutral" | "atelier-light"
-            | "sumie-light" | "sumie-dark" => {
+            | "sumie-light" | "sumie-dark" | "samurai" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),
@@ -787,14 +862,11 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(themes.active().id, builtin.id);
         let original = themes.highlight_with_style(&ctx, &Default::default(), source, "rs", 14.);
-        // Phosphor retains its original syntect palette for compatibility.
-        if builtin.id != "phosphor" {
-            assert!(
-                contrast(color_for(&original, "comment"), p.background) >= 4.5,
-                "{} comments",
-                builtin.id
-            );
-        }
+        assert!(
+            contrast(color_for(&original, "comment"), p.background) >= 4.5,
+            "{} comments",
+            builtin.id
+        );
         themes.select("custom:derived", &ctx).unwrap();
         assert_eq!(
             themes.highlight_with_style(&ctx, &Default::default(), source, "rs", 14.),

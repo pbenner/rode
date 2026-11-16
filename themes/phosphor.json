@@ -1,0 +1,18 @@
+{
+  "name": "Phosphor",
+  "base": "phosphor",
+  "syntax": {
+    "comment": "#9CAFA5",
+    "keyword": "#8FE3AD",
+    "type": "#A0D8CE",
+    "function": "#D0E7B1",
+    "string": "#C4D99B",
+    "number": "#E9C18C",
+    "constant": "#D2B5DD",
+    "variable": "#CDDAD8",
+    "operator": "#B5D1C3",
+    "punctuation": "#A1B9AE",
+    "builtin": "#98CFC6",
+    "attribute": "#CFBDD9"
+  }
+}

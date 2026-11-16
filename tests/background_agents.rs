@@ -302,7 +302,7 @@ fn an_idle_agent_exit_pauses_existing_and_future_queued_work() {
 }
 
 #[test]
-fn diagnostic_lines_up_to_one_mib_keep_the_native_agent_connected() {
+fn diagnostics_larger_than_one_mib_keep_the_native_agent_connected() {
     for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("continue"), "").unwrap();
@@ -319,11 +319,11 @@ fn diagnostic_lines_up_to_one_mib_keep_the_native_agent_connected() {
 fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_prompt() {
     use rode_agent_core::{attachment::Attachment, queue::Action as Queue};
     for provider in [Provider::Codex, Provider::Claude, Provider::Acp] {
-        for stream in ["stdout", "stderr"] {
+        for fresh in [false, true] {
             let fixture = Fixture::new();
             fs::write(fixture.root.join("record-inputs"), "").unwrap();
-            let prompt = format!("overflow-{stream}");
-            let info = fixture.create(provider, true, &prompt);
+            let prompt = "overflow-stdout";
+            let info = fixture.create(provider, true, prompt);
 
             let mut view = fixture.attach(&info);
             view.until(|s| s.chat.connected && s.chat.busy);
@@ -347,17 +347,13 @@ fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_promp
             assert!(!failed.chat.connected);
             assert!(failed.queue.paused);
             assert_eq!(failed.queue.items.len(), 1);
-            let limit = if stream == "stdout" {
-                rode_agent_core::LINE_LIMIT
-            } else {
-                rode_agent_core::STDERR_LINE_LIMIT
-            };
+            let limit = rode_agent_core::OUTPUT_LINE_LIMIT;
             assert!(
                 failed
                     .chat
                     .messages
                     .iter()
-                    .any(|message| message.text.contains(stream)
+                    .any(|message| message.text.contains("stdout")
                         && message.text.contains(&format!("{limit} bytes"))),
                 "{:?}",
                 failed.chat.messages
@@ -365,7 +361,6 @@ fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_promp
             let rejected = view.queue("cannot-resume-dead-agent", Queue::Pause { paused: false });
             assert!(rejected.error.contains("Recover"));
             assert!(rejected.queue.paused);
-            let fresh = stream == "stderr";
             view.queue(
                 "recover",
                 Queue::Recover {
@@ -415,7 +410,7 @@ fn overflow_recovery_keeps_queued_attachments_and_never_repeats_the_failed_promp
             assert!(done.chat.last_turn_succeeded);
             let inputs = fs::read_to_string(inputs).unwrap();
             assert_eq!(inputs.lines().count(), 2);
-            assert_eq!(inputs.matches(&prompt).count(), 1);
+            assert_eq!(inputs.matches(prompt).count(), 1);
             assert!(inputs.contains("preserved snapshot"));
         }
     }
@@ -671,6 +666,70 @@ impl Drop for View {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn large_replies_work_in_fresh_and_restored_native_controllers() {
+    for provider in Provider::ALL {
+        for restored in [false, true] {
+            let fixture = Fixture::new();
+            fs::write(
+                fixture.root.join("agent.py"),
+                include_str!("fixtures/agent.py"),
+            )
+            .unwrap();
+            fs::write(
+                fixture.root.join("history-fixture.json"),
+                r#"{"replay_bytes":5242880}"#,
+            )
+            .unwrap();
+            let info = fixture.create_agent(
+                provider,
+                true,
+                if restored { None } else { Some("large-output") },
+                vec![],
+            );
+            let mut view = fixture.attach(&info);
+            if restored {
+                view.until(|s| s.history.as_ref().is_some_and(|h| !h.busy && h.can_resume));
+                view.send(Action::HistoryResume {
+                    id: "saved-1".into(),
+                });
+                let state = view.until(|s| s.history.is_none() && s.chat.connected);
+                view.send(Action::Submit {
+                    text: "large-output".into(),
+                    attachments: vec![],
+                    config: Box::new(state.chat.config),
+                });
+            }
+            let state = view.until(|s| s.chat.completed == 1 && !s.chat.busy);
+            assert!(state.chat.last_turn_succeeded, "{:?}", state.chat.messages);
+            assert!(state.chat.connected);
+            assert!(!state.chat.recoverable);
+            assert!(
+                state
+                    .chat
+                    .messages
+                    .iter()
+                    .any(|m| m.role == rode_agent_core::protocol::Role::Tool
+                        && m.text.contains("apply_patch verification failed")
+                        && m.text.ends_with("[… truncated]")),
+                "{:?}",
+                state.chat.messages
+            );
+            assert!(
+                state
+                    .chat
+                    .messages
+                    .iter()
+                    .map(|m| m.text.len())
+                    .sum::<usize>()
+                    < 512 * 1024
+            );
+            view.send(Action::End);
+            view.until(|s| !s.info.alive);
+        }
     }
 }
 

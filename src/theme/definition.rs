@@ -17,6 +17,7 @@ pub(super) const MAX_THEME_BYTES: u64 = 64 * 1024;
 pub(super) const MAX_CUSTOM_THEMES: usize = 32;
 
 const EMBEDDED_THEMES: &[(&str, &str)] = &[
+    ("samurai", include_str!("../../themes/samurai.json")),
     ("sumie-light", include_str!("../../themes/sumie-light.json")),
     ("sumie-dark", include_str!("../../themes/sumie-dark.json")),
     ("synthwave84", include_str!("../../themes/synthwave84.json")),
@@ -205,6 +206,14 @@ pub(super) fn builtin(id: &str) -> Option<Theme> {
         return None;
     }
     Some(resolve(id, EMBEDDED_THEMES, &mut Vec::new()).expect("embedded theme is valid"))
+}
+
+/// The root palette has no ancestor to resolve. Apply its semantic code colors
+/// through the same bounded data parser as every derived preset, without recursion.
+pub(super) fn phosphor(base: &Theme) -> Theme {
+    ThemeFile::parse(include_str!("../../themes/phosphor.json"))
+        .and_then(|file| file.apply("phosphor", base))
+        .expect("embedded Phosphor theme is valid")
 }
 
 /// Keep presentation order in the catalog while resolving bases by identifier.

@@ -74,7 +74,7 @@ impl Launch {
             "Invalid process arguments."
         );
         ensure!(
-            (8192..=16 * 1024 * 1024).contains(&self.line_limit),
+            (8192..=rode_agent_core::OUTPUT_LINE_LIMIT).contains(&self.line_limit),
             "Invalid process line limit."
         );
         Ok(())
@@ -92,7 +92,7 @@ pub(crate) type ExecutablePaths = OnceLock<[PathBuf; 2]>;
 pub struct Session {
     input: SyncSender<Vec<u8>>,
     line_limit: usize,
-    events: Receiver<Event>,
+    events: rode_agent_core::io::EventReceiver,
     control: Arc<ProcessGroup>,
     executable: Arc<ExecutablePaths>,
 }
@@ -113,6 +113,11 @@ pub(crate) fn encode_request(message: &Value) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 impl Writer {
+    /// Further restrict outgoing input independently of the incoming reply budget.
+    pub(crate) fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = self.limit.min(limit);
+        self
+    }
     /// Queue JSON without blocking; `false` means backpressure and the caller must retry.
     pub fn try_send(&self, message: &Value) -> Result<bool> {
         self.try_send_buffer(&mut encode_request(message)?)
@@ -174,7 +179,7 @@ impl Session {
         );
         let line_limit = launch.line_limit;
         let (input, input_rx) = mpsc::sync_channel::<Vec<u8>>(32);
-        let (output, events) = mpsc::sync_channel::<Event>(16);
+        let (output, events) = rode_agent_core::io::event_channel();
         let control = Arc::new(ProcessGroup::default());
         let run_control = control.clone();
         let executable = Arc::new(ExecutablePaths::default());
@@ -212,7 +217,7 @@ impl Session {
     }
     /// Take the next available event without waiting.
     pub fn poll(&self) -> Option<Event> {
-        self.events.try_recv().ok()
+        self.events.poll()
     }
     /// Request idempotent SIGTERM followed by timed SIGKILL for the owned process group.
     pub fn stop(&self) {
@@ -251,11 +256,15 @@ impl Drop for Session {
     }
 }
 
-fn emit(output: &SyncSender<Event>, wake: &Arc<dyn Fn() + Send + Sync>, event: Event) -> bool {
+fn emit(
+    output: &rode_agent_core::io::EventSender,
+    wake: &Arc<dyn Fn() + Send + Sync>,
+    event: Event,
+) -> bool {
     // Repaint before sending as well: a full bounded queue needs the consumer
     // to wake before the producer can finish its next send.
     wake();
-    let sent = output.send(event).is_ok();
+    let sent = output.send(event);
     wake();
     sent
 }
@@ -263,7 +272,7 @@ fn emit(output: &SyncSender<Event>, wake: &Arc<dyn Fn() + Send + Sync>, event: E
 fn run_session(
     launch: Launch,
     input: Receiver<Vec<u8>>,
-    output: SyncSender<Event>,
+    output: rode_agent_core::io::EventSender,
     control: Arc<ProcessGroup>,
     executable: Arc<ExecutablePaths>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -406,23 +415,20 @@ fn run_session(
         let control = control.clone();
         readers.push(std::thread::spawn(move || {
             let mut reader = BufReader::new(reader);
-            loop {
-                let (limit, stream) = if rpc { (line_limit, "Process stdout JSON-RPC") }
-                    else { (rode_agent_core::STDERR_LINE_LIMIT, "Process stderr diagnostics") };
-                match rode_agent_core::io::read_line(&mut reader, limit, stream) {
-                    Ok(Some(line)) => {
-                        let event = if rpc {
-                            if line.iter().all(u8::is_ascii_whitespace) { continue; }
-                            match serde_json::from_slice(&line) {
-                                Ok(value) => Event::Message(value),
-                                Err(_) => { emit(&output, &wake, Event::Error("Process stdout is not JSON-RPC. Check the selected protocol and arguments.".into())); control.stop(); return; }
-                            }
-                        } else { Event::Stderr(String::from_utf8_lossy(&line).trim_end().to_owned()) };
-                        if !emit(&output, &wake, event) { return; }
-                    }
-                    Ok(None) => return,
-                    Err(error) => { emit(&output, &wake, Event::Error(error.to_string())); control.stop(); return; }
-                }
+            let send = |event| emit(&output, &wake, event);
+            let result = if rpc {
+                rode_agent_core::io::read_messages(
+                    &mut reader,
+                    line_limit,
+                    "Process stdout JSON-RPC",
+                    send,
+                )
+            } else {
+                rode_agent_core::io::read_diagnostics(&mut reader, send)
+            };
+            if let Err(error) = result {
+                emit(&output, &wake, Event::Error(format!("{error:#}")));
+                control.stop();
             }
         }));
     }
@@ -444,6 +450,32 @@ pub(crate) use rode_host_core::command::resolve_program;
 #[cfg(test)]
 mod writer_tests {
     use super::*;
+    #[test]
+    fn larger_replies_do_not_widen_an_agents_outgoing_message_limit() {
+        let (input, receiver) = mpsc::sync_channel(1);
+        let writer = Writer {
+            input,
+            limit: rode_agent_core::OUTPUT_LINE_LIMIT,
+        }
+        .with_limit(rode_agent_core::LINE_LIMIT);
+        assert!(
+            writer
+                .send(&serde_json::json!({"text":"x".repeat(rode_agent_core::LINE_LIMIT)}))
+                .is_err()
+        );
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            writer
+                .send(&serde_json::json!({"text":"small request"}))
+                .is_ok()
+        );
+        assert!(receiver.try_recv().is_ok());
+        assert_eq!(
+            writer.with_limit(usize::MAX).limit,
+            rode_agent_core::LINE_LIMIT
+        );
+    }
+
     #[test]
     fn full_pipe_preserves_the_encoded_request_for_retry() {
         let (input, receiver) = mpsc::sync_channel(1);

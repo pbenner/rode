@@ -10,7 +10,8 @@
 //! only this browser's process. Metadata is filtered again on the client, and
 //! restored Codex permissions are overridden before any later turn can run.
 //! Pages, messages, bytes, replay time and cursors are bounded. History transport
-//! allows 2 MiB responses; the retained view keeps Chat's 128-message/512-KiB cap.
+//! uses the live 32 MiB response budget even after restoration; the retained view
+//! keeps Chat's 128-message/512-KiB cap.
 
 use super::{
     Access, Event, Launch, Provider, Session, controls,
@@ -293,7 +294,7 @@ impl Browser {
                 ),
                 Event::Message(value) => self.receive(value),
                 Event::Stderr(text) => {
-                    self.stderr = clip(&format!("{}\n{text}", self.stderr), 8192);
+                    super::io::append_diagnostic(&mut self.stderr, &text);
                     Ok(())
                 }
                 Event::Error(error) => Err(anyhow::anyhow!(error)),

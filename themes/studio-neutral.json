@@ -13,8 +13,8 @@
     "frame_accent": "#c5ccd6",
     "heading": "#f2f2f4",
     "success": "#9ac9a3",
-    "error": "#e9a1a1",
-    "selection": "#41464f",
+    "error": "#EFAFAF",
+    "selection": "#343A44",
     "hover": "#35383f",
     "active": "#454a54",
     "gutter": "#8a8c96",
@@ -22,7 +22,7 @@
     "terminal_foreground": "#e5e5e7"
   },
   "syntax": {
-    "comment": "#969ba6",
+    "comment": "#A1A6B2",
     "keyword": "#dbc9a3",
     "type": "#a9c9c4",
     "function": "#d5dbe5",

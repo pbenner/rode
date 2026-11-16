@@ -408,7 +408,10 @@ try:
                                     "id": f"tool-{n}",
                                     "type": "commandExecution",
                                     "command": "pwd",
-                                    "aggregatedOutput": str(root),
+                                    "aggregatedOutput": "Saved tool output\n"
+                                    + "x" * history_options().get("replay_bytes", 0)
+                                    if history_options().get("replay_bytes")
+                                    else str(root),
                                 },
                                 {
                                     "id": f"agent-{n}",
@@ -622,7 +625,46 @@ try:
             elif message == "bad-protocol":
                 print("this is not JSON-RPC", flush=True)
             elif message == "overflow":
-                print("x" * (256 * 1024 + 10), flush=True)
+                # A real oversized JSON frame, rather than malformed stdout.
+                reply("x" * (32 * 1024 * 1024))
+            elif message == "large-output":
+                # Diagnostics have no framing contract or trailing newline.
+                sys.stderr.write("startup noise " * 180000)
+                sys.stderr.write("\napply_patch verification failed: source changed 界🦀")
+                sys.stderr.flush()
+                output = "apply_patch verification failed: source changed\n" + "x" * (
+                    5 * 1024 * 1024
+                )
+                if acp:
+                    notify(
+                        "session/update",
+                        {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "tool_call_update",
+                                "toolCallId": "large-tool",
+                                "title": "Fixture patch",
+                                "status": "failed",
+                                "rawOutput": output,
+                            },
+                        },
+                    )
+                else:
+                    notify(
+                        "item/completed",
+                        {
+                            "threadId": thread_id,
+                            "turnId": f"turn-{counter}",
+                            "item": {
+                                "type": "commandExecution",
+                                "id": "large-tool",
+                                "command": "Fixture patch",
+                                "aggregatedOutput": output,
+                                "exitCode": 1,
+                            },
+                        },
+                    )
+                finish("Large tool output handled; patch failure remains visible.")
             elif message == "history-burst" and not acp:
                 # Evict earlier prompts from the bounded display transcript.
                 for index in range(140):

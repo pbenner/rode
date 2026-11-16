@@ -305,7 +305,6 @@ impl Kernel {
                     }
                     self.status = text.chars().take(512).collect();
                     self.stderr.push_str(&text);
-                    self.stderr.push('\n');
                     self.stderr = self
                         .stderr
                         .chars()
@@ -425,22 +424,24 @@ mod tests {
 
     #[test]
     fn exit_without_a_protocol_error_includes_startup_stderr_and_interpreter() {
-        let (mut kernel, send, _) = kernel(Duration::from_secs(30));
-        send.send(process::Event::Stderr("Traceback:".into()))
-            .unwrap();
-        send.send(process::Event::Stderr(
-            "ImportError: broken dependency".into(),
-        ))
-        .unwrap();
-        send.send(process::Event::Exited(Some(1))).unwrap();
-        let events = kernel.poll();
-        let [Event::Error(error)] = events.as_slice() else {
-            panic!("{events:?}")
-        };
-        assert!(error.contains("exit status 1"));
-        assert!(error.contains("Project host using /project/.venv/bin/python"));
-        assert!(error.contains("Traceback:\nImportError: broken dependency"));
-        assert!(!error.contains("Starting kernel"));
+        for chunks in [
+            vec!["Traceback:\n", "ImportError: broken dependency"],
+            vec!["Traceback:\nImp", "ortError: broken ", "dependency"],
+        ] {
+            let (mut kernel, send, _) = kernel(Duration::from_secs(30));
+            for text in chunks {
+                send.send(process::Event::Stderr(text.into())).unwrap();
+            }
+            send.send(process::Event::Exited(Some(1))).unwrap();
+            let events = kernel.poll();
+            let [Event::Error(error)] = events.as_slice() else {
+                panic!("{events:?}")
+            };
+            assert!(error.contains("exit status 1"));
+            assert!(error.contains("Project host using /project/.venv/bin/python"));
+            assert!(error.contains("Traceback:\nImportError: broken dependency"));
+            assert!(!error.contains("Starting kernel"));
+        }
     }
 
     #[test]

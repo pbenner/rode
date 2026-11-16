@@ -615,6 +615,19 @@ Agent, runtime and desktop queues have different message limits, wake callbacks
 and replay/attachment contracts. Those distinctions remain with their adapters;
 an abstraction that hides them would obscure the bounds it is meant to enforce.
 
+Direct agent processes and host-owned agent processes share only JSON decoding,
+diagnostic decoding and byte-budgeted event backpressure in
+`rode-agent-core::io`. Their adapters retain launch policy, child ownership,
+wake callbacks and their own input limits. Incoming agent lines allow 32 MiB;
+history transfers preserve that budget when adopted by a live chat. The event
+queue estimates retained JSON/string bytes without serializing another copy,
+allows sixteen small events within 4 MiB, and lets a larger reply occupy the
+queue alone. A worker can hold one additional reply while waiting; closing the
+consumer releases blocked readers. Stderr streams independently in bounded
+UTF-8 chunks, and controllers retain only its latest 8 KiB. Display previews
+stop formatting at their own 16 KiB budget. These presentation limits never
+truncate protocol identifiers, permission requests or executable tool arguments.
+
 PDF tools share the host's bounded binary capture through `capture_bounded`;
 their adapter retains the renderer's limits and diagnostics. Capture keeps its
 scoped child guard for synchronous error cleanup, while `ProcessGroup` shares
