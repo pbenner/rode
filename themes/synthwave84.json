@@ -54,18 +54,10 @@
       10,
       5
     ],
-    "item_spacing": [
-      8,
-      6
-    ],
     "surface_padding": 12,
     "popup_padding": 16,
-    "body_size": 14,
-    "button_size": 13,
     "heading_size": 21,
     "small_size": 11,
-    "border_width": 1,
-    "focus_width": 1,
-    "disabled_alpha": 0.5
+    "focus_width": 1
   }
 }

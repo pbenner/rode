@@ -24,6 +24,7 @@ mod questions;
 mod queue;
 mod recovery;
 mod runtime;
+mod splitter;
 mod view;
 
 /// Window-owned chat presentation, host-keyed configuration and disposable backend views.

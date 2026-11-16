@@ -59,26 +59,7 @@
     "minimum_contrast": 4.5
   },
   "ui": {
-    "control_radius": 6,
-    "surface_radius": 10,
-    "popup_radius": 12,
-    "control_height": 30,
-    "button_padding": [
-      12,
-      6
-    ],
-    "item_spacing": [
-      8,
-      6
-    ],
     "surface_padding": 12,
-    "popup_padding": 18,
-    "body_size": 14,
-    "button_size": 13,
-    "heading_size": 21,
-    "small_size": 12,
-    "border_width": 1,
-    "focus_width": 2,
-    "disabled_alpha": 0.5
+    "heading_size": 21
   }
 }

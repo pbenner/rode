@@ -36,7 +36,7 @@ case "$suite" in
     documents|remote|runtimes) packages+=(gocryptfs) ;;
 esac
 if [[ "$suite" == runtimes ]]; then packages+=(lldb-19); fi
-# Bound stalled connections/reads inside the existing 600-second CI deadline.
+# Bound each connection/read; the CI command also has an overall 600-second deadline.
 # APT retries individual downloads, retaining completed archives; do not retry
 # dpkg installation or silently continue with incomplete package indexes.
 apt_options=(
@@ -45,7 +45,24 @@ apt_options=(
     -o Acquire::https::Timeout=30
     -o DPkg::Lock::Timeout=60
     -o APT::Update::Error-Mode=any
+    -o Acquire::Languages=none
 )
+# Check jobs opt into direct Ubuntu HTTPS sources instead of the hosted
+# runner's mirror list. Scope the override to both APT invocations without
+# rewriting /etc/apt or deleting indexes belonging to other repositories.
+# Local runs keep their configured distribution, mirrors and signing keys.
+if [[ -n "${RODE_CI_APT_SOURCES:-}" ]]; then
+    if [[ "$RODE_CI_APT_SOURCES" != /* || ! -f "$RODE_CI_APT_SOURCES" || ! -r "$RODE_CI_APT_SOURCES" ]]; then
+        echo 'RODE_CI_APT_SOURCES must name an absolute, readable sources file.' >&2
+        exit 1
+    fi
+    apt_options+=(
+        -o "Dir::Etc::sourcelist=$RODE_CI_APT_SOURCES"
+        -o Dir::Etc::sourceparts=-
+        -o APT::Get::List-Cleanup=0
+    )
+    echo "Using APT sources: $RODE_CI_APT_SOURCES"
+fi
 sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
 sudo env DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends "${packages[@]}"
 if [[ "$suite" == tools || "$suite" == runtimes ]]; then

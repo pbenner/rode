@@ -4,7 +4,9 @@
 //! widths and themed surfaces. Callers retain scroll IDs, state and actions, so
 //! docking a page never changes its identity or starts background work.
 use crate::theme::Palette;
-pub(super) use crate::theme::{card_frame, compact_control_height, control_height, dialog_frame};
+pub(super) use crate::theme::{
+    card_frame, compact_control_height, control_height, dialog_frame, text_input,
+};
 use eframe::egui::{self, Align, Layout, RichText};
 
 #[cfg(test)]
@@ -220,21 +222,6 @@ pub(super) fn subtitle(ui: &mut egui::Ui, text: &str, palette: Palette) {
         )
         .wrap(),
     );
-}
-
-/// Single-line form/search input with the same inset and minimum height as
-/// adjacent actions. Keep TextEdit's native editing, focus and stable caller IDs.
-pub(super) fn text_input<'a>(
-    ui: &egui::Ui,
-    value: &'a mut dyn egui::TextBuffer,
-) -> egui::TextEdit<'a> {
-    let padding = ui.spacing().button_padding;
-    egui::TextEdit::singleline(value)
-        .margin(egui::Margin::symmetric(
-            padding.x.round() as i8,
-            padding.y.round() as i8,
-        ))
-        .min_size(egui::vec2(0., control_height(ui)))
 }
 
 /// Reserve a readable label column in a form grid. Compact forms put the field

@@ -233,16 +233,7 @@ pub(crate) fn selectable_label(
     selected: bool,
     text: impl Into<WidgetText>,
 ) -> Response {
-    let text = text.into();
-    let label = text.text().to_owned();
-    let response = ui.add(
-        egui::Button::selectable(selected, text)
-            .stroke(egui::Stroke::NONE)
-            .sense(button_sense(ui, &label, Sense::click())),
-    );
-    crate::theme::button_focus(ui, &response, None);
-    target(ui, &label, &response);
-    response
+    ui.add(Button::selectable(selected, text))
 }
 
 pub(crate) fn button_sense(ui: &egui::Ui, label: &str, sense: Sense) -> Sense {

@@ -435,7 +435,7 @@ class DependencySetupTests(unittest.TestCase):
         )
         path.chmod(0o755)
 
-    def run_setup(self, suite="runtimes", fail=""):
+    def run_setup(self, suite="runtimes", fail="", sources=""):
         calls_path = self.root / "calls.jsonl"
         calls_path.write_text("")
         result = subprocess.run(
@@ -445,6 +445,7 @@ class DependencySetupTests(unittest.TestCase):
                 PATH=str(self.tools),
                 GITHUB_ENV=str(self.root / "exports"),
                 FAIL_APT_PHASE=fail,
+                RODE_CI_APT_SOURCES=sources,
             ),
             capture_output=True,
             text=True,
@@ -467,6 +468,7 @@ class DependencySetupTests(unittest.TestCase):
                 "Acquire::https::Timeout=30",
                 "DPkg::Lock::Timeout=60",
                 "APT::Update::Error-Mode=any",
+                "Acquire::Languages=none",
             ):
                 self.assertIn(option, call["args"])
             self.assertEqual(call["frontend"], "noninteractive")
@@ -481,6 +483,44 @@ class DependencySetupTests(unittest.TestCase):
         exports = (self.root / "exports").read_text()
         for name in ("RODE_TEST_PRETTIER", "RODE_TEST_RUFF", "RODE_TEST_LLDB", "RODE_TEST_JUPYTER"):
             self.assertIn(name, exports)
+
+    def test_ci_sources_override_is_shared_by_update_and_install(self):
+        sources = self.root / "repository with spaces/ubuntu.sources"
+        sources.parent.mkdir()
+        shutil.copy2(ci.ROOT / "scripts/ci-ubuntu.sources", sources)
+        result, calls = self.run_setup("lint", sources=str(sources))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["name"] for call in calls], ["apt-get", "apt-get"])
+        for call in calls:
+            for option in (
+                f"Dir::Etc::sourcelist={sources}",
+                "Dir::Etc::sourceparts=-",
+                "APT::Get::List-Cleanup=0",
+                "Acquire::Languages=none",
+            ):
+                self.assertIn(option, call["args"])
+        self.assertIn("update", calls[0]["args"])
+        self.assertIn("install", calls[1]["args"])
+        self.assertEqual(sources.read_bytes(), (ci.ROOT / "scripts/ci-ubuntu.sources").read_bytes())
+
+    def test_invalid_source_overrides_fail_before_apt(self):
+        for sources in ("relative.sources", str(self.root / "missing.sources"), str(self.root)):
+            with self.subTest(sources=sources):
+                result, calls = self.run_setup("lint", sources=sources)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("absolute, readable sources file", result.stderr)
+                self.assertEqual(calls, [])
+
+    def test_source_override_errors_never_retry_the_runner_mirror(self):
+        sources = ci.ROOT / "scripts/ci-ubuntu.sources"
+        for phase in ("update", "install"):
+            with self.subTest(phase=phase):
+                result, calls = self.run_setup("lint", fail=phase, sources=str(sources))
+                self.assertEqual(result.returncode, 100, result.stdout + result.stderr)
+                self.assertEqual(len(calls), 1 if phase == "update" else 2)
+                for call in calls:
+                    self.assertEqual(call["name"], "apt-get")
+                    self.assertIn(f"Dir::Etc::sourcelist={sources}", call["args"])
 
     def test_missing_go_or_gofmt_fails_before_any_package_download(self):
         for suite in ("tools", "runtimes"):
@@ -513,6 +553,11 @@ class DependencySetupTests(unittest.TestCase):
                 self.assertEqual([call["name"] for call in calls], ["apt-get", "apt-get"])
                 self.assertFalse(
                     any(arg.startswith("golang-") for call in calls for arg in call["args"])
+                )
+                self.assertFalse(
+                    any(
+                        arg.startswith("Dir::Etc::source") for call in calls for arg in call["args"]
+                    )
                 )
 
     def test_apt_failure_stops_setup_without_retrying_install_or_starting_other_downloads(self):

@@ -32,7 +32,7 @@ pub struct Palette {
     pub control_border: Option<Color32>,
     /// Optional activity-rail fill, otherwise the shared panel surface.
     pub activity_background: Option<Color32>,
-    /// Optional status-bar fill, otherwise the shared raised surface.
+    /// Optional status-bar fill, otherwise the shared panel surface.
     pub status_background: Option<Color32>,
     /// Optional editor caret color, independent of interactive emphasis.
     pub cursor: Option<Color32>,

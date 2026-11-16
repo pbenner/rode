@@ -77,6 +77,21 @@ pub fn compact_control_height(ui: &egui::Ui) -> f32 {
         .max(18.)
 }
 
+/// Single-line form/search input with the same inset and minimum height as
+/// adjacent actions. Callers retain native editing, focus and widget IDs.
+pub(crate) fn text_input<'a>(
+    ui: &egui::Ui,
+    value: &'a mut dyn egui::TextBuffer,
+) -> egui::TextEdit<'a> {
+    let padding = ui.spacing().button_padding;
+    egui::TextEdit::singleline(value)
+        .margin(egui::Margin::symmetric(
+            padding.x.round() as i8,
+            padding.y.round() as i8,
+        ))
+        .min_size(egui::vec2(0., control_height(ui)))
+}
+
 /// The common bordered surface, also used by monitor cards. Width follows its
 /// column; callers may customize the frame for selected or destructive states.
 pub fn card_frame(palette: Palette) -> egui::Frame {

@@ -3,7 +3,7 @@
 //! Keep one editor ID for cursor/undo continuity and reserve the action row
 //! outside the scroller. Resizing is local to this window and never submits text.
 
-use eframe::egui::{self, Align, Key, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Align, Key, Rect, Vec2};
 
 const DEFAULT_HEIGHT: f32 = 140.;
 const MIN_HEIGHT: f32 = 118.;
@@ -14,9 +14,8 @@ const TRANSCRIPT_MIN_HEIGHT: f32 = 160.;
 pub(super) struct State {
     /// Preferred height without the optional unsaved-file row. Keep it when a
     /// temporarily small window clamps the actual panel or history hides input.
-    height: f32,
+    height: super::splitter::State,
     attachment_height: f32,
-    drag_start: Option<f32>,
     history: Vec<String>,
     recall: Option<Recall>,
     older_requested: bool,
@@ -26,9 +25,8 @@ pub(super) struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            height: DEFAULT_HEIGHT,
+            height: Default::default(),
             attachment_height: 0.,
-            drag_start: None,
             history: Vec::new(),
             recall: None,
             older_requested: false,
@@ -301,7 +299,7 @@ impl State {
         enabled: bool,
     ) -> Layout {
         if hidden {
-            self.drag_start = None;
+            self.height.cancel_drag();
             return Layout {
                 content: bounds,
                 input: Rect::from_min_max(bounds.max, bounds.max),
@@ -314,81 +312,26 @@ impl State {
             .min(bounds.height())
             .max(0.);
         let minimum = (MIN_HEIGHT + extra).min(maximum);
-        let height = (self.height + extra).clamp(minimum, maximum);
-        let top = bounds.bottom() - height;
-        let handle = Rect::from_min_max(
-            egui::pos2(bounds.left(), (top - 6.).max(bounds.top())),
-            egui::pos2(bounds.right(), top + 2.),
+        let split = self.height.bottom(
+            ui,
+            bounds,
+            super::splitter::Size {
+                default: DEFAULT_HEIGHT,
+                minimum,
+                maximum,
+                extra,
+            },
+            "agent-composer-resize",
+            "Message input height",
+            enabled,
         );
-        let sense = if enabled {
-            Sense::click_and_drag()
-        } else {
-            Sense::hover()
-        };
-        let response = ui.interact(handle, ui.id().with("agent-composer-resize"), sense)
-            .on_hover_cursor(egui::CursorIcon::ResizeVertical)
-            .on_hover_text("Drag to resize message input · Double-click to reset\nWhen focused: Up/Down to resize, Home to reset");
-        crate::app::ui_probe::button(ui, "agent-composer-resize", &response);
-        crate::keyboard::target(ui, "Message input height", &response);
-        if response.is_pointer_button_down_on() || response.dragged() {
-            crate::app::ui_probe::button(ui, "agent-composer-resize-active", &response);
+        if split.handle.drag_stopped() {
+            ui.memory_mut(|m| m.request_focus(egui::Id::new("agent-composer")));
         }
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::DragValue, enabled, "Message input height")
-        });
-        let mut resized = height;
-        if enabled {
-            if response.drag_started() {
-                self.drag_start = Some(height);
-            }
-            if response.dragged() {
-                resized = (self.drag_start.unwrap_or(height)
-                    - response.total_drag_delta().unwrap_or_default().y)
-                    .clamp(minimum, maximum);
-                self.height = resized - extra;
-            }
-            if response.double_clicked()
-                || (response.has_focus()
-                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Home)))
-            {
-                self.height = DEFAULT_HEIGHT;
-                resized = (self.height + extra).clamp(minimum, maximum);
-            } else if response.has_focus() {
-                for (key, step) in [(Key::ArrowUp, 20.), (Key::ArrowDown, -20.)] {
-                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
-                        resized = (resized + step).clamp(minimum, maximum);
-                        self.height = resized - extra;
-                    }
-                }
-            }
-            if response.drag_stopped() {
-                self.drag_start = None;
-                ui.memory_mut(|m| m.request_focus(egui::Id::new("agent-composer")));
-            }
-        } else {
-            self.drag_start = None;
-        }
-        let input = Rect::from_min_max(
-            egui::pos2(bounds.left(), bounds.bottom() - resized),
-            bounds.max,
-        );
-        let center = egui::pos2(bounds.center().x, input.top() - 2.);
-        let color = if response.hovered() || response.dragged() || response.has_focus() {
-            ui.visuals().selection.stroke.color
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        ui.painter().line_segment(
-            [center - egui::vec2(18., 0.), center + egui::vec2(18., 0.)],
-            Stroke::new(2.0_f32, color),
-        );
         Layout {
-            content: Rect::from_min_max(
-                bounds.min,
-                egui::pos2(bounds.right(), (input.top() - 6.).max(bounds.top())),
-            ),
-            input,
-            stretch: resized - extra - DEFAULT_HEIGHT,
+            content: split.content,
+            input: split.panel,
+            stretch: split.panel.height() - extra - DEFAULT_HEIGHT,
         }
     }
 }

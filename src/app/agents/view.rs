@@ -112,19 +112,9 @@ impl Agents {
             !modal,
         );
         let composer = layout.input;
-        let mut content = layout.content;
-        let queue_height = if hide_composer {
-            0.
-        } else {
-            self.queue.height().min(content.height() * 0.45)
-        };
-        let queue_rect = egui::Rect::from_min_max(
-            egui::pos2(content.left(), content.bottom() - queue_height),
-            content.max,
-        );
-        if queue_height > 0. {
-            content.max.y = (queue_rect.top() - 6.).max(content.top());
-        }
+        let (content, queue_rect) = self
+            .queue
+            .layout(ui, layout.content, !hide_composer, !modal);
         let mut send = false;
         let mut discover_models = false;
         let mut attach = false;
@@ -322,11 +312,12 @@ impl Agents {
                 }
             });
         });
-        if queue_height > 0. {
+        if queue_rect.is_positive() {
             ui.scope_builder(egui::UiBuilder::new().max_rect(queue_rect), |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(queue_rect.expand(paint_margin)));
                 agents.queue.ui(
                     ui,
+                    palette,
                     !offline
                         && !modal
                         && !agents.history_open

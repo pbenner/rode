@@ -20,7 +20,9 @@ from ui_harness import (
     NativeUI,
     assert_running,
     close_window,
+    display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     read_json_lines,
@@ -29,9 +31,12 @@ from ui_harness import (
     stop_process,
     wait_for_project,
     wait_for_window,
+    x11,
+    xtest,
 )
 
 with fixture_directory(prefix="rode-agent-queue-ui-") as base:
+    environment = fixture_environment(base, RODE_SESSION_DIR=str(base / "runtime"))
     project = base / "project"
     project.mkdir()
     shutil.copy2(ROOT / "tests/fixtures/agent.py", project / "agent.py")
@@ -41,13 +46,6 @@ with fixture_directory(prefix="rode-agent-queue-ui-") as base:
     profile = json.dumps(["LOCAL", str(project), ""], separators=(",", ":"))
     (config / "app.ron").write_text(
         json.dumps({"agent_preferences": json.dumps({profile: {"codex": "./agent.py"}})})
-    )
-    environment = dict(
-        os.environ,
-        XDG_CONFIG_HOME=str(base / "config"),
-        XDG_DATA_HOME=str(base / "data"),
-        RODE_UI_TEST_STATE=str(base / "ui-state.json"),
-        RODE_SESSION_DIR=str(base / "runtime"),
     )
     log_path = ARTIFACTS / "queue.log"
     with log_path.open("w") as log:
@@ -86,6 +84,34 @@ with fixture_directory(prefix="rode-agent-queue-ui-") as base:
                 digest = hashlib.sha256(message.encode()).hexdigest()
                 ui.control(f"agent-queue-{index}-value:" + digest)
 
+            def panel_height(state=None):
+                state = state or ui.layout()
+                panel = next(
+                    b["rect"] for b in state["buttons"] if b["name"] == "agent-queue-panel"
+                )
+                return panel[3] - panel[1]
+
+            def aligned_rows(compact=False):
+                buttons = {b["name"]: b["rect"] for b in ui.layout()["buttons"]}
+                for index, message in enumerate(["first queued", "second queued", "delete this"]):
+                    preview = buttons[
+                        f"agent-queue-{index}-value:" + hashlib.sha256(message.encode()).hexdigest()
+                    ]
+                    row = buttons[f"agent-queue-row-{index}"]
+                    actions = [
+                        buttons[f"agent-queue-{index}-{action}"]
+                        for action in ["earlier", "later", "edit", "delete"]
+                    ]
+                    assert all(
+                        row[0] <= b[0] < b[2] <= row[2] and row[1] <= b[1] < b[3] <= row[3]
+                        for b in actions
+                    ), (row, actions)
+                    assert all(a[2] <= b[0] for a, b in zip(actions, actions[1:])), actions
+                    if compact:
+                        assert preview[3] <= min(b[1] for b in actions), (preview, actions)
+                    else:
+                        assert preview[2] <= actions[0][0], (preview, actions)
+
             window = wait_for_window(process, log_path)
             wait_for_project(window, process, log_path, project)
             focus_window(window)
@@ -101,13 +127,75 @@ with fixture_directory(prefix="rode-agent-queue-ui-") as base:
             send("delete this")
             queued(2, "delete this")
             assert prompts() == ["wait"], "A queued prompt interrupted the running turn"
+            aligned_rows()
             screenshot(window, "queued.png")
-            # The bounded queue sits immediately above the unchanged composer.
+            original_height = panel_height()
+            # Start from the composer: the first key after a keyboard-only
+            # focus handoff must resize instead of selecting another control.
+            ui.hint("Queued prompts height")
+            ui.press("agent-queue-resize", "Up")
+            ui.layout(
+                lambda state: panel_height(state) >= original_height + 18,
+                "First keyboard resize lost focus",
+            )
+            ui.press("agent-queue-resize", "Home")
+            ui.layout(
+                lambda state: abs(panel_height(state) - original_height) <= 2,
+                "Queue height did not reset",
+            )
+            x, y = ui.control("agent-queue-resize", hovered=True)
+            xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
+            xtest.XTestFakeButtonEvent(display, 1, 1, 0)
+            x11.XFlush(display)
+            ui.control("agent-queue-resize-active")
+            for distance in [20, 40, 60]:
+                xtest.XTestFakeMotionEvent(display, -1, x, y - distance, 0)
+                x11.XFlush(display)
+                ui.layout(
+                    lambda state: panel_height(state) >= original_height + distance - 2,
+                    "Queue divider did not move",
+                )
+            xtest.XTestFakeButtonEvent(display, 1, 0, 0)
+            x11.XFlush(display)
+            ui.absent("agent-queue-resize-active")
+            ui.hint("Queued prompts height")
+            ui.press("agent-queue-resize", "Home")
+            ui.layout(
+                lambda state: abs(panel_height(state) - original_height) <= 2,
+                "Queue height did not reset",
+            )
+            for step in range(1, 7):
+                ui.press("agent-queue-resize", "Up")
+                ui.layout(
+                    lambda state: panel_height(state) >= original_height + step * 20 - 2,
+                    "Keyboard queue resizing failed",
+                )
+            preferred_height = panel_height()
+            ui.resize(850, 560)
+            bounds = {b["name"]: b["rect"] for b in ui.layout()["buttons"]}
+            assert bounds["agent-queue-panel"][3] <= bounds["agent-composer"][1], bounds
+            ui.resize(1380, 900)
+            ui.layout(
+                lambda state: abs(panel_height(state) - preferred_height) <= 2,
+                "Compact window discarded queue height",
+            )
+            ui.resize(850, 900)
+            aligned_rows(compact=True)
+            screenshot(window, "compact-queue.png")
+            ui.resize(1380, 900)
+            assert prompts() == ["wait"], "Resizing submitted queued work"
             ui.click("agent-queue-1-earlier")
             queued(0, "second queued")
             ui.click("agent-queue-0-edit")
             screenshot(window, "editing.png")
             ui.click("agent-queue-edit-input")
+            long_edit = "queued edit line\n" * 24 + "edited second queued"
+            ui.fill("agent-queue-edit-input", long_edit)
+            ui.resize(850, 560)
+            ui.resize(1380, 900)
+            ui.control(
+                "agent-queue-edit-input-value:" + hashlib.sha256(long_edit.encode()).hexdigest()
+            )
             ui.fill("agent-queue-edit-input", "edited second queued")
             ui.click("agent-queue-save")
             ui.absent("agent-queue-edit-input")
@@ -160,7 +248,7 @@ with fixture_directory(prefix="rode-agent-queue-ui-") as base:
             )
             close_window(window, process)
             print(
-                "Queued prompts: FIFO, editing, reordering, deletion, Stop/failure pause, draft preservation and conversation isolation passed."
+                "Queued prompts: mouse/keyboard resizing, compact rows, long edits, FIFO, reordering, deletion, Stop/failure pause, draft preservation and conversation isolation passed."
             )
         except BaseException:
             if window and process.poll() is None:

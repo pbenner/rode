@@ -1,9 +1,8 @@
 //! Queue presentation and unsent edits; native conversations own the queued payloads. Only acknowledged,
 //! successful turns advance the queue. Editing and Stop suspend dispatch.
-use super::super::icons::{self, Icon};
-use crate::app::ui_probe;
-use eframe::egui::{self, RichText};
 use std::collections::VecDeque;
+
+mod view;
 
 const LIMIT: usize = 16;
 
@@ -26,6 +25,7 @@ struct Edit {
 /// The direct transport path also uses local submission gating; hosted dispatch
 /// remains the controller's responsibility after the GUI detaches.
 pub(super) struct Queue {
+    view: view::State,
     prompts: VecDeque<Prompt>,
     serial: u64,
     paused: bool,
@@ -55,6 +55,7 @@ impl Queue {
 
     /// Reset local queue presentation, pending commands, reply gating and recall state.
     pub fn clear(&mut self) {
+        self.view.clear();
         self.prompts.clear();
         self.commands.clear();
         self.hosted = false;
@@ -240,102 +241,6 @@ impl Queue {
         }
     }
 
-    /// Reserve a bounded queue panel height in logical UI points, including any active edit form.
-    pub fn height(&self) -> f32 {
-        if self.is_empty() {
-            0.
-        } else {
-            32. + self.prompts.len().min(3) as f32 * 30.
-                + if self.edit.is_some() { 130. } else { 0. }
-        }
-    }
-
-    /// Render pending prompts and capture pause/edit/remove/reorder commands;
-    /// disabling the view keeps the queue visible without accepting mutations.
-    pub fn ui(&mut self, ui: &mut egui::Ui, enabled: bool, can_resume: bool) {
-        let mut action = None;
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Queued ({})", self.prompts.len())).strong())
-                    .on_hover_text("Pending prompts belong to this agent. With Persist on, the host continues the queue and retains its attachments after detaching or closing Rode. Pause, Stop, failures and permission requests still hold work.");
-                let toggle = ui.add_enabled(!self.paused || can_resume, crate::keyboard::Button::new(if self.paused { "Resume queue" } else { "Pause queue" }).small())
-                    .on_hover_text("Queued messages run in order after a successful reply. Stop or an error pauses the queue.");
-                ui_probe::button(ui, if self.paused { "agent-queue-resume" } else { "agent-queue-pause" }, &toggle);
-                if toggle.clicked() {
-                    self.set_paused(!self.paused);
-                }
-                if self.edit.is_some() {
-                    ui.weak("Editing · waiting");
-                } else if self.paused {
-                    ui.weak("Paused");
-                }
-            });
-            egui::ScrollArea::vertical()
-                .id_salt("queued-prompts")
-                .auto_shrink([false, false])
-                .max_height(ui.available_height().max(1.))
-                .show(ui, |ui| {
-                    for (index, prompt) in self.prompts.iter().enumerate() {
-                        ui.push_id(prompt.id, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}.", index + 1));
-                                let earlier = ui.add_enabled_ui(index > 0, |ui| icons::small(ui, Icon::ChevronUp, "Move earlier")).inner;
-                                ui_probe::button(ui, &format!("agent-queue-{index}-earlier"), &earlier);
-                                if earlier.clicked() {
-                                    action = Some(Action::Move(prompt.id, true));
-                                }
-                                let later = ui.add_enabled_ui(index + 1 < self.prompts.len(), |ui| icons::small(ui, Icon::ChevronDown, "Move later")).inner;
-                                ui_probe::button(ui, &format!("agent-queue-{index}-later"), &later);
-                                if later.clicked() {
-                                    action = Some(Action::Move(prompt.id, false));
-                                }
-                                let edit = ui.add_enabled(self.edit.is_none(), crate::keyboard::Button::new("Edit").small());
-                                ui_probe::button(ui, &format!("agent-queue-{index}-edit"), &edit);
-                                if edit.clicked() {
-                                    action = Some(Action::Edit(prompt.id));
-                                }
-                                let delete = crate::keyboard::small_button(ui, "Delete");
-                                ui_probe::button(ui, &format!("agent-queue-{index}-delete"), &delete);
-                                if delete.clicked() {
-                                    action = Some(Action::Remove(prompt.id));
-                                }
-                                if !prompt.files.is_empty() { ui.label(format!("{} files", prompt.files.len())).on_hover_text(prompt.files.join("\n")); }
-                                let summary = ui.add(egui::Label::new(prompt.text.lines().find(|line| !line.trim().is_empty()).unwrap_or_default()).truncate())
-                                    .on_hover_text(&prompt.text);
-                                ui_probe::value(ui, &format!("agent-queue-{index}-value"), &summary, &prompt.text);
-                            });
-                            if let Some(edit) = &mut self.edit
-                                && edit.id == prompt.id {
-                                let input = ui.add(crate::keyboard::named("Queued prompt", egui::TextEdit::multiline(&mut edit.text)
-                                    .id_salt(("queued-edit", edit.id))
-                                    .desired_rows(3)
-                                    .desired_width(f32::INFINITY)
-                                    .char_limit(crate::agent::PROMPT_LIMIT)));
-                                ui_probe::button(ui, "agent-queue-edit-input", &input);
-                                ui_probe::value(ui, "agent-queue-edit-input-value", &input, &edit.text);
-                                ui.horizontal(|ui| {
-                                    let save = ui.add_enabled(valid(&edit.text) || edit.text.len() <= crate::agent::PROMPT_LIMIT && !prompt.files.is_empty(), crate::keyboard::Button::new("Save prompt").small());
-                                    ui_probe::button(ui, "agent-queue-save", &save);
-                                    if save.clicked() {
-                                        action = Some(Action::Save);
-                                    }
-                                    let cancel = crate::keyboard::small_button(ui, "Cancel edit");
-                                    ui_probe::button(ui, "agent-queue-cancel-edit", &cancel);
-                                    if cancel.clicked() {
-                                        action = Some(Action::Cancel);
-                                    }
-                                });
-                            }
-                        });
-                    }
-                });
-        });
-        if let Some(action) = action {
-            self.apply(action);
-            ui.ctx().request_repaint();
-        }
-    }
-
     fn apply(&mut self, action: Action) {
         if self.hosted {
             use rode_agent_core::queue::Action as Host;
@@ -407,6 +312,97 @@ fn valid(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resizing_preserves_queue_payloads_and_restores_height_after_a_compact_window() {
+        use eframe::egui::{self, Key, Rect};
+        for width in [340., 960.] {
+            let ctx = egui::Context::default();
+            crate::theme::install(
+                &ctx,
+                crate::theme::Theme::builtin("atelier-dark")
+                    .unwrap()
+                    .palette,
+            );
+            let mut queue = Queue::default();
+            queue.set_hosted();
+            for text in ["first prompt", "second prompt", "third prompt"] {
+                queue.push(text.into()).unwrap();
+            }
+            let commands = queue.commands.len();
+            let mut render = |height, visible, events| {
+                let mut result = None;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, height),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let bounds = ui.available_rect_before_wrap();
+                            result = Some((
+                                queue.layout(ui, bounds, visible, true),
+                                ui.id().with("agent-queue-resize"),
+                            ));
+                        });
+                    },
+                );
+                result.unwrap()
+            };
+            let ((_, original), _) = render(700., true, vec![]);
+            let start = original.center_top() - egui::vec2(0., 2.);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: egui::Modifiers::NONE,
+            };
+            render(
+                700.,
+                true,
+                vec![egui::Event::PointerMoved(start), button(start, true)],
+            );
+            let moved = start - egui::vec2(0., 60.);
+            let ((content, enlarged), id) =
+                render(700., true, vec![egui::Event::PointerMoved(moved)]);
+            assert!(enlarged.height() >= original.height() + 59.);
+            assert!(content.bottom() < enlarged.top());
+            render(700., true, vec![button(moved, false)]);
+            let ((content, compact), _) = render(190., true, vec![]);
+            assert!(content.height() >= 0. && compact.height() < enlarged.height());
+            assert_eq!(render(700., true, vec![]).0.1, enlarged);
+            assert_eq!(render(700., false, vec![]).0.1.height(), 0.);
+            assert_eq!(render(700., true, vec![]).0.1, enlarged);
+            ctx.memory_mut(|memory| memory.request_focus(id));
+            let key = |key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let taller = render(700., true, vec![key(Key::ArrowUp)]).0.1;
+            assert_eq!(taller.height(), enlarged.height() + 20.);
+            assert_eq!(render(700., true, vec![key(Key::Home)]).0.1, original);
+            assert_eq!(
+                queue.commands.len(),
+                commands,
+                "Resizing must not mutate the hosted queue"
+            );
+            assert_eq!(
+                queue
+                    .prompts
+                    .iter()
+                    .map(|p| p.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["first prompt", "second prompt", "third prompt"]
+            );
+        }
+    }
 
     #[test]
     fn accepted_prompts_enter_recall_once_in_dispatch_order_without_transcript_rows() {
