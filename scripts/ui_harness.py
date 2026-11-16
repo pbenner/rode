@@ -20,6 +20,7 @@ import statistics
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 from fixture_support import (
@@ -911,6 +912,106 @@ def screenshot(window, name, *, timeout=10):
         check=True,
         timeout=timeout,
     )
+
+
+def pane_outline_coverage(raw, width, height, rect, scale):
+    """Measure all four rendered edges on a flat panel, including fractional DPI.
+
+    Use the visible top edge as the colour reference and ignore antialiasing
+    fringes. Sampling the final image catches later separators and clipping
+    hiding an outline that exists in the UI's shape list.
+    """
+    if width <= 0 or height <= 0 or len(raw) != width * height * 3:
+        raise AssertionError("Invalid outline screenshot dimensions")
+    if not math.isfinite(scale) or scale <= 0 or not all(math.isfinite(value) for value in rect):
+        raise AssertionError("Invalid outline geometry or scale")
+
+    def pixel(x, y):
+        offset = (y * width + x) * 3
+        return tuple(raw[offset : offset + 3])
+
+    left, top, right, bottom = [value * scale for value in rect]
+    if not (0 <= left < right <= width and 0 <= top < bottom <= height):
+        raise AssertionError("Outline geometry is outside the screenshot")
+    # Ignore only the antialiased corners, not the outer quarters of each edge.
+    corner = math.ceil(scale) + 1
+    xs = range(math.ceil(left + corner), math.floor(right - corner))
+    ys = range(math.ceil(top + corner), math.floor(bottom - corner))
+    if not xs or not ys:
+        raise AssertionError("Outline is too small for a reliable pixel check")
+
+    def band(start, end, limit):
+        return range(max(0, math.floor(start)), min(limit, math.ceil(end)))
+
+    edges = {
+        "top": [[pixel(x, y) for y in band(top - 1, top + scale + 1, height)] for x in xs],
+        "bottom": [[pixel(x, y) for y in band(bottom - scale - 1, bottom + 1, height)] for x in xs],
+        "left": [[pixel(x, y) for x in band(left - 1, left + scale + 1, width)] for y in ys],
+        "right": [[pixel(x, y) for x in band(right - scale - 1, right + 1, width)] for y in ys],
+    }
+    background = pixel(round((left + right) / 2), math.ceil(top + scale + 2))
+    candidates = Counter(
+        color
+        for position in edges["top"]
+        for color in position
+        if max(abs(a - b) for a, b in zip(color, background)) > 4
+    )
+    reference = (
+        max(
+            candidates,
+            key=lambda color: (
+                max(abs(a - b) for a, b in zip(color, background)),
+                candidates[color],
+            ),
+        )
+        if candidates
+        else None
+    )
+    return {
+        edge: (
+            # Count positions along the edge, so a thick stroke cannot hide a gap.
+            sum(
+                any(max(abs(a - b) for a, b in zip(color, reference)) <= 2 for color in position)
+                for position in positions
+            )
+            / max(1, len(positions))
+            if reference is not None
+            else 0
+        )
+        for edge, positions in edges.items()
+    }
+
+
+def assert_pane_outline(ui, pane, filename):
+    """Require a complete native focus rectangle; use a theme with flat panel fill."""
+    last = {}
+
+    def painted():
+        name = "pane-outline-" + pane
+        state = ui.layout(
+            lambda state: any(button["name"] == name for button in state["buttons"]),
+            f"{pane} focus outline was not registered",
+        )
+        rect = next(button["rect"] for button in state["buttons"] if button["name"] == name)
+        scale = state["pixels_per_point"]
+        width, height = [round(value * scale) for value in state["size"]]
+        screenshot(ui.window, filename)
+        raw = subprocess.check_output(
+            ["convert", str(ARTIFACTS / filename), "-depth", "8", "rgb:-"], timeout=10
+        )
+        if len(raw) != width * height * 3:
+            return False
+        last.update(pane_outline_coverage(raw, width, height, rect, scale))
+        return all(coverage >= 0.99 for coverage in last.values())
+
+    try:
+        wait_for_effect(
+            painted, "Incomplete pane focus outline", process=ui.process, log_path=ui.log_path
+        )
+    except AssertionError as error:
+        raise AssertionError(
+            f"{pane} focus outline edge coverage: {last}. Screenshot: {filename}"
+        ) from error
 
 
 def button_fill_contrast(raw, width, height, rect, reference, scale):

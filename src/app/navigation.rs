@@ -641,10 +641,10 @@ impl EditorApp {
     /// Allocate a clipped pane interior and track its stable fallback focus target.
     /// Callers must render controls in the returned Ui, leaving the outline gutter empty.
     #[must_use = "Render pane controls in the returned interior, outside the focus-outline gutter"]
-    pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, pane: Pane) -> egui::Ui {
-        let ctx = ui.ctx().clone();
+    pub(super) fn pane_ui(&mut self, panel_ui: &mut egui::Ui, pane: Pane) -> egui::Ui {
+        let ctx = panel_ui.ctx().clone();
         let host_id = pane.id_in(ctx.viewport_id());
-        let mut surface = layout::PaneSurface::new(ui, host_id);
+        let mut surface = layout::PaneSurface::new(panel_ui, host_id);
         let rect = surface.outer;
         let ui = &mut surface.content;
         let zoom = self.pane_zoom(ctx.viewport_id());
@@ -699,13 +699,28 @@ impl EditorApp {
             self.navigation.pending = None;
         }
         if !blocked && self.navigation.pending.is_none() {
+            // Padding and shared resize gutters do not own widget focus.
+            // Nor can a floating layer claim the pane underneath its geometry.
+            let interactive = ui.max_rect().intersect(ui.clip_rect());
             let focused = ctx.memory(|m| m.focused());
             let inside = focused
                 .and_then(|id| ctx.read_response(id))
-                .is_some_and(|r| rect.contains(r.interact_rect.center()));
-            let clicked = ctx.input(|i| {
-                i.pointer.any_pressed()
-                    && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+                .is_some_and(|r| {
+                    r.layer_id == ui.layer_id()
+                        && interactive.is_positive()
+                        && interactive.contains(r.interact_rect.center())
+                });
+            let pressed = ctx.input(|input| {
+                if input.pointer.any_pressed() {
+                    input.pointer.interact_pos()
+                } else {
+                    None
+                }
+            });
+            let clicked = pressed.is_some_and(|point| {
+                interactive.is_positive()
+                    && interactive.contains(point)
+                    && ctx.layer_id_at(point) == Some(ui.layer_id())
             });
             if ctx.input(|input| input.focused)
                 && (inside || (pane == Pane::Terminal && Terminal::focused(&ctx)) || clicked)
@@ -719,8 +734,18 @@ impl EditorApp {
                 }
             }
         }
-        if self.navigation.used && self.navigation.active == pane && !blocked {
-            surface.focus_outline(self.themes.active().palette.accent.gamma_multiply(0.6));
+        if self.navigation.used
+            && self.navigation.active == pane
+            && ctx.input(|input| input.focused)
+            && !blocked
+            && let Some(rect) =
+                surface.focus_outline(self.themes.active().palette.accent.gamma_multiply(0.6))
+        {
+            let mut outline = host.clone();
+            outline.rect = rect;
+            // Publish the actual paint bounds, using the panel clip rather
+            // than the narrower content clip. This adds no input target.
+            ui_probe::button(panel_ui, &format!("pane-outline-{pane:?}"), &outline);
         }
         surface.content
     }

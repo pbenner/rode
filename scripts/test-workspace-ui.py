@@ -348,7 +348,18 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             assert tool_window("Terminal") == terminal_window
             assert sum(call.get("method") == "initialize" for call in calls()) == 1
             screenshot(chat_window, "independent-chat-tab.png")
+            # Both windows now show Tools panes. Only the native input owner
+            # may draw the active outline, even though the pane kind matches.
             focus(window)
+            driver().navigate("f")
+            driver().command("System: Monitor", keyboard=True)
+            control("pane-outline-Tools")
+            root_pass = driver().layout()["pass"]
+            composer(chat_window)
+            control("pane-outline-Tools", chat_window)
+            driver().absent("pane-outline-Tools", after_pass=root_pass)
+            focus(window)
+            activate("workspace-code")
             disabled_tab("Chat")
             activate("source-editor")
             control("source-editor", focused=True)

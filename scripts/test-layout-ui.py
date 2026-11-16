@@ -12,6 +12,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     NativeUI,
+    assert_pane_outline,
     click,
     close_window,
     display,
@@ -45,19 +46,34 @@ def button(x, y, number=1):
     x11.XFlush(display)
 
 
-def drag(start, end):
+def drag(start, end, check=None):
     xtest.XTestFakeMotionEvent(display, -1, *start, 0)
     xtest.XTestFakeButtonEvent(display, 1, 1, 0)
     x11.XFlush(display)
-    time.sleep(0.1)
-    for step in range(1, 15):
-        x = round(start[0] + (end[0] - start[0]) * step / 14)
-        y = round(start[1] + (end[1] - start[1]) * step / 14)
-        xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
+    try:
+        time.sleep(0.1)
+        for step in range(1, 15):
+            x = round(start[0] + (end[0] - start[0]) * step / 14)
+            y = round(start[1] + (end[1] - start[1]) * step / 14)
+            xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
+            x11.XFlush(display)
+            time.sleep(0.035)
+        if check is not None:
+            check()
+    finally:
+        xtest.XTestFakeButtonEvent(display, 1, 0, 0)
         x11.XFlush(display)
-        time.sleep(0.035)
-    xtest.XTestFakeButtonEvent(display, 1, 0, 0)
-    x11.XFlush(display)
+
+
+def explorer_divider(state):
+    controls = {button["name"]: button["rect"] for button in state["buttons"]}
+    explorer, editor = controls["pane-Explorer"], controls["pane-Editor"]
+    scale = state["pixels_per_point"]
+    # Both panes use the same symmetric padding, so their midpoint is the
+    # real divider without assuming a sidebar width or a theme's margin.
+    return round((explorer[2] + editor[0]) / 2 * scale), round(
+        (explorer[1] + explorer[3]) / 2 * scale
+    )
 
 
 def append_save(ui, path, marker, *, unsaved=""):
@@ -161,6 +177,30 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             ui = NativeUI(window, process, log_path, base / "ui-state.json", root)
             for name in names:
                 ui.open_file(name)
+            ui.navigate("f")
+            assert_pane_outline(ui, "Explorer", "explorer-focus.png")
+            start = explorer_divider(ui.layout())
+            xtest.XTestFakeMotionEvent(display, -1, *start, 0)
+            x11.XFlush(display)
+            assert_pane_outline(ui, "Explorer", "explorer-focus-resize-hover.png")
+            scale = ui.layout()["pixels_per_point"]
+            end = (round(start[0] + 48 * scale), start[1])
+
+            def resizing():
+                ui.layout(
+                    lambda state: explorer_divider(state)[0] > start[0] + 30 * scale,
+                    "Explorer did not resize",
+                )
+                assert_pane_outline(ui, "Explorer", "explorer-focus-resize-active.png")
+
+            drag(start, end, check=resizing)
+            drag(explorer_divider(ui.layout()), start)
+            ui.layout(
+                lambda state: abs(explorer_divider(state)[0] - start[0]) <= 1,
+                "Explorer width was not restored",
+            )
+            assert_pane_outline(ui, "Explorer", "explorer-focus-after-resize.png")
+            ui.navigate("e")
             append_save(ui, root / "notes.txt", "active_tab_focus")
             ui.open_file("notes.txt")
             append_save(ui, root / "notes.txt", "same_file_refocus")
@@ -216,6 +256,14 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             key("t", ("Control_L", "Shift_L"))
             ui.resize(850, 560)
             terminal_focus(ui)
+            # The shortcut's focus was checked above. Notifications are allowed
+            # to cover panes; dismiss any before measuring an unobscured border.
+            if any(button["name"] == "notice-dismiss" for button in ui.layout()["buttons"]):
+                ui.click("notice-dismiss")
+                ui.absent("notice-dismiss")
+                ui.navigate("t")
+                terminal_focus(ui)
+            assert_pane_outline(ui, "Terminal", "terminal-focus-compact.png")
             screenshot(window, "minimum-terminal.png")
             text("echo layout_terminal_ok > terminal.ok\n")
             wait_for(
@@ -223,6 +271,9 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
                 "Terminal controls/content were lost in the narrow layout",
             )
             key("t", ("Control_L", "Shift_L"))  # Return to full-width code, not a split pane.
+            ui.navigate("f")
+            assert_pane_outline(ui, "Explorer", "explorer-focus-compact.png")
+            ui.navigate("e")
             click(410, 215)
             key("f", ("Control_L",))
             text("layout")

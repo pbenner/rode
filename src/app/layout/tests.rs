@@ -23,37 +23,158 @@ fn pane_outlines_stay_outside_child_paint_and_preceding_toolbars() {
                         .show(ctx, |ui| {
                             let toolbar = ui.button("Existing toolbar").rect;
                             let mut pane = PaneSurface::new(ui, egui::Id::new("bounded-pane"));
-                            pane.focus_outline(color);
+                            let outline = pane.focus_outline(color);
                             let inner = pane.content.max_rect();
                             // Even an oversized widget drawn after the outline
                             // cannot paint over it or resize the parent surface.
                             pane.content
                                 .add_sized([500., 500.], egui::Button::new("Oversized control"));
-                            bounds = Some((toolbar, pane.outer, inner, ui.min_rect()));
+                            bounds = Some((toolbar, pane.outer, inner, ui.min_rect(), outline));
                         });
                 },
             );
-            let (toolbar, outer, inner, allocated) = bounds.unwrap();
+            let (toolbar, outer, inner, allocated, outline_rect) = bounds.unwrap();
             assert!(inner.is_finite() && inner.width() >= 0. && inner.height() >= 0.);
             assert!(toolbar.bottom() < outer.top());
             assert!(outer.contains_rect(inner));
             assert!(allocated.bottom() <= outer.bottom());
-            let outline = output.shapes.iter().position(|shape| {
-                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == color)
-            }).expect("Missing pane outline");
-            for shape in &output.shapes[outline + 1..] {
-                // Child UI bookkeeping may leave empty placeholders.
-                if !matches!(shape.shape, egui::Shape::Noop) {
+            if let Some(outline_rect) = outline_rect {
+                assert!(outer.contains_rect(outline_rect));
+                let style = ctx.style();
+                let separator = style
+                    .visuals
+                    .widgets
+                    .noninteractive
+                    .bg_stroke
+                    .width
+                    .max(style.visuals.widgets.hovered.fg_stroke.width)
+                    .max(style.visuals.widgets.active.fg_stroke.width);
+                for gap in [
+                    outline_rect.left() - outer.left(),
+                    outer.right() - outline_rect.right(),
+                    outline_rect.top() - outer.top(),
+                    outer.bottom() - outline_rect.bottom(),
+                ] {
                     assert!(
-                        inner.contains_rect(shape.clip_rect),
-                        "{size:?}, scale {scale}: child paint clip {:?} escapes {inner:?}",
-                        shape.clip_rect,
+                        gap >= separator + 0.9 / scale,
+                        "Outline touches separator/scissor: {gap} at {scale}"
                     );
                 }
+                let outline = output.shapes.iter().position(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == color)
+                }).expect("Missing pane outline");
+                for shape in &output.shapes[outline + 1..] {
+                    // Child UI bookkeeping may leave empty placeholders.
+                    if !matches!(shape.shape, egui::Shape::Noop) {
+                        assert!(
+                            inner.contains_rect(shape.clip_rect),
+                            "{size:?}, scale {scale}: child paint clip {:?} escapes {inner:?}",
+                            shape.clip_rect,
+                        );
+                    }
+                }
+            } else {
+                assert!(!output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == color)
+                }), "Collapsed pane painted a degenerate outline");
             }
             if inner.is_positive() {
                 assert!(inner.left() - outer.left() >= 12.);
                 assert!(inner.top() - outer.top() >= 8.);
+            }
+        }
+    }
+}
+
+#[test]
+fn pane_chrome_and_content_remain_separate_under_parent_clips_and_thick_resize_strokes() {
+    for scale in [0.5, 0.75, 1., 1.25, 1.5, 2., 3.] {
+        for size in [
+            egui::Vec2::ZERO,
+            egui::vec2(1.3, 0.5),
+            egui::vec2(8., 8.),
+            egui::vec2(180., 160.),
+        ] {
+            for resize_width in [1., 4., 8.] {
+                let mut original = None;
+                for clipping in 0..3 {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    let mut measured = None;
+                    let color = egui::Color32::MAGENTA;
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default()
+                                .frame(pane_frame(egui::Color32::BLACK))
+                                .show(ctx, |ui| {
+                                    ui.visuals_mut().widgets.hovered.fg_stroke.width = resize_width;
+                                    ui.visuals_mut().widgets.active.fg_stroke.width =
+                                        resize_width + 1.;
+                                    let available = ui.available_rect_before_wrap();
+                                    let clip = match clipping {
+                                        0 => available,
+                                        1 => egui::Rect::from_min_max(
+                                            available.lerp_inside(egui::vec2(0.2, 0.15)),
+                                            available.lerp_inside(egui::vec2(0.8, 0.85)),
+                                        ),
+                                        _ => available
+                                            .translate(available.size() + egui::vec2(10., 10.)),
+                                    };
+                                    ui.set_clip_rect(clip);
+                                    let pane = PaneSurface::new(ui, egui::Id::new("clipped-pane"));
+                                    let outline = pane.focus_outline(color);
+                                    measured = Some((
+                                        pane.outer,
+                                        pane.content.max_rect(),
+                                        pane.content.clip_rect(),
+                                        outline,
+                                        clip,
+                                    ));
+                                });
+                        },
+                    );
+                    let (outer, inner, clip, outline, parent_clip) = measured.unwrap();
+                    assert!(outer.is_finite() && inner.is_finite() && clip.is_finite());
+                    assert!(inner.width() >= 0. && inner.height() >= 0.);
+                    if let Some(expected) = original {
+                        assert_eq!((outer, inner), expected, "Clipping moved the layout");
+                    } else {
+                        original = Some((outer, inner));
+                    }
+                    if clip.is_positive() {
+                        assert!(parent_clip.contains_rect(clip) && inner.contains_rect(clip));
+                    }
+                    if let Some(outline) = outline {
+                        let visible = outer.intersect(parent_clip);
+                        let guard = resize_width + 1. + 1. / scale;
+                        for gap in [
+                            outline.left() - visible.left(),
+                            visible.right() - outline.right(),
+                            outline.top() - visible.top(),
+                            visible.bottom() - outline.bottom(),
+                        ] {
+                            assert!(gap >= guard - 0.001);
+                        }
+                        if clip.is_positive() {
+                            assert!(
+                                outline.shrink(1.).contains_rect(clip),
+                                "Content can cover chrome"
+                            );
+                        }
+                    } else {
+                        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == color)));
+                    }
+                    if clipping == 2 {
+                        assert!(
+                            outline.is_none() && !clip.is_positive(),
+                            "Fully hidden pane still paints"
+                        );
+                    }
+                }
             }
         }
     }

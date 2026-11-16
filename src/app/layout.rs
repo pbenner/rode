@@ -18,6 +18,7 @@ pub(super) mod tests;
 pub(super) struct PaneSurface {
     pub content: egui::Ui,
     pub outer: egui::Rect,
+    outline: Option<egui::Rect>,
     painter: egui::Painter,
 }
 
@@ -30,14 +31,30 @@ impl PaneSurface {
         let available = ui.available_rect_before_wrap();
         let outer =
             egui::Rect::from_min_size(available.min, available.size().max(egui::Vec2::ZERO));
-        let clearance = Self::STROKE_WIDTH + 2. / ui.pixels_per_point();
+        let visible = clipped_rect(outer, ui.clip_rect());
+        // Panels paint resize separators after their contents. Keep the entire
+        // outline clear of those strokes and of fractional-DPI scissor rounding.
+        let widgets = &ui.visuals().widgets;
+        let separator_width = widgets
+            .noninteractive
+            .bg_stroke
+            .width
+            .max(widgets.hovered.fg_stroke.width)
+            .max(widgets.active.fg_stroke.width);
+        let edge_clearance = separator_width + 1. / ui.pixels_per_point();
+        let outline = inset_rect(visible, egui::Vec2::splat(edge_clearance));
+        // A complete rectangle needs room for both strokes and a visible
+        // interior. Do not paint a degenerate line or dot in a collapsed pane.
+        let minimum = 2. * Self::STROKE_WIDTH + 1. / ui.pixels_per_point();
+        let outline =
+            (outline.width() >= minimum && outline.height() >= minimum).then_some(outline);
+        let clearance = edge_clearance + Self::STROKE_WIDTH + 2. / ui.pixels_per_point();
         let padding = crate::theme::PANEL_MARGIN;
-        let inset = egui::vec2(
-            (padding.left as f32).max(clearance).min(outer.width() / 2.),
-            (padding.top as f32).max(clearance).min(outer.height() / 2.),
-        );
-        let inner = outer.shrink2(inset);
-        let painter = ui.painter().with_clip_rect(outer.intersect(ui.clip_rect()));
+        let inset =
+            egui::vec2(padding.left as f32, padding.top as f32).max(egui::Vec2::splat(clearance));
+        let inner = inset_rect(outer, inset);
+        let content_clip = clipped_rect(inner, inset_rect(visible, egui::Vec2::splat(clearance)));
+        let painter = ui.painter().with_clip_rect(visible);
         // Allocate the bounded surface, rather than letting child overflow
         // enlarge it and displace adjacent panes or preceding toolbar rows.
         ui.advance_cursor_after_rect(outer);
@@ -47,23 +64,42 @@ impl PaneSurface {
                 .max_rect(inner)
                 .layout(Layout::top_down(Align::Min)),
         );
-        content.set_clip_rect(inner.intersect(ui.clip_rect()));
+        content.set_clip_rect(content_clip);
         Self {
             content,
             outer,
+            outline,
             painter,
         }
     }
 
-    /// Paint only in the reserved gutter, outside the clipped content area.
-    pub fn focus_outline(&self, color: egui::Color32) {
+    /// Paint inside the visible pane's reserved gutter and return the paint bounds.
+    /// Collapsed or fully clipped panes have no drawable focus rectangle.
+    pub fn focus_outline(&self, color: egui::Color32) -> Option<egui::Rect> {
+        let outline = self.outline?;
         self.painter.rect_stroke(
-            self.outer,
+            outline,
             0,
             egui::Stroke::new(Self::STROKE_WIDTH, color),
             egui::StrokeKind::Inside,
         );
+        Some(outline)
     }
+}
+
+/// Normalize disjoint clips to a finite, empty rectangle instead of inverted bounds.
+fn clipped_rect(rect: egui::Rect, clip: egui::Rect) -> egui::Rect {
+    let intersection = rect.intersect(clip);
+    if intersection.is_positive() {
+        intersection
+    } else {
+        egui::Rect::from_min_size(rect.min, egui::Vec2::ZERO)
+    }
+}
+
+/// Insets cannot invert tiny panes, including during native resize transitions.
+fn inset_rect(rect: egui::Rect, inset: egui::Vec2) -> egui::Rect {
+    rect.shrink2(inset.min(rect.size() / 2.))
 }
 
 /// A pane surface owns its padding. Its parent frame must leave that space to

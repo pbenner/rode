@@ -15,6 +15,7 @@ from ui_fixture import native_session
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    assert_pane_outline,
     display,
     fixture_directory,
     fixture_environment,
@@ -70,9 +71,13 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             RODE_UI_TEST_STATE=str(state_path),
         )
         saved = base / "data/rode/app.ron"
-        args = [str(BINARY), str(root)]
+        # A flat fill lets the pixel check compare every outline edge directly.
+        args = [str(BINARY), str(root), "--theme", "carbon"]
         with native_session(args, environment, root, f"dpi-{dpi}") as ui:
             ui.open_file("main.txt")
+            ui.navigate("f")
+            assert_pane_outline(ui, "Explorer", f"dpi-{dpi}-explorer-focus.png")
+            ui.navigate("e")
             ui.click("source-editor")
             key("End", ("Control_L",))
             text("Unsaved text survives scaling\n")
@@ -127,6 +132,9 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             )
             assert preferences(saved)["font_size"] == "15"
             assert source.read_text() == "Original text\n", "Scaling saved a dirty buffer"
+            ui.navigate("f")
+            assert_pane_outline(ui, "Explorer", f"dpi-{dpi}-explorer-focus-75.png")
+            ui.navigate("e")
             screenshot(ui.window, f"dpi-{dpi}-75.png")
             assert abs(header_height(f"dpi-{dpi}-75.png", dpi) - original * 0.75) <= 2
             ui.click("menu-view")

@@ -3,6 +3,156 @@
 use super::*;
 
 #[test]
+fn a_floating_layer_click_does_not_select_the_pane_underneath_it() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.navigation.used = true;
+    app.navigation.active = Pane::Explorer;
+    let point = egui::pos2(300., 100.);
+    for pressed in [None, Some(true), Some(false)] {
+        let events = pressed.map_or_else(Vec::new, |pressed| {
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        });
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500., 300.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::left("overlay-focus-explorer")
+                    .exact_width(200.)
+                    .frame(layout::pane_frame(egui::Color32::BLACK))
+                    .show(ctx, |ui| app.pane_ui(ui, Pane::Explorer));
+                egui::CentralPanel::default()
+                    .frame(layout::pane_frame(egui::Color32::BLACK))
+                    .show(ctx, |ui| app.pane_ui(ui, Pane::Editor));
+                egui::Area::new(egui::Id::new("floating-pane-control"))
+                    .order(egui::Order::Tooltip)
+                    .fixed_pos(egui::pos2(250., 75.))
+                    // Keep sizing estimates from relocating the click target.
+                    .constrain(false)
+                    .show(ctx, |ui| {
+                        let response = ui.add_sized([100., 50.], egui::Button::new("Overlay"));
+                        assert!(response.rect.contains(point));
+                    });
+            },
+        );
+        assert_eq!(
+            app.navigation.active,
+            Pane::Explorer,
+            "Floating control selected the editor underneath (pressed: {pressed:?}, layer: {:?})",
+            ctx.layer_id_at(point)
+        );
+    }
+}
+
+#[test]
+fn a_resize_gutter_does_not_steal_focus_for_the_adjacent_pane() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.navigation.used = true;
+    app.navigation.active = Pane::Explorer;
+    let resize_id = egui::Id::new("focused-resize-gutter");
+    for _ in 0..3 {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500., 300.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::SidePanel::left("focus-claim-explorer")
+                    .exact_width(200.)
+                    .frame(layout::pane_frame(egui::Color32::BLACK))
+                    .show(ctx, |ui| app.pane_ui(ui, Pane::Explorer));
+                egui::CentralPanel::default()
+                    .frame(layout::pane_frame(egui::Color32::BLACK))
+                    .show(ctx, |ui| {
+                        let response = ui.interact(
+                            egui::Rect::from_center_size(
+                                egui::pos2(200., 150.),
+                                egui::vec2(8., 100.),
+                            ),
+                            resize_id,
+                            Sense::focusable_noninteractive(),
+                        );
+                        response.request_focus();
+                        app.pane_ui(ui, Pane::Editor)
+                    });
+            },
+        );
+        assert_eq!(
+            app.navigation.active,
+            Pane::Explorer,
+            "Resize gutter selected the neighbouring editor"
+        );
+    }
+}
+
+#[test]
+fn inactive_native_windows_do_not_duplicate_the_active_pane_outline() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.navigation.used = true;
+    app.navigation.active = Pane::Tools;
+    let child = egui::ViewportId::from_hash_of("other-pane-window");
+    let color = app.themes.active().palette.accent.gamma_multiply(0.6);
+    for (viewport, focused) in [
+        (egui::ViewportId::ROOT, true),
+        (child, false),
+        (child, true),
+        (egui::ViewportId::ROOT, false),
+        (egui::ViewportId::ROOT, true),
+    ] {
+        let mut input = egui::RawInput {
+            viewport_id: viewport,
+            focused,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400., 300.),
+            )),
+            ..Default::default()
+        };
+        input.viewports.insert(
+            viewport,
+            egui::ViewportInfo {
+                focused: Some(focused),
+                ..Default::default()
+            },
+        );
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default()
+                .frame(layout::pane_frame(egui::Color32::BLACK))
+                .show(ctx, |ui| app.pane_ui(ui, Pane::Tools));
+        });
+        let painted = output.shapes.iter().any(
+            |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == color),
+        );
+        assert_eq!(
+            painted, focused,
+            "Incorrect native focus outline in {viewport:?}"
+        );
+    }
+}
+
+#[test]
 fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pane-layout.json");
@@ -89,7 +239,12 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                         assert!(
                             output.shapes.iter().any(|shape| {
                                 matches!(&shape.shape, egui::Shape::Rect(rect)
-                                if rect.rect == outer && rect.stroke.color
+                                if outer.contains_rect(rect.rect)
+                                    && rect.rect.left() > outer.left()
+                                    && rect.rect.right() < outer.right()
+                                    && rect.rect.top() > outer.top()
+                                    && rect.rect.bottom() < outer.bottom()
+                                    && rect.stroke.color
                                     == app.themes.active().palette.accent.gamma_multiply(0.6))
                             }),
                             "Missing Explorer focus outline"

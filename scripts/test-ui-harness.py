@@ -22,6 +22,7 @@ from ui_harness import (
     focus_request,
     focus_window,
     palette_command,
+    pane_outline_coverage,
     read_json_lines,
     screenshot,
     stop_fixture_agents,
@@ -32,6 +33,68 @@ from ui_harness import (
     wait_for_ui_state,
     wait_for_window,
 )
+
+
+class PaneOutlineTests(unittest.TestCase):
+    @staticmethod
+    def image(scale=1, missing=None, partial=False):
+        """A flat panel with a real-width rectangular border and optional missing segment."""
+        width = height = 100
+        background = bytes((20, 20, 20))
+        color = bytes((160, 220, 200))
+        raw = bytearray(background * (width * height))
+        for y in range(10, 90):
+            for x in range(10, 90):
+                edges = {
+                    "top": y < 10 + scale,
+                    "bottom": y >= 90 - scale,
+                    "left": x < 10 + scale,
+                    "right": x >= 90 - scale,
+                }
+                erased = (
+                    missing
+                    and edges[missing]
+                    and (not partial or 15 <= (x if missing in ("top", "bottom") else y) < 40)
+                )
+                if any(edges.values()) and not erased:
+                    offset = (y * width + x) * 3
+                    raw[offset : offset + 3] = color
+        rect = [10 / scale, 10 / scale, 90 / scale, 90 / scale]
+        return raw, width, height, rect, scale
+
+    def test_complete_edges_have_unit_coverage_regardless_of_stroke_thickness(self):
+        for scale in (1, 2, 3):
+            with self.subTest(scale=scale):
+                self.assertEqual(
+                    pane_outline_coverage(*self.image(scale)),
+                    dict.fromkeys(("top", "bottom", "left", "right"), 1.0),
+                )
+
+    def test_missing_edges_and_shorter_segments_cannot_be_compensated_by_thicker_strokes(self):
+        for scale in (1, 2, 3):
+            for edge in ("top", "bottom", "left", "right"):
+                for partial in (False, True):
+                    with self.subTest(scale=scale, edge=edge, partial=partial):
+                        coverage = pane_outline_coverage(*self.image(scale, edge, partial))
+                        self.assertLess(coverage[edge], 0.9)
+                        self.assertTrue(all(0 <= value <= 1 for value in coverage.values()))
+
+    def test_invalid_captures_and_geometry_fail_loudly(self):
+        raw, width, height, rect, scale = self.image()
+        for bad_scale in (0, -1, float("nan"), float("inf")):
+            with self.assertRaises(AssertionError):
+                pane_outline_coverage(raw, width, height, rect, bad_scale)
+        for bad_rect in (
+            [-1, 10, 90, 90],
+            [10, 10, 101, 90],
+            [10, 90, 90, 10],
+            [10, 10, 11, 11],
+            [float("nan"), 10, 90, 90],
+        ):
+            with self.assertRaises(AssertionError):
+                pane_outline_coverage(raw, width, height, bad_rect, scale)
+        with self.assertRaises(AssertionError):
+            pane_outline_coverage(raw[:-1], width, height, rect, scale)
 
 
 class FixtureAcknowledgementTests(unittest.TestCase):
