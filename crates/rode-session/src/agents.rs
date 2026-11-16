@@ -171,6 +171,9 @@ impl Store {
                     queue: Default::default(),
                     info: info.clone(),
                     chat: rode_agent_core::service::ChatView {
+                        // A view can attach before the worker's first publish.
+                        // Its initial update must be a complete snapshot, not a delta.
+                        input_history: Some(Vec::new()),
                         busy: spec.text.is_some(),
                         status: "Starting agent…".into(),
                         config: spec.config.clone(),

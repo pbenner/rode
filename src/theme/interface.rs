@@ -62,14 +62,14 @@ pub struct InterfaceStyle {
     pub disabled_alpha: f32,
 }
 
-/// Shared rounded-component defaults, selected by `"ui": {}` on any palette.
+/// Shared contemporary component defaults, used by every palette.
 /// Presets override individual tokens rather than copying this baseline.
 impl Default for InterfaceStyle {
     fn default() -> Self {
         Self {
             control_radius: 6,
             surface_radius: 10,
-            popup_radius: 10,
+            popup_radius: 12,
             control_height: 30.,
             button_padding: [12., 6.],
             item_spacing: [8., 6.],
@@ -78,7 +78,7 @@ impl Default for InterfaceStyle {
             body_size: 14.,
             button_size: 13.,
             heading_size: 22.,
-            small_size: 11.,
+            small_size: 12.,
             border_width: 1.,
             focus_width: 2.,
             disabled_alpha: 0.5,
@@ -159,7 +159,7 @@ impl InterfaceStyle {
         Ok(value)
     }
 
-    /// Apply shared component roles after the common palette and legacy defaults.
+    /// Apply shared component roles after the common palette defaults.
     pub(super) fn install(self, style: &mut egui::Style, palette: Palette) {
         style.spacing.item_spacing = self.item_spacing.into();
         style.spacing.button_padding = self.button_padding.into();
@@ -221,6 +221,7 @@ impl InterfaceStyle {
 
 /// Install palette colors, spacing and typography into the native egui context.
 pub fn install(ctx: &egui::Context, palette: Palette) {
+    super::typography::install(ctx);
     ctx.data_mut(|data| data.insert_temp(IconStyle::key(), palette.icons));
     let mut style = (*ctx.style()).clone();
     // Explicit palette selection owns appearance across every native viewport;
@@ -231,7 +232,7 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
         egui::Theme::Light
     });
     // Reset all spacing and the secondary text role before applying a palette,
-    // so optional component styles cannot leak into a subsequent legacy theme.
+    // so optional component styles cannot leak into a subsequent theme.
     style.spacing = Default::default();
     style.text_styles.insert(
         TextStyle::Small,
@@ -332,9 +333,7 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style
         .text_styles
         .insert(TextStyle::Heading, FontId::proportional(24.0));
-    if let Some(ui) = palette.ui {
-        ui.install(&mut style, palette);
-    }
+    palette.ui.unwrap_or_default().install(&mut style, palette);
     ctx.set_style(style);
     // Theme changes also repaint unfocused editor and tool windows.
     let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());

@@ -556,13 +556,13 @@ impl Widget for IconButton<'_> {
         let id = ui.next_auto_id().with("outline-icon");
         let icon = Atom::custom(id, Vec2::splat(self.size));
         let mut button = if self.icon_only {
-            Button::new(icon).frame(false).small()
+            Button::new(icon).stroke(Stroke::NONE).frame(false).small()
         } else {
             let mut text = RichText::new(self.label);
             if let Some(color) = self.tint {
                 text = text.color(color);
             }
-            Button::new((icon, text))
+            Button::new((icon, text)).stroke(Stroke::NONE)
         }
         .selected(self.selected)
         .sense(super::keyboard::button_sense(ui, self.label, self.sense))
@@ -573,18 +573,31 @@ impl Widget for IconButton<'_> {
         if !self.shortcut.is_empty() {
             button = button.shortcut_text(self.shortcut);
         }
+        // Icon slots have their own fixed geometry; text-button padding must
+        // not widen a toolbar when a theme increases its labeled controls.
+        let padding = ui.spacing().button_padding;
+        if self.icon_only {
+            ui.spacing_mut().button_padding = Vec2::splat(4.);
+        }
         let output = button.atom_ui(ui);
+        ui.spacing_mut().button_padding = padding;
         let icon_rect = output.rect(id);
         let response = output.response;
+        if !self.icon_only {
+            crate::theme::button_focus(ui, &response, None);
+        }
         if ui.is_rect_visible(response.rect) {
             let visuals = ui.style().interact_selectable(&response, self.selected);
             if self.icon_only && (response.hovered() || response.has_focus() || self.selected) {
-                ui.painter()
-                    .rect_filled(response.rect, 4., visuals.weak_bg_fill);
+                ui.painter().rect_filled(
+                    response.rect,
+                    visuals.corner_radius,
+                    visuals.weak_bg_fill,
+                );
                 if response.has_focus() {
                     ui.painter().rect_stroke(
                         response.rect,
-                        4.,
+                        visuals.corner_radius,
                         visuals.bg_stroke,
                         StrokeKind::Inside,
                     );
@@ -638,6 +651,7 @@ pub(super) fn submenu<R>(
     let id = ui.next_auto_id().with("submenu-icon");
     let arrow_id = id.with("arrow");
     let output = Button::new((Atom::custom(id, Vec2::splat(16.)), label))
+        .stroke(Stroke::NONE)
         .right_text(Atom::custom(arrow_id, Vec2::splat(14.)))
         .atom_ui(ui);
     let color = ui.visuals().weak_text_color();
@@ -647,6 +661,7 @@ pub(super) fn submenu<R>(
     if let Some(rect) = output.rect(arrow_id) {
         Icon::ChevronRight.paint(ui.painter(), rect, color);
     }
+    crate::theme::button_focus(ui, &output.response, None);
     super::ui_probe::button(ui, &format!("submenu:{label}"), &output.response);
     super::keyboard::target(ui, label, &output.response);
     // SubMenu tests hover against the trigger rectangle, independently of the
@@ -668,6 +683,7 @@ pub(super) fn overflow(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Response 
             .frame(false),
         "All open editors",
     )
+    .frame(false)
     .ui(ui, contents);
     Icon::More.paint(
         ui.painter(),

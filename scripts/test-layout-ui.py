@@ -113,19 +113,28 @@ def active_line(ui, filename, width, height, accent, minimum=80):
         tab = controls["editor-tab:" + active]
         pane = controls["pane-Editor"]
         scale = layout["pixels_per_point"]
-        y = round(tab[1] * scale)
-        left = max(0, round(pane[0] * scale))
-        right = min(width, round(pane[2] * scale))
+        top = max(0, round(tab[1] * scale))
+        bottom = min(height, round(tab[3] * scale))
+        left = max(0, round(max(pane[0], tab[0]) * scale))
+        right = min(width, round(min(pane[2], tab[2]) * scale))
         screenshot(ui.window, filename)
         data = subprocess.check_output(
             ["convert", str(ARTIFACTS / filename), "-depth", "8", "rgb:-"]
         )
         if len(data) != width * height * 3:
             return False
-        pixels = [
-            tuple(data[(y * width + x) * 3 : (y * width + x) * 3 + 3]) for x in range(left, right)
-        ]
-        return pixels.count(accent) >= minimum
+        # A theme may put the accent at either edge or inside a rounded tab.
+        # Require a continuous-width marker inside this active tab, rather
+        # than counting unrelated accents across the whole editor header.
+        required = min(minimum * scale, max(0, right - left - 32 * scale))
+        return required > 0 and any(
+            sum(
+                tuple(data[(y * width + x) * 3 : (y * width + x) * 3 + 3]) == accent
+                for x in range(left, right)
+            )
+            >= required
+            for y in range(top, bottom)
+        )
 
     wait_for(painted, "Active tab is off-screen or its selection marker is missing")
 

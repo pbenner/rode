@@ -189,7 +189,7 @@ impl State {
         let title = |ui: &mut egui::Ui| {
             ui.label(
                 RichText::new("Open project")
-                    .size(palette.ui.map_or(20., |style| style.heading_size))
+                    .size(palette.ui.unwrap_or_default().heading_size)
                     .strong()
                     .color(palette.heading_color()),
             );
@@ -248,9 +248,8 @@ impl State {
 
         // Reserve the footer before measuring the scrollable body. Neither an
         // expanded rules editor nor a short viewport may hide confirmation.
-        let footer_height = layout::control_height(ui)
-            .max(palette.ui.map_or(32., |style| style.control_height))
-            + 24.;
+        let footer_height =
+            layout::control_height(ui).max(palette.ui.unwrap_or_default().control_height) + 24.;
         let body_height =
             (ctx.content_rect().height() - 64. - (ui.cursor().min.y - top) - footer_height).max(1.);
         egui::ScrollArea::vertical()

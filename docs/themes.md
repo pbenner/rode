@@ -1,5 +1,7 @@
 # Themes
 
+New installations start with **Atelier Dark**. Saved theme choices and explicit
+`--theme` selections take precedence, including existing Phosphor preferences.
 
 Click **Theme: …** at the bottom right, or choose **View → Color theme**. Built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
 
@@ -9,9 +11,9 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Bu
 | Sumi-e Dark | `sumie-dark` | Neutral charcoal-ink surfaces, paper-white text and the same illustration in pale ink |
 | SynthWave ’84 | `synthwave84` | Upstream purple surfaces, pink variables, cyan functions, yellow keywords and orange strings |
 | SynthWave ’84 — Neon Dreams | `synthwave84-neon` | SynthWave’s optional bright token cores, native glyph halos, pink-to-cyan tab/activity accents and subtle editor gradient |
-| Atelier Dark | `atelier-dark` | Neutral graphite surfaces, emerald accents, crisp white text and distinct semantic syntax |
-| Atelier Light | `atelier-light` | Matching cool-white surfaces, cobalt accents, deep ink text and a complete light terminal palette |
-| Phosphor | `phosphor` | Original charcoal and soft green; the default |
+| Atelier Dark | `atelier-dark` | Neutral graphite surfaces, mint accents, crisp white text and distinct semantic syntax; the initial default |
+| Atelier Light | `atelier-light` | Soft-white surfaces, deep sage-green accents, deep ink text and a complete light terminal palette |
+| Phosphor | `phosphor` | Original charcoal and soft green |
 | Carbon | `carbon` | Near-black, neutral panels, amber accents, teal keywords; inspired by the reference screenshot |
 | Carbon Edge | `carbon-edge` | Carbon’s interface, syntax and terminal colours with amber cut-corner frames and static glow |
 | Code Dark | `code-dark` | Neutral charcoal, light gray text and blue accents; inspired by VS Code's classic dark theme |
@@ -26,6 +28,18 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Bu
 | Studio | `studio` | Graphite surfaces, soft white text, blue-violet accents, rounded controls and tabs, coordinated typography and spacing |
 | Studio Neutral | `studio-neutral` | Studio’s rounded styling with neutral charcoal surfaces, silver accents, sage strings and sand keywords |
 | Studio Hacker | `studio-hacker` | Studio’s rounded styling with green-black surfaces, fresh green accents, mint text and green terminal prompts |
+
+All themes share embedded Inter interface typography, coordinated spacing, tonal
+secondary buttons and rounded active tabs. Input fields retain clear boundaries;
+keyboard focus stays inside each control. Menus and dialogs use soft shadows,
+while tool cards and the sidebar have distinct surface layers. The header
+provides a compact workspace/command control, and the welcome page groups the
+main project actions. Command results use flat rows with labels on the left and
+shortcuts in a separate trailing column. Workbench forms share padded input
+fields with the project dialogs. Editor and terminal text keep their independent monospace
+font and size. Sumi-e artwork and decorated themes retain their own character.
+Inter is included in the binary with its [font license](licensing.md), with no
+font installation or network access required.
 
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, One Half Dark, or either SynthWave ’84 variant’s code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
@@ -101,6 +115,8 @@ with no network access or animation.
 Sumi-e also uses native brush-stroke icons, with tapered ink lines, open-circle
 strokes, folded paper documents and an ink-brush palette symbol. Familiar action
 shapes, accessible labels, keyboard shortcuts and click targets are preserved.
+Ink edges and tips use anti-aliasing sized to physical display pixels, and curve
+detail adapts to display scale so small and high-DPI icons stay smooth.
 Switching themes updates the icons in menus, toolbars and all editor windows.
 Custom variants can set `"artwork": "none"` and `"icons": "outline"` independently;
 see the [theme format](theme-format.md).
@@ -112,10 +128,10 @@ see the [theme format](theme-format.md).
 ![Sumi-e welcome screen with plum blossom](../assets/sumie-expanded-welcome.png)
 
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
-Both share compact 28-point controls, restrained corner radii, proportional UI
-labels, quiet separators and stronger control/focus outlines. The dark palette
-uses neutral graphite surfaces, emerald emphasis and crisp white text; the light
-palette uses cool-white surfaces, deep ink text and cobalt emphasis. Each includes
+Both share 30-point controls, restrained corner radii, Inter UI labels, quiet
+separators and clear keyboard focus. The dark palette uses neutral graphite
+surfaces, mint emphasis and crisp white text; the light palette uses soft-white
+surfaces, deep ink text and sage-green emphasis. Each includes
 its own syntax, Git status and ANSI terminal colors. Choose **Follow UI theme** under Syntax
 highlighting for the matching code palette; explicitly selected independent
 syntax themes retain their own colors.
@@ -127,13 +143,15 @@ focused and open states. Syntax text also reaches 4.5:1 against the editor and s
 existing 4.5:1 minimum-contrast rendering option. Bright ANSI colors retain at
 least 4.5:1 against the default terminal background.
 
-Native RODE captures with a demo Rust workspace; the dark preview is captured at 2× DPI:
+Native RODE captures of the shared component styling in a demo workspace:
 
 | Atelier Dark | Atelier Light |
 | --- | --- |
 | ![Atelier Dark native editor](../assets/atelier-dark.png) | ![Atelier Light native editor](../assets/atelier-light.png) |
 
-Studio is designed for everyday work: graphite surface layers, quiet borders, proportional interface labels and a restrained blue-violet accent. Shared component settings coordinate control heights, corner radii, card padding and heading sizes. Control outlines use a dedicated color, separate from quiet panel dividers. Keyboard focus uses a stronger outline on inputs, chat composers and buttons, including filled primary actions. Secondary text stays readable on hover, pressed and open surfaces; disabled controls are subdued, and soft shadows distinguish menus and dialogs. Code and terminal fonts keep their separate size preference. Select **Follow UI theme** for its matching syntax palette. Studio is an optional preset; Phosphor remains the default.
+![Command palette with aligned labels and shortcuts](../assets/atelier-command-palette.png)
+
+Studio is designed for everyday work: graphite surface layers, quiet borders, proportional interface labels and a restrained blue-violet accent. Shared component settings coordinate control heights, corner radii, card padding and heading sizes. Control outlines use a dedicated color, separate from quiet panel dividers. Keyboard focus uses a stronger outline on inputs, chat composers and buttons, including filled primary actions. Secondary text stays readable on hover, pressed and open surfaces; disabled controls are subdued, and soft shadows distinguish menus and dialogs. Code and terminal fonts keep their separate size preference. Select **Follow UI theme** for its matching syntax palette. Atelier Dark is the initial default; Studio and Phosphor remain available.
 
 Studio Neutral inherits Studio’s rounded controls, spacing, typography and focus treatment. Neutral charcoal surfaces and silver accents replace the blue-violet palette, with sage strings, sand keywords and subdued terminal colors. Select **Follow UI theme** to use its matching code colors; independently selected syntax themes retain their own colors. All Studio variants remain available.
 
@@ -143,7 +161,7 @@ Hologram is inspired by a cyan holographic loading panel over navy code. Double 
 
 Telemetry takes its cues from turquoise sci-fi instrument screens: open corner brackets, subdued vertical rails and small hatched edge accents on near-black panels. Matching mint text and green-cyan syntax keep the appearance cohesive. All frame details are static and stay within the panel margins.
 
-Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, loaded at startup. They can inherit any built-in palette and override UI, syntax, ANSI terminal colors and the optional native frame treatment. Carbon Edge, Afterglow, Knight Rider, Hologram and Telemetry use static decoration: code and terminal backgrounds stay solid, and switching themes preserves buffers, independent syntax choices and running shells. See the [theme format and examples](../themes/README.md). An invalid or missing theme produces a visible warning and falls back to Phosphor if the selected theme is unavailable. Presets are embedded in the binary, with no extra downloads, dependencies, or background effects.
+Custom themes are JSON files in `${XDG_CONFIG_HOME:-~/.config}/rode/themes/`, loaded at startup. They can inherit any built-in palette and override UI, syntax, ANSI terminal colors and the optional native frame treatment. Carbon Edge, Afterglow, Knight Rider, Hologram and Telemetry use static decoration: code and terminal backgrounds stay solid, and switching themes preserves buffers, independent syntax choices and running shells. See the [theme format and examples](../themes/README.md). An invalid or missing theme produces a visible warning and falls back to Atelier Dark if the selected theme is unavailable. Presets are embedded in the binary, with no extra downloads, dependencies, or background effects.
 
 **View → Interface scale** offers percentage presets and 5% Smaller/Larger actions for the whole interface, separately from **Editor font size**. Try 75% or 50% if the GUI looks too large on another display; [interface sizing](editing.md) explains monitor scaling, reset and keyboard access.
 

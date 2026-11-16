@@ -87,7 +87,7 @@ fn action_button(ui: &mut Ui, file: &GitFile, action: Action, size: Vec2) -> egu
     let response = ui
         .add_enabled(
             action.enabled(file),
-            Button::new(action.label(file)).min_size(size),
+            crate::keyboard::Button::new(action.label(file)).min_size(size),
         )
         .on_hover_text(action.hint())
         .on_disabled_hover_text(disabled_hint);

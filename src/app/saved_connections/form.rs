@@ -19,6 +19,62 @@ impl State {
             "Rust SSH is built in. OpenSSH is available for advanced configurations.",
             palette,
         );
+        // Keep the action row visible while larger type, access rules and
+        // saved-profile descriptions scroll within the viewport's body budget.
+        let footer = layout::control_height(ui) + 28.;
+        let body_height = (ctx.content_rect().height()
+            - 80.
+            - footer
+            - (ui.cursor().top() - ui.min_rect().top()))
+        .max(40.);
+        egui::ScrollArea::vertical()
+            .id_salt("connection-fields")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .auto_shrink([false, true])
+            .min_scrolled_height(body_height)
+            .max_height(body_height)
+            .show(ui, |ui| self.fields(ui, ctx, palette, presets, focus));
+        ui.add_space(12.0);
+        ui.horizontal_wrapped(|ui| {
+            if palette.primary(ui, "Connect").clicked() {
+                match self.draft.validate() {
+                    Ok(()) => {
+                        intent = Some(FormIntent::Connect(Box::new(self.draft.clone())));
+                    }
+                    Err(error) => intent = Some(FormIntent::Error(error.to_string())),
+                }
+            }
+            let save = ui.add_enabled(
+                !self.saving,
+                crate::keyboard::Button::new(if self.saving {
+                    "Saving…"
+                } else {
+                    "Save profile"
+                }),
+            );
+            ui_probe::button(ui, "ssh-save-profile", &save);
+            if save.clicked() {
+                intent = Some(match self.draft.validate() {
+                    Ok(()) => FormIntent::Save,
+                    Err(error) => FormIntent::Error(error.to_string()),
+                });
+            }
+            if crate::keyboard::button(ui, "Cancel").clicked() {
+                intent = Some(FormIntent::Cancel);
+            }
+        });
+        intent
+    }
+
+    /// Scrollable profile fields; the owning form keeps connection actions pinned.
+    fn fields(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: theme::Palette,
+        presets: &mut sandbox_presets::State,
+        focus: &mut bool,
+    ) {
         let mut selected = None;
         if !self.profiles.is_empty() || !self.aliases.is_empty() {
             crate::keyboard::ComboBox::new("profiles", "Saved SSH connection")
@@ -110,7 +166,8 @@ impl State {
                         } else {
                             "Host / alias"
                         };
-                        if *focus && label == initial_focus {
+                        let request_focus = *focus && label == initial_focus;
+                        if request_focus {
                             ui.memory_mut(|memory| memory.request_focus(id));
                             if self.name_focus {
                                 let mut state =
@@ -125,15 +182,21 @@ impl State {
                             }
                             *focus = false;
                         }
-                        let response = ui.add(crate::keyboard::named(
-                            label,
-                            egui::TextEdit::singleline(field)
-                                // Loading saved profiles can insert a dropdown above
-                                // these fields while the user is already typing.
-                                .id(id)
-                                .hint_text(hint)
-                                .desired_width(field_width),
-                        ));
+                        let response = ui.add_sized(
+                            [field_width, layout::control_height(ui)],
+                            crate::keyboard::named(
+                                label,
+                                layout::text_input(ui, field)
+                                    // Loading saved profiles can insert a dropdown above
+                                    // these fields while the user is already typing.
+                                    .id(id)
+                                    .hint_text(hint)
+                                    .desired_width(field_width),
+                            ),
+                        );
+                        if request_focus {
+                            response.request_focus();
+                        }
                         ui_probe::button(ui, &format!("ssh-field-{label}"), &response);
                         ui.end_row();
                     }
@@ -225,35 +288,5 @@ impl State {
             });
         }
         ui.label(RichText::new("Authentication and host-key prompts open in the terminal. RODE uses a compatible installed helper or deploys a matching native helper.").small().color(palette.muted));
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if palette.primary(ui, "Connect").clicked() {
-                match self.draft.validate() {
-                    Ok(()) => {
-                        intent = Some(FormIntent::Connect(Box::new(self.draft.clone())));
-                    }
-                    Err(error) => intent = Some(FormIntent::Error(error.to_string())),
-                }
-            }
-            let save = ui.add_enabled(
-                !self.saving,
-                crate::keyboard::Button::new(if self.saving {
-                    "Saving…"
-                } else {
-                    "Save profile"
-                }),
-            );
-            ui_probe::button(ui, "ssh-save-profile", &save);
-            if save.clicked() {
-                intent = Some(match self.draft.validate() {
-                    Ok(()) => FormIntent::Save,
-                    Err(error) => FormIntent::Error(error.to_string()),
-                });
-            }
-            if crate::keyboard::button(ui, "Cancel").clicked() {
-                intent = Some(FormIntent::Cancel);
-            }
-        });
-        intent
     }
 }

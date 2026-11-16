@@ -487,7 +487,7 @@ impl EditorApp {
                     ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
                         ui.set_min_size(size);
                         ui.add(
-                            egui::Label::new(palette.tag("EXPLORER").color(
+                            egui::Label::new(palette.tag("Explorer").color(
                                 if palette.chrome.is_decorated() {
                                     palette.heading
                                 } else {
@@ -514,7 +514,7 @@ impl EditorApp {
                 let root_response = ui
                     .add(
                         egui::Label::new(
-                            RichText::new(ssh::display_name(&root).to_uppercase())
+                            RichText::new(ssh::display_name(&root))
                                 .strong()
                                 .size(12.0)
                                 .color(palette.text),

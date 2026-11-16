@@ -172,7 +172,7 @@ pub(super) fn header(
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(title)
-                    .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
+                    .size(palette.ui.unwrap_or_default().heading_size - 2.)
                     .strong()
                     .color(palette.heading_color()),
             );
@@ -181,7 +181,7 @@ pub(super) fn header(
     } else {
         ui.label(
             RichText::new(title)
-                .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
+                .size(palette.ui.unwrap_or_default().heading_size - 2.)
                 .strong()
                 .color(palette.heading_color()),
         );
@@ -202,7 +202,7 @@ pub(super) fn header(
 pub(super) fn heading(ui: &mut egui::Ui, title: &str, description: &str, palette: Palette) {
     ui.label(
         RichText::new(title)
-            .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
+            .size(palette.ui.unwrap_or_default().heading_size - 2.)
             .strong()
             .color(palette.heading_color()),
     );
@@ -215,11 +215,26 @@ pub(super) fn subtitle(ui: &mut egui::Ui, text: &str, palette: Palette) {
     ui.add(
         egui::Label::new(
             RichText::new(text)
-                .size(palette.ui.map_or(12., |style| style.body_size - 1.))
+                .size(palette.ui.unwrap_or_default().body_size - 1.)
                 .color(palette.muted),
         )
         .wrap(),
     );
+}
+
+/// Single-line form/search input with the same inset and minimum height as
+/// adjacent actions. Keep TextEdit's native editing, focus and stable caller IDs.
+pub(super) fn text_input<'a>(
+    ui: &egui::Ui,
+    value: &'a mut dyn egui::TextBuffer,
+) -> egui::TextEdit<'a> {
+    let padding = ui.spacing().button_padding;
+    egui::TextEdit::singleline(value)
+        .margin(egui::Margin::symmetric(
+            padding.x.round() as i8,
+            padding.y.round() as i8,
+        ))
+        .min_size(egui::vec2(0., control_height(ui)))
 }
 
 /// Reserve a readable label column in a form grid. Compact forms put the field
@@ -278,7 +293,7 @@ pub(super) fn section<R>(
     let result = card(ui, palette, |ui| {
         ui.label(
             RichText::new(title)
-                .size(palette.ui.map_or(15., |style| style.body_size + 1.))
+                .size(palette.ui.unwrap_or_default().body_size + 1.)
                 .strong()
                 .color(palette.heading_color()),
         );

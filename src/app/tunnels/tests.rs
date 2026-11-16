@@ -384,7 +384,10 @@ fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_a
             attempts: 1,
         }];
         app.tunnels.spec.listen_on = ListenOn::AllInterfaces;
-        for page in [Page::Tunnels, Page::Saved, Page::New] {
+        for (page_index, page) in [Page::Tunnels, Page::Saved, Page::New]
+            .into_iter()
+            .enumerate()
+        {
             app.tunnels.page = page;
             for frame in 0..3 {
                 let _ = ctx.run(
@@ -393,7 +396,9 @@ fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_a
                             egui::Pos2::ZERO,
                             egui::vec2(width, 1400.),
                         )),
-                        time: Some(frame as f64),
+                        // egui animations require time to keep advancing when
+                        // the same context changes pages.
+                        time: Some((page_index * 3 + frame) as f64),
                         ..Default::default()
                     },
                     |ctx| {
@@ -470,7 +475,10 @@ fn click(app: &mut EditorApp, ctx: &egui::Context, label: &str) -> egui::FullOut
     dialog_frame(app, ctx, size, vec![]);
     let output = dialog_frame(app, ctx, size, vec![]);
     let (rect, clip) = text_bounds(&output, label);
-    assert!(clip.contains_rect(rect), "Click target is clipped: {label}");
+    assert!(
+        clip.contains_rect(rect),
+        "Click target is clipped: {label}: {rect:?} outside {clip:?}"
+    );
     let mut result = egui::FullOutput::default();
     for pressed in [true, false] {
         result = dialog_frame(

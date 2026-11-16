@@ -272,7 +272,7 @@ fn direct_theme_json_parsing_enforces_the_same_size_limit_as_file_loading() {
 }
 
 #[test]
-fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
+fn component_overrides_inherit_and_restore_shared_layout_and_typography() {
     let studio = Theme::builtin("studio").unwrap();
     let original = studio.palette.ui.unwrap();
     let derived = Theme::from_json(
@@ -295,14 +295,15 @@ fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
     );
     let directory = tempfile::tempdir().unwrap();
     let (mut themes, _) = Themes::load(directory.path(), "phosphor");
+    themes.entries.push(derived);
     let ctx = egui::Context::default();
     themes.select("phosphor", &ctx).unwrap();
     let before = ctx.style();
     themes.select_syntax("nord", &ctx).unwrap();
-    themes.select("studio", &ctx).unwrap();
+    themes.select("custom:studio", &ctx).unwrap();
     let styled = ctx.style();
     assert_ne!(styled.spacing, before.spacing);
-    assert_ne!(styled.text_styles, before.text_styles);
+    assert_eq!(styled.text_styles, before.text_styles);
     assert!(
         !styled.spacing.scroll.floating,
         "Scrollbars must reserve their own gutter"
@@ -321,7 +322,7 @@ fn component_styles_inherit_and_restore_legacy_layout_and_typography() {
     assert_eq!(
         *ctx.style(),
         *before,
-        "Component styles leaked into a legacy theme"
+        "Component overrides leaked into the shared baseline"
     );
 }
 
@@ -590,7 +591,7 @@ fn invalid_or_missing_theme_falls_back_without_losing_valid_themes() {
     )
     .unwrap();
     let (themes, warnings) = Themes::load(directory.path(), "custom:missing");
-    assert_eq!(themes.active().id, "phosphor");
+    assert_eq!(themes.active().id, rode::theme::DEFAULT_THEME_ID);
     assert_eq!(themes.entries.len(), Theme::builtins().len() + 1);
     assert!(warnings.iter().any(|w| w.contains("broken.json")));
     assert!(warnings.iter().any(|w| w.contains("unavailable")));

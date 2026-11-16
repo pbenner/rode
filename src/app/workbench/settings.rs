@@ -115,7 +115,7 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         ui.label(
             RichText::new("Project settings")
-                .size(palette.ui.map_or(18., |style| style.heading_size - 2.))
+                .size(palette.ui.unwrap_or_default().heading_size - 2.)
                 .strong()
                 .color(palette.heading_color()),
         );
@@ -275,7 +275,7 @@ impl EditorApp {
             ui.label("Ruff command (blank: uvx ruff)");
             ui.add(crate::keyboard::named(
                 "Ruff executable",
-                egui::TextEdit::singleline(&mut self.workbench.draft.ruff)
+                layout::text_input(ui, &mut self.workbench.draft.ruff)
                     .desired_width(f32::INFINITY)
                     .hint_text("uvx ruff, auto, ruff, or /path/to/ruff"),
             ))
@@ -308,7 +308,7 @@ impl EditorApp {
             ui.label("Build executable");
             ui.add(crate::keyboard::named(
                 "LaTeX compiler",
-                egui::TextEdit::singleline(&mut self.workbench.draft.latex.program)
+                layout::text_input(ui, &mut self.workbench.draft.latex.program)
                     .desired_width(f32::INFINITY)
                     .hint_text("latexmk, another compiler, or /path/to/tool"),
             ));
@@ -364,7 +364,7 @@ impl EditorApp {
                 ui.label(label);
                 ui.add(crate::keyboard::named(
                     label,
-                    egui::TextEdit::singleline(value)
+                    layout::text_input(ui, value)
                         .desired_width(f32::INFINITY)
                         .hint_text(hint),
                 ));
@@ -383,7 +383,7 @@ impl EditorApp {
             ui.label("Marp CLI (blank: installed project node_modules/.bin/marp, then PATH)");
             ui.add(crate::keyboard::named(
                 "Marp executable",
-                egui::TextEdit::singleline(&mut self.workbench.draft.marp.program)
+                layout::text_input(ui, &mut self.workbench.draft.marp.program)
                     .desired_width(f32::INFINITY)
                     .hint_text("marp or /path/to/marp"),
             ));
@@ -402,7 +402,7 @@ impl EditorApp {
                 });
             ui.add(crate::keyboard::named(
                 "Browser executable",
-                egui::TextEdit::singleline(&mut self.workbench.draft.marp.browser)
+                layout::text_input(ui, &mut self.workbench.draft.marp.browser)
                     .desired_width(f32::INFINITY)
                     .hint_text("/usr/bin/firefox or /usr/bin/chromium"),
             ));
@@ -411,7 +411,7 @@ impl EditorApp {
             ui.label("Additional theme CSS (optional project-host path)");
             ui.add(crate::keyboard::named(
                 "Slide stylesheet",
-                egui::TextEdit::singleline(&mut self.workbench.draft.marp.theme_css)
+                layout::text_input(ui, &mut self.workbench.draft.marp.theme_css)
                     .desired_width(f32::INFINITY)
                     .hint_text("themes/slides.css"),
             ));
@@ -592,12 +592,12 @@ impl EditorApp {
             ui.label("squeue");
             ui.add(crate::keyboard::named(
                 "squeue executable",
-                egui::TextEdit::singleline(&mut self.workbench.draft.slurm_queue),
+                layout::text_input(ui, &mut self.workbench.draft.slurm_queue),
             ));
             ui.label("scancel");
             ui.add(crate::keyboard::named(
                 "scancel executable",
-                egui::TextEdit::singleline(&mut self.workbench.draft.slurm_cancel),
+                layout::text_input(ui, &mut self.workbench.draft.slurm_cancel),
             ));
             if crate::keyboard::button(ui, "Save Slurm settings").clicked() {
                 self.workbench.prefs.slurm_queue = self.workbench.draft.slurm_queue.trim().into();

@@ -119,6 +119,8 @@ impl EditorApp {
                     // Like the project picker, the tunnel manager owns its
                     // scrolling body and keeps its actions visible.
                     self.tunnels_dialog(ui, ctx);
+                } else if self.dialog == Dialog::Connect {
+                    self.connect_dialog(ui, ctx);
                 } else {
                     egui::ScrollArea::vertical()
                         .id_salt(("dialog-body", std::mem::discriminant(&self.dialog)))
@@ -137,8 +139,6 @@ impl EditorApp {
                                 self.encrypted_ui(ui, ctx);
                             } else if matches!(self.dialog, Dialog::MarpExport(..)) {
                                 self.marp_export_dialog(ui, ctx);
-                            } else if self.dialog == Dialog::Connect {
-                                self.connect_dialog(ui, ctx);
                             } else if self.dialog == Dialog::Shortcuts {
                                 self.help_dialog(ui);
                             } else if self.dialog == Dialog::Commands {

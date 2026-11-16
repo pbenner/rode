@@ -21,14 +21,18 @@ pub(super) fn show(
 ) -> Actions {
     let mut result = Actions::default();
     let button_width = |label: &str| {
-        ui.painter()
-            .layout_no_wrap(
-                label.into(),
-                egui::TextStyle::Button.resolve(ui.style()),
-                ui.visuals().text_color(),
-            )
-            .size()
-            .x
+        let measure = |style: egui::TextStyle| {
+            ui.painter()
+                .layout_no_wrap(
+                    label.into(),
+                    style.resolve(ui.style()),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x
+        };
+        measure(egui::TextStyle::Button)
+            .max(measure(egui::TextStyle::Body))
             .ceil()
             + 2. * ui.spacing().button_padding.x
     };

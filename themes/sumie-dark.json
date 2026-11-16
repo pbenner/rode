@@ -61,9 +61,9 @@
     "minimum_contrast": 4.5
   },
   "ui": {
-    "control_radius": 2,
-    "surface_radius": 4,
-    "popup_radius": 6,
+    "control_radius": 6,
+    "surface_radius": 10,
+    "popup_radius": 12,
     "control_height": 30,
     "button_padding": [
       12,
@@ -78,7 +78,7 @@
     "body_size": 14,
     "button_size": 13,
     "heading_size": 21,
-    "small_size": 11,
+    "small_size": 12,
     "border_width": 1,
     "focus_width": 2,
     "disabled_alpha": 0.5

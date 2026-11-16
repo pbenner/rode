@@ -68,7 +68,7 @@ pub(super) fn show(
     let commits: Vec<_> = data.lines().filter_map(Commit::parse).collect();
     let filter = ui.add(crate::keyboard::named(
         "Filter recent commits by message, author or hash",
-        egui::TextEdit::singleline(&mut state.filter)
+        layout::text_input(ui, &mut state.filter)
             .id_salt("git-history-filter")
             .desired_width(f32::INFINITY)
             .hint_text("Filter recent commits by message, author or hash")
@@ -237,7 +237,7 @@ fn row(
             .layout(Layout::left_to_right(Align::Center)),
         |ui| {
             let details = ui
-                .add_sized([widths[0], height], Button::new("Details"))
+                .add_sized([widths[0], height], crate::keyboard::Button::new("Details"))
                 .on_hover_text("View this commit's message, changed files and patch");
             ui_probe::button(ui, &format!("git-history-details-{}", commit.oid), &details);
             if details.clicked() {

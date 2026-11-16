@@ -35,8 +35,9 @@ mod interface;
 mod palette;
 mod surfaces;
 pub mod syntax;
+mod typography;
 pub use artwork::Artwork;
-pub(crate) use components::{PANEL_MARGIN, control_height_for_style};
+pub(crate) use components::{PANEL_MARGIN, button_focus, control_height_for_style};
 pub use components::{card_frame, compact_control_height, control_height, dialog_frame, frame};
 use definition::{MAX_CUSTOM_THEMES, MAX_THEME_BYTES};
 pub use interface::{IconStyle, InterfaceStyle, install};
@@ -45,6 +46,10 @@ pub use surfaces::Chrome;
 
 /// Shared preference key for the interface palette, separate from syntax selection.
 pub const STORAGE_KEY: &str = "color_theme";
+
+/// Initial appearance and missing-preset fallback. Saved/CLI selections still
+/// take precedence; this does not change the base of existing custom themes.
+pub const DEFAULT_THEME_ID: &str = "atelier-dark";
 
 /// Named interface palette with its private syntax fallback data.
 #[derive(Clone)]
@@ -174,16 +179,21 @@ impl Themes {
                 }
             }
         }
+        let fallback = entries
+            .iter()
+            .position(|theme| theme.id == DEFAULT_THEME_ID)
+            .unwrap_or(0);
         let selected = entries
             .iter()
             .position(|t| t.id == requested)
             .unwrap_or_else(|| {
                 if !requested.is_empty() {
                     warnings.push(format!(
-                        "Theme '{requested}' is unavailable; using Phosphor"
+                        "Theme '{requested}' is unavailable; using {}",
+                        entries[fallback].name
                     ));
                 }
-                0
+                fallback
             });
         let mut syntax = Box::new(SyntectSettings {
             ps: two_face::syntax::extra_newlines(),

@@ -70,7 +70,7 @@ pub(in crate::app) fn rules_ui(
                 ui.scope_builder(egui::UiBuilder::new().id(draft_id.with(grant.serial)), |ui| {
                     row(ui, index, columns.height, palette, |ui| {
                         ui.add_sized(
-                            [columns.path_width(ui), columns.height],crate::keyboard::named("Sandbox access path", egui::TextEdit::singleline(&mut grant.path).font(egui::TextStyle::Monospace)
+                            [columns.path_width(ui), columns.height],crate::keyboard::named("Sandbox access path", layout::text_input(ui, &mut grant.path).font(egui::TextStyle::Monospace)
                                 .desired_width(0.).vertical_align(Align::Center).hint_text("/path or ~/folder"))).on_hover_text(grant.path.as_str());
                         access_picker(ui, &mut grant.access, columns, false);
                         if ui.add_sized(

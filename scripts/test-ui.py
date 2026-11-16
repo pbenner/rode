@@ -181,6 +181,7 @@ fn run_step(step: usize) {
             environment["RODE_UI_TEST_STATE"],
             "appearance-menu",
         )
+        ui.scroll_to_control("interface-theme:code-dark", over="interface-theme:phosphor")
         click_button(
             window,
             process,

@@ -169,7 +169,7 @@ impl EditorApp {
                 ui.label("Clone into this folder (must be empty)");
                 ui.add(crate::keyboard::named(
                     "Clone repository URL",
-                    egui::TextEdit::singleline(&mut self.workbench.git.clone_url),
+                    layout::text_input(ui, &mut self.workbench.git.clone_url),
                 ));
                 if crate::keyboard::button(ui, "Clone repository").clicked()
                     && !self.workbench.git.clone_url.is_empty()
@@ -268,8 +268,8 @@ impl EditorApp {
                 GitTab::Stash => self.git_stash_ui(ui,ctx),
                 GitTab::Remotes => {
                     ui.monospace(&self.workbench.git.git_tab_data);
-                    ui.label("Remote name"); ui.add(crate::keyboard::named("Remote name", egui::TextEdit::singleline(&mut self.workbench.git.remote_name)));
-                    ui.label("URL"); ui.add(crate::keyboard::named("Remote URL", egui::TextEdit::singleline(&mut self.workbench.git.remote_url)));
+                    ui.label("Remote name"); ui.add(crate::keyboard::named("Remote name", layout::text_input(ui, &mut self.workbench.git.remote_name)));
+                    ui.label("URL"); ui.add(crate::keyboard::named("Remote URL", layout::text_input(ui, &mut self.workbench.git.remote_url)));
                     ui.horizontal_wrapped(|ui| {
                         if crate::keyboard::button(ui, "Add remote").clicked() { self.git_mutate(vec!["remote".into(),"add".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Add remote",ctx); }
                         if crate::keyboard::button(ui, "Set URL").clicked() { self.git_mutate(vec!["remote".into(),"set-url".into(),self.workbench.git.remote_name.clone(),self.workbench.git.remote_url.clone()],"Set remote URL",ctx); }
@@ -283,7 +283,7 @@ impl EditorApp {
                         if crate::keyboard::small_button(ui, "Checkout").clicked() { self.git_mutate(vec!["switch".into(),"--detach".into(),tag.into()],"Checkout tag",ctx); }
                         if crate::keyboard::small_button(ui, "Delete").clicked() { self.workbench.git.confirm = Some((format!("Delete local tag {tag}?"),vec!["tag".into(),"-d".into(),tag.into()].into())); }
                     }); }
-                    ui.add(crate::keyboard::named("Tag name", egui::TextEdit::singleline(&mut self.workbench.git.tag_input)));
+                    ui.add(crate::keyboard::named("Tag name", layout::text_input(ui, &mut self.workbench.git.tag_input)));
                     ui.horizontal_wrapped(|ui| {
                         if crate::keyboard::button(ui, "Create tag at HEAD").clicked() { self.git_mutate(vec!["tag".into(),self.workbench.git.tag_input.clone()],"Create tag",ctx); }
                         if crate::keyboard::button(ui, "Push tags").clicked() { self.git_mutate(strings(&["push","--tags"]),"Push tags",ctx); }
@@ -315,8 +315,8 @@ impl EditorApp {
                         });
                     }
                     ui.label(RichText::new("Linked worktrees need access to the main repository's .git directory. Grant it in Sandbox access when opening a separate sandbox.").small());
-                    ui.label("Worktree path (must be accessible in the sandbox)"); ui.add(crate::keyboard::named("Worktree path", egui::TextEdit::singleline(&mut self.workbench.git.worktree_path)));
-                    ui.label("Branch"); ui.add(crate::keyboard::named("Worktree branch", egui::TextEdit::singleline(&mut self.workbench.git.worktree_branch)));
+                    ui.label("Worktree path (must be accessible in the sandbox)"); ui.add(crate::keyboard::named("Worktree path", layout::text_input(ui, &mut self.workbench.git.worktree_path)));
+                    ui.label("Branch"); ui.add(crate::keyboard::named("Worktree branch", layout::text_input(ui, &mut self.workbench.git.worktree_branch)));
                     crate::keyboard::checkbox(ui, &mut self.workbench.git.worktree_new_branch,"Create new branch");
                     ui.horizontal_wrapped(|ui| {
                         if crate::keyboard::button(ui, "Add worktree").clicked() {
@@ -744,12 +744,12 @@ impl EditorApp {
         ui.label("New branch name");
         ui.add(crate::keyboard::named(
             "New branch name",
-            egui::TextEdit::singleline(&mut self.workbench.git.branch_input),
+            layout::text_input(ui, &mut self.workbench.git.branch_input),
         ));
         ui.label("Start point (blank: HEAD)");
         ui.add(crate::keyboard::named(
             "Branch start point",
-            egui::TextEdit::singleline(&mut self.workbench.git.branch_target),
+            layout::text_input(ui, &mut self.workbench.git.branch_target),
         ));
         if crate::keyboard::button(ui, "Create and switch").clicked() {
             let mut args = vec![
@@ -767,7 +767,7 @@ impl EditorApp {
     pub(in crate::app) fn git_stash_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.add(crate::keyboard::named(
             "Stash message",
-            egui::TextEdit::singleline(&mut self.workbench.git.stash_message),
+            layout::text_input(ui, &mut self.workbench.git.stash_message),
         ));
         if crate::keyboard::button(ui, "Stash changes + untracked files").clicked() {
             self.git_mutate(

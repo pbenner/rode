@@ -83,9 +83,10 @@ fn button_highlights_stay_inside_exact_fit_controls_across_themes_and_scales() {
                     let (clip, frame) = output
                         .shapes
                         .iter()
+                        .rev()
                         .find_map(|shape| match &shape.shape {
                             egui::Shape::Rect(rect)
-                                if rect.stroke.width > 0.
+                                if (rect.stroke.width > 0. || rect.fill.a() > 0)
                                     && rect.rect.contains(bounds.center()) =>
                             {
                                 Some((shape.clip_rect, rect))
@@ -529,7 +530,8 @@ pub(in crate::app) fn assert_button_alignment(
         .iter()
         .filter_map(|shape| match &shape.shape {
             egui::Shape::Rect(rect)
-                if rect.stroke.color == palette.control_border.unwrap_or(palette.border)
+                if (rect.stroke.color == palette.control_border.unwrap_or(palette.border)
+                    || rect.stroke.width == 0.)
                     && rect.fill == palette.raised
                     && rect.rect.height() >= style.control_height - 1.
                     && rect.rect.height() <= style.control_height + 12.

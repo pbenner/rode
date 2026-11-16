@@ -93,10 +93,8 @@ impl EditorApp {
                 ui.label("mise executable (blank: host PATH or ~/.local/bin/mise)");
                 ui.add(crate::keyboard::named(
                     "mise executable",
-                    egui::TextEdit::singleline(
-                        state.draft.runtimes.entry("mise".into()).or_default(),
-                    )
-                    .hint_text("mise or /path/to/mise"),
+                    layout::text_input(ui, state.draft.runtimes.entry("mise".into()).or_default())
+                        .hint_text("mise or /path/to/mise"),
                 ));
                 ui.small("Apply environment saves this choice. Explicit Rode variables and interpreter paths take precedence. Existing sessions keep their environment.");
             }
@@ -223,12 +221,13 @@ impl EditorApp {
                     layout::field_label(ui, label, compact);
                     let field = ui.add(crate::keyboard::named(
                         label,
-                        egui::TextEdit::singleline(
+                        layout::text_input(
+                            ui,
                             state.draft.runtimes.entry((*program).into()).or_default(),
                         )
                         .id(fields_id.with(program))
                         .desired_width(executable_width)
-                        .min_size(egui::vec2(executable_width, 20.))
+                        .min_size(egui::vec2(executable_width, layout::control_height(ui)))
                         .char_limit(4096)
                         .hint_text(format!("auto ({program}) or /path/to/{program}")),
                     ));

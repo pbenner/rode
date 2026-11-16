@@ -118,24 +118,34 @@ impl State {
             return;
         }
         let mut open = self.open;
+        let mut close_requested = false;
         egui::Window::new("Terminal colors")
             .id(egui::Id::new("terminal-colors"))
             .open(&mut open)
             .collapsible(false)
             .default_width(410.)
+            .max_width((ctx.content_rect().width() - 64.).max(1.))
             .frame(super::layout::dialog_frame(&ctx.style(), theme.palette))
             .show(ctx, |ui| {
+                // Measure the body independently of a cached short window.
+                // Actions stay outside its scroll clip when ANSI rows expand.
+                let body_height = (ctx.content_rect().height() - 160. - layout::control_height(ui)).max(1.);
                 egui::ScrollArea::vertical()
-                    .max_height((ctx.content_rect().height() - 110.).max(180.))
+                    .min_scrolled_height(body_height)
+                    .max_height(body_height)
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        super::layout::heading(ui, "Terminal colors", "Saved per theme · applies to all terminal views", theme.palette);
-                        ui.label(RichText::new(format!("Theme: {}", theme.name)).strong());
+                        super::layout::subtitle(ui, "Saved per theme · applies to all terminal views", theme.palette);
+                        let theme_label = ui.label(RichText::new(format!("Theme: {}", theme.name)).strong());
+                        ui_probe::button(ui, "terminal-colors-theme", &theme_label);
                         let mut palette = self.palette(theme);
                         let settings = self.themes.entry(theme.id.clone()).or_default();
                         ui.add_space(8.);
                         ui.label("Minimum text contrast");
-                        if ui.add(crate::keyboard::named("Terminal minimum contrast", egui::Slider::new(&mut palette.terminal_minimum_contrast, 1.0..=21.0)
-                            .step_by(0.5).suffix(":1"))).changed() {
+                        let contrast = ui.add(crate::keyboard::named("Terminal minimum contrast", egui::Slider::new(&mut palette.terminal_minimum_contrast, 1.0..=21.0)
+                            .step_by(0.5).suffix(":1")));
+                        ui_probe::button(ui, "terminal-colors-contrast", &contrast);
+                        if contrast.changed() {
                             settings.minimum_contrast = Some(palette.terminal_minimum_contrast);
                             self.pending.insert(key(&theme.id, "minimum_contrast"), palette.terminal_minimum_contrast.to_string());
                         }
@@ -150,6 +160,7 @@ impl State {
                                 ui.label(label);
                                 let mut rgb = [color.r(), color.g(), color.b()];
                                 let response = ui.color_edit_button_srgb(&mut rgb);
+                                ui_probe::button(ui, &format!("terminal-colors-{field}"), &response);
                                 crate::keyboard::target(ui, &format!("Terminal {label} color"), &response);
                                 if response.changed() {
                                     let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
@@ -159,31 +170,42 @@ impl State {
                                 ui.end_row();
                             }
                         });
-                        crate::keyboard::collapsing(ui, "ANSI colors", |ui| {
+                        let ansi = crate::keyboard::collapsing(ui, "ANSI colors", |ui| {
                             ui.small("Bold ANSI / PS1 colors use bright swatches (8–15).");
-                            egui::Grid::new("terminal-ansi-colors").num_columns(4).show(ui, |ui| {
+                            let stacked = ui.available_width() < 340.;
+                            egui::Grid::new("terminal-ansi-colors").num_columns(if stacked { 2 } else { 4 }).show(ui, |ui| {
                                 for i in 0..8 {
                                     for index in [i, i + 8] {
                                         ui.label(NAMES[index]);
                                         let c = palette.ansi[index];
                                         let mut rgb = [c.r(), c.g(), c.b()];
                                         let response = ui.color_edit_button_srgb(&mut rgb);
+                                        ui_probe::button(ui, &format!("terminal-colors-ansi-{index}"), &response);
                                         crate::keyboard::target(ui, &format!("ANSI {} color", NAMES[index]), &response);
                                         if response.changed() {
                                             let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                                             settings.ansi[index] = Some(color);
                                             self.pending.insert(key(&theme.id, &format!("ansi.{index}")), hex(color));
                                         }
+                                        if stacked { ui.end_row(); }
                                     }
-                                    ui.end_row();
+                                    if !stacked { ui.end_row(); }
                                 }
                             });
                         });
-                        ui.separator();
-                        if crate::keyboard::button(ui, "Reset to theme defaults").clicked() { self.reset(&theme.id); }
+                        ui_probe::button(ui, "terminal-colors-ansi", &ansi.header_response);
                     });
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    let reset = crate::keyboard::button(ui, "Reset to theme defaults");
+                    ui_probe::button(ui, "terminal-colors-reset", &reset);
+                    if reset.clicked() { self.reset(&theme.id); }
+                    let close = crate::keyboard::button(ui, "Close");
+                    ui_probe::button(ui, "terminal-colors-close", &close);
+                    close_requested |= close.clicked();
+                });
             });
-        self.open = open;
+        self.open = open && !close_requested;
     }
 }
 

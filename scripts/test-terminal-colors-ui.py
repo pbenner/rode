@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Native PTY contrast, palette edits, per-theme persistence and live-shell checks."""
 
-import ctypes
 import json
 import os
 import shlex
@@ -19,9 +18,7 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     ROOT,
-    click,
     close_window,
-    display,
     fixture_directory,
     fixture_environment,
     focus_window,
@@ -30,8 +27,6 @@ from ui_harness import (
     text,
     theme,
     wait_for_window,
-    x11,
-    xtest,
 )
 from ui_harness import (
     read_preferences as preferences,
@@ -55,14 +50,43 @@ def window_for(process, title="RODE"):
 
 def colors():
     ui.command("Terminal: Colors and contrast")
+    ui.control("terminal-colors-theme")
 
 
-def number(x, y, value):
-    click(x, y)
-    click(x, y)
-    key("a", ("Control_L",))
-    text(value)
-    key("Return")
+def press(name, modifiers=()):
+    before = ui.layout()["pass"]
+    key(name, modifiers)
+    ui.layout(lambda state: state["pass"] > before, "Color control did not process " + name)
+
+
+def contrast(value, theme_id="phosphor"):
+    stored = preferences(saved).get(f"terminal_color.{theme_id}.minimum_contrast", "1")
+    current = float(stored) if stored != "theme" else 1.0
+    ui.hint("Terminal minimum contrast")
+    ui.control("terminal-colors-contrast", focused=True)
+    steps = round((float(value) - current) / 0.5)
+    for _ in range(abs(steps)):
+        press("Right" if steps > 0 else "Left")
+
+
+def edit_red(label, screenshot_name):
+    # Enter egui's native picker through its named swatch. Its pinned native
+    # tab order reaches the numeric row (type, copy, R); no popup coordinates
+    # depend on the interface font, title height or placement on the display.
+    ui.hint(label)
+    press("Return")
+    for _ in range(4):
+        press("Tab")
+    screenshot(window, screenshot_name)
+    press("a", ("Control_L",))
+    text("240")
+    press("Return")
+    press("Escape")
+
+
+def close_colors():
+    ui.click("terminal-colors-close")
+    ui.absent("terminal-colors-theme")
 
 
 def bright_pixels(filename):
@@ -79,6 +103,15 @@ def bright_pixels(filename):
         ]
     )
     return sum(min(rgb[i : i + 3]) > 90 for i in range(0, len(rgb), 3))
+
+
+def contrast_pixels(filename, *, visible):
+    def painted():
+        screenshot(window, filename)
+        count = bright_pixels(filename)
+        return count > 100 if visible else count < 10
+
+    wait_for(painted, f"{filename}: terminal contrast did not render")
 
 
 def prompt_colors(window, filename, palette, crop=None, failed=False):
@@ -124,6 +157,7 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
         "printf '\\033[2J\\033[H\\033[?25l\\033[30mANSI_DARK\\033[0m\\n"
         "\\033[38;5;17mINDEX_DARK\\033[0m\\n"
         "\\033[38;2;9;10;11mRGB_DARK\\033[0m\\n'\n"
+        ": > " + shlex.quote(str(root / "dark-ready")) + "\n"
         "exec /bin/sh -i\n"
     )
     shell.chmod(0o700)
@@ -138,9 +172,13 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
     for run in (
         () if os.environ.get("RODE_TERMINAL_COLORS_UI_PROMPT_ONLY") else ("initial", "restart")
     ):
+        (root / "dark-ready").unlink(missing_ok=True)
         with (ARTIFACTS / f"{run}.log").open("w") as log:
             process = subprocess.Popen(
-                [str(BINARY), str(root)], env=environment, stdout=log, stderr=log
+                [str(BINARY), str(root), *(["--theme", "phosphor"] if run == "initial" else [])],
+                env=environment,
+                stdout=log,
+                stderr=log,
             )
             window = None
             try:
@@ -148,12 +186,12 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                 window = ui.window
                 key("t", ("Control_L", "Shift_L"))
                 ui.terminal_input()
+                wait_for(lambda: (root / "dark-ready").exists(), "Dark-text fixture did not start")
                 if run == "initial":
-                    screenshot(window, "contrast-default.png")
-                    assert bright_pixels("contrast-default.png") < 10
+                    contrast_pixels("contrast-default.png", visible=False)
                     colors()
                     screenshot(window, "settings.png")
-                    number(470, 309, "4.5")
+                    contrast(4.5)
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.minimum_contrast")
@@ -163,11 +201,10 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                     )
                     # The terminal now fills the workspace. Close the dialog
                     # before measuring its first three lines, which it covers.
-                    click(731, 137)
-                    screenshot(window, "contrast-enabled.png")
-                    assert bright_pixels("contrast-enabled.png") > 100
+                    close_colors()
+                    contrast_pixels("contrast-enabled.png", visible=True)
                     colors()
-                    number(470, 309, "1")
+                    contrast(1)
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.minimum_contrast")
@@ -175,14 +212,10 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                         ),
                         "Exact-color mode was not saved immediately",
                     )
-                    click(731, 137)
-                    screenshot(window, "contrast-off.png")
-                    assert bright_pixels("contrast-off.png") < 10
+                    close_colors()
+                    contrast_pixels("contrast-off.png", visible=False)
                     colors()
-                    click(440, 396)
-                    screenshot(window, "foreground-picker.png")
-                    number(507, 422, "240")
-                    click(700, 281)
+                    edit_red("Terminal Foreground color", "foreground-picker.png")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.foreground")
@@ -190,11 +223,9 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                         ),
                         "Foreground edit was not saved",
                     )
-                    click(375, 450)
-                    click(440, 498)
-                    screenshot(window, "ansi-picker.png")
-                    number(507, 524, "240")
-                    click(700, 281)
+                    ui.click("terminal-colors-ansi")
+                    ui.control("terminal-colors-ansi-0")
+                    edit_red("ANSI Black color", "ansi-picker.png")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.ansi.0") == "#f02224"
@@ -202,20 +233,21 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                         "ANSI swatch edit was not saved",
                     )
                     screenshot(window, "ansi-edited.png")
-                    click(731, 137)
+                    close_colors()
                     theme("Carbon", ui=ui)
                     colors()
-                    number(470, 309, "7")
+                    contrast(7, "carbon")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.carbon.minimum_contrast") == "7"
                         ),
                         "Second theme did not save independently",
                     )
-                    click(731, 137)
+                    close_colors()
                     theme("Phosphor", ui=ui)
                     assert preferences(saved)["terminal_color.phosphor.minimum_contrast"] == "1"
-                    click(600, 755)
+                    ui.navigate("t")
+                    ui.terminal_input()
                     text("printf still-alive > color-proof\n")
                     wait_for(
                         lambda: (root / "color-proof").exists(),
@@ -226,9 +258,11 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                     assert preferences(saved)["terminal_color.phosphor.ansi.0"] == "#f02224"
                     colors()
                     screenshot(window, "restored.png")
-                    # Collapse the restored ANSI section to reveal Reset.
-                    click(375, 450)
-                    click(415, 498)
+                    # Collapse a restored open section before the footer action.
+                    if any(b["name"] == "terminal-colors-ansi-0" for b in ui.layout()["buttons"]):
+                        ui.click("terminal-colors-ansi")
+                        ui.absent("terminal-colors-ansi-0")
+                    ui.click("terminal-colors-reset")
                     wait_for(
                         lambda: (
                             preferences(saved).get("terminal_color.phosphor.minimum_contrast")
@@ -238,24 +272,14 @@ with fixture_directory(prefix="rode-terminal-colors-") as directory:
                     )
                     assert preferences(saved)["terminal_color.phosphor.ansi.0"] == "theme"
                     assert preferences(saved)["terminal_color.carbon.minimum_contrast"] == "7"
-                    click(731, 137)
-                    screenshot(window, "reset.png")
-                    assert bright_pixels("reset.png") < 10
+                    close_colors()
+                    contrast_pixels("reset.png", visible=False)
                     colors()
-                    x11.XResizeWindow.argtypes = [
-                        ctypes.c_void_p,
-                        ctypes.c_ulong,
-                        ctypes.c_uint,
-                        ctypes.c_uint,
-                    ]
                     ui.resize(850, 560)
-                    click(375, 450)
+                    ui.click("terminal-colors-ansi")
+                    ui.control("terminal-colors-ansi-0")
                     screenshot(window, "minimum-window.png")
-                    xtest.XTestFakeMotionEvent(display, -1, 700, 430, 0)
-                    for _ in range(8):
-                        xtest.XTestFakeButtonEvent(display, 5, 1, 0)
-                        xtest.XTestFakeButtonEvent(display, 5, 0, 0)
-                    x11.XFlush(display)
+                    ui.scroll_to_control("terminal-colors-ansi-15", over="terminal-colors-ansi-0")
                     screenshot(window, "minimum-window-scrolled.png")
                 close_window(window, process)
             except Exception:

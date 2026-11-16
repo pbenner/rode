@@ -255,7 +255,7 @@ impl EditorApp {
                 return;
             }
             if self.project_bookmarks.projects.is_empty() {
-                ui.label(palette.tag("Bookmark a project using the icon above."));
+                ui.label(palette.tag("No saved projects yet."));
             }
             let current = self.bookmark_candidate().map(|b| b.project.id());
             let mut projects: Vec<_> = self.project_bookmarks.projects.iter().collect();

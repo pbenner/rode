@@ -61,12 +61,19 @@ impl<'a> MenuButton<'a> {
     }
     pub(crate) fn from_button(button: egui::Button<'a>, label: &str) -> Self {
         Self {
-            inner: egui::containers::menu::MenuButton::from_button(button),
+            inner: egui::containers::menu::MenuButton::from_button(
+                button.stroke(egui::Stroke::NONE),
+            ),
             label: label.into(),
         }
     }
     pub(crate) fn config(mut self, config: egui::containers::menu::MenuConfig) -> Self {
         self.inner = self.inner.config(config);
+        self
+    }
+    /// Apply an explicit frame choice after the shared menu-button treatment.
+    pub(crate) fn frame(mut self, frame: bool) -> Self {
+        self.inner.button = self.inner.button.frame(frame);
         self
     }
     pub(crate) fn ui<R>(
@@ -75,6 +82,7 @@ impl<'a> MenuButton<'a> {
         add: impl FnOnce(&mut egui::Ui) -> R,
     ) -> (Response, Option<egui::InnerResponse<R>>) {
         let result = self.inner.ui(ui, add);
+        crate::theme::button_focus(ui, &result.0, None);
         target(ui, &self.label, &result.0);
         result
     }
@@ -101,20 +109,26 @@ pub(crate) fn editor_named<'a>(label: &'a str, widget: impl Widget + 'a) -> impl
 pub(crate) struct Button<'a> {
     inner: egui::Button<'a>,
     label: String,
+    stroke_override: bool,
+    fill: Option<egui::Color32>,
 }
 impl<'a> Button<'a> {
     pub(crate) fn selectable(selected: bool, text: impl Into<WidgetText>) -> Self {
         let text = text.into();
         Self {
             label: text.text().into(),
-            inner: egui::Button::selectable(selected, text),
+            inner: egui::Button::selectable(selected, text).stroke(egui::Stroke::NONE),
+            stroke_override: false,
+            fill: None,
         }
     }
     pub(crate) fn new(text: impl Into<WidgetText>) -> Self {
         let text = text.into();
         Self {
             label: text.text().into(),
-            inner: egui::Button::new(text),
+            inner: egui::Button::new(text).stroke(egui::Stroke::NONE),
+            stroke_override: false,
+            fill: None,
         }
     }
     pub(crate) fn selected(mut self, value: bool) -> Self {
@@ -127,6 +141,11 @@ impl<'a> Button<'a> {
     }
     pub(crate) fn frame(mut self, value: bool) -> Self {
         self.inner = self.inner.frame(value);
+        self
+    }
+    /// Put shortcuts in a trailing column, independently of the visible label.
+    pub(crate) fn shortcut_text(mut self, shortcut: &str) -> Self {
+        self.inner = self.inner.shortcut_text(shortcut.to_owned());
         self
     }
     pub(crate) fn truncate(mut self) -> Self {
@@ -142,10 +161,12 @@ impl<'a> Button<'a> {
         self
     }
     pub(crate) fn fill(mut self, color: egui::Color32) -> Self {
+        self.fill = Some(color);
         self.inner = self.inner.fill(color);
         self
     }
     pub(crate) fn stroke(mut self, stroke: impl Into<egui::Stroke>) -> Self {
+        self.stroke_override = true;
         self.inner = self.inner.stroke(stroke);
         self
     }
@@ -156,6 +177,9 @@ impl Widget for Button<'_> {
             .inner
             .sense(button_sense(ui, &self.label, Sense::click()))
             .ui(ui);
+        if !self.stroke_override {
+            crate::theme::button_focus(ui, &response, self.fill);
+        }
         target(ui, &self.label, &response);
         response
     }
@@ -211,11 +235,12 @@ pub(crate) fn selectable_label(
 ) -> Response {
     let text = text.into();
     let label = text.text().to_owned();
-    let response = ui.add(egui::Button::selectable(selected, text).sense(button_sense(
-        ui,
-        &label,
-        Sense::click(),
-    )));
+    let response = ui.add(
+        egui::Button::selectable(selected, text)
+            .stroke(egui::Stroke::NONE)
+            .sense(button_sense(ui, &label, Sense::click())),
+    );
+    crate::theme::button_focus(ui, &response, None);
     target(ui, &label, &response);
     response
 }

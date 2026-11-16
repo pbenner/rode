@@ -29,7 +29,7 @@ impl EditorApp {
         }
         let input = ui.add(crate::keyboard::named(
             "Type a command…",
-            egui::TextEdit::singleline(&mut self.dialog_input)
+            layout::text_input(ui, &mut self.dialog_input)
                 .id(input_id)
                 .desired_width(f32::INFINITY)
                 .hint_text("Type a command…"),
@@ -119,8 +119,12 @@ impl EditorApp {
                     let (_, name, shortcut) = &commands[index];
                     let response = ui.add_sized(
                         [ui.available_width(), 30.],
-                        crate::keyboard::Button::new(format!("{name}     {shortcut}"))
-                            .selected(row == self.navigation.list.index),
+                        crate::keyboard::Button::selectable(
+                            row == self.navigation.list.index,
+                            name.as_str(),
+                        )
+                        .shortcut_text(shortcut)
+                        .truncate(),
                     );
                     // A fixture may submit only after the complete query has
                     // reached this frame, not merely its first matching prefix.

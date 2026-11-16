@@ -282,7 +282,7 @@ impl EditorApp {
             ui.label("Name");
             let name = ui.add(crate::keyboard::named(
                 "Name",
-                egui::TextEdit::singleline(&mut state.name)
+                layout::text_input(ui, &mut state.name)
                     .desired_width(f32::INFINITY)
                     .char_limit(1024),
             ));
@@ -294,7 +294,7 @@ impl EditorApp {
             ui.label("Email");
             let email = ui.add(crate::keyboard::named(
                 "Email",
-                egui::TextEdit::singleline(&mut state.email)
+                layout::text_input(ui, &mut state.email)
                     .desired_width(f32::INFINITY)
                     .char_limit(1024),
             ));

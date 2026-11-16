@@ -93,7 +93,7 @@ impl EditorApp {
                 ui.label("Credentials will be sent only to:");
                 ui.monospace(&prompt.entry.origin);
                 ui.label("Username");
-                let mut username = egui::TextEdit::singleline(&mut prompt.entry.username)
+                let mut username = layout::text_input(ui, &mut prompt.entry.username)
                     .id(egui::Id::new("git-auth-username"))
                     .desired_width(f32::INFINITY)
                     .char_limit(4096)
@@ -103,7 +103,7 @@ impl EditorApp {
                 ui_probe::button(ui, "git-auth-username", &username.response);
                 crate::keyboard::field_target(ui, "Git username", &username.response);
                 ui.label("Password or access token");
-                let mut password = egui::TextEdit::singleline(&mut prompt.entry.password)
+                let mut password = layout::text_input(ui, &mut prompt.entry.password)
                     .id(egui::Id::new("git-auth-password"))
                     .password(true)
                     .desired_width(f32::INFINITY)

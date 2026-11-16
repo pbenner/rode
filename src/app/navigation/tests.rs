@@ -207,7 +207,7 @@ fn explorer_focus_outline_clears_toolbar_controls_across_themes_and_scales() {
                         control("explorer-refresh-expanded"),
                     ];
                     let output = output.unwrap();
-                    let title = layout::tests::text_bounds(&output, "EXPLORER");
+                    let title = layout::tests::text_bounds(&output, "Explorer");
                     let outer = app.navigation.native_rects[&egui::ViewportId::ROOT]
                         [Pane::Explorer.index()]
                     .unwrap();

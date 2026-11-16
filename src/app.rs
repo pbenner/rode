@@ -256,7 +256,7 @@ impl EditorApp {
             .theme
             .clone()
             .or_else(|| storage.and_then(|s| s.get_string(theme::STORAGE_KEY)))
-            .unwrap_or_else(|| "phosphor".into());
+            .unwrap_or_else(|| theme::DEFAULT_THEME_ID.into());
         let (mut themes, mut warnings) = theme::Themes::load(&theme::directory(), &requested_theme);
         let requested_syntax = startup
             .syntax_theme

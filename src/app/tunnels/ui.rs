@@ -134,7 +134,10 @@ impl EditorApp {
         let footer_height = if page == Page::New { 144. } else { 90. };
         let body_height =
             (ctx.content_rect().height() - 80. - header_height - footer_height).max(40.);
+        // Reserve the gutter before Grid measures its cells. An appearing
+        // solid scrollbar otherwise reuses wider cached cells during animation.
         egui::ScrollArea::vertical()
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .id_salt((
                 "tunnel-page",
                 page,
@@ -245,7 +248,7 @@ impl EditorApp {
             ui.label("Desktop relay alias / jump chain");
             ui.add(crate::keyboard::named(
                 "Desktop relay alias / jump chain",
-                egui::TextEdit::singleline(&mut self.tunnels.relay_jump)
+                layout::text_input(ui, &mut self.tunnels.relay_jump)
                     .id_salt("tunnel-desktop-relay")
                     .desired_width(f32::INFINITY)
                     .hint_text("From the tunnel’s relay settings"),
@@ -491,10 +494,12 @@ impl EditorApp {
                 });
             });
             layout::section(ui, "Port forwarding", palette, |ui| {
-                form_grid(ui, "forwarding-fields", |ui, compact, _| {
+                form_grid(ui, "forwarding-fields", |ui, compact, width| {
                     port_field(ui, "Relay port", &mut spec.listen_port, compact);
                     layout::field_label(ui, "Relay access", compact);
                     let access = crate::keyboard::ComboBox::new("tunnel-listen-on", "Tunnel listener access")
+                        .width(width.min(220.))
+                        .truncate()
                         .selected_text(spec.listen_on.label())
                         .show_ui(ui, |ui| {
                             for scope in [ListenOn::Loopback, ListenOn::AllInterfaces] {
@@ -599,14 +604,16 @@ impl EditorApp {
 }
 
 fn tunnel_error(ui: &mut egui::Ui, ctx: &egui::Context, error: &str, color: egui::Color32) {
+    // Keep copying reachable even when the diagnostic wraps beyond the
+    // visible scroll body at larger interface font sizes.
+    if crate::keyboard::small_button(ui, "Copy error").clicked() {
+        ctx.copy_text(error.to_owned());
+    }
     ui.add(
         egui::Label::new(RichText::new(error).color(color))
             .wrap()
             .selectable(true),
     );
-    if crate::keyboard::small_button(ui, "Copy error").clicked() {
-        ctx.copy_text(error.to_owned());
-    }
 }
 
 fn endpoint(host: &str, port: u16) -> String {
@@ -636,14 +643,17 @@ fn text_field(
     width: f32,
 ) {
     layout::field_label(ui, label, compact);
-    let field = ui.add(crate::keyboard::named(
-        label,
-        egui::TextEdit::singleline(value)
-            .id_salt(label)
-            .hint_text(hint)
-            .char_limit(4096)
-            .desired_width(width),
-    ));
+    let field = ui.add_sized(
+        [width, layout::control_height(ui)],
+        crate::keyboard::named(
+            label,
+            layout::text_input(ui, value)
+                .id_salt(label)
+                .hint_text(hint)
+                .char_limit(4096)
+                .desired_width(width),
+        ),
+    );
     ui_probe::button(ui, &format!("tunnel-field-{label}"), &field);
     ui.end_row();
 }

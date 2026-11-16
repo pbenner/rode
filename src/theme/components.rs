@@ -7,11 +7,7 @@ impl Palette {
     /// Create a compact secondary label using the theme's interface typography.
     pub fn tag(self, text: impl Into<String>) -> egui::RichText {
         let text = egui::RichText::new(text).color(self.muted);
-        if let Some(ui) = self.ui {
-            text.font(FontId::proportional(ui.small_size))
-        } else {
-            text.monospace().size(11.)
-        }
+        text.font(FontId::proportional(self.ui.unwrap_or_default().small_size))
     }
 
     /// Draw the shared accent-filled primary action button.
@@ -19,11 +15,11 @@ impl Palette {
         let response = ui.add(
             egui::Button::new(egui::RichText::new(text).color(self.background).strong())
                 .fill(self.accent)
-                .min_size(egui::vec2(0.0, self.ui.map_or(32., |ui| ui.control_height))),
+                .stroke(Stroke::NONE)
+                .min_size(egui::vec2(0.0, self.ui.unwrap_or_default().control_height)),
         );
-        if let Some(style) = self.ui.filter(|_| {
-            response.enabled() && (response.has_focus() || response.is_pointer_button_down_on())
-        }) {
+        if response.enabled() && (response.has_focus() || response.is_pointer_button_down_on()) {
+            let style = self.ui.unwrap_or_default();
             // An accent outline disappears against the filled accent button.
             // Use its high-contrast foreground for an inset focus/pressed ring.
             ui.painter().rect_stroke(
@@ -35,6 +31,25 @@ impl Palette {
         }
         response
     }
+}
+
+/// Secondary actions use tonal fills instead of input-like outlines. Their
+/// native response still owns focus/activation; keep the focus ring inside the
+/// unchanged target so a neighbouring pane cannot clip it.
+pub(crate) fn button_focus(ui: &egui::Ui, response: &egui::Response, fill: Option<Color32>) {
+    if !response.enabled() || !(response.has_focus() || response.is_pointer_button_down_on()) {
+        return;
+    }
+    let mut stroke = ui.visuals().selection.stroke;
+    if fill == Some(stroke.color) {
+        stroke.color = ui.visuals().extreme_bg_color;
+    }
+    ui.painter().rect_stroke(
+        response.rect.shrink(1.5),
+        ui.visuals().widgets.active.corner_radius,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// Measure the complete button height before allocating a row or a bounded
@@ -65,49 +80,44 @@ pub fn compact_control_height(ui: &egui::Ui) -> f32 {
 /// The common bordered surface, also used by monitor cards. Width follows its
 /// column; callers may customize the frame for selected or destructive states.
 pub fn card_frame(palette: Palette) -> egui::Frame {
-    let mut frame = egui::Frame::new()
-        .fill(palette.panel)
+    let style = palette.ui.unwrap_or_default();
+    egui::Frame::new()
+        .fill(palette.raised)
         .stroke(Stroke::new(
-            1_f32,
+            style.border_width,
             if palette.chrome.is_decorated() {
                 palette.frame_accent.gamma_multiply(0.55)
             } else {
                 palette.border
             },
         ))
-        .corner_radius(if palette.chrome.is_decorated() { 2 } else { 6 })
-        .inner_margin(12);
-    if let Some(style) = palette.ui {
-        frame = frame
-            .fill(palette.raised)
-            .stroke(Stroke::new(style.border_width, palette.border))
-            .corner_radius(style.surface_radius)
-            .inner_margin(style.surface_padding as i8);
-    }
-    frame
+        .corner_radius(if palette.chrome.is_decorated() && palette.ui.is_none() {
+            2
+        } else {
+            style.surface_radius
+        })
+        .inner_margin(style.surface_padding as i8)
 }
 
 /// Common modal surface; size and scrolling remain owned by each dialog.
 pub fn dialog_frame(style: &egui::Style, palette: Palette) -> egui::Frame {
-    let mut frame = egui::Frame::popup(style)
+    let metrics = palette.ui.unwrap_or_default();
+    egui::Frame::popup(style)
         .fill(palette.panel)
         .stroke(Stroke::new(
-            1_f32,
+            metrics.border_width,
             if palette.chrome.is_decorated() {
                 palette.frame_accent.gamma_multiply(0.65)
             } else {
                 palette.border
             },
         ))
-        .corner_radius(if palette.chrome.is_decorated() { 2 } else { 8 })
-        .inner_margin(16);
-    if let Some(style) = palette.ui {
-        frame = frame
-            .stroke(Stroke::new(style.border_width, palette.border))
-            .corner_radius(style.popup_radius)
-            .inner_margin(style.popup_padding as i8);
-    }
-    frame
+        .corner_radius(if palette.chrome.is_decorated() && palette.ui.is_none() {
+            2
+        } else {
+            metrics.popup_radius
+        })
+        .inner_margin(metrics.popup_padding as i8)
 }
 
 /// Standard symmetric panel padding, shared by ordinary frames and pane interiors.

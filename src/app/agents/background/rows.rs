@@ -178,9 +178,9 @@ fn row(
                     .show_tooltip_when_elided(false),
             )
             .on_hover_text(&metadata);
-            field(ui, "PROJECT", &info.root, palette);
-            field(ui, "MODE", &info.mode, palette);
-            field(ui, "STATUS", &info.status, palette);
+            field(ui, "Project", &info.root, palette);
+            field(ui, "Mode", &info.mode, palette);
+            field(ui, "Status", &info.status, palette);
             ui.add(
                 egui::Label::new(RichText::new(attachment.summary).size(12.).color(
                     if attachment.enabled {
@@ -263,7 +263,7 @@ fn field(ui: &mut egui::Ui, label: &str, value: &str, palette: Palette) {
             Layout::left_to_right(Align::Center),
             |ui| {
                 ui.set_min_width(54.);
-                ui.label(palette.tag(label));
+                ui.add(egui::Label::new(palette.tag(label)).truncate());
             },
         );
         ui.allocate_ui_with_layout(

@@ -55,7 +55,7 @@ impl EditorApp {
             .exact_height(27.)
             .frame(
                 egui::Frame::new()
-                    .fill(palette.status_background.unwrap_or(palette.raised))
+                    .fill(palette.status_background.unwrap_or(palette.panel))
                     .inner_margin(egui::Margin::symmetric(12, 4)),
             )
             .show(ctx, |ui| {
@@ -112,7 +112,7 @@ impl EditorApp {
                             let (connection, color) = match self.workspace.as_ref() {
                                 Some(w) if w.remote.is_some() => (
                                     format!(
-                                        "↗ SSH {}{}",
+                                        "SSH · {}{}",
                                         w.remote.as_ref().unwrap().profile.endpoint(),
                                         if w.connected { "" } else { " · offline" }
                                     ),
@@ -122,11 +122,11 @@ impl EditorApp {
                                         palette.error
                                     },
                                 ),
-                                _ => (">_ LOCAL".into(), palette.success),
+                                _ => ("Local".into(), palette.success),
                             };
                             let natural = ui
                                 .painter()
-                                .layout_no_wrap(connection.clone(), FontId::monospace(11.), color)
+                                .layout_no_wrap(connection.clone(), FontId::proportional(12.), color)
                                 .size()
                                 .x
                                 + 8.;
@@ -136,8 +136,7 @@ impl EditorApp {
                                     [host_width, 19.],
                                     crate::keyboard::Button::new(
                                         RichText::new(&connection)
-                                            .monospace()
-                                            .size(11.)
+                                            .size(12.)
                                             .color(color),
                                     )
                                     .frame(false)

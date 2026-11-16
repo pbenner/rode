@@ -877,6 +877,7 @@ fn theme_choice_persists_without_touching_unsaved_edits_or_font_size() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
+    assert_eq!(app.themes.active().id, theme::DEFAULT_THEME_ID);
     app.new_file();
     app.documents[0].fixture_content().text = "unsaved work".into();
     app.font_size = 19.0;
@@ -900,6 +901,13 @@ fn theme_choice_persists_without_touching_unsaved_edits_or_font_size() {
         },
     );
     assert_eq!(overridden.themes.active().id, "phosphor");
+    let mut legacy_storage = MemoryStorage::default();
+    legacy_storage
+        .0
+        .insert(theme::STORAGE_KEY.into(), "phosphor".into());
+    cc.storage = Some(&legacy_storage);
+    let legacy_choice = EditorApp::new(&cc, Startup::default());
+    assert_eq!(legacy_choice.themes.active().id, "phosphor");
 }
 
 #[test]

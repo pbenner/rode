@@ -37,6 +37,15 @@ RODE's native drawing module does not import that artwork, and this review found
 
 ## Font and distribution notices
 
+The interface embeds the unmodified Inter Regular face from the official
+[Inter 4.1 release](https://github.com/rsms/inter/releases/tag/v4.1), by Rasmus
+Andersson and the Inter Project Authors. The release and extracted files are
+SHA-256 pinned in `assets/fonts/manifest.json`; `assets/fonts/Inter-LICENSE.txt`
+retains its complete SIL Open Font License 1.1 and copyright notice.
+`rode --theme-licenses` prints this notice, and the Debian collector includes it
+in `THIRD-PARTY-NOTICES.gz`. Inter replaces only proportional interface text;
+the monospace and fallback fonts below remain embedded with their own terms.
+
 `vendor/vt100` contains the MIT-licensed `vt100` 0.16.2 parser with RODE's
 character-set support patch. Its original license is retained beside the source;
 `vendor/vt100/PATCH.md` records the upstream revision and modifications. The Cargo
@@ -60,7 +69,7 @@ The collector covers the workspace's normal/build dependency graph for the build
 
 Bundled web/configuration formatters use dprint's TypeScript, JSON and Markdown libraries plus `markup_fmt`, Malva and Pretty YAML under their upstream MIT terms. Their parser/printing dependencies retain their own licenses, including Apache-2.0 for SWC. The normal dependency notice collector includes these engines and the supplemental upstream texts; no formatter extension or npm package is redistributed.
 
-`rode --syntax-licenses` and `rode --theme-licenses` print the separate acknowledgements for embedded grammars and syntax themes; they are not a complete font/dependency license listing.
+`rode --syntax-licenses` and `rode --theme-licenses` print the separate acknowledgements for embedded grammars, syntax themes and Inter; they are not a complete dependency/fallback-font license listing.
 
 ## Optional Codex runtime
 

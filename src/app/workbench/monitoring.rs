@@ -633,12 +633,7 @@ mod tests {
                     .shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
-                        egui::Shape::Rect(rect)
-                            if rect.fill
-                                == palette.ui.map_or(palette.panel, |_| palette.raised) =>
-                        {
-                            Some(rect.rect)
-                        }
+                        egui::Shape::Rect(rect) if rect.fill == palette.raised => Some(rect.rect),
                         _ => None,
                     })
                     .collect();

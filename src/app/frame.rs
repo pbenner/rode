@@ -16,17 +16,20 @@ impl EditorApp {
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
                 ui.horizontal_centered(|ui| {
-                    ui.label(
-                        RichText::new("[r]")
-                            .monospace()
-                            .size(22.0)
-                            .strong()
-                            .color(palette.accent),
+                    let (mark, _) = ui.allocate_exact_size(egui::vec2(26., 26.), Sense::hover());
+                    ui.painter()
+                        .rect_filled(mark, 7, palette.accent.gamma_multiply(0.12));
+                    ui.painter().text(
+                        mark.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "[r]",
+                        FontId::monospace(13.),
+                        palette.accent,
                     );
                     ui.label(
                         RichText::new("RODE")
                             .strong()
-                            .size(16.0)
+                            .size(15.0)
                             .color(palette.heading_color()),
                     );
                     ui.add_space(14.0);
@@ -37,23 +40,27 @@ impl EditorApp {
                         .as_ref()
                         .map(|w| {
                             format!(
-                                "{}  /  {}",
-                                if w.remote.is_some() { "SSH" } else { "LOCAL" },
-                                ssh::display_name(&w.root)
+                                "{}  ·  {}",
+                                ssh::display_name(&w.root),
+                                if w.remote.is_some() {
+                                    "SSH workspace"
+                                } else {
+                                    "Local workspace"
+                                },
                             )
                         })
                         .unwrap_or_else(|| "Your next workspace starts here".into());
                     let roomy = ctx.content_rect().width() >= 1180.;
                     let workspace_width =
                         (ui.available_width() - if roomy { 250. } else { 230. }).clamp(90., 360.);
+                    let mut workspace_button = IconButton::new(Icon::Search, &label)
+                        .color(palette.muted)
+                        .truncate();
+                    if workspace_width >= 250. {
+                        workspace_button = workspace_button.shortcut("Ctrl+Shift+P");
+                    }
                     if ui
-                        .add_sized(
-                            [workspace_width, 28.],
-                            crate::keyboard::Button::new(
-                                RichText::new(&label).color(palette.muted),
-                            )
-                            .truncate(),
-                        )
+                        .add_sized([workspace_width, 30.], workspace_button)
                         .on_hover_text(format!("{label}\nOpen command palette · Ctrl+Shift+P"))
                         .clicked()
                     {
@@ -289,7 +296,6 @@ impl EditorApp {
                     {
                         self.set_dialog(Dialog::Shortcuts);
                     }
-                    ui.label(palette.tag("0.1"));
                 });
             });
     }
@@ -388,29 +394,27 @@ impl EditorApp {
             .show(ui, |ui| {
                 ui.add_space(top);
                 ui.vertical_centered(|ui| {
-                    let mark = ui.label(
-                        RichText::new("[ r ]")
-                            .monospace()
-                            .size(if compact { 44. } else { 64. })
-                            .color(palette.accent),
-                    );
+                    let mark = ui.label(palette.tag("RODE"));
                     ui.add_space(12.0);
                     let title = ui.label(
-                        RichText::new("RODE")
-                            .size(if compact { 28. } else { 34. })
+                        RichText::new("Welcome to RODE")
+                            .size(if compact { 26. } else { 32. })
                             .strong()
                             .color(palette.text),
                     );
                     let subtitle = ui.label(
-                        RichText::new("Small footprint. Far reach.")
-                            .size(18.0)
+                        RichText::new("Local projects and remote compute, together.")
+                            .size(15.0)
                             .color(palette.muted),
                     );
                     ui.add_space(12.0);
-                    let hint =
-                        ui.label(palette.tag("RUST EDITOR  /  OPENSSH NATIVE  /  REMOTE READY"));
+                    let hint = ui.label(palette.tag(if self.workspace.is_some() {
+                        "Choose a file in Explorer, or open another workspace."
+                    } else {
+                        "Open a folder or connect to a remote project to begin."
+                    }));
                     ui.add_space(if compact { 20. } else { 32. });
-                    let action_size = egui::vec2((ui.available_width() - 32.).clamp(0., 320.), 32.);
+                    let action_size = egui::vec2((ui.available_width() - 32.).clamp(0., 320.), 36.);
                     let connect = ui.add_sized(
                         action_size,
                         crate::keyboard::Button::new(

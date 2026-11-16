@@ -150,17 +150,12 @@ impl Palette {
             return;
         }
         painter.rect_filled(rect, 0, fill);
-        if let Some(ui) = self.ui.filter(|_| self.chrome == Chrome::Plain) {
+        if self.chrome == Chrome::Plain {
+            let ui = self.ui.unwrap_or_default();
             painter.rect_filled(rect, 0, self.panel);
             let pill = rect.shrink2(egui::vec2(4., 4.));
             if active {
-                painter.rect(
-                    pill,
-                    ui.control_radius,
-                    self.raised,
-                    Stroke::new(ui.border_width, self.border),
-                    egui::StrokeKind::Inside,
-                );
+                painter.rect_filled(pill, ui.control_radius, self.raised);
                 painter.line_segment(
                     [
                         pos2(pill.left() + 10., pill.bottom()),

@@ -105,7 +105,7 @@ impl EditorApp {
         ui.label("Custom interpreter or environment folder (on this host)");
         ui.add(crate::keyboard::named(
             "Python interpreter or environment",
-            egui::TextEdit::singleline(&mut self.workbench.draft.python)
+            layout::text_input(ui, &mut self.workbench.draft.python)
                 .desired_width(f32::INFINITY)
                 .hint_text(".venv or /path/to/bin/python"),
         ));
@@ -173,12 +173,12 @@ impl EditorApp {
         ui.label("Folder inside project");
         ui.add(crate::keyboard::named(
             "Virtual environment folder",
-            egui::TextEdit::singleline(&mut self.workbench.python.venv_path),
+            layout::text_input(ui, &mut self.workbench.python.venv_path),
         ));
         ui.label("Base Python executable");
         ui.add(crate::keyboard::named(
             "Base Python executable",
-            egui::TextEdit::singleline(&mut self.workbench.python.venv_python),
+            layout::text_input(ui, &mut self.workbench.python.venv_python),
         ));
         crate::keyboard::checkbox(
             ui,

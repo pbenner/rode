@@ -106,10 +106,10 @@ impl EditorApp {
             detail.push('\n');
             detail.extend(self.sessions.slurm_error.chars().take(320));
         }
-        if ui.add_enabled_ui(ready && !self.session_busy(), |ui| ui.add_sized([112., height], button.truncate())).inner
-            .on_hover_text(format!("{detail}\nAllocate resources, inspect progress or release the allocation. Persistence is controlled separately."))
-            .clicked()
-        {
+        let response = ui.add_enabled_ui(ready && !self.session_busy(), |ui| ui.add_sized([112., height], button.truncate())).inner
+            .on_hover_text(format!("{detail}\nAllocate resources, inspect progress or release the allocation. Persistence is controlled separately."));
+        super::super::ui_probe::button(ui, "terminal-allocation", &response);
+        if response.clicked() {
             self.open_slurm(ctx);
         }
         if let Some(job) = job.filter(|job| job.state == "PENDING")

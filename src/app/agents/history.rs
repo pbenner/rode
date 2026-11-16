@@ -97,164 +97,167 @@ pub(super) fn ui(
 ) -> Action {
     let mut action = Action::default();
     layout::page(ui, layout::PAGE_WIDTH, |ui| {
-        layout::header(
-            ui,
-            "Chat history",
-            "Restore saved chats here. Open chats use Running. Ownership is checked on restore.",
-            palette,
-            |ui| {
-                toolbar(ui, browser, can_resume, confirmation, &mut action, palette);
-            },
-        );
-        if let Some(scope) = scope_picker(
-            ui,
-            browser.map_or(Scope::Project, |browser| browser.scope),
-            browser.is_some_and(|browser| browser.can_list && !browser.busy),
-        ) {
-            action.scope = Some(scope);
-            *confirmation = None;
-        }
+        // Keep filtering reachable even when toolbars, descriptions or scope
+        // controls need more height than a compact chat panel can provide.
         let search = ui.add_sized(
-            [ui.available_width(), 30.],
+            [ui.available_width(), layout::control_height(ui)],
             crate::keyboard::named(
                 "Filter loaded conversations…",
-                egui::TextEdit::singleline(filter)
+                layout::text_input(ui, filter)
+                    .id_salt("agent-history-filter")
                     .desired_width(f32::INFINITY)
                     .hint_text("Filter loaded conversations…")
                     .char_limit(256),
             ),
         );
         super::super::ui_probe::button(ui, "agent-history-filter", &search);
-        ui.add_space(4.);
-        let Some(browser) = browser else {
-            ui.label(RichText::new("Loading saved conversations…").color(palette.muted));
-            return;
-        };
-        if !browser.busy && (!browser.can_resume || !browser.diagnostics().is_empty()) {
-            // Keep backend diagnostics readable without allowing a
-            // long traceback to displace the conversation list.
-            egui::Frame::new()
-                .fill(palette.raised)
-                .inner_margin(8)
-                .corner_radius(4)
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("history-status")
-                        .max_height(96.)
-                        .show(ui, |ui| {
-                            ui.add(egui::Label::new(&browser.status).wrap().selectable(true));
-                        });
-                });
-        } else {
-            ui.horizontal(|ui| {
-                if browser.busy {
-                    ui.spinner();
-                }
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&browser.status)
-                            .size(11.)
-                            .color(palette.muted),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(&browser.status);
-            });
-        }
-        if !browser.diagnostics().is_empty() {
-            let details = crate::keyboard::CollapsingHeader::new("Error details")
-                .id_salt("history-backend-details")
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("history-backend-diagnostics")
-                        .max_height(120.)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(browser.diagnostics())
-                                    .wrap()
-                                    .selectable(true),
-                            );
-                        });
-                });
-            ui_probe::button(ui, "agent-history-error-details", &details.header_response);
-            ui_probe::button(
-                ui,
-                if details.body_response.is_some() {
-                    "agent-history-error-expanded"
-                } else {
-                    "agent-history-error-collapsed"
-                },
-                &details.header_response,
-            );
-        }
-        if !browser.busy
-            && !browser.backend_output().is_empty()
-            && (!browser.diagnostics().is_empty() || !browser.can_resume)
-        {
-            let output =
-                crate::keyboard::CollapsingHeader::new("Startup warnings and backend output")
-                    .id_salt("history-backend-output")
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("history-backend-output-scroll")
-                            .max_height(120.)
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::Label::new(browser.backend_output())
-                                        .wrap()
-                                        .selectable(true),
-                                );
-                            });
-                    });
-            ui_probe::button(ui, "agent-history-backend-output", &output.header_response);
-            ui_probe::button(
-                ui,
-                if output.body_response.is_some() {
-                    "agent-history-output-expanded"
-                } else {
-                    "agent-history-output-collapsed"
-                },
-                &output.header_response,
-            );
-        }
-        if !can_resume {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "Stop the current turn before resuming or deleting conversations.",
-                    )
-                    .small()
-                    .color(palette.muted),
-                )
-                .wrap(),
-            );
-        }
-        if browser.scope == Scope::AllProjects {
-            ui.add(egui::Label::new("Lists projects visible to this backend on this host. Open another project's folder to restore its chats; switch to Current project to delete history.").wrap());
-        } else if !browser.can_delete && !browser.busy && browser.diagnostics().is_empty() {
-            ui.add(egui::Label::new(RichText::new("History deletion is unavailable with this backend.").small().color(palette.muted)).wrap())
-                            .on_hover_text("ACP agents must advertise session deletion; older Codex versions may need updating.");
-        }
-        ui.add_space(6.);
-        if let Some(selected) = confirmation.clone() {
-            confirm(
-                ui,
-                browser,
-                can_resume,
-                selected,
-                confirmation,
-                &mut action,
-                palette,
-            );
-            ui.add_space(8.);
-        }
-        let query = filter.to_lowercase();
         egui::ScrollArea::vertical()
             .id_salt("agent-history-list")
             .auto_shrink([false, false])
             .min_scrolled_height(0.)
             .max_height(ui.available_height().max(1.))
             .show(ui, |ui| {
+                layout::header(
+                    ui,
+                    "Chat history",
+                    "Restore saved chats here. Open chats use Running. Ownership is checked on restore.",
+                    palette,
+                    |ui| {
+                        toolbar(ui, browser, can_resume, confirmation, &mut action, palette);
+                    },
+                );
+                if let Some(scope) = scope_picker(
+                    ui,
+                    browser.map_or(Scope::Project, |browser| browser.scope),
+                    browser.is_some_and(|browser| browser.can_list && !browser.busy),
+                ) {
+                    action.scope = Some(scope);
+                    *confirmation = None;
+                }
+                ui.add_space(4.);
+                let Some(browser) = browser else {
+                    ui.label(RichText::new("Loading saved conversations…").color(palette.muted));
+                    return;
+                };
+                if !browser.busy && (!browser.can_resume || !browser.diagnostics().is_empty()) {
+                    // Keep backend diagnostics readable without allowing a
+                    // long traceback to displace the conversation list.
+                    egui::Frame::new()
+                        .fill(palette.raised)
+                        .inner_margin(8)
+                        .corner_radius(4)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("history-status")
+                                .max_height(96.)
+                                .show(ui, |ui| {
+                                    ui.add(egui::Label::new(&browser.status).wrap().selectable(true));
+                                });
+                        });
+                } else {
+                    ui.horizontal(|ui| {
+                        if browser.busy {
+                            ui.spinner();
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&browser.status)
+                                    .size(11.)
+                                    .color(palette.muted),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&browser.status);
+                    });
+                }
+                if !browser.diagnostics().is_empty() {
+                    let details = crate::keyboard::CollapsingHeader::new("Error details")
+                        .id_salt("history-backend-details")
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("history-backend-diagnostics")
+                                .max_height(120.)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(browser.diagnostics())
+                                            .wrap()
+                                            .selectable(true),
+                                    );
+                                });
+                        });
+                    ui_probe::button(ui, "agent-history-error-details", &details.header_response);
+                    ui_probe::button(
+                        ui,
+                        if details.body_response.is_some() {
+                            "agent-history-error-expanded"
+                        } else {
+                            "agent-history-error-collapsed"
+                        },
+                        &details.header_response,
+                    );
+                }
+                if !browser.busy
+                    && !browser.backend_output().is_empty()
+                    && (!browser.diagnostics().is_empty() || !browser.can_resume)
+                {
+                    let output =
+                        crate::keyboard::CollapsingHeader::new("Startup warnings and backend output")
+                            .id_salt("history-backend-output")
+                            .show(ui, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("history-backend-output-scroll")
+                                    .max_height(120.)
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            egui::Label::new(browser.backend_output())
+                                                .wrap()
+                                                .selectable(true),
+                                        );
+                                    });
+                            });
+                    ui_probe::button(ui, "agent-history-backend-output", &output.header_response);
+                    ui_probe::button(
+                        ui,
+                        if output.body_response.is_some() {
+                            "agent-history-output-expanded"
+                        } else {
+                            "agent-history-output-collapsed"
+                        },
+                        &output.header_response,
+                    );
+                }
+                if !can_resume {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(
+                                "Stop the current turn before resuming or deleting conversations.",
+                            )
+                            .small()
+                            .color(palette.muted),
+                        )
+                        .wrap(),
+                    );
+                }
+                if browser.scope == Scope::AllProjects {
+                    ui.add(egui::Label::new("Lists projects visible to this backend on this host. Open another project's folder to restore its chats; switch to Current project to delete history.").wrap());
+                } else if !browser.can_delete && !browser.busy && browser.diagnostics().is_empty() {
+                    ui.add(egui::Label::new(RichText::new("History deletion is unavailable with this backend.").small().color(palette.muted)).wrap())
+                                    .on_hover_text("ACP agents must advertise session deletion; older Codex versions may need updating.");
+                }
+                ui.add_space(6.);
+                if let Some(selected) = confirmation.clone() {
+                    confirm(
+                        ui,
+                        browser,
+                        can_resume,
+                        selected,
+                        confirmation,
+                        &mut action,
+                        palette,
+                    );
+                    ui.add_space(8.);
+                }
+                let query = filter.to_lowercase();
                 let mut visible = 0;
                 for entry in &browser.entries {
                     if !query.is_empty()
@@ -346,7 +349,7 @@ pub(super) fn ui(
             });
         // A click dispatches host work after rendering. Do not publish the old
         // idle state in that frame as acknowledgement of the new operation.
-        if !browser.busy
+        if browser.is_some_and(|browser| !browser.busy)
             && !action.refresh
             && !action.more
             && action.delete.is_none()
