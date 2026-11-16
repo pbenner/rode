@@ -162,6 +162,15 @@ impl EditorApp {
                 .add(egui::Slider::new(&mut self.font_size, 10.0..=26.0).suffix(" pt"))
                 .changed();
         });
+        if check(
+            ui,
+            "Word wrap",
+            &self.command_hint(Command::WordWrap),
+            self.word_wrap,
+        ) {
+            self.execute_command(Command::WordWrap, ctx);
+            ui.close();
+        }
         section(ui, "WORKSPACE", false);
         submenu(ui, Icon::Environment, "Workspace panels", |ui| {
             self.menu_commands(ui, ctx, Command::PANELS)

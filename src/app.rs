@@ -171,6 +171,8 @@ pub struct EditorApp {
     pdf_cancel: Arc<AtomicBool>,
     persistence: Option<crate::persistence::Preferences>,
     font_save_pending: bool,
+    word_wrap: bool,
+    word_wrap_save_pending: bool,
     agents: agents::Agents,
     editor: editor_windows::View,
     editors: editor_windows::Windows,
@@ -288,6 +290,10 @@ impl EditorApp {
             pdf_cancel: Arc::new(AtomicBool::new(false)),
             persistence: None,
             font_save_pending: false,
+            word_wrap: storage
+                .and_then(|storage| storage.get_string("word_wrap"))
+                .is_some_and(|value| value == "true"),
+            word_wrap_save_pending: false,
             agents: agents::Agents::load(storage),
             editor: Default::default(),
             editors: Default::default(),
@@ -380,6 +386,7 @@ impl EditorApp {
         };
         self.persist_theme_choice(Some(&mut storage));
         self.persist_ui_scale(Some(&mut storage));
+        self.persist_word_wrap(Some(&mut storage));
         self.persist_project_preferences(Some(&mut storage));
         self.persist_agent_preferences(Some(&mut storage));
         self.persist_extensions(Some(&mut storage));
@@ -791,6 +798,7 @@ impl eframe::App for EditorApp {
             self.persist_native(None);
         } else {
             self.persist_ui_scale(frame.storage_mut());
+            self.persist_word_wrap(frame.storage_mut());
             self.persist_theme_choice(frame.storage_mut());
             self.persist_project_preferences(frame.storage_mut());
             self.persist_agent_preferences(frame.storage_mut());
@@ -826,6 +834,7 @@ impl eframe::App for EditorApp {
         self.sandbox_presets.store(storage);
         self.tunnels.store(storage);
         storage.set_string("font_size", self.font_size.to_string());
+        storage.set_string("word_wrap", self.word_wrap.to_string());
         storage.set_string("ui_scale", self.ui_scale.to_string());
         if let Ok(options) = serde_json::to_string(&self.sandbox_defaults) {
             storage.set_string("sandbox_defaults", options);

@@ -86,6 +86,77 @@ fn frame(app: &mut EditorApp, ctx: &egui::Context, events: Vec<egui::Event>) {
     let _ = input_and_close(app, ctx, events, false);
 }
 
+#[test]
+fn word_wrap_consumes_its_alt_text_without_losing_edits_before_or_after_it() {
+    // Some backends emit the Alt chord's printable text; others suppress it.
+    // In either case, subsequent text in the packet still belongs to the editor.
+    for emits_alt_text in [false, true] {
+        for style in [Style::Standard, Style::Emacs, Style::Vim] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_file();
+            app.navigation.bindings.select_style(style);
+            frame(&mut app, &ctx, vec![]);
+            frame(&mut app, &ctx, vec![]);
+            if style == Style::Vim {
+                frame(&mut app, &ctx, vec![egui::Event::Text("i".into())]);
+            }
+            let mut events = vec![
+                egui::Event::Text("before ".into()),
+                key(Key::Z, egui::Modifiers::ALT),
+            ];
+            if emits_alt_text {
+                events.push(egui::Event::Text("z".into()));
+            }
+            events.push(egui::Event::Text("after".into()));
+            frame(&mut app, &ctx, events);
+            for _ in 0..8 {
+                frame(&mut app, &ctx, vec![]);
+            }
+            assert!(app.word_wrap, "{style:?}");
+            assert_eq!(app.documents[0].text, "before after", "{style:?}");
+        }
+    }
+}
+
+#[test]
+fn editor_focus_requested_by_a_closing_control_survives_its_pointer_release() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_file();
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    let id = app.documents[0].id;
+    let widget = egui::Id::new(("document", id));
+    let pointer = |pressed| egui::Event::PointerButton {
+        pos: egui::pos2(900., 500.),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    frame(&mut app, &ctx, vec![pointer(true)]);
+    app.focus_editor(&ctx);
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000., 700.),
+            )),
+            events: vec![pointer(false)],
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert_eq!(app.take_editor_focus(ui, ctx), None);
+            });
+        },
+    );
+    frame(&mut app, &ctx, vec![]);
+    assert!(ctx.memory(|memory| memory.has_focus(widget)));
+}
+
 /// Exercise input, native TextEdit and exit admission in the production frame order.
 fn input_and_close(
     app: &mut EditorApp,

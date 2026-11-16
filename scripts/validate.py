@@ -11,7 +11,9 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -49,10 +51,17 @@ def environment():
 
 
 def publish_helper():
-    """Snapshot the build with explicit permissions, without modifying Cargo's executable."""
+    """Strip a private copy before atomic publication, leaving Cargo and running helpers intact."""
     source = ROOT / "target/ci/rode-sessiond"
     destination = source.with_name("rode-sessiond-test")
-    ci.publish_executable(source, destination)
+    # Native formatter libraries make the unstripped CI build larger than the
+    # deployment bound. Keep that bound and remove only unused symbols from the
+    # test snapshot, just as the release profile does for distributed helpers.
+    with tempfile.TemporaryDirectory(prefix="helper-snapshot-", dir=source.parent) as directory:
+        snapshot = Path(directory) / source.name
+        shutil.copyfile(source, snapshot)
+        subprocess.run(["strip", "--strip-unneeded", str(snapshot)], check=True, timeout=30)
+        ci.publish_executable(snapshot, destination)
 
 
 def main(arguments=None):
@@ -258,7 +267,7 @@ def main(arguments=None):
     ):
         try:
             publish_helper()
-        except OSError as error:
+        except (OSError, subprocess.SubprocessError) as error:
             results.append(dict(name="publish-helper", exit_code=1, error=str(error)))
             print(f"Cannot publish helper: {error}", file=sys.stderr)
             built = False

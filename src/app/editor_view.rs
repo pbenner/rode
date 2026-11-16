@@ -171,8 +171,11 @@ impl EditorApp {
                 let debug_enabled=self.feature(crate::extensions::Feature::Debugger);
                 let debug_verified=self.documents[self.documents.active_index()].path.as_ref().and_then(|p|self.debugger.client.as_ref().and_then(|c|c.breakpoints.get(p))).map_or(&[][..],Vec::as_slice);
                 let themes = &self.themes;
+                let word_wrap = self.word_wrap;
+                let reflow = std::mem::replace(&mut self.editor.rendered_wrap, word_wrap) != word_wrap;
                 let diagnostics = self.document_issues(self.documents.active().unwrap());
                 let git_gutter = &self.editor.git_gutter;
+                let gutter_layout = &mut self.editor.gutter_layout;
                 let input=&mut self.editor.input;
                 let doc = self.documents.active_mut().unwrap();
                 input.bind_source(doc.id,shortcut_style);
@@ -199,7 +202,7 @@ impl EditorApp {
                 )
                 .to_owned();
                 let highlight = doc.text.len() < 512 * 1024;
-                let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _wrap: f32| {
+                let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap: f32| {
                     let mut job = if highlight {
                         themes.highlight(ui, buffer.as_str(), &lang, font_size)
                     } else {
@@ -210,14 +213,18 @@ impl EditorApp {
                             f32::INFINITY,
                         )
                     };
-                    job.wrap.max_width = f32::INFINITY;
+                    job.wrap.max_width = if word_wrap { wrap.max(1.) } else { f32::INFINITY };
                     ui.fonts_mut(|fonts| fonts.layout_job(job))
                 };
-                egui::ScrollArea::both()
+                let mut source_scroll = egui::ScrollArea::both()
+                    .scroll([!word_wrap, true])
                     .id_salt(("editor-scroll", doc.id))
                     .auto_shrink([false, false])
-                    .max_height(source_height)
-                    .show(ui, |ui| {
+                    .max_height(source_height);
+                if word_wrap {
+                    source_scroll = source_scroll.horizontal_scroll_offset(0.);
+                }
+                source_scroll.show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.horizontal_top(|ui| {
                             let digits=doc.line_count().max(1).ilog10()+1;
@@ -241,7 +248,7 @@ impl EditorApp {
                                 .code_editor()
                                 .cursor_at_end(false)
                                 .font(FontId::monospace(font_size))
-                                .desired_width(ui.available_width().max(80.0))
+                                .desired_width(ui.available_width().max(if word_wrap { 1. } else { 80. }))
                                 .desired_rows(2)
                                 .frame(false)
                                 .margin(egui::vec2(6.0, 0.0))
@@ -250,7 +257,10 @@ impl EditorApp {
                             });
                             themes.paint_glow(ui, glow, &output.galley, output.galley_pos);
                             input.after_source(ui,doc.id,&mut output,&doc.text,palette);
+                            palette.paint_source_artwork(ui, &output);
                             ui_probe::button(ui, "source-editor", &output.response);
+                            ui_probe::button(ui, if word_wrap { "source-editor-wrapped" } else { "source-editor-unwrapped" }, &output.response);
+                            ui_probe::button(ui, &format!("source-editor-layout:{}:{}", doc.line_count(), output.galley.rows.len()), &output.response);
                             keyboard::editor_target(ui, "Source editor", &output.response);
                             if output.cursor_range.is_some_and(|range| range.primary.index == 0 && range.secondary.index == 0) {
                                 ui_probe::button(ui, "source-editor-at-start", &output.response);
@@ -261,7 +271,7 @@ impl EditorApp {
                             if !debug_breakpoints.is_empty() {
                                 ui_probe::button(ui, "source-editor-breakpoints", &output.response);
                             }
-                            if jump_requested
+                            if (jump_requested || (reflow && output.response.has_focus()))
                                 && let Some(cursor) = output
                                     .cursor_range
                                     .map(|range| range.primary.index)
@@ -273,7 +283,7 @@ impl EditorApp {
                                     .translate(output.galley_pos.to_vec2());
                                 ui.scroll_to_rect(caret, Some(Align::Center));
                             }
-                            let rows = gutter::Rows::new(&output.galley, output.galley_pos);
+                            let rows = gutter_layout.rows(&output.galley, output.galley_pos);
                             let gutter = egui::Rect::from_min_max(
                                 egui::pos2(gutter.left(), rows.bounds().top()),
                                 egui::pos2(gutter.right(), rows.bounds().bottom()),
@@ -281,7 +291,7 @@ impl EditorApp {
                             let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(gutter));
                             let visible = rows.visible(ui.clip_rect());
                             for line in visible.clone() {
-                                let row = rows.line(line).unwrap();
+                                let row = rows.first_row(line).unwrap();
                                 let y = row.center().y;
                                 if debug_enabled && let Some(path)=&doc.path {
                                     let rect=egui::Rect::from_min_max(egui::pos2(gutter.left(),row.top()),egui::pos2(gutter.left()+16.,row.bottom()));
@@ -318,7 +328,7 @@ impl EditorApp {
                                 Stroke::new(1.0_f32, palette.border),
                             );
                             if !output.response.changed() {
-                                change_clicked = git_gutter.paint(ui, doc, gutter, rows, palette);
+                                change_clicked = git_gutter.paint(ui, doc, gutter, &rows, palette);
                                 for (issue_index, issue) in diagnostics
                                     .iter()
                                     .enumerate()
@@ -329,7 +339,7 @@ impl EditorApp {
                                     } else {
                                         palette.accent
                                     };
-                                    let row = rows.line(issue.row - 1).unwrap();
+                                    let row = rows.first_row(issue.row - 1).unwrap();
                                     let marker = egui::pos2(gutter.left() + 21.0, row.center().y);
                                     painter.circle_filled(marker, 3.0, color);
                                     ui.interact(
@@ -347,30 +357,13 @@ impl EditorApp {
                                         .take(issue.row.saturating_sub(1))
                                         .map(|s| s.chars().count())
                                         .sum();
-                                    let start = output
-                                        .galley
-                                        .pos_from_cursor(egui::text::CCursor::new(
-                                            offset + issue.column.saturating_sub(1),
-                                        ))
-                                        .translate(output.galley_pos.to_vec2());
                                     let length = if issue.end_row == issue.row {
                                         issue.end_column.saturating_sub(issue.column).max(1)
                                     } else {
                                         1
                                     };
-                                    let end = output
-                                        .galley
-                                        .pos_from_cursor(egui::text::CCursor::new(
-                                            offset + issue.column.saturating_sub(1) + length,
-                                        ))
-                                        .translate(output.galley_pos.to_vec2());
-                                    let underline = egui::Rect::from_min_max(
-                                        egui::pos2(start.left(), start.top()),
-                                        egui::pos2(
-                                            end.right().max(start.left() + 5.),
-                                            start.bottom(),
-                                        ),
-                                    );
+                                    let start = offset.saturating_add(issue.column.saturating_sub(1));
+                                    for (segment, underline) in rows.character_range(start, start.saturating_add(length), output.text_clip_rect).enumerate() {
                                     let points: Vec<_> = (0..=((underline.width() / 3.) as usize)
                                         .max(2))
                                         .map(|i| {
@@ -386,10 +379,11 @@ impl EditorApp {
                                     );
                                     ui.interact(
                                         underline,
-                                        id.with(("issue-range", issue_index)),
+                                        id.with(("issue-range", issue_index, segment)),
                                         Sense::hover(),
                                     )
                                     .on_hover_text(format!("{}: {}", issue.code, issue.message));
+                                    }
                                 }
                             }
                             if !doc.saving && !doc.dirty() {

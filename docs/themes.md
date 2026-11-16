@@ -5,8 +5,8 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Bu
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
-| Sumi-e Light | `sumie-light` | Warm washi-paper surfaces, deep ink text, vermilion accents and muted pine, indigo and ochre syntax |
-| Sumi-e Dark | `sumie-dark` | Neutral charcoal-ink surfaces, paper-white text and coordinated soft vermilion accents |
+| Sumi-e Light | `sumie-light` | Warm washi-paper surfaces, deep ink text, vermilion accents and an original pine-and-crane ink illustration |
+| Sumi-e Dark | `sumie-dark` | Neutral charcoal-ink surfaces, paper-white text and the same illustration in pale ink |
 | SynthWave ’84 | `synthwave84` | Upstream purple surfaces, pink variables, cyan functions, yellow keywords and orange strings |
 | SynthWave ’84 — Neon Dreams | `synthwave84-neon` | SynthWave’s optional bright token cores, native glyph halos, pink-to-cyan tab/activity accents and subtle editor gradient |
 | Atelier Dark | `atelier-dark` | Neutral graphite surfaces, emerald accents, crisp white text and distinct semantic syntax |
@@ -88,11 +88,20 @@ turning the interface into a bright multicolor surface. Both use crisp, lightly
 rounded controls, quiet dividers, matching ANSI palettes and the existing 4.5:1
 terminal contrast setting. Keyboard hints inherit the same control styling.
 Select **Follow UI theme** for matching syntax, or keep an independent code
-palette. The themes use native components with solid editor surfaces.
+palette.
+
+An original ink-wash vignette adds a windswept pine, crane, rocky shore and
+distant mountains to unused space at the source editor's lower right. Its ink
+tint follows the light/dark palette. The illustration shrinks or disappears
+when source rows occupy that space, and hides while text is selected; code,
+carets, gutters, previews and terminal output retain their existing backgrounds.
+It is static, embedded in the application and cached across editor windows,
+with no network access or animation. Custom variants can set `"artwork": "none"`
+to retain the palette without the illustration; see the [theme format](theme-format.md).
 
 | Sumi-e Light | Sumi-e Dark |
 | --- | --- |
-| ![Sumi-e Light native editor](../assets/sumie-light.png) | ![Sumi-e Dark native editor](../assets/sumie-dark.png) |
+| ![Sumi-e Light illustrated editor](../assets/sumie-illustrated-light.png) | ![Sumi-e Dark illustrated editor](../assets/sumie-illustrated-dark.png) |
 
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
 Both share compact 28-point controls, restrained corner radii, proportional UI

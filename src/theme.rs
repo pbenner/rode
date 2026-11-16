@@ -14,7 +14,8 @@
 //!
 //! `palette` owns color roles and defaults; `definition` resolves bounded preset
 //! data and inheritance. `interface` applies shared egui styling, `components`
-//! builds reusable controls/frames, and `surfaces` draws optional decoration.
+//! builds reusable controls/frames, `surfaces` draws optional decoration, and
+//! `artwork` places embedded illustrations outside the visible source rows.
 //! `syntax` owns independent code palettes and cached highlighting. This module
 //! coordinates selection and startup loading; views consume roles, not preset IDs.
 use anyhow::{Context, Result};
@@ -26,6 +27,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use syntect::highlighting::Theme as SyntaxTheme;
+mod artwork;
 mod components;
 mod definition;
 mod glow;
@@ -33,6 +35,7 @@ mod interface;
 mod palette;
 mod surfaces;
 pub mod syntax;
+pub use artwork::Artwork;
 pub(crate) use components::{PANEL_MARGIN, control_height_for_style};
 pub use components::{card_frame, compact_control_height, control_height, dialog_frame, frame};
 use definition::{MAX_CUSTOM_THEMES, MAX_THEME_BYTES};

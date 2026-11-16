@@ -97,6 +97,21 @@ fn main() { println!("ready"); }
 """
         source.write_text(original)
         environment = fixture_environment(base)
+        # Preview/undo checks compare exact source, independently of whether an
+        # installed or bundled formatter is available on this project host.
+        host = ["rode-test", "", "", os.environ["RODE_TEST_SSH_CONFIG"], ""] if remote else None
+        context_key = json.dumps([host, str(root)], separators=(",", ":"))
+        config = base / "data/rode"
+        config.mkdir(parents=True)
+        (config / "app.ron").write_text(
+            json.dumps(
+                {
+                    "project_preferences": json.dumps(
+                        {context_key: {"format_on_save": False, "sandbox": {"enabled": True}}}
+                    )
+                }
+            )
+        )
         # Probe the same default policy with the actual executable, not the test process.
         probe = subprocess.run(
             [str(BINARY), "--file-helper"],

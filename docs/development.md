@@ -558,6 +558,10 @@ python3 scripts/validate.py
 The full command runs formatting/lint and harness regressions, builds the current
 checkout, publishes integration binaries from Cargo's reported paths, runs the
 ordinary Rust suite and doctests, then runs every fast and extended CI suite.
+Its private test-helper snapshot is stripped with binutils `strip` before atomic
+publication so the larger development build fits the existing deployment bound.
+Cargo's executable and previously running helpers remain untouched; stripping
+failures are recorded as validation failures.
 Each UI suite gets its own display through `scripts/ui_display.py`. Every CI case
 also gets a fresh private HOME, XDG directories, session/vault roots and temporary
 directory, including older fixtures which replace only some environment fields.
@@ -916,6 +920,8 @@ Linux is validated; the automated SSH daemon fixture does not cover every authen
 `cargo test --test languages --test project` checks filename/grammar coverage, colored Go/Python/TS/TSX/TOML/Dockerfile tokens across themes, Unicode issue columns, stdin formatting and source preservation, and active sandbox enforcement. Real Go/clang-format checks run when those tools are on PATH. Set `RODE_TEST_PRETTIER` to an installed Prettier executable and `RODE_TEST_RUFF` for their real desktop/headless parity checks. The SSH fixture also checks installed project-local formatter selection and syntax diagnostics in both direct and ProxyJump sandboxed sessions.
 
 With Go on PATH and `RODE_TEST_PRETTIER` set, run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-languages-ui.py` for actual Go format/run/build, TypeScript formatting/Problems, and saves after syntax errors. Screenshots/logs and `toolchain.json` go to `target/languages-ui/`. The standard-library-only Go fixture declares its actual minimum (Go 1.16), disables toolchain/module downloads and uses private caches; shell startup and user Go configuration cannot redirect its tools. CI installs Go, clang-format, shfmt and a pinned test Prettier; the application itself never installs those tools.
+
+The language UI fixture also starts a separate editor with an empty PATH to check bundled formatting, buffer-based saves, syntax diagnostics and recovery without Prettier, Node or npm. `rode-host-core` unit tests cover each linked formatter, idempotence, Unicode positions, BOM/CRLF preservation, embedded code and retained import/property order. The `project` integration tests send the same unsaved snapshots through both executable entry points with an empty PATH, check installed-tool precedence and missing interpreters, and verify that no source/configuration file is executed or rewritten. `RODE_SSH_TEST_NO_PYTHON=1 RODE_SSH_TEST_FILTER=native_generic_operations scripts/test-ssh.sh` repeats native formatting/checks on direct SSH and ProxyJump, including enforced Landlock when required. Helpers must advertise `bundled_web_formatters`; older installed helpers cannot silently retain the Node requirement.
 
 ## Independent syntax themes
 

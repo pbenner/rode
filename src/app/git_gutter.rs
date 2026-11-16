@@ -164,7 +164,7 @@ impl State {
         ui: &mut egui::Ui,
         doc: &Document,
         gutter: egui::Rect,
-        rows: editor_view::gutter::Rows<'_>,
+        rows: &editor_view::gutter::Rows<'_>,
         palette: theme::Palette,
     ) -> Option<usize> {
         if let Some(changes) = self.current(doc) {

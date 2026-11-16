@@ -13,6 +13,10 @@ pub(super) struct View {
     pub input: input::Router,
     /// Versioned Git comparison and peek state for this editor's selection.
     pub git_gutter: git_gutter::State,
+    /// Cached logical-line projection for the most recently rendered source layout.
+    pub gutter_layout: editor_view::gutter::Layout,
+    /// Last applied shared wrap preference, used to reveal the caret after reflow.
+    pub rendered_wrap: bool,
     pub show_find: bool,
     pub find: String,
     pub replacement: String,
@@ -31,6 +35,8 @@ impl Default for View {
             tabs: Default::default(),
             input: Default::default(),
             git_gutter: Default::default(),
+            gutter_layout: Default::default(),
+            rendered_wrap: false,
             show_find: false,
             find: String::new(),
             replacement: String::new(),

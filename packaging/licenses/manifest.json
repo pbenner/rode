@@ -142,5 +142,163 @@
         "source": "https://raw.githubusercontent.com/warp-tech/russh/3d09c20c52a542ffa327723d3a44cb1edd9b0ca4/LICENSE-2.0.txt"
       }
     ]
+  },
+  {
+    "packages": [
+      "bytes-str@0.2.9"
+    ],
+    "files": [
+      {
+        "file": "bytes-str-LICENSE",
+        "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+        "source": "https://raw.githubusercontent.com/dudykr/ddbase/19f6487518dbebbc198346bfb979313ef457199e/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "capacity_builder_macros@0.3.0"
+    ],
+    "files": [
+      {
+        "file": "capacity_builder_macros-LICENSE",
+        "sha256": "429efaf45c4004a7e0b589b1938755dad03ad649a813bd7305457d3f8ee8035f",
+        "source": "https://raw.githubusercontent.com/dsherret/capacity_builder/61370ade72f9ed5e3f40fb261f92057c3486ed83/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "css_dataset@0.4.1"
+    ],
+    "files": [
+      {
+        "file": "css_dataset-LICENSE",
+        "sha256": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd",
+        "source": "https://raw.githubusercontent.com/g-plane/css_dataset/0fda0754f7f42d8d90ecde895d8c6f8655c0e3d9/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "dprint-swc-ext@0.28.1"
+    ],
+    "files": [
+      {
+        "file": "dprint-swc-ext-LICENSE",
+        "sha256": "ca818b8b82971190f76fa6b1b0dacc98ebefeeee723bef00edd747704541898f",
+        "source": "https://raw.githubusercontent.com/dprint/dprint-swc-ext/9f8e869ac1d6f313f24a1217b7c958fdb38922a1/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "malva@0.16.1"
+    ],
+    "files": [
+      {
+        "file": "malva-LICENSE",
+        "sha256": "fe85f268adfe7f3f30994c01093db77b96b917b730cba4275765b1ae97b1f471",
+        "source": "https://raw.githubusercontent.com/g-plane/malva/ce7f5f864c8d6fad7766344f56131b9492e29776/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "markup_fmt@0.28.0"
+    ],
+    "files": [
+      {
+        "file": "malva-LICENSE",
+        "sha256": "fe85f268adfe7f3f30994c01093db77b96b917b730cba4275765b1ae97b1f471",
+        "source": "https://raw.githubusercontent.com/g-plane/markup_fmt/17c54e4fe0804f4b9ac5af8ada85a6695f0dcd68/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "pretty_yaml@0.6.0"
+    ],
+    "files": [
+      {
+        "file": "pretty_yaml-LICENSE",
+        "sha256": "2efe0331e360cdaa2701ae0b42fa1ce6002ee52675d648a0c49029b5f27eb734",
+        "source": "https://raw.githubusercontent.com/g-plane/pretty_yaml/8692d450e21b6dd8a573e561776e102cb5fdb171/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "raffia@0.13.0"
+    ],
+    "files": [
+      {
+        "file": "css_dataset-LICENSE",
+        "sha256": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd",
+        "source": "https://raw.githubusercontent.com/g-plane/raffia/f5cfbbdff33e4c1370940a48a76d26e5202b151d/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "raffia_macro@0.2.0"
+    ],
+    "files": [
+      {
+        "file": "css_dataset-LICENSE",
+        "sha256": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd",
+        "source": "https://raw.githubusercontent.com/g-plane/raffia/c6cf6c661324f82422d7976ca035f9b5634f768e/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "yaml_parser@0.3.0"
+    ],
+    "files": [
+      {
+        "file": "pretty_yaml-LICENSE",
+        "sha256": "2efe0331e360cdaa2701ae0b42fa1ce6002ee52675d648a0c49029b5f27eb734",
+        "source": "https://raw.githubusercontent.com/g-plane/pretty_yaml/8692d450e21b6dd8a573e561776e102cb5fdb171/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "ast_node@7.0.0",
+      "better_scoped_tls@1.0.1",
+      "from_variant@3.0.0",
+      "string_enum@1.0.2",
+      "swc_atoms@10.0.1",
+      "swc_common@27.0.0",
+      "swc_ecma_ast@30.0.2",
+      "swc_ecma_lexer@46.0.0",
+      "swc_ecma_parser@47.0.2",
+      "swc_eq_ignore_macros@1.0.1",
+      "swc_macros_common@1.0.1",
+      "swc_visit@2.0.2"
+    ],
+    "note": "The crate-recorded source revisions returned HTTP 404 during review. This unchanged upstream Apache-2.0 text is pinned to the commit that last changed SWC LICENSE; the original crate revisions are retained below.",
+    "crate_source_revisions": {
+      "ast_node@7.0.0": "9170cd59ebf735925c00cf0fbe615d1feb181431",
+      "better_scoped_tls@1.0.1": "832d537695a07e539660096883fab52bb7f10ecf",
+      "from_variant@3.0.0": "00ec64fe9a4da0973f14721d7b6dc1f13cd75413",
+      "string_enum@1.0.2": "0ce4fd737e260c0cbfffcfdb19f269a9cc221ef4",
+      "swc_atoms@10.0.1": "5a56e973b91c1e1d294c49f58efe50f03af6079a",
+      "swc_common@27.0.0": "c5baa0c4f074885aac617593ab70c3859f541e24",
+      "swc_ecma_ast@30.0.2": "31557bd2ec4770821f813957b043ab9f80da7184",
+      "swc_ecma_lexer@46.0.0": "c5baa0c4f074885aac617593ab70c3859f541e24",
+      "swc_ecma_parser@47.0.2": "22d26a6cf4acb35ee68d6588fb06af855297dd51",
+      "swc_eq_ignore_macros@1.0.1": "832d537695a07e539660096883fab52bb7f10ecf",
+      "swc_macros_common@1.0.1": "832d537695a07e539660096883fab52bb7f10ecf",
+      "swc_visit@2.0.2": "59a9a43a8d6c826de58766a111c459af68828ab1"
+    },
+    "files": [
+      {
+        "file": "swc-LICENSE",
+        "sha256": "d96eba1f1881334d50ffc144276dfa98e147a415e7c591ecdfcb81680361dc91",
+        "source": "https://raw.githubusercontent.com/swc-project/swc/f4cab32dd2697506c071f69c385986ac481e931b/LICENSE"
+      }
+    ]
   }
 ]

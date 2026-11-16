@@ -150,7 +150,7 @@ pub(super) fn paint(
     markers: &[Marker],
     id: u64,
     gutter: egui::Rect,
-    rows: editor_view::gutter::Rows<'_>,
+    rows: &editor_view::gutter::Rows<'_>,
     palette: theme::Palette,
 ) -> Option<usize> {
     let clip = gutter.intersect(ui.clip_rect());

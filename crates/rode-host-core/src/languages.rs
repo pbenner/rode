@@ -2,6 +2,8 @@
 use serde::Deserialize;
 use std::{path::Path, sync::OnceLock};
 
+pub(crate) mod bundled;
+
 /// Embedded language capability record shared with the SSH tool peer.
 #[derive(Debug, Deserialize)]
 pub struct Language {
@@ -13,7 +15,7 @@ pub struct Language {
     pub extensions: Vec<String>,
     /// Recognized exact filenames, such as build/configuration files.
     pub filenames: Vec<String>,
-    /// Optional installed formatter command identifier.
+    /// Preferred formatter command; Prettier also has a bundled native fallback.
     pub formatter: Option<String>,
     /// Optional installed checker override; otherwise the formatter may provide parser checks.
     #[serde(default)]

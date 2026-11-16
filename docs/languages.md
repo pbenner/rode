@@ -13,16 +13,20 @@ Use **Code → Format document** (**Shift+Alt+F**), **Check document**, and **Vi
 | Python, type stubs | `uvx ruff` by default | Ruff lint and syntax diagnostics; safe fixes |
 | Go | `gofmt` | Syntax errors |
 | Rust | `rustfmt` | Formatting only |
-| JavaScript/JSX, TypeScript/TSX | `prettier` | Parser syntax errors |
-| HTML, CSS/SCSS, JSON, YAML, Markdown | `prettier` | Parser syntax errors |
+| JavaScript/JSX, TypeScript/TSX | Installed `prettier`, otherwise bundled native formatter | Parser syntax errors |
+| HTML, CSS/SCSS, JSON/JSONC, YAML, Markdown | Installed `prettier`, otherwise bundled native formatter | Parser syntax errors (Markdown is permissive) |
 | C, C++, Java, C# | `clang-format` | Formatting only |
 | Bash / POSIX shell | `shfmt` | Syntax errors |
 | LaTeX | Optional `latexindent` | Optional ChkTeX lint; compiler issues after builds |
 | Other languages | Project terminal | Project terminal |
 
-Install the listed tools on the computer where the project runs. Project-local `node_modules/.bin/prettier` takes precedence over PATH; RODE never runs `npx` to fetch it. Ruff's explicitly configured `uvx ruff` default is the exception: uv may download Ruff into its cache. See [Python environments and Ruff configuration](project-tools.md#formatting-issues-and-python-environments).
+Web, configuration and Markdown formatting works offline without installing Prettier, Node.js or npm, including on SSH/compute hosts. RODE's native host helper contains the formatters. Project-local `node_modules/.bin/prettier` takes precedence over PATH; when Prettier or its runtime cannot start, RODE uses the bundled formatter automatically. It never runs `npx`, downloads formatting plugins or executes JavaScript configuration in the bundled path. Errors from a running Prettier (such as invalid configuration or missing plugins) are reported rather than silently changing formatters.
 
-Formatters read the current buffer through stdin and return text; they do not write source files. Project configuration such as `.prettierrc`, `.clang-format`, `.editorconfig`, and Ruff settings is respected by the corresponding tool. Parser checks do not report type errors, compiler errors, or missing imports outside Ruff's checks. Ignored files follow the tool's ignore rules. There is no LSP, completion, or go-to-definition in this release.
+The bundled defaults use two spaces, an 80-column target, and preserve the source's BOM and LF/CRLF convention. Import declarations and JSON properties retain their order. HTML script/style blocks and supported Markdown code fences use the same native engines; unknown languages and incomplete Markdown examples retain their code. Output can differ from Prettier, and the fallback does not interpret `.prettierrc`, `.editorconfig`, Prettier ignore rules or plugins. Install Prettier when those project-specific conventions are required.
+
+Other listed tools still need to be installed on the computer where the project runs. Ruff's explicitly configured `uvx ruff` default may download Ruff into its cache. See [Python environments and Ruff configuration](project-tools.md#formatting-issues-and-python-environments).
+
+Formatters receive the current buffer and return text; they do not write source files. Installed tools read through stdin and respect their corresponding project configuration such as `.prettierrc`, `.clang-format`, `.editorconfig`, and Ruff settings. Parser checks do not report type errors, compiler errors, or missing imports outside Ruff's checks. Installed tools follow their own ignore rules. There is no LSP, completion, or go-to-definition in this release.
 
 Live checks debounce for 900 ms, cover only the active buffer up to 512 KiB, and stop retrying an unavailable tool until a manual retry or settings change. Manual tools retain their own 8 MiB input limit; larger buffers skip automatic save hooks and use ordinary revision-checked saving. File opening and saving have no fixed byte-size ceiling. Outdated results are discarded. Missing tools or syntax errors preserve the submitted text and allow saving. A missing tool for one language does not disable other languages' checks.
 
@@ -51,6 +55,8 @@ In a sandbox, hidden toolchains/caches remain hidden. Use [sandbox access settin
 Additional grammars come from the [two-face / bat collection](https://docs.rs/two-face/0.5.2/two_face/), using the existing syntect renderer and RODE theme palettes. `rode --syntax-licenses` prints their embedded acknowledgements, also documented in the [upstream license listing](https://codeberg.org/CosmicHarper/two-face/src/tag/v0.5.2+bat-0.26.1/generated/acknowledgements_full.md).
 
 Formatter references: [gofmt](https://pkg.go.dev/cmd/gofmt), [Prettier stdin](https://prettier.io/docs/cli#--stdin-filepath), [clang-format](https://clang.llvm.org/docs/ClangFormat.html), [shfmt](https://github.com/mvdan/sh/blob/master/cmd/shfmt/shfmt.1.scd).
+
+Bundled native engines: [dprint TypeScript](https://github.com/dprint/dprint-plugin-typescript), [dprint JSON](https://github.com/dprint/dprint-plugin-json), [dprint Markdown](https://github.com/dprint/dprint-plugin-markdown), [markup_fmt](https://github.com/g-plane/markup_fmt), [Malva](https://github.com/g-plane/malva), and [Pretty YAML](https://github.com/g-plane/pretty_yaml). These are linked Rust libraries; the dprint CLI and WebAssembly runtime are not required.
 
 ## LaTeX projects
 

@@ -264,6 +264,14 @@ impl EditorApp {
             self.finish_input(ctx);
             return;
         }
+        // Consume printable Alt-chord text before a source keymap can treat it
+        // as an edit or mode command. Earlier edits have already been fenced.
+        if self
+            .source_input_scope(ctx)
+            .is_some_and(|scope| scope.focused(ctx))
+        {
+            self.consume_command(Command::WordWrap, ctx);
+        }
         if self.editors.contains(ctx.viewport_id())
             && self.documents.viewport() == ctx.viewport_id()
         {

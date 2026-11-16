@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native language highlighting, Go run/build, and Prettier buffer checks."""
+"""Native language tools, installed Prettier precedence and offline formatting."""
 
 import json
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/languages-ui"
 )
+from ui_fixture import native_session, project_args
 from ui_harness import (
     ARTIFACTS,
     BINARY,
@@ -152,5 +153,69 @@ def run():
                 stop_process(process)
 
 
+def run_bundled():
+    """Exercise save/manual tools through the real helper with an empty executable PATH."""
+    with fixture_directory(prefix="rode-native-format-ui-") as base:
+        root = base / "project"
+        root.mkdir()
+        empty_path = base / "empty-path"
+        empty_path.mkdir()
+        fixtures = [
+            ("main.ts", 'const value:string="hello";', 'const value: string = "hello";\n'),
+            ("data.json", '{"value":1}', '{ "value": 1 }\n'),
+            ("style.scss", "a{color:red}", "a {\n  color: red;\n}\n"),
+            ("readme.md", "#  Heading\n\n* hello", "# Heading\n\n- hello\n"),
+        ]
+        for name, source, _ in fixtures:
+            (root / name).write_text(source)
+        environment = fixture_environment(base, PATH=str(empty_path), SHELL="/bin/bash")
+        assert all(
+            shutil.which(tool, path=environment["PATH"]) is None
+            for tool in ("prettier", "node", "npm")
+        )
+        with native_session(project_args(root), environment, root, "bundled") as ui:
+            for index, (name, source, expected) in enumerate(fixtures):
+                ui.open_file(name)
+                if index == 0:
+                    # Format-on-save must submit the live buffer, not reread the file.
+                    ui.fill("source-editor", source + "\n")
+                    ui.command("Save file")
+                else:
+                    ui.command("Code: Format document")
+                    ui.control("source-editor-modified")
+                    ui.command("Save file")
+                wait_for(
+                    lambda: (root / name).read_text() == expected,
+                    f"Bundled formatting was not saved: {name}",
+                )
+                ui.source(expected)
+                ui.control("source-editor-saved")
+            ui.open_file("main.ts")
+            invalid = "const value = ;"
+            ui.fill("source-editor", invalid)
+            ui.command("Code: Check document")
+            ui.command("Code: Problems")
+            ui.control("problems-check-complete")
+            assert (root / "main.ts").read_text() == fixtures[0][2], "Checking changed disk"
+            ui.command("Save file")
+            wait_for(
+                lambda: (root / "main.ts").read_text() == invalid,
+                "Native syntax errors prevented saving",
+            )
+            # A syntax failure must not mark the formatter unavailable for the next edit.
+            ui.open_file("main.ts")
+            ui.fill("source-editor", "const value:number=2;")
+            ui.command("Save file")
+            wait_for(
+                lambda: (root / "main.ts").read_text() == "const value: number = 2;\n",
+                "Native formatter did not recover after syntax errors",
+            )
+            screenshot(ui.window, "bundled-formatting.png")
+        print(
+            "Bundled formatting, live-buffer saves and syntax recovery passed without Prettier/Node/npm on PATH."
+        )
+
+
 if __name__ == "__main__":
     run()
+    run_bundled()

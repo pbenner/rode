@@ -32,6 +32,7 @@ pub(in crate::app) enum Command {
     Explorer,
     Find,
     Shortcuts,
+    WordWrap,
     UiScaleStep(f32),
     UiScaleReset,
     TerminalColors,
@@ -117,6 +118,7 @@ impl Command {
         Self::Explorer,
         Self::Find,
         Self::Shortcuts,
+        Self::WordWrap,
         Self::TerminalColors,
         Self::UiScaleStep(-0.05),
         Self::UiScaleStep(0.05),
@@ -218,6 +220,9 @@ impl Command {
             }
             Self::Shortcuts => {
                 Definition::new("Keyboard shortcuts…", Icon::Settings).palette("Keyboard shortcuts")
+            }
+            Self::WordWrap => {
+                Definition::new("Word wrap", Icon::Format).palette("Editor: Toggle word wrap")
             }
             Self::TerminalColors => Definition::new("Terminal colors…", Icon::Palette)
                 .palette("Terminal: Colors and contrast"),
@@ -340,6 +345,7 @@ impl Command {
             Self::Terminal => (egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::T),
             Self::Explorer => (egui::Modifiers::COMMAND, Key::B),
             Self::Find => (egui::Modifiers::COMMAND, Key::F),
+            Self::WordWrap => (egui::Modifiers::ALT, Key::Z),
             Self::UiScaleReset => (egui::Modifiers::COMMAND, Key::Num0),
             Self::Panel(Panel::Git) => (egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::G),
             Self::Panel(Panel::Problems) => {
@@ -373,7 +379,26 @@ impl Command {
         self.shortcut()
             .is_some_and(|shortcut| {
                 ctx.input_mut(|input| {
-                    if self == Self::DebugOver {
+                    if self == Self::WordWrap {
+                        // X11 Alt chords may also carry a printable event.
+                        // Remove only the text paired with this consumed key;
+                        // later typing in the same packet must still reach its widget.
+                        let mut events = std::mem::take(&mut input.events).into_iter().peekable();
+                        let mut consumed = false;
+                        while let Some(event) = events.next() {
+                            if matches!(&event, egui::Event::Key { key, modifiers, pressed: true, .. }
+                                if *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers))
+                            {
+                                consumed = true;
+                                if matches!(events.peek(), Some(egui::Event::Text(text)) if text.eq_ignore_ascii_case("z")) {
+                                    events.next();
+                                }
+                            } else {
+                                input.events.push(event);
+                            }
+                        }
+                        consumed
+                    } else if self == Self::DebugOver {
                         // Shift+F10 belongs to contextual menus. egui's relaxed
                         // modifier matching would otherwise consume it as F10.
                         let mut consumed = false;
@@ -417,6 +442,7 @@ impl EditorApp {
             }
             Command::Connect => self.dialog == Dialog::Connect,
             Command::Terminal => self.terminal_any_visible(),
+            Command::WordWrap => self.word_wrap,
             Command::Extensions => self.dialog == Dialog::Extensions,
             _ => false,
         }
@@ -539,6 +565,7 @@ impl EditorApp {
             Command::UiScaleStep(step) => self.set_ui_scale(self.ui_scale + step, ctx),
             Command::UiScaleReset => self.set_ui_scale(1., ctx),
             Command::TerminalColors => self.terminal_colors.open = true,
+            Command::WordWrap => self.toggle_word_wrap(ctx),
             Command::LocalFolder => self.open_local_folder_dialog(),
             Command::SaveAll => self.save_all(ctx),
             Command::Quit => self.guarded(Action::Quit, ctx),

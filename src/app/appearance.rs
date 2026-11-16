@@ -6,6 +6,33 @@
 use super::*;
 
 impl EditorApp {
+    /// Reflow all editor windows without changing their text, cursor or undo identity.
+    pub(super) fn toggle_word_wrap(&mut self, ctx: &egui::Context) {
+        self.word_wrap = !self.word_wrap;
+        self.word_wrap_save_pending = true;
+        self.focus_editor_in(self.command_editor(ctx), ctx);
+        let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+        for viewport in viewports {
+            ctx.request_repaint_of(viewport);
+        }
+    }
+
+    /// Merge only a changed wrap preference; idle frames do not rewrite it.
+    pub(super) fn persist_word_wrap(
+        &mut self,
+        storage: Option<&mut (dyn eframe::Storage + 'static)>,
+    ) {
+        if !std::mem::take(&mut self.word_wrap_save_pending) {
+            return;
+        }
+        if let Some(storage) = storage {
+            storage.set_string("word_wrap", self.word_wrap.to_string());
+            storage.flush();
+        } else {
+            self.notify("Word wrap changed, but could not be saved.", true);
+        }
+    }
+
     /// Apply a finite 50–200% interface zoom rounded to one percentage point;
     /// invalid input resets to 100%. Mark the new value for persistence.
     pub(super) fn set_ui_scale(&mut self, scale: f32, ctx: &egui::Context) {

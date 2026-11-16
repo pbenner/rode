@@ -1,7 +1,7 @@
 //! Palette/syntax parsing, cached layouts, independent preferences and concurrent theme edits.
 
 use eframe::egui::{self, Color32};
-use rode::theme::{Chrome, Palette, Theme, Themes, parse_color};
+use rode::theme::{Artwork, Chrome, Palette, Theme, Themes, parse_color};
 use std::fs;
 
 fn contrast(a: Color32, b: Color32) -> f64 {
@@ -29,6 +29,41 @@ fn color_for(layout: &egui::text::LayoutJob, token: &str) -> Color32 {
         .unwrap()
         .format
         .color
+}
+
+#[test]
+fn embedded_artwork_inherits_independently_and_can_be_disabled() {
+    for base in ["sumie-light", "sumie-dark"] {
+        let builtin = Theme::builtin(base).unwrap();
+        assert_eq!(builtin.palette.artwork, Artwork::SumiE);
+        assert_eq!(builtin.palette.chrome, Chrome::Plain);
+        let inherited = Theme::from_json(
+            "custom:ink",
+            &format!(r#"{{"name":"Ink","base":"{base}"}}"#),
+        )
+        .unwrap();
+        assert_eq!(inherited.palette, builtin.palette);
+        let unillustrated = Theme::from_json(
+            "custom:unillustrated",
+            &format!(r#"{{"name":"Unillustrated","base":"{base}","artwork":"none"}}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            unillustrated.palette,
+            Palette {
+                artwork: Artwork::None,
+                ..builtin.palette
+            }
+        );
+    }
+    assert_eq!(Palette::default().artwork, Artwork::None);
+    assert!(
+        Theme::from_json(
+            "custom:invalid",
+            r#"{"name":"Invalid","artwork":"external.png"}"#
+        )
+        .is_err()
+    );
 }
 
 #[test]

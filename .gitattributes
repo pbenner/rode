@@ -1,5 +1,7 @@
 * text=auto eol=lf
 *.png binary
 *.pdf binary
+# License snapshots are hashed as upstream bytes, including their line endings.
+packaging/licenses/** -text -whitespace
 # Keep pinned upstream snapshots byte-for-byte; vendor.json checks their contents.
 crates/rode-bwrap/vendor/** -whitespace

@@ -689,8 +689,19 @@ fn analyze(
             .current_dir(root)
             .args(language.formatter_args(path))
             .env("NO_COLOR", "1");
-        let output = run(command, text.as_bytes().to_vec(), Duration::from_secs(20))
-            .with_context(|| format!("{tool} is unavailable. Install it on the project host and make it available on PATH."))?;
+        let output = match run(command, text.as_bytes().to_vec(), Duration::from_secs(20)) {
+            // ENOENT also covers an installed script whose interpreter is missing.
+            // Exit 127 covers launchers such as /usr/bin/env that cannot find Node.
+            // Configuration, plugin, permission and syntax errors remain authoritative.
+            Err(error) if tool == "prettier" && error.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) && root.is_dir() => {
+                return crate::languages::bundled::analyze(language, path, text, format);
+            }
+            Ok(output) if tool == "prettier" && output.code == 127 => {
+                return crate::languages::bundled::analyze(language, path, text, format);
+            }
+            output => output.with_context(|| format!("{tool} is unavailable. Install it on the project host and make it available on PATH."))?,
+        };
         if output.success() {
             if format {
                 result.text = output.stdout;

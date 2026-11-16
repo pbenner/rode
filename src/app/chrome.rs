@@ -360,6 +360,13 @@ impl EditorApp {
     /// Consume the pending document focus request only when this editor can accept input.
     pub(super) fn take_editor_focus(&mut self, ui: &egui::Ui, ctx: &egui::Context) -> Option<u64> {
         self.editor.tabs.focus?;
+        // A menu/button can close above an editor in its release frame. Native
+        // TextEdit still sees that click outside its bounds and drops focus;
+        // retain the request until the next pass instead of consuming it early.
+        if ctx.input(|input| input.pointer.any_released()) {
+            ctx.request_repaint();
+            return None;
+        }
         if self.dialog != Dialog::None
             || self.pending.modal()
             || self.workbench_modal()

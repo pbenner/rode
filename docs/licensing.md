@@ -2,6 +2,12 @@
 
 RODE's own code is covered by the repository's [MIT license](https://github.com/pbenner/rode/blob/main/LICENSE). Bundled fonts, parser grammars, syntax themes and other dependencies retain their own terms.
 
+The Sumi-e pine-and-crane illustration is original artwork generated for RODE
+with the built-in image-generation tool. Its source PNG and generation prompt
+are retained under `assets/themes/`; it does not incorporate an imported artist's
+image. The editor derives a transparent ink mask from that embedded asset and
+tints it for the light and dark palettes.
+
 ## Icon source review
 
 The review on 2026-10-29 inspected the icon drawing code, repository artwork, Cargo dependencies and Debian notice generation:
@@ -45,7 +51,9 @@ The Debian builder collects these files from the exact Cargo dependency source a
 
 Agent-chat maths uses `latex-rust`, whose Rust code is MIT OR Apache-2.0. It embeds STIX Two Math under SIL Open Font License 1.1 and a modified dvips colour table under LPPL 1.3c or later. The notice collector includes its `NOTICE`, complete `fonts/stix-two-math/OFL.txt` and attributed `data/dvipsnames.tsv` alongside the crate licenses. These assets retain their own terms.
 
-The collector covers the workspace's normal/build dependency graph for the build host, including license directories and REUSE copyright headers. Some published crates omit their upstream license files. For these, `packaging/licenses/` keeps unchanged texts from the exact upstream revision recorded in the crate, with package versions, source URLs and SHA-256 hashes in its manifest. Packaging verifies the hashes and requires a license text for every collected dependency; an SPDX declaration alone is insufficient. Collection runs offline. When updating dependencies, review any changed or missing notices before updating the snapshots. See [Debian packaging](packaging.md) for the validation command.
+The collector covers the workspace's normal/build dependency graph for the build host, including license directories and REUSE copyright headers. Some published crates omit their upstream license files. For these, `packaging/licenses/` keeps unchanged upstream texts, with package versions, immutable source URLs and SHA-256 hashes in its manifest. Snapshots use the crate-recorded upstream revision where available. The SWC entries explicitly record an exception: those source revisions returned HTTP 404, so their complete Apache-2.0 license is pinned to the upstream commit that last changed that file, retaining SWC's attribution and the original crate revisions in the manifest. Packaging verifies the hashes and requires a license text for every collected dependency; an SPDX declaration alone is insufficient. Collection runs offline. When updating dependencies, review any changed or missing notices before updating the snapshots. See [Debian packaging](packaging.md) for the validation command.
+
+Bundled web/configuration formatters use dprint's TypeScript, JSON and Markdown libraries plus `markup_fmt`, Malva and Pretty YAML under their upstream MIT terms. Their parser/printing dependencies retain their own licenses, including Apache-2.0 for SWC. The normal dependency notice collector includes these engines and the supplemental upstream texts; no formatter extension or npm package is redistributed.
 
 `rode --syntax-licenses` and `rode --theme-licenses` print the separate acknowledgements for embedded grammars and syntax themes; they are not a complete font/dependency license listing.
 

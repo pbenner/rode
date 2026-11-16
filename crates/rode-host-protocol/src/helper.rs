@@ -15,6 +15,8 @@ pub const MAX_EXECUTABLE: u64 = 24 * 1024 * 1024;
 pub const CAPABILITIES: &[&str] = &[
     "files",
     "project_tools",
+    // Old installed helpers would still require Node/Prettier for these files.
+    "bundled_web_formatters",
     "git_memory_auth",
     "contexts",
     "sessions",
@@ -278,5 +280,16 @@ mod tests {
             .validate(std::env::consts::OS, std::env::consts::ARCH, 20)
             .unwrap_err();
         assert!(error.contains("connection_heartbeats"), "{error}");
+    }
+
+    #[test]
+    fn helpers_without_native_formatters_require_an_upgrade() {
+        let mut info = Info::current("0.1.0", 20);
+        info.capabilities
+            .retain(|cap| cap != "bundled_web_formatters");
+        let error = info
+            .validate(std::env::consts::OS, std::env::consts::ARCH, 20)
+            .unwrap_err();
+        assert!(error.contains("bundled_web_formatters"), "{error}");
     }
 }

@@ -86,6 +86,44 @@ class ValidationTests(unittest.TestCase):
         versions.start()
         self.addCleanup(versions.stop)
 
+    def test_helper_publication_preserves_cargo_and_retains_the_previous_snapshot_on_failure(self):
+        for fails in (False, True):
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "target/ci/rode-sessiond"
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b"original Cargo executable")
+                destination = source.with_name("rode-sessiond-test")
+                destination.write_bytes(b"previous helper snapshot")
+
+                def strip(command, **kwargs):
+                    self.assertEqual(command[:2], ["strip", "--strip-unneeded"])
+                    self.assertTrue(kwargs["check"])
+                    snapshot = Path(command[2])
+                    self.assertNotEqual(snapshot, source)
+                    self.assertEqual(snapshot.read_bytes(), source.read_bytes())
+                    if fails:
+                        raise subprocess.CalledProcessError(1, command)
+                    snapshot.write_bytes(b"stripped helper snapshot")
+
+                with (
+                    patch.object(validate, "ROOT", root),
+                    patch.object(validate.subprocess, "run", side_effect=strip),
+                ):
+                    if fails:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            validate.publish_helper()
+                    else:
+                        validate.publish_helper()
+                self.assertEqual(source.read_bytes(), b"original Cargo executable")
+                self.assertEqual(
+                    destination.read_bytes(),
+                    b"previous helper snapshot" if fails else b"stripped helper snapshot",
+                )
+                if not fails:
+                    self.assertEqual(destination.stat().st_mode & 0o777, 0o755)
+                self.assertEqual(sorted(source.parent.iterdir()), sorted([source, destination]))
+
     def test_interruption_records_the_failed_command_without_launching_later_cases(self):
         with tempfile.TemporaryDirectory() as directory:
             with (
@@ -429,7 +467,12 @@ class ValidationTests(unittest.TestCase):
             source.parent.mkdir(parents=True)
             source.write_bytes(b"fixture helper")
             source.chmod(0o775)
-            with patch.object(validate, "ROOT", root):
+            # This case isolates publication permissions; the stripping tests
+            # above exercise transformation and failure before publication.
+            with (
+                patch.object(validate, "ROOT", root),
+                patch.object(validate.subprocess, "run"),
+            ):
                 validate.publish_helper()
             snapshot = source.with_name("rode-sessiond-test")
             self.assertEqual(snapshot.read_bytes(), source.read_bytes())

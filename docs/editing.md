@@ -1,5 +1,17 @@
 # Editing and shortcuts
 
+## Word wrap
+
+Choose **View → Word wrap**, press **Alt+Z**, or run **Editor: Toggle word wrap**
+from the command palette. Long source lines reflow to the editor width, including
+when a window is resized. Wrapping is off by default; the choice is shared across
+editor windows and saved immediately for the next launch.
+
+This is a display setting: it never inserts line breaks, saves a file, or resets
+the cursor, selection or undo history. Line numbers, Git markers, breakpoints and
+diagnostics continue to refer to file lines, with continuation rows sharing their
+original line number. Terminal output and rendered previews keep their own layout.
+
 ## Git line changes
 
 When the Git extension is enabled and Git is available on the project host, the
@@ -60,6 +72,7 @@ Operations use the prepared project's actual filesystem policy. Mutation control
 - Shared local/SSH file and project-folder browser with left-aligned names, optional hidden files, and parent-folder navigation
 - Aligned single-row tabs with bounded widths, duplicate-filename context, active-tab reveal, overflow arrows/editor list, drag reordering, and middle-click closing
 - Line numbers, UTF-8 text, [multi-language highlighting and tools](languages.md), undo/redo, clipboard
+- Optional soft word wrapping, shared across editor windows and saved for the next launch
 - Read-only [PDF previews](pdf.md) with page navigation, zoom/pan, and reload
 - Read-only [image previews](images.md) in normal tabs, with zoom, fit, transparency, and reload
 - Switch Markdown tabs between source editing and [rendered previews](markdown.md), including unsaved changes
@@ -86,6 +99,7 @@ Open File, Open as hex, and Save As share the project-folder browser's directory
 | Ctrl+Shift+Tab / Ctrl+Tab | Previous / next tab |
 | Ctrl+B | Toggle explorer |
 | Ctrl+F | Find / replace |
+| Alt+Z | Toggle word wrap |
 | Ctrl+Shift+R | Toggle Markdown preview, or Marp slides for detected decks |
 | Ctrl+Shift+G | Git source control |
 | Ctrl+Shift+M | Problems |

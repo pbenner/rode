@@ -88,7 +88,13 @@ fn first_menu_row(path: &std::path::Path) -> egui::Rect {
     control(path, name)
 }
 
-fn scroll_to_end(app: &mut EditorApp, ctx: &egui::Context, size: egui::Vec2, row: egui::Rect) {
+fn scroll_menu(
+    app: &mut EditorApp,
+    ctx: &egui::Context,
+    size: egui::Vec2,
+    row: egui::Rect,
+    end: bool,
+) {
     // Use the solid scrollbar gutter so scrolling does not hover another submenu.
     let point = egui::pos2(row.right() + 5., row.center().y);
     for _ in 0..4 {
@@ -100,7 +106,7 @@ fn scroll_to_end(app: &mut EditorApp, ctx: &egui::Context, size: egui::Vec2, row
                 egui::Event::PointerMoved(point),
                 egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(0., -2000.),
+                    delta: egui::vec2(0., if end { -2000. } else { 2000. }),
                     modifiers: Default::default(),
                 },
             ],
@@ -183,15 +189,18 @@ fn compact_menus_scroll_to_last_actions_and_keep_view_toggles_open() {
             frame(&mut app, &ctx, size, vec![]);
             click(&mut app, &ctx, size, control(&state, "menu-file"));
             let first = control(&state, "menu-item:New file");
-            scroll_to_end(&mut app, &ctx, size, first);
+            scroll_menu(&mut app, &ctx, size, first, true);
             let quit = control(&state, "menu-item:Quit");
             assert!(
                 ctx.content_rect().contains_rect(quit),
                 "{theme}, {scale}: {quit:?}"
             );
             click(&mut app, &ctx, size, control(&state, "menu-view"));
-            let scale_menu = control(&state, "submenu:Interface scale: 100%");
+            // Opening another compact menu can retain a scroll offset. Reveal
+            // its first actions before following a submenu's settling bounds.
+            scroll_menu(&mut app, &ctx, size, first_menu_row(&state), false);
             for _ in 0..4 {
+                let scale_menu = control(&state, "submenu:Interface scale: 100%");
                 frame(
                     &mut app,
                     &ctx,
@@ -200,7 +209,7 @@ fn compact_menus_scroll_to_last_actions_and_keep_view_toggles_open() {
                 );
             }
             let larger = control(&state, "interface-larger");
-            scroll_to_end(&mut app, &ctx, size, larger);
+            scroll_menu(&mut app, &ctx, size, larger, true);
             let reset = control(&state, "interface-reset");
             assert!(
                 ctx.content_rect().contains_rect(reset),
@@ -208,7 +217,7 @@ fn compact_menus_scroll_to_last_actions_and_keep_view_toggles_open() {
             );
             escape(&mut app, &ctx, size);
             click(&mut app, &ctx, size, control(&state, "menu-view"));
-            scroll_to_end(&mut app, &ctx, size, first_menu_row(&state));
+            scroll_menu(&mut app, &ctx, size, first_menu_row(&state), true);
             let original = app.show_hidden;
             click(
                 &mut app,

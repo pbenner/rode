@@ -99,7 +99,7 @@ impl EditorApp {
             });
         }
         ui.add_space(12.);
-        let status = ui.label(RichText::new("Python: Ruff. Go: gofmt. JS/TS/web: Prettier. C/C++/Java/C#: clang-format. Shell: shfmt. Rust: rustfmt. Tools must be installed on the project host; configure automatic checks in Settings.").small().color(palette.muted));
+        let status = ui.label(RichText::new("JS/TS/web: bundled formatting, or installed Prettier. Python: Ruff. Go: gofmt. C/C++/Java/C#: clang-format. Shell: shfmt. Rust: rustfmt. Other tools require installation on the project host; configure automatic checks in Settings.").small().color(palette.muted));
         if self.workbench.code_tools.checking.is_empty() {
             ui_probe::button(ui, "problems-check-complete", &status);
         }

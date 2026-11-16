@@ -13,6 +13,12 @@ portable-pty = "0.9"
 rode-host-protocol = { path = "../rode-host-protocol" }
 anyhow = "1"
 base64 = "0.22"
+dprint-plugin-typescript = "0.101"
+dprint-plugin-json = "0.26"
+dprint-plugin-markdown = "0.29"
+markup_fmt = { version = "0.28", default-features = false }
+malva = { version = "0.16", default-features = false }
+pretty_yaml = { version = "0.6", default-features = false }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

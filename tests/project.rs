@@ -19,7 +19,11 @@ use std::{
 };
 
 fn remote(request: &Request) -> anyhow::Result<Response> {
-    let mut child = native_peer::command()
+    remote_command(request, native_peer::command())
+}
+
+fn remote_command(request: &Request, mut command: Command) -> anyhow::Result<Response> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -41,6 +45,9 @@ fn remote(request: &Request) -> anyhow::Result<Response> {
         .tool
         .unwrap())
 }
+
+#[path = "project/bundled.rs"]
+mod bundled;
 
 #[test]
 fn background_git_status_preserves_the_index_and_respects_an_external_writer() {

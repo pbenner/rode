@@ -800,6 +800,38 @@ fn invalid_interface_scale_uses_system_display_scaling() {
 }
 
 #[test]
+fn word_wrap_persists_immediately_and_preserves_unsaved_source() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    assert!(!app.word_wrap);
+    app.new_file();
+    app.documents[0].fixture_content().text = "unsaved long source ".repeat(80);
+    let source = app.documents[0].text.clone();
+    let id = app.documents[0].id;
+    let version = app.documents[0].version();
+    app.execute_command(Command::WordWrap, &ctx);
+    assert!(app.word_wrap);
+    assert!(app.command_selected(Command::WordWrap, &ctx));
+    assert_eq!(app.documents[0].id, id);
+    assert_eq!(app.documents[0].version(), version);
+    assert_eq!(app.documents[0].text, source);
+    let mut storage = MemoryStorage::default();
+    app.persist_word_wrap(Some(&mut storage));
+    assert_eq!(storage.0["word_wrap"], "true");
+    assert_eq!(storage.1, 1);
+    app.persist_word_wrap(Some(&mut storage));
+    assert_eq!(storage.1, 1);
+    let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+    cc.storage = Some(&storage);
+    assert!(EditorApp::new(&cc, Startup::default()).word_wrap);
+    app.execute_command(Command::WordWrap, &ctx);
+    app.persist_word_wrap(Some(&mut storage));
+    assert_eq!(storage.0["word_wrap"], "false");
+    assert_eq!(app.documents[0].text, source);
+}
+
+#[test]
 fn theme_change_flushes_preferences_without_exiting_or_waiting_for_autosave() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());

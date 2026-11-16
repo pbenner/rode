@@ -660,11 +660,11 @@ fn native_generic_operations_need_no_remote_python() {
         assert!(
             Command::new(remote.client_program())
                 .args(remote.channel_args(false))
-                .arg("if command -v python3 >/dev/null 2>&1; then exit 99; fi")
+                .arg("for tool in python3 prettier node npm; do if command -v \"$tool\" >/dev/null 2>&1; then exit 99; fi; done")
                 .status()
                 .unwrap()
                 .success(),
-            "Python must be absent from the fixture PATH"
+            "Python, Prettier, Node and npm must be absent from the fixture PATH"
         );
         let base = tempfile::tempdir().unwrap();
         if std::env::var("RODE_SSH_TEST_NO_BWRAP").as_deref() == Ok("1") {
@@ -789,6 +789,52 @@ fn native_generic_operations_need_no_remote_python() {
                 .unwrap();
             assert_eq!(read.text, "native file service");
             assert_eq!(read.revision, saved.revision);
+            // These buffers exist only in memory. Direct SSH and ProxyJump must
+            // use the deployed helper's linked engines, also under Landlock.
+            for (name, source, token) in [
+                ("buffer.ts", "const x:number=1;", "const x: number = 1;"),
+                ("buffer.json", "{\"x\":1}", "\"x\": 1"),
+                ("buffer.yaml", "x: [1,2]", "[1, 2]"),
+                ("buffer.html", "<div  class='x'>text</div>", "class=\"x\""),
+                ("buffer.scss", "a{color:red}", "color: red;"),
+                ("buffer.md", "#  Heading\n\n* hello", "# Heading\n\n- hello"),
+            ] {
+                let path = root.join(name);
+                for format in [false, true] {
+                    let response = remote
+                        .request_in(
+                            &Request::Tool {
+                                request: rode::project::Request::Analyze {
+                                    root: plan.root.clone(),
+                                    path: path.to_string_lossy().into(),
+                                    text: source.into(),
+                                    python: "off".into(),
+                                    ruff: "auto".into(),
+                                    format,
+                                    check: true,
+                                    fix: false,
+                                },
+                            },
+                            Some(&plan),
+                        )
+                        .unwrap();
+                    let Some(rode::project::Response::Analysis(result)) = response.tool else {
+                        panic!()
+                    };
+                    assert!(
+                        result.diagnostics.is_empty(),
+                        "{name}: {:?}",
+                        result.diagnostics
+                    );
+                    assert!(result.warnings.is_empty(), "{name}: {:?}", result.warnings);
+                    if format {
+                        assert!(result.text.contains(token), "{name}: {}", result.text);
+                    } else {
+                        assert_eq!(result.text, source);
+                    }
+                    assert!(!path.exists());
+                }
+            }
             let response = remote
                 .request_in(
                     &Request::Tool {

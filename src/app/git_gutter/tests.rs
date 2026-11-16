@@ -365,7 +365,7 @@ fn markers_stay_in_their_own_strip_and_deletions_remain_visible_at_both_ends() {
                 );
                 job.sections[0].format.line_height = Some(20.);
                 let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-                let rows = editor_view::gutter::Rows::new(&galley, gutter.left_top());
+                let rows = editor_view::gutter::Layout::default().rows(&galley, gutter.left_top());
                 let _ = diff::paint(
                     ui,
                     &[
@@ -392,7 +392,7 @@ fn markers_stay_in_their_own_strip_and_deletions_remain_visible_at_both_ends() {
                     ],
                     1,
                     gutter,
-                    rows,
+                    &rows,
                     palette,
                 );
             });
@@ -491,7 +491,7 @@ fn painting_rejects_old_versions_other_paths_and_unbound_recovery_documents() {
                     ui,
                     doc,
                     gutter,
-                    editor_view::gutter::Rows::new(&galley, gutter.left_top()),
+                    &editor_view::gutter::Layout::default().rows(&galley, gutter.left_top()),
                     palette,
                 );
             });
