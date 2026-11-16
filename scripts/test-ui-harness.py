@@ -639,6 +639,90 @@ class ButtonReadinessTests(unittest.TestCase):
 
 
 class NativeInteractionTests(unittest.TestCase):
+    @staticmethod
+    def dismissal_state(render_pass, *names):
+        return json.dumps(
+            {
+                "pid": 42,
+                "pass": render_pass,
+                "buttons": [{"name": name} for name in names],
+            }
+        )
+
+    def test_dismissal_waits_for_every_output_control_in_one_new_frame_without_mouse_input(self):
+        process = Mock(pid=42)
+        process.poll.return_value = None
+        ui = NativeUI(1, process, "log", "state")
+        close, output = "git-output-close", "git-output-view"
+        states = [
+            self.dismissal_state(10, close, output),
+            self.dismissal_state(10),  # An older absence cannot acknowledge Return.
+            self.dismissal_state(11, close, output),  # The key is still queued.
+            self.dismissal_state(12, output),
+            self.dismissal_state(13, close),
+            self.dismissal_state(14),
+        ]
+        with (
+            patch.object(ui, "hint") as hint,
+            patch.object(ui, "control") as control,
+            patch("ui_harness.focus_window"),
+            patch("ui_harness.delayed_input", side_effect=lambda _: nullcontext()),
+            patch("ui_harness.key") as key,
+            patch("ui_harness.click") as click,
+            patch("ui_harness.Path.read_text", side_effect=states) as read,
+            patch("ui_harness.time.sleep"),
+        ):
+            key.side_effect = lambda *_: self.assertEqual(read.call_count, 1)
+            state = ui.dismiss(close, label="Close", also_absent=(output,))
+            self.assertEqual(state["pass"], 14)
+            self.assertEqual(read.call_count, len(states))
+            hint.assert_called_once_with("Close")
+            control.assert_called_once_with(close, focused=True)
+            key.assert_called_once_with("Return", ())
+            click.assert_not_called()
+
+    def test_a_window_that_stays_open_fails_without_retrying_or_clicking_through_it(self):
+        process = Mock(pid=42)
+        process.poll.return_value = None
+        ui = NativeUI(1, process, "log", "state")
+        with (
+            patch.object(ui, "hint"),
+            patch.object(ui, "control"),
+            patch("ui_harness.focus_window"),
+            patch("ui_harness.delayed_input", side_effect=lambda _: nullcontext()),
+            patch("ui_harness.key") as key,
+            patch("ui_harness.click") as click,
+            patch(
+                "ui_harness.Path.read_text",
+                return_value=self.dismissal_state(10, "git-output-close", "git-output-view"),
+            ),
+            patch("ui_harness.time.sleep"),
+            patch("ui_harness.time.monotonic", side_effect=[0, 0, 0, 0, 13]),
+            self.assertRaisesRegex(AssertionError, "did not dismiss.*git-output"),
+        ):
+            try:
+                ui.dismiss("git-output-close", label="Close", also_absent=("git-output-view",))
+            finally:
+                key.assert_called_once_with("Return", ())
+                click.assert_not_called()
+
+    def test_missing_or_ambiguous_hint_labels_fail_without_typing_a_guessed_code(self):
+        for choices in [[], [dict(label="Close", code="a"), dict(label="Close", code="b")]]:
+            with self.subTest(choices=choices):
+                ui = NativeUI(1, Mock(), "log", "state")
+                with (
+                    patch.object(ui, "navigate"),
+                    patch.object(
+                        ui, "layout", return_value=dict(keyboard=dict(mode="hints", hints=choices))
+                    ),
+                    patch("ui_harness.text") as text,
+                    self.assertRaises(AssertionError),
+                ):
+                    try:
+                        ui.hint("Close")
+                    finally:
+                        text.assert_not_called()
+
     def test_effect_waits_treat_only_missing_files_as_transient(self):
         process = Mock()
         process.poll.return_value = None

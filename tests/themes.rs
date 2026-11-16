@@ -314,16 +314,24 @@ fn atelier_appearance_inherits_and_resets_native_light_and_dark_widget_defaults(
 }
 
 #[test]
-fn atelier_syntax_and_terminal_text_remain_readable_after_live_appearance_switches() {
+fn coordinated_syntax_and_terminal_text_remain_readable_after_live_appearance_switches() {
     let directory = tempfile::tempdir().unwrap();
     let (mut themes, warnings) = Themes::load(directory.path(), "atelier-dark");
     assert!(warnings.is_empty());
     let ctx = egui::Context::default();
     let source = "// Notes\n#[derive(Debug)]\nstruct Packet { name: String }\npub fn dispatch() { let count = 42; println!(\"Ready\"); }\n";
     let mut previous = None;
-    for id in ["atelier-dark", "atelier-light", "atelier-dark"] {
+    for id in [
+        "atelier-dark",
+        "atelier-light",
+        "atelier-dark",
+        "sumie-light",
+        "sumie-dark",
+        "sumie-light",
+    ] {
         themes.select(id, &ctx).unwrap();
         let palette = themes.active().palette;
+        assert_eq!(ctx.style().visuals.dark_mode, palette.dark_mode);
         let layout = themes.highlight_with_style(&ctx, &ctx.style(), source, "rs", 14.);
         for section in &layout.sections {
             assert!(
@@ -376,6 +384,8 @@ fn component_themes_keep_controls_and_secondary_labels_readable_in_every_state()
         "studio-hacker",
         "atelier-dark",
         "atelier-light",
+        "sumie-light",
+        "sumie-dark",
     ] {
         let palette = Theme::builtin(theme).unwrap().palette;
         let ctx = egui::Context::default();
@@ -418,6 +428,8 @@ fn component_themes_draw_visible_keyboard_focus_on_inputs_and_primary_actions() 
         "studio-hacker",
         "atelier-dark",
         "atelier-light",
+        "sumie-light",
+        "sumie-dark",
     ] {
         let palette = Theme::builtin(theme).unwrap().palette;
         let ctx = egui::Context::default();
@@ -700,7 +712,8 @@ fn builtin_palettes_are_readable_and_custom_bases_preserve_their_syntax() {
                 builtin.id
             ),
             "synthwave84" | "synthwave84-neon" | "ice" | "code-dark" | "afterglow"
-            | "knight-rider" | "hologram" | "studio" | "studio-neutral" | "atelier-light" => {
+            | "knight-rider" | "hologram" | "studio" | "studio-neutral" | "atelier-light"
+            | "sumie-light" | "sumie-dark" => {
                 assert!(path.b() > path.r(), "{} cool path", builtin.id)
             }
             "neon" => assert!(path.r() > path.g() && path.b() > path.g(), "violet path"),

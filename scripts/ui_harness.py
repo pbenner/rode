@@ -409,6 +409,43 @@ class NativeUI:
             self.window, self.process, self.log_path, self.state_path, value, keyboard=keyboard
         )
 
+    def hint(self, label):
+        """Focus one uniquely named visible control using its observed hint code."""
+        self.navigate("a")
+        state = self.layout(
+            lambda state: state.get("keyboard", {}).get("mode") == "hints",
+            "Keyboard hints did not appear",
+        )
+        choices = [entry for entry in state["keyboard"]["hints"] if entry["label"] == label]
+        assert len(choices) == 1, (label, choices, state["keyboard"])
+        with delayed_input(self.process):
+            text(choices[0]["code"])
+        return self.layout(
+            lambda current: (
+                current["pass"] > state["pass"] and current["keyboard"]["mode"] == "idle"
+            ),
+            "Focus handoff stalled",
+        )
+
+    def dismiss(self, name, *, label, also_absent=()):
+        """Activate Close once by keyboard and await all dismissed controls in one fresh frame.
+
+        Floating output windows can resize while their first frames settle. A
+        focused native widget retains its identity when its pixel position moves.
+        Failure to close is an error; never retry input or click the covered UI.
+        """
+        self.hint(label)
+        before = self.layout()["pass"]
+        self.press(name, "Return")
+        closed = {name, *also_absent}
+        return self.layout(
+            lambda state: (
+                state["pass"] > before
+                and all(button["name"] not in closed for button in state["buttons"])
+            ),
+            f"{label} did not dismiss {', '.join(sorted(closed))}",
+        )
+
     def navigate(self, name, modifiers=(), *, leader="space", leader_modifiers=("Control_L",)):
         """Send a leader chord once; wait until each half is processed, without clicking."""
         before = self.layout()["pass"]
@@ -654,7 +691,8 @@ class NativeUI:
         """Send one key to a focused control; callers must acknowledge its actual effect."""
         focus_window(self.window)
         self.control(name, focused=True)
-        key(key_name, modifiers)
+        with delayed_input(self.process):
+            key(key_name, modifiers)
 
     def terminal_input(self, *, focused=True):
         """Observe an attached terminal; keyboard-only tests must retain their focus evidence."""

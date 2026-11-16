@@ -218,6 +218,16 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     } else {
         egui::Visuals::light()
     };
+    // Pane and scroll clips exclude their gutters. Keep button paint inside
+    // its allocated rectangle so edge-aligned controls retain every border.
+    for widget in [
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.expansion = 0.;
+    }
     style.visuals.panel_fill = palette.background;
     style.visuals.window_fill = palette.panel;
     style.visuals.extreme_bg_color = palette.background;
@@ -243,6 +253,7 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
     style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.text);
     style.visuals.widgets.active.weak_bg_fill = palette.active;
     style.visuals.widgets.active.bg_fill = palette.active;
+    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     style.visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.text);
     style.visuals.widgets.open.weak_bg_fill = palette.active;
     style.visuals.widgets.open.bg_fill = palette.active;
@@ -278,9 +289,7 @@ pub fn install(ctx: &egui::Context, palette: Palette) {
             &mut style.visuals.widgets.open,
         ] {
             widget.corner_radius = egui::CornerRadius::same(corner_radius);
-            widget.expansion = 0.0;
         }
-        style.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, palette.accent);
         style.visuals.widgets.open.bg_stroke = Stroke::new(1.0_f32, palette.accent);
     }
     style.spacing.item_spacing = egui::vec2(8.0, 7.0);

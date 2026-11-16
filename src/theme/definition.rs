@@ -15,6 +15,8 @@ pub(super) const MAX_THEME_BYTES: u64 = 64 * 1024;
 pub(super) const MAX_CUSTOM_THEMES: usize = 32;
 
 const EMBEDDED_THEMES: &[(&str, &str)] = &[
+    ("sumie-light", include_str!("../../themes/sumie-light.json")),
+    ("sumie-dark", include_str!("../../themes/sumie-dark.json")),
     ("synthwave84", include_str!("../../themes/synthwave84.json")),
     (
         "synthwave84-neon",

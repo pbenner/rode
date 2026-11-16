@@ -1,10 +1,12 @@
 # Themes
 
 
-Click **Theme: …** at the bottom right, or choose **View → Color theme**. Nineteen built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
+Click **Theme: …** at the bottom right, or choose **View → Color theme**. Built-in themes cover the interface and terminal in dark and light appearances, with matching syntax colors when **Follow UI theme** is selected:
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
+| Sumi-e Light | `sumie-light` | Warm washi-paper surfaces, deep ink text, vermilion accents and muted pine, indigo and ochre syntax |
+| Sumi-e Dark | `sumie-dark` | Neutral charcoal-ink surfaces, paper-white text and coordinated soft vermilion accents |
 | SynthWave ’84 | `synthwave84` | Upstream purple surfaces, pink variables, cyan functions, yellow keywords and orange strings |
 | SynthWave ’84 — Neon Dreams | `synthwave84-neon` | SynthWave’s optional bright token cores, native glyph halos, pink-to-cyan tab/activity accents and subtle editor gradient |
 | Atelier Dark | `atelier-dark` | Neutral graphite surfaces, emerald accents, crisp white text and distinct semantic syntax |
@@ -27,13 +29,13 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Ni
 
 Choose **View → Syntax highlighting** for independent Dracula, Catppuccin Mocha, Nord, Monokai, One Half Dark, or either SynthWave ’84 variant’s code colors. The command palette offers **Syntax theme: …** and the status-bar theme menu exposes both choices. See [syntax themes and detailed custom scope rules](syntax-themes.md). **Follow UI theme** preserves the matching syntax colors described above.
 
-Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in Atelier Light). Carbon and Carbon Edge use warm-neutral prompt accents, Atelier Dark emerald, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier Light cool blue, Studio Neutral silver-blue, Neon violet, and Telemetry turquoise. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
+Built-in terminal palettes follow the interface theme: default text and ANSI **White** use the theme’s text colour, with a stronger matching **Bright white** foreground (lighter in dark themes, darker in light themes). Carbon and Carbon Edge use warm-neutral prompt accents, Atelier Dark emerald, Amber cream and gold, Phosphor/Matrix/Studio Hacker green, Ice/Code Dark/Afterglow/Knight Rider/Hologram/Studio/Atelier Light cool blue, Studio Neutral silver-blue, Neon violet, Telemetry turquoise, and Sumi-e muted indigo. Bright prompt colours remain readable against the terminal background, while red/green status colours stay distinct. Custom themes and explicitly saved terminal colour overrides still take precedence. Use **Reset to theme defaults** to remove older custom swatches.
 
 Bash prompt colors come from `PS1` in the shell's own configuration. RODE honors bold ANSI foreground colors using the theme's bright variants: `\e[1;30m` uses bright black and `\e[1;34m` uses bright blue. Existing prompts therefore follow the selected terminal palette without editing `.bashrc`; see [prompt rendering](terminals.md#bash-prompts-and-colors).
 
 Choose **View → Terminal colors…**, or **Terminal: Colors and contrast** in the command palette, to adjust the terminal foreground, background and 16 ANSI colors. Settings are saved immediately, separately for each interface theme. **Reset to theme defaults** removes that theme's overrides.
 
-**Minimum text contrast** is optional. Atelier defaults to **4.5:1**; the other built-in themes use **1:1** (off), preserving shell colors. Increase it, for example to **4.5:1**, if you want additional readability protection for terminal text, including 256-color and explicit RGB text. Correction changes only rendered text, against each cell's actual background; backgrounds, Powerline separators and box/block graphics keep their colors. A requested ratio may be impossible against a midtone background; RODE then uses the most readable black/white foreground. These settings apply to all terminal text, including local, SSH, debugger and retained error views, without changing shell configuration or restarting commands. Custom themes can set their own contrast default in the [theme format](../themes/README.md).
+**Minimum text contrast** is optional. Atelier and Sumi-e default to **4.5:1**; the other built-in themes use **1:1** (off), preserving shell colors. Increase it, for example to **4.5:1**, if you want additional readability protection for terminal text, including 256-color and explicit RGB text. Correction changes only rendered text, against each cell's actual background; backgrounds, Powerline separators and box/block graphics keep their colors. A requested ratio may be impossible against a midtone background; RODE then uses the most readable black/white foreground. These settings apply to all terminal text, including local, SSH, debugger and retained error views, without changing shell configuration or restarting commands. Custom themes can set their own contrast default in the [theme format](../themes/README.md).
 
 Navigation, command menus, and toolbar controls share a theme-aware outline icon style. Icon-only controls show descriptive tooltips; menus retain text labels and aligned keyboard shortcuts. Icons are drawn directly in Rust without an icon font or additional runtime dependencies.
 
@@ -42,6 +44,8 @@ Empty input fields show examples and default behaviour in the theme's muted text
 The command palette (**Ctrl+Shift+P**) offers **Theme: Matrix**, **Theme: Amber**, and the other built-in/custom choices. Changes apply immediately without restarting the session. An independently selected syntax theme keeps its code colors. UI selections are flushed to local preferences as soon as they change and restored on startup; closing the application is not required to save them. On Linux the preference file is `${XDG_DATA_HOME:-~/.local/share}/rode/app.ron`.
 
 ```sh
+./target/release/rode . --theme sumie-light --syntax-theme ui
+./target/release/rode . --theme sumie-dark --syntax-theme ui
 ./target/release/rode . --theme synthwave84 --syntax-theme ui
 ./target/release/rode . --theme synthwave84-neon --syntax-theme ui
 ./target/release/rode . --theme atelier-dark
@@ -75,6 +79,20 @@ while italics and underlines render directly. Bright ANSI red is lifted from
 normal ANSI red and the upstream syntax colors are preserved. The MIT notice is
 included in `rode --theme-licenses` and packaged third-party notices. See the
 [pinned source and adaptation notes](../themes/syntax/README.md).
+
+**Sumi-e Light** and **Sumi-e Dark** are an original Japanese fine-art-inspired
+family. Light uses warm washi-paper surfaces and dark ink; Dark uses neutral
+charcoal and paper-white text. Vermilion focus outlines, pine strings, indigo
+functions, ochre numbers and subdued plum constants distinguish code without
+turning the interface into a bright multicolor surface. Both use crisp, lightly
+rounded controls, quiet dividers, matching ANSI palettes and the existing 4.5:1
+terminal contrast setting. Keyboard hints inherit the same control styling.
+Select **Follow UI theme** for matching syntax, or keep an independent code
+palette. The themes use native components with solid editor surfaces.
+
+| Sumi-e Light | Sumi-e Dark |
+| --- | --- |
+| ![Sumi-e Light native editor](../assets/sumie-light.png) | ![Sumi-e Dark native editor](../assets/sumie-dark.png) |
 
 **Atelier Dark** and **Atelier Light** form a coordinated everyday-work family.
 Both share compact 28-point controls, restrained corner radii, proportional UI

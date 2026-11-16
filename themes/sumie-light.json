@@ -1,0 +1,61 @@
+{
+  "name": "Sumi-e Light",
+  "base": "sumie-dark",
+  "appearance": "light",
+  "chrome": "plain",
+  "colors": {
+    "background": "#F7F4EC",
+    "panel": "#EEEAE1",
+    "raised": "#E6E2D8",
+    "border": "#C7C5B9",
+    "control_border": "#73796F",
+    "text": "#242B2B",
+    "muted": "#515B52",
+    "accent": "#942F27",
+    "frame_accent": "#942F27",
+    "heading": "#172222",
+    "success": "#3E6046",
+    "error": "#942F27",
+    "selection": "#DDE3D7",
+    "hover": "#E4E6DC",
+    "active": "#DCE0D4",
+    "gutter": "#626B60",
+    "terminal_background": "#F2EFE6",
+    "terminal_foreground": "#242B2B"
+  },
+  "syntax": {
+    "comment": "#566252",
+    "keyword": "#943C31",
+    "type": "#3D5E48",
+    "function": "#354E6D",
+    "string": "#485E36",
+    "number": "#745022",
+    "constant": "#70475D",
+    "variable": "#242B2B",
+    "operator": "#414E4E",
+    "punctuation": "#566252",
+    "builtin": "#2D6058",
+    "attribute": "#684E68"
+  },
+  "ansi": [
+    "#293030",
+    "#993C34",
+    "#3F5F43",
+    "#745424",
+    "#354E6D",
+    "#70475D",
+    "#2D6261",
+    "#242B2B",
+    "#535D55",
+    "#9F3029",
+    "#335D3F",
+    "#70501C",
+    "#2E4868",
+    "#6B3D58",
+    "#245B59",
+    "#111C1D"
+  ],
+  "terminal": {
+    "minimum_contrast": 4.5
+  }
+}

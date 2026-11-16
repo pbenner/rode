@@ -5,7 +5,7 @@
 //! while their geometry follows layout. A focus handoff holds later keyboard events
 //! until the destination acknowledges focus; no hint letters reach source or PTYs.
 use eframe::egui;
-use egui::{Align, FontId, Key, Sense};
+use egui::{Align, Key, Sense};
 use egui::{Id, Rect, Response, Widget, WidgetText};
 use std::sync::Mutex;
 use std::{collections::HashMap, sync::Arc};

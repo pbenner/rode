@@ -3,7 +3,7 @@ use super::*;
 
 /// Paint hint labels without adding pointer targets. Search owns a separate top
 /// modal; its keyboard events are supplied only while its native controls render.
-pub(crate) fn finish(ctx: &egui::Context, background: egui::Color32, foreground: egui::Color32) {
+pub(crate) fn finish(ctx: &egui::Context) {
     let Some(catalog) = catalog(ctx) else {
         return;
     };
@@ -13,34 +13,54 @@ pub(crate) fn finish(ctx: &egui::Context, background: egui::Color32, foreground:
     };
     let next = match mode {
         Mode::Hints { choices, prefix } => {
+            // Read the installed widget style each frame: built-in/custom theme
+            // changes apply to every viewport without caching a second palette.
+            let style = ctx.style();
+            let active = &style.visuals.widgets.active;
+            let font = egui::TextStyle::Button.resolve(&style);
+            let padding = (style.spacing.button_padding * 0.5).max(egui::vec2(4., 2.));
+            let inset = padding + egui::Vec2::splat(active.bg_stroke.width);
+            let bounds = ctx.content_rect().shrink(2.);
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Tooltip,
                 Id::new("keyboard-hints"),
             ));
-            for choice in choices.iter().filter(|c| c.code.starts_with(&prefix)) {
+            for choice in choices
+                .iter()
+                .filter(|c| bounds.is_positive() && c.code.starts_with(&prefix))
+            {
                 let galley = painter.layout_no_wrap(
                     choice.code.to_uppercase(),
-                    FontId::monospace(13.),
-                    background,
+                    font.clone(),
+                    active.text_color(),
                 );
+                let size = (galley.size() + inset * 2.).min(bounds.size());
                 let rect = Rect::from_min_size(
-                    choice.target.rect.left_top(),
-                    galley.size() + egui::vec2(10., 6.),
+                    choice
+                        .target
+                        .rect
+                        .min
+                        .max(bounds.min)
+                        .min(bounds.max - size),
+                    size,
                 );
-                let bounds = ctx.content_rect().shrink(2.);
-                let rect = rect.translate(egui::vec2(
-                    (bounds.right() - rect.right()).min(0.),
-                    (bounds.bottom() - rect.bottom()).min(0.),
-                ));
-                painter.rect_filled(rect, 3., foreground);
-                painter.galley(rect.min + egui::vec2(5., 3.), galley, background);
+                painter.rect(
+                    rect,
+                    active.corner_radius,
+                    active.weak_bg_fill,
+                    active.bg_stroke,
+                    egui::StrokeKind::Inside,
+                );
+                painter
+                    .with_clip_rect(rect)
+                    .galley(rect.min + inset, galley, active.text_color());
             }
             painter.text(
                 ctx.content_rect().center_bottom() - egui::vec2(0., 12.),
                 egui::Align2::CENTER_BOTTOM,
                 "Type a hint to focus · Enter/Space activates · Escape cancels",
-                FontId::proportional(12.),
-                foreground,
+                egui::TextStyle::Small.resolve(&style),
+                style.visuals.weak_text_color(),
             );
             Mode::Hints { choices, prefix }
         }

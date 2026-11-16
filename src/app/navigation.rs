@@ -808,7 +808,6 @@ impl EditorApp {
                         });
                 });
         }
-        let palette = self.themes.active().palette;
-        keyboard::finish(ctx, palette.background, palette.text);
+        keyboard::finish(ctx);
     }
 }

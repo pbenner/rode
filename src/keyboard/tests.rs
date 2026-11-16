@@ -33,10 +33,78 @@ fn frame(ctx: &egui::Context, events: Vec<egui::Event>, enabled: bool, text: &mu
                 ));
                 button(ui, "After");
             });
-            finish(ctx, egui::Color32::BLACK, egui::Color32::WHITE);
+            finish(ctx);
         },
     );
     clicked
+}
+
+#[test]
+fn hint_badges_follow_live_themes_without_reassigning_codes_or_activating_controls() {
+    let mut themes = crate::theme::Theme::builtins();
+    themes.push(
+        crate::theme::Theme::from_json(
+            "custom:hints",
+            r##"{"name":"Hint overrides","base":"atelier-light","colors":{"active":"#18384e","text":"#f0f4f8","accent":"#ffc140"},"ui":{"button_size":15,"button_padding":[16,8],"control_radius":9,"focus_width":3}}"##,
+        )
+        .unwrap(),
+    );
+    for scale in [0.75, 1., 2.] {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(scale);
+        install(&ctx);
+        let render = || {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    prepare(ctx, Id::new("themed-hints"));
+                    capture(ctx);
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!button(ui, "Apply").clicked());
+                        assert!(!button(ui, "Cancel").clicked());
+                    });
+                    finish(ctx);
+                },
+            )
+        };
+        render();
+        start(&ctx, false);
+        let hints = snapshot(&ctx)["hints"].clone();
+        let code = hints[0]["code"].as_str().unwrap().to_uppercase();
+        for theme in &themes {
+            crate::theme::install(&ctx, theme.palette);
+            let output = render();
+            assert_eq!(snapshot(&ctx)["hints"], hints);
+            let (index, text) = output
+                .shapes
+                .iter()
+                .enumerate()
+                .find_map(|(index, shape)| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == code => Some((index, text)),
+                    _ => None,
+                })
+                .expect("Missing hint label");
+            let egui::Shape::Rect(badge) = &output.shapes[index - 1].shape else {
+                panic!("Missing hint surface");
+            };
+            let style = ctx.style();
+            let active = &style.visuals.widgets.active;
+            assert_eq!(badge.fill, active.weak_bg_fill, "{} hint fill", theme.id);
+            assert_eq!(badge.stroke, active.bg_stroke, "{} hint border", theme.id);
+            assert_eq!(badge.corner_radius, active.corner_radius);
+            assert_eq!(badge.stroke_kind, egui::StrokeKind::Inside);
+            assert!(ctx.content_rect().contains_rect(badge.rect));
+            let format = &text.galley.job.sections[0].format;
+            assert_eq!(format.color, active.text_color());
+            assert_eq!(format.font_id, egui::TextStyle::Button.resolve(&style));
+        }
+    }
 }
 
 #[test]
@@ -111,7 +179,7 @@ fn hint_codes_follow_layout_without_reassignment() {
                 ui.add_enabled(enabled, Button::new("Apply"));
                 button(ui, "After");
             });
-            finish(ctx, egui::Color32::BLACK, egui::Color32::WHITE);
+            finish(ctx);
         });
     };
     render(0., true);
@@ -256,7 +324,7 @@ fn a_hint_can_activate_a_non_default_group_member_once() {
                         });
                     });
                 });
-                finish(ctx, egui::Color32::BLACK, egui::Color32::WHITE);
+                finish(ctx);
             },
         );
         activated
@@ -418,7 +486,7 @@ fn empty_hosts_cancel_discovery_without_replaying_input_into_later_controls() {
                 |ctx| {
                     prepare(ctx, Id::new("scope"));
                     capture(ctx);
-                    finish(ctx, egui::Color32::BLACK, egui::Color32::WHITE);
+                    finish(ctx);
                 },
             );
         };

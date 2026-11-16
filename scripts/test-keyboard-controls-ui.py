@@ -12,19 +12,6 @@ from ui_fixture import native_session
 from ui_harness import BINARY, fixture_directory, fixture_environment, key, text
 
 
-def hint(ui, label):
-    """Select an observed code; geometry is never used to activate a control."""
-    ui.navigate("a")
-    state = ui.layout(
-        lambda state: state.get("keyboard", {}).get("mode") == "hints",
-        "Keyboard hints did not appear",
-    )
-    choices = [entry for entry in state["keyboard"]["hints"] if entry["label"] == label]
-    assert len(choices) == 1, (label, choices, state["keyboard"])
-    text(choices[0]["code"])
-    ui.layout(lambda state: state["keyboard"]["mode"] == "idle", "Focus handoff stalled")
-
-
 def run():
     with fixture_directory(prefix="rode-keyboard-controls-") as base:
         root = base / "project"
@@ -35,7 +22,7 @@ def run():
         other.write_text("second\n")
         environment = fixture_environment(base)
         with native_session([str(BINARY), str(source)], environment, root, "controls") as ui:
-            hint(ui, "File menu")
+            ui.hint("File menu")
             ui.control("menu-file", focused=True)
             # Selecting the hint focuses; only Enter opens the existing menu.
             assert not any(b["name"] == "menu-item:New file" for b in ui.layout()["buttons"])
@@ -54,17 +41,17 @@ def run():
             ui.control("source-editor", focused=True)
             ui.command("Open file by path", keyboard=True)
             ui.control("file-dialog-path", focused=True)
-            hint(ui, "Cancel")
+            ui.hint("Cancel")
             key("Return")
             ui.document(source)
             ui.navigate("p")
-            hint(ui, "Code")
+            ui.hint("Code")
             key("Right")
             ui.control("workspace-tab:Chat", focused=True)
             assert not any(b["name"] == "agent-composer" for b in ui.layout()["buttons"])
-            hint(ui, "Terminal")
+            ui.hint("Terminal")
             ui.control("workspace-tab:Terminal", focused=True)
-            hint(ui, "Chat")
+            ui.hint("Chat")
             ui.control("workspace-tab:Chat", focused=True)
             assert not any(b["name"] == "agent-composer" for b in ui.layout()["buttons"])
             key("Return")
@@ -96,10 +83,10 @@ def run():
             ui.fill_path(other)
             key("Return")
             ui.document(other)
-            hint(ui, "Editor tab: main.txt")
+            ui.hint("Editor tab: main.txt")
             key("F10", ("Shift_L",))
             ui.control("editor-tab-detach")
-            hint(ui, "Move tab right")
+            ui.hint("Move tab right")
             key("Return")
             expected = [
                 "editor-tab:" + hashlib.sha256(str(path).encode()).hexdigest()

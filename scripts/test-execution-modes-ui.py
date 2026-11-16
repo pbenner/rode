@@ -22,6 +22,7 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     assert_running,
     click_button,
     close_window,
@@ -146,6 +147,7 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
             window = wait_for_window(process, log_path)
             wait_for_project(window, process, log_path, root)
             focus_window(window)
+            ui = NativeUI(window, process, log_path, state_path, root)
 
             def wait(check, message):
                 until = time.monotonic() + 20
@@ -310,23 +312,35 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
             initial_head = git("rev-parse", "HEAD")
             probe.write_text(probe.read_text() + "# second commit\n")
             git("add", "--", "probe.sh")
+            # Exercise output dismissal even on hosts without sandbox support.
+            # This is a real Git-hook failure, independent of policy enforcement.
+            allowed_hook = hook.read_text()
+            hook.write_text(
+                "#!/bin/sh\nprintf 'Execution fixture: intentional hook failure\\n' >&2\nexit 1\n"
+            )
+            replace("git-commit-message", "Retained Git draft")
+            click("git-commit")
+            control("git-output-view")
+            assert git("rev-parse", "HEAD") == initial_head
+            assert git("diff", "--cached", "--name-only") == "probe.sh"
+            ui.dismiss("git-output-close", label="Close", also_absent=("git-output-view",))
+            hook.write_text(allowed_hook)
             if active:
                 click("git-execution-mode")
                 click("git-use-sandbox")
-                replace("git-commit-message", "Retained Git draft")
                 click("git-commit")
                 control("git-output-view")
                 assert git("rev-parse", "HEAD") == initial_head
                 assert git("diff", "--cached", "--name-only") == "probe.sh"
                 screenshot(window, "git-sandbox-denied.png")
-                click("git-output-close")
+                ui.dismiss("git-output-close", label="Close", also_absent=("git-output-view",))
                 click("git-execution-mode")
                 click("git-use-host")
-                click("git-commit")
-                wait(
-                    lambda: git("log", "-1", "--format=%s") == "Retained Git draft",
-                    "Host Git retry lost the commit draft or retained sandbox restrictions",
-                )
+            click("git-commit")
+            wait(
+                lambda: git("log", "-1", "--format=%s") == "Retained Git draft",
+                "Host Git retry lost the commit draft or retained sandbox restrictions",
+            )
             screenshot(window, "git-host.png")
             close_window(window, process)
             stored = re.search(

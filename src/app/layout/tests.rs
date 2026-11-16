@@ -2,6 +2,113 @@
 use super::*;
 
 #[test]
+fn button_highlights_stay_inside_exact_fit_controls_across_themes_and_scales() {
+    use crate::app::icons::{Icon, IconButton};
+
+    for theme in crate::theme::Theme::builtins() {
+        for scale in [0.75, 1., 1.25, 2.] {
+            for icon in [false, true] {
+                for state in ["idle", "hovered", "focused", "pressed"] {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    crate::theme::install(&ctx, theme.palette);
+                    let bounds =
+                        egui::Rect::from_min_size(egui::pos2(40., 40.), egui::vec2(224., 32.));
+                    let mut response = None;
+                    let mut output = None;
+                    for pass in 0..2 {
+                        let mut events = Vec::new();
+                        if state == "hovered" || state == "pressed" {
+                            events.push(egui::Event::PointerMoved(bounds.center()));
+                        }
+                        if state == "pressed" && pass == 1 {
+                            events.push(egui::Event::PointerButton {
+                                pos: bounds.center(),
+                                button: egui::PointerButton::Primary,
+                                pressed: true,
+                                modifiers: egui::Modifiers::NONE,
+                            });
+                        }
+                        output = Some(ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(400., 240.),
+                                )),
+                                events,
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().frame(egui::Frame::NONE).show(
+                                    ctx,
+                                    |ui| {
+                                        let mut cell = ui.new_child(
+                                            egui::UiBuilder::new().max_rect(bounds).layout(
+                                                egui::Layout::centered_and_justified(
+                                                    egui::Direction::TopDown,
+                                                ),
+                                            ),
+                                        );
+                                        cell.set_clip_rect(bounds);
+                                        let button = if icon {
+                                            cell.add(IconButton::new(Icon::Folder, "Open folder"))
+                                        } else {
+                                            cell.button("Open folder")
+                                        };
+                                        if state == "focused" {
+                                            button.request_focus();
+                                        }
+                                        response = Some(button);
+                                    },
+                                );
+                            },
+                        ));
+                    }
+                    let response = response.unwrap();
+                    assert_eq!(
+                        response.rect, bounds,
+                        "Interaction changed the control layout"
+                    );
+                    assert!(!response.clicked(), "Focus/press activated the control");
+                    if state == "focused" {
+                        assert!(response.has_focus());
+                    }
+                    if state == "hovered" {
+                        assert!(response.hovered());
+                    }
+                    if state == "pressed" {
+                        assert!(response.is_pointer_button_down_on());
+                    }
+                    let output = output.unwrap();
+                    let (clip, frame) = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Rect(rect)
+                                if rect.stroke.width > 0.
+                                    && rect.rect.contains(bounds.center()) =>
+                            {
+                                Some((shape.clip_rect, rect))
+                            }
+                            _ => None,
+                        })
+                        .expect("Missing button frame");
+                    assert!(
+                        bounds.contains_rect(frame.rect) && clip.contains_rect(frame.rect),
+                        "{} at {scale}, icon={icon}, {state}: frame {:?} escapes its control or clip {clip:?}",
+                        theme.id,
+                        frame.rect,
+                    );
+                    if state == "focused" || state == "pressed" {
+                        assert_eq!(frame.stroke.color, theme.palette.accent);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn pane_outlines_stay_outside_child_paint_and_preceding_toolbars() {
     for scale in [0.75, 1., 1.25, 2.] {
         for size in [egui::vec2(2., 2.), egui::vec2(180., 160.)] {
