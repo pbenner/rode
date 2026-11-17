@@ -61,9 +61,6 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
     git("add", ".")
     git("commit", "-qm", "Initial")
     (root / "empty.txt").write_text("")
-    for line in [0, 35, 64, 199]:
-        long_source[line] = f"let line_{line + 1} = 999;\n"
-    (root / "long.rs").write_text("".join(long_source))
     staged = "one\nchanged\nkeep\nlast\nextra\n"
     path.write_text(staged)
     git("add", "--", path.name)
@@ -249,26 +246,53 @@ with fixture_directory(prefix="rode-git-gutter-ui-") as base:
             assert (root / "empty.txt").read_text() == ""
             key("z", ("Control_L",))
             ui.source("")
+            # Place changes relative to the observed source viewport and a full
+            # painted line. A different font, DPI or host banner changes how
+            # many lines fit; fixed line numbers cannot assert visibility.
+            controls = {button["name"]: button["rect"] for button in ui.layout()["buttons"]}
+            line_rect = next(
+                button["rect"]
+                for button in staged_layout["buttons"]
+                if button["name"] == "git-change-modified:2"
+            )
+            visible_rows = int(
+                (controls["pane-Editor"][3] - controls["source-editor"][1])
+                / (line_rect[3] - line_rect[1])
+            )
+            near_bottom = visible_rows - 2
+            middle = visible_rows + 16
+            near_end = len(long_source) - 3
+            assert 1 < near_bottom < middle < near_end, visible_rows
+            assert middle < len(long_source) - visible_rows, (
+                "Long-source fixture must span separate top and bottom viewports",
+                visible_rows,
+            )
+            for line in [1, near_bottom, middle, near_end]:
+                long_source[line - 1] = f"let line_{line} = 999;\n"
+            (root / "long.rs").write_text("".join(long_source))
+            top_markers = ["git-change-modified:1", f"git-change-modified:{near_bottom}"]
             ui.open_file(root / "long.rs")
             ui.absent("git-peek-diff")
-            markers(["git-change-modified:1", "git-change-modified:36"])
-            ui.click("git-change-modified:36")
+            markers(top_markers)
+            ui.click(f"git-change-modified:{near_bottom}")
             ui.value(
-                "git-peek-patch", "@@ -36,1 +36,1 @@\n-let line_36 = 36;\n+let line_36 = 999;\n"
+                "git-peek-patch",
+                f"@@ -{near_bottom},1 +{near_bottom},1 @@\n"
+                f"-let line_{near_bottom} = {near_bottom};\n+let line_{near_bottom} = 999;\n",
             )
             # Opening the preview shrinks the source viewport. The selected
             # change must remain visible after that layout and source jump.
-            ui.control("source-editor-cursor:36:1", focused=True)
-            ui.control("git-change-modified:36")
+            ui.control(f"source-editor-cursor:{near_bottom}:1", focused=True)
+            ui.control(f"git-change-modified:{near_bottom}")
             screenshot(window, "long-source-peek.png")
             ui.click("git-peek-close")
             ui.control("source-editor", focused=True)
             ui.click("source-editor")
             key("End", ("Control_L",))
-            markers(["git-change-modified:200"])
+            markers([f"git-change-modified:{near_end}"])
             screenshot(window, "long-source-scrolled.png")
             key("Home", ("Control_L",))
-            markers(["git-change-modified:1", "git-change-modified:36"])
+            markers(top_markers)
             ui.open_file(root / "new.txt")
             markers(["git-change-added:1"])
             ui.click("git-change-added:1")
