@@ -6,8 +6,8 @@ The Sumi-e pine/crane, bamboo/bird and plum-blossom illustrations and the Samura
 warrior, kabuto helmet, castle and tsuba sword guard are original artwork generated
 for RODE with the built-in image-generation tool. Their source
 PNGs and generation prompts are retained under `assets/themes/`; none incorporate
-an imported artist's image. The editor derives transparent ink masks from those
-embedded assets and tints them for the light and dark palettes.
+an imported artist's image. The editor derives transparent ink masks from its
+embedded illustrations and tints them for the light and dark palettes.
 
 The Sumi-e icon treatment is native drawing code written for RODE: pressure-varied
 strokes on the existing icon grid, with paper and ink-brush motifs. No external

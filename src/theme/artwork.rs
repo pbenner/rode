@@ -2,6 +2,8 @@
 //! text rows, so artwork never changes source contrast or owns an input region.
 //! Each alpha-mask texture is shared by every viewport of an egui context; theme
 //! switches only change its tint. No files, network requests or timers are used.
+//! Source geometry comes from an unscrolled viewport captured by the editor;
+//! visible text may suppress the illustration, but never shrink it while scrolling.
 use super::Palette;
 use eframe::egui::{self, Pos2, Rect, TextureHandle, pos2};
 use layout::{Area, Placement, Tone, placements, source_placements};
@@ -18,7 +20,7 @@ pub enum Artwork {
     None,
     /// Original pine/crane, bamboo and plum-blossom ink-wash illustrations.
     SumiE,
-    /// Original samurai, kabuto helmet, castle and tsuba ink illustrations.
+    /// Original silver-gray samurai, kabuto helmet and castle ink illustrations.
     Samurai,
 }
 
@@ -30,10 +32,11 @@ enum Motif {
     Warrior,
     Kabuto,
     Castle,
-    Tsuba,
 }
 
 impl Motif {
+    /// Resolve only compiled-in originals. Archived assets such as the unused
+    /// Samurai sword guard are deliberately absent from the executable.
     fn bytes(self) -> &'static [u8] {
         match self {
             Self::Pine => include_bytes!("../../assets/themes/sumie-ink.png"),
@@ -42,11 +45,11 @@ impl Motif {
             Self::Warrior => include_bytes!("../../assets/themes/samurai-warrior.png"),
             Self::Kabuto => include_bytes!("../../assets/themes/samurai-kabuto.png"),
             Self::Castle => include_bytes!("../../assets/themes/samurai-castle.png"),
-            Self::Tsuba => include_bytes!("../../assets/themes/samurai-tsuba.png"),
         }
     }
 }
 
+/// Cache successful decoding or failure; repeated frames never retry bad assets.
 #[derive(Clone)]
 struct InkTexture(Option<TextureHandle>);
 
@@ -67,6 +70,8 @@ fn ink_mask(motif: Motif) -> Option<egui::ColorImage> {
     Some(egui::ColorImage::from_rgba_unmultiplied(size, &rgba))
 }
 
+/// Lazily decode once per UI context/motif and share the texture across editor
+/// windows. Palette tints stay out of the cache, so theme changes need no decode.
 fn texture(ctx: &egui::Context, motif: Motif) -> Option<TextureHandle> {
     let id = egui::Id::new(("embedded-sumi-e-ink", motif));
     if let Some(cached) = ctx.data_mut(|data| data.get_temp::<InkTexture>(id)) {
@@ -82,22 +87,22 @@ fn texture(ctx: &egui::Context, motif: Motif) -> Option<TextureHandle> {
 impl Palette {
     /// Paint only in unused source-canvas space. Selection leaves the artwork
     /// visible; dense or narrow buffers suppress it to protect source text.
+    /// `viewport` must be captured before scrolling in the same logical screen
+    /// coordinates as `ui.clip_rect()`, with the line-number gutter excluded.
+    /// `output` supplies translated row positions for collision checks only.
     pub(crate) fn paint_source_artwork(
         self,
         ui: &egui::Ui,
         output: &egui::text_edit::TextEditOutput,
+        viewport: Rect,
     ) {
         let pictures = self.artwork.pictures(Area::Source);
         if pictures.is_empty() {
             return;
         }
-        let canvas = Rect::from_min_max(
-            pos2(
-                ui.clip_rect().left().max(output.response.rect.left()),
-                ui.clip_rect().top(),
-            ),
-            ui.clip_rect().max,
-        );
+        // The caller captures this before scrolling the content. Widget/galley
+        // positions move during horizontal scrolling and cannot anchor artwork.
+        let canvas = viewport.intersect(ui.clip_rect());
         self.paint_placements(
             ui,
             canvas,
@@ -116,8 +121,8 @@ impl Palette {
         self.paint_placements(ui, canvas, placements(canvas, pictures, |_| true));
     }
 
-    /// Welcome content reports occupied bounds. Multiple illustrations also
-    /// avoid each other, shrinking or disappearing as the viewport gets smaller.
+    /// Welcome content reports occupied bounds in logical screen coordinates.
+    /// Fit around those controls, shrinking or omitting artwork in smaller views.
     pub(crate) fn paint_welcome_artwork(self, ui: &egui::Ui, canvas: Rect, occupied: Rect) {
         let pictures = self.artwork.pictures(Area::Welcome);
         if pictures.is_empty() {
@@ -133,13 +138,14 @@ impl Palette {
         );
     }
 
+    /// Paint cached masks without allocating widget IDs, input regions or layout
+    /// space. Clipping affects paint only; selection and focus remain untouched.
     fn paint_placements(self, ui: &egui::Ui, canvas: Rect, placements: [Option<Placement>; 2]) {
         for placed in placements.into_iter().flatten() {
             if let Some(texture) = texture(ui.ctx(), placed.picture.motif) {
                 let tint = match placed.picture.tone {
                     Tone::Ink => self.muted.gamma_multiply(0.72),
                     Tone::Silver => self.muted.gamma_multiply(0.86),
-                    Tone::Gold => self.frame_accent.gamma_multiply(0.70),
                 };
                 ui.painter().with_clip_rect(canvas).image(
                     texture.id(),

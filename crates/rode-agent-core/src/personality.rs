@@ -285,6 +285,7 @@ mod tests {
                 role,
                 title: id.into(),
                 text,
+                tool_state: None,
             });
         }
         chat.apply_view(view);

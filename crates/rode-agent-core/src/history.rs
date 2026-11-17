@@ -15,7 +15,7 @@
 
 use super::{
     Access, Event, Launch, Provider, Session, controls,
-    protocol::{Message, Role, clip},
+    protocol::{Message, Role, ToolState, clip},
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -778,14 +778,19 @@ fn recency(updated: Option<u64>) -> String {
         format!("{}d ago", age / 86400)
     }
 }
+/// Build a bounded saved item. History replay is not live execution, so tools
+/// default to completed; protocol-specific parsing restores explicit failures.
 fn message(id: String, role: Role, title: &str, text: &str) -> Message {
     Message {
         id: clip(&id, 512),
         role,
         title: clip(title, 256),
         text: clip(text, if role == Role::Tool { 16384 } else { 65536 }),
+        tool_state: (role == Role::Tool).then_some(ToolState::Completed),
     }
 }
+/// Project supported saved Codex items into display rows, preserving command
+/// exit outcomes so failed tools remain inspectable after a later submission.
 fn codex_messages(turn: &Value) -> Vec<Message> {
     turn["items"]
         .as_array()
@@ -799,7 +804,7 @@ fn codex_messages(turn: &Value) -> Vec<Message> {
                 turn["id"].as_str().unwrap_or("turn"),
                 item["id"].as_str().unwrap_or("item")
             );
-            match item["type"].as_str()? {
+            let mut result = match item["type"].as_str()? {
                 "userMessage" => {
                     let text = item["content"]
                         .as_array()
@@ -833,10 +838,17 @@ fn codex_messages(turn: &Value) -> Vec<Message> {
                     &clip(&item["changes"].to_string(), 16384),
                 )),
                 _ => None,
+            }?;
+            if result.role == Role::Tool {
+                result.tool_state = Some(ToolState::codex_completed(item));
             }
+            Some(result)
         })
         .collect()
 }
+/// Merge an ACP history notification; report budget hits while appending to an
+/// existing row or evicting retained rows. Historical pending/in-progress records
+/// do not represent active work. Omitted status preserves the terminal outcome.
 fn acp_message(messages: &mut VecDeque<Message>, update: &Value, serial: &mut u64) -> bool {
     let role = match update["sessionUpdate"].as_str().unwrap_or_default() {
         "user_message_chunk" => Role::User,
@@ -886,6 +898,16 @@ fn acp_message(messages: &mut VecDeque<Message>, update: &Value, serial: &mut u6
             &text,
         ));
     }
+    if role == Role::Tool
+        && let Some(state) = update["status"].as_str().and_then(ToolState::acp)
+        && let Some(message) = messages.back_mut()
+    {
+        message.tool_state = Some(if state == ToolState::Running {
+            ToolState::Completed
+        } else {
+            state
+        });
+    }
     trim(messages) || limited
 }
 fn trim(messages: &mut VecDeque<Message>) -> bool {
@@ -905,6 +927,39 @@ fn trim(messages: &mut VecDeque<Message>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_tools_keep_completion_and_failure_states_when_the_next_turn_starts() {
+        let messages = codex_messages(&json!({"id":"saved", "items":[
+            {"id":"ok", "type":"commandExecution", "status":"completed", "exitCode":0},
+            {"id":"bad", "type":"commandExecution", "status":"completed", "exitCode":2}
+        ]}));
+        assert_eq!(messages[0].tool_state, Some(ToolState::Completed));
+        assert_eq!(messages[1].tool_state, Some(ToolState::Failed));
+        let mut replay = VecDeque::new();
+        let mut serial = 0;
+        for status in ["pending", "failed"] {
+            acp_message(
+                &mut replay,
+                &json!({
+                    "sessionUpdate":"tool_call_update", "toolCallId":"saved-tool", "status":status
+                }),
+                &mut serial,
+            );
+        }
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].tool_state, Some(ToolState::Failed));
+        // A later content/title-only update must not turn a failed tool into a
+        // successful one merely because it omitted the optional status field.
+        acp_message(
+            &mut replay,
+            &json!({
+                "sessionUpdate":"tool_call_update", "toolCallId":"saved-tool", "title":"Final details"
+            }),
+            &mut serial,
+        );
+        assert_eq!(replay[0].tool_state, Some(ToolState::Failed));
+    }
 
     #[test]
     fn long_replayed_prompts_hide_styles_before_or_after_transport_clipping() {

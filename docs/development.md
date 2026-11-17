@@ -834,11 +834,38 @@ The SSH fixture also opens two independent masters for the same alias and checks
 
 Markdown checks use `cargo test --lib markdown` for unsaved-buffer rendering, source saves, source-path resolution, input limits, image URI isolation, stale-result rejection, and texture-budget release. The production input regression batches Preview → Edit, Undo and Save in one native frame and verifies both the source buffer and saved bytes, so a save overtaking undo cannot masquerade as lost history. Native local/SSH screenshots and logs go to `target/markdown-ui/`; these checks also exercise actual sandboxed image reads, view switching, undo/redo, cursor preservation, themes, and find returning to source. Run `scripts/test-markdown-ui.py` with `RODE_TEST_SLOW_UI=1` on a private display to queue the same transition/undo/save sequence while the owned GUI is paused.
 
+## Theme artwork checks
+
+Run `python3 scripts/rust_tests.py --locked --profile ci -p rode --lib theme::artwork`
+for embedded-mask decoding/caching, content clearance, selection/focus preservation
+and fixed source geometry across both scroll axes. Mixed short and long rows must
+exercise both visible and suppressed artwork: checking an always-hidden image
+would miss the resizing regression. These tests also require one silver-gray
+illustration on each Samurai surface. Source artwork may resize with its viewport,
+but scrolling text must only affect visibility. Explorer and welcome artwork
+retain their adaptive fit around controls; see [theme composition](architecture.md#theme-composition).
+
 ## Terminal color checks
 
 `cargo test --lib terminal` and `cargo test --test themes --test persistence` cover actual egui glyph colors for ANSI/256-color/RGB/inverse text, Bash PS1 bold/bright colors and resets across every built-in theme, exact-color mode, unchanged parser output, decorative glyphs, bounded contrast caches, theme defaults/validation, per-theme overrides, independent concurrent edits and stale explicit resets. `scripts/test-terminal-colors-ui.py` uses a real native PTY and isolated preferences to check contrast changes, ANSI swatches, theme switching, restart persistence and continued shell input. It also runs a real Bash prompt with status/Git expansions, checks bright-black host/marker and bright-blue path colors, and compares success/failure colors with xterm when installed; xterm is an optional test reference, not an application dependency. Run it on an isolated X display; screenshots/logs go to `target/terminal-colors-ui/`.
 
 ## Agent checks
+
+Completed-tool presentation has focused checks in
+`src/app/agents/transcript.rs` and `src/app/agents/tests.rs`. They open real native
+disclosures, keep active/failed tools visible, verify the older-helper fallback,
+restore the global display preference and toggle it during a busy chat without
+changing execution configuration or transcript content. Run them through the
+isolated Rust runner:
+
+```sh
+python3 scripts/rust_tests.py --locked --profile ci -p rode --lib app::agents::
+python3 scripts/rust_tests.py --locked --profile ci -p rode-agent-core --lib
+```
+
+The core tests cover completion-only view changes, legacy wire records and
+partial history updates that omit a previously failed tool's status. These
+fixtures verify protocol and presentation behavior without a model account.
 
 `cargo test --lib composer_sends` checks Enter submission, Shift+Enter/newline paste, focus/modal guards, key repeat and IME confirmation against the native text widget. The native agent UI test sends a multiline message using Shift+Enter followed by Enter, verifies the exact backend prompt, and checks that inserting a newline alone never starts an agent.
 

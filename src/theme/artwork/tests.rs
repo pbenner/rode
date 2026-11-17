@@ -1,6 +1,50 @@
 //! Artwork caching, content clearance and interaction invariants.
 use super::*;
-use egui::{Color32, Galley, vec2};
+use egui::{Color32, Galley, pos2, vec2};
+
+#[test]
+fn source_artwork_keeps_its_viewport_size_and_anchor_through_both_scroll_axes() {
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        // Long rows enter and leave the picture's area during scrolling. The
+        // old adaptive fit shrank the picture to squeeze beside those rows.
+        let source =
+            "short\n".repeat(50) + &("x".repeat(65) + "\n").repeat(30) + &"short\n".repeat(50);
+        let galley = ctx.fonts_mut(|fonts| {
+            fonts.layout_no_wrap(source, egui::FontId::monospace(16.), Color32::WHITE)
+        });
+        let canvas = Rect::from_min_size(pos2(50., 40.), vec2(1000., 700.));
+        for artwork in [Artwork::SumiE, Artwork::Samurai] {
+            let pictures = artwork.pictures(Area::Source);
+            let expected = placements(canvas, pictures, |_| true)[0].unwrap().rect;
+            let (mut visible, mut hidden) = (0, 0);
+            for y in (-1800..=200).step_by(40) {
+                for x in [-200., 64.] {
+                    match source_placements(canvas, &galley, pos2(x, y as f32), pictures)[0] {
+                        Some(placed) => {
+                            assert_eq!(placed.rect, expected, "Scrolling resized or moved artwork");
+                            visible += 1;
+                        }
+                        None => hidden += 1,
+                    }
+                }
+            }
+            assert!(
+                visible > 1 && hidden > 0,
+                "Exercise both open space and overlapping code"
+            );
+        }
+    });
+    for area in [Area::Source, Area::Explorer, Area::Welcome] {
+        let pictures = Artwork::Samurai.pictures(area);
+        assert_eq!(pictures.len(), 1);
+        assert!(
+            pictures
+                .iter()
+                .all(|picture| matches!(picture.tone, Tone::Silver))
+        );
+    }
+}
 
 #[test]
 fn samurai_picture_sets_stay_clear_of_content_and_each_other() {
@@ -29,10 +73,7 @@ fn samurai_picture_sets_stay_clear_of_content_and_each_other() {
                 );
             }
             if size.x > 1000. {
-                assert_eq!(
-                    rects.len(),
-                    if matches!(area, Area::Explorer) { 1 } else { 2 }
-                );
+                assert_eq!(rects.len(), 1);
             }
             if size.y < 100. {
                 assert!(rects.is_empty());
@@ -51,7 +92,7 @@ fn samurai_picture_sets_stay_clear_of_content_and_each_other() {
         let canvas = Rect::from_min_size(Pos2::ZERO, egui::vec2(1200., 800.));
         let pictures = Artwork::Samurai.pictures(Area::Source);
         let positioned = source_placements(canvas, &galley, egui::pos2(8., 40.), pictures);
-        assert_eq!(positioned.iter().flatten().count(), 2);
+        assert_eq!(positioned.iter().flatten().count(), 1);
         for positioned in positioned.into_iter().flatten() {
             assert!(galley.rows.iter().all(|row| {
                 !row.rect()
@@ -96,7 +137,6 @@ fn embedded_ink_has_transparent_negative_space_and_reuses_its_texture() {
         Motif::Warrior,
         Motif::Kabuto,
         Motif::Castle,
-        Motif::Tsuba,
     ] {
         let image = ink_mask(motif).expect("The embedded illustration must decode");
         assert!(image.pixels.iter().any(|pixel| pixel.a() == 0));
@@ -260,6 +300,7 @@ fn painting_preserves_selection_layout_focus_and_input_without_hiding_or_moving(
                     },
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
+                            let viewport = ui.available_rect_before_wrap();
                             let source_output = egui::TextEdit::multiline(&mut source)
                                 .id(id)
                                 .code_editor()
@@ -275,7 +316,7 @@ fn painting_preserves_selection_layout_focus_and_input_without_hiding_or_moving(
                             }
                             let next_id = ui.next_auto_id();
                             let cursor = ui.cursor();
-                            palette.paint_source_artwork(ui, &source_output);
+                            palette.paint_source_artwork(ui, &source_output, viewport);
                             assert_eq!(ui.next_auto_id(), next_id);
                             assert_eq!(ui.cursor(), cursor);
                             assert!(source_output.response.has_focus());

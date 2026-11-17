@@ -229,12 +229,16 @@ impl EditorApp {
                 if word_wrap {
                     source_scroll = source_scroll.horizontal_scroll_offset(0.);
                 }
+                let digits=doc.line_count().max(1).ilog10()+1;
+                let digit_width=ui.fonts_mut(|f|f.glyph_width(&FontId::monospace(font_size),'0'));
+                let gutter_width=46.0+(digits as f32*digit_width).max(24.0);
+                // Capture the source viewport before either scroll offset is
+                // applied, excluding the gutter from decorative artwork.
+                let mut source_canvas = ui.available_rect_before_wrap();
+                source_canvas.min.x += gutter_width;
                 source_scroll.show(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         ui.horizontal_top(|ui| {
-                            let digits=doc.line_count().max(1).ilog10()+1;
-                            let digit_width=ui.fonts_mut(|f|f.glyph_width(&FontId::monospace(font_size),'0'));
-                            let gutter_width=46.0+(digits as f32*digit_width).max(24.0);
                             let (gutter, _) = ui.allocate_exact_size(
                                 egui::vec2(gutter_width, 0.0),
                                 Sense::hover(),
@@ -262,7 +266,7 @@ impl EditorApp {
                             });
                             themes.paint_glow(ui, glow, &output.galley, output.galley_pos);
                             input.after_source(ui,doc.id,&mut output,&doc.text,palette);
-                            palette.paint_source_artwork(ui, &output);
+                            palette.paint_source_artwork(ui, &output, source_canvas);
                             ui_probe::button(ui, "source-editor", &output.response);
                             ui_probe::button(ui, if word_wrap { "source-editor-wrapped" } else { "source-editor-unwrapped" }, &output.response);
                             ui_probe::button(ui, &format!("source-editor-layout:{}:{}", doc.line_count(), output.galley.rows.len()), &output.response);

@@ -7,7 +7,7 @@ Click **Theme: …** at the bottom right, or choose **View → Color theme**. Bu
 
 | Theme | CLI ID | Appearance |
 | --- | --- | --- |
-| Samurai | `samurai` | Obsidian-gray surfaces, silver-steel controls, gold details and four original samurai illustrations |
+| Samurai | `samurai` | Obsidian-gray surfaces, silver-steel controls, gold interface details and silver-gray samurai illustrations |
 | Sumi-e Light | `sumie-light` | Warm washi-paper surfaces, deep ink text, vermilion accents and an original pine-and-crane ink illustration |
 | Sumi-e Dark | `sumie-dark` | Neutral sumi-black surfaces, paper-white text, restrained gold accents and pale ink illustrations |
 | SynthWave ’84 | `synthwave84` | Upstream purple surfaces, pink variables, cyan functions, yellow keywords and orange strings |
@@ -119,29 +119,31 @@ adjustments leave the original scope colors and ANSI red intact.
 
 **Samurai** is a dark Japanese armor-and-ink theme with neutral obsidian surfaces,
 silver-steel focus accents, aged-gold details, ivory text and a coordinated code
-and terminal palette. Four original transparent illustrations are embedded: an
-armored samurai beneath a pine, a kabuto helmet, a castle landscape and an
-openwork tsuba sword guard. The visual direction draws on Japanese
+and terminal palette. Three original transparent illustrations are embedded: an
+armored samurai beneath a pine, a kabuto helmet and a castle landscape, all in
+silver-gray ink. The visual direction draws on Japanese
 [iron, silver and gold sword fittings](https://www.metmuseum.org/art/collection/search/29535).
 
-The editor pairs the warrior landscape with a small gold-tinted sword guard;
-Explorer shows the kabuto beneath the file tree; the welcome and empty-editor
-screens pair the castle with a larger sword-guard ornament. Artwork avoids actual
-text, controls and other artwork, and shrinks or disappears in compact or dense
-views. Text selection preserves it. Assets are cached per UI context, with no
-runtime downloads, animation or additional input targets. Samurai reuses the
+The editor shows the warrior landscape; Explorer shows the silver-gray kabuto
+beneath the file tree; the welcome and empty-editor screens show the castle.
+There are no round sword-guard ornaments. Source artwork keeps its viewport-based
+size and anchor while scrolling vertically or horizontally. Overlapping code
+hides it instead of shrinking it; resizing the editor can change its size.
+Explorer and welcome artwork fit around their controls. Text selection preserves
+it. Assets are cached per UI context, with no runtime downloads, animation or additional input targets. Samurai reuses the
 native brush icons and shared controls. Select **Theme: Samurai**, or launch
 `rode --theme samurai --syntax-theme ui` for matching code colors. Custom variants
 can set `"artwork": "none"` or `"icons": "outline"` independently.
 
 The original PNGs and exact generation prompts are stored together in
 `assets/themes/`: `samurai-warrior`, `samurai-kabuto`, `samurai-castle` and
-`samurai-tsuba`, each with a `.png` and `.prompt.txt` file. They were generated
-with the built-in imagegen tool, with no external reference images supplied.
+`samurai-tsuba`, each with a `.png` and `.prompt.txt` file. The unused sword guard
+is retained as an archived original and is no longer embedded or displayed. They
+were generated with the built-in imagegen tool, with no external reference images supplied.
 
 | Samurai editor | Samurai welcome |
 | --- | --- |
-| ![Samurai editor with warrior, helmet and sword-guard artwork](../assets/samurai-editor.png) | ![Samurai welcome with castle and armor artwork](../assets/samurai-welcome.png) |
+| ![Samurai editor with silver-gray warrior and helmet artwork](../assets/samurai-editor.png) | ![Samurai welcome with castle and armor artwork](../assets/samurai-welcome.png) |
 
 **Sumi-e Light** and **Sumi-e Dark** are an original Japanese fine-art-inspired
 family. Light uses warm washi-paper surfaces, dark ink and vermilion emphasis.

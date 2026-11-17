@@ -159,6 +159,12 @@ impl Agents {
             if agents.settings && !answering {
                 egui::ScrollArea::vertical().id_salt("agent-settings-scroll")
                     .max_height((ui.available_height()-90.).clamp(60.,240.)).show(ui,|ui| {
+                    // Presentation stays editable while the execution controls
+                    // below are disabled for an active or queued turn.
+                    let activity = crate::keyboard::checkbox(ui, &mut agents.show_completed_tools, "Keep completed tool activity visible")
+                        .on_hover_text("Keep finished commands, file changes and tool calls in the conversation. Output remains expandable. This display preference applies to all projects and can change while the agent is working.");
+                    ui_probe::button(ui, "agent-show-completed-tools", &activity);
+                    if activity.changed() { agents.set_show_completed_tools(agents.show_completed_tools); }
                     ui.add_enabled_ui(!agents.chat.busy && !agents.chat.queue_pending(),|ui| {
                         if agents.config.provider.is_acp() {
                             let claude = agents.config.provider == Provider::Claude;
@@ -203,7 +209,7 @@ impl Agents {
                             agents.runtime.ui(ui, remote.as_ref(), install_enabled, codex_available);
                         }
                     });
-                    ui.label(RichText::new("Settings are saved for this project. Model and Access controls are below. Executable/provider changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
+                    ui.label(RichText::new("Agent settings are saved for this project; display preferences apply to all projects. Model and Access controls are below. Executable/provider changes start a new conversation. Use the agent's login or environment for credentials.").small().color(palette.muted));
                 });
             }
             ui.horizontal(|ui| { ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -281,35 +287,7 @@ impl Agents {
                     else if agents.config.provider == Provider::Claude { ui.add(egui::Label::new("Install claude-agent-acp and authenticate Claude on this host, then send a message. Model, effort and permission choices come from Claude.").wrap()); }
                     else { ui.add(egui::Label::new("Install and authenticate your agent on this host before sending a message.").wrap()); }
                 }
-                for message in &agents.chat.messages {
-                    ui.push_id(&message.id,|ui| {
-                        if message.role == Role::Tool {
-                            crate::keyboard::collapsing(ui, RichText::new(&message.title).monospace().size(12.).color(palette.muted),|ui| {
-                                ui.add(egui::Label::new(RichText::new(&message.text).monospace().size(11.)).wrap().selectable(true));
-                            });
-                        } else {
-                            egui::Frame::new().fill(if message.role == Role::User {palette.raised}else{palette.background}).inner_margin(8).corner_radius(4).show(ui,|ui| {
-                                let copy = ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&message.title).strong().size(11.).color(if message.role == Role::Notice {palette.muted}else{palette.accent}));
-                                    if message.role == Role::Assistant {
-                                        let button = icons::small(ui,Icon::Copy,"Copy response");
-                                        if message.text.len() <= 64 * 1024 {
-                                            ui_probe::value(ui, "agent-copy-response", &button, &message.text);
-                                        }
-                                        button.clicked()
-                                    } else {
-                                        false
-                                    }
-                                }).inner;
-                                let output = render_message(ui,&message.text,palette,copy);
-                                if message.role == Role::Assistant && message.text.len() <= 64 * 1024 {
-                                    ui_probe::value(ui, "agent-response", &output.response, &message.text);
-                                }
-                            });
-                        }
-                    });
-                    ui.add_space(5.);
-                }
+                transcript::show(ui, &agents.chat.messages, agents.chat.busy, agents.show_completed_tools, palette);
             });
         });
         if queue_rect.is_positive() {

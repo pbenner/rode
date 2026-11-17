@@ -24,8 +24,52 @@ pub enum Role {
     /// A local lifecycle or protocol explanation.
     Notice,
 }
+/// Normalized tool lifecycle, independent of display titles or output text.
+/// Backend notifications set individual states; turn completion or disconnect
+/// settles any tool still marked Running without rewriting earlier outcomes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolState {
+    /// Pending or executing; keep visible even in the compact transcript.
+    Running,
+    /// Finished successfully; the UI may collapse its presentation.
+    Completed,
+    /// Failed, declined or interrupted; keep available without opening a group.
+    Failed,
+}
+
+impl ToolState {
+    /// Classify a terminal Codex item, shared by completion notifications and
+    /// saved command/file records. A nonzero exit code or explicit failure
+    /// takes precedence over a generic "completed" status. Do not call on start.
+    pub(super) fn codex_completed(item: &Value) -> Self {
+        if matches!(item["status"].as_str(), Some("failed" | "declined"))
+            || item["exitCode"].as_i64().is_some_and(|code| code != 0)
+            || item["success"] == false
+        {
+            Self::Failed
+        } else {
+            Self::Completed
+        }
+    }
+
+    /// Decode an ACP status supplied by a tool update. Missing or unrecognized
+    /// values have no replacement state; partial updates must retain the last
+    /// known outcome rather than silently turn a failed tool into a success.
+    pub(super) fn acp(status: &str) -> Option<Self> {
+        match status {
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "pending" | "in_progress" => Some(Self::Running),
+            _ => None,
+        }
+    }
+}
+
 /// One in-memory transcript item; never persisted as preferences.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Equality covers lifecycle metadata as well as text: native view deltas must
+/// deliver completion-only changes even when the command produced no output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     /// Protocol/stable item identifier used to merge streamed updates.
     pub id: String,
@@ -35,6 +79,11 @@ pub struct Message {
     pub title: String,
     /// Bounded accumulated body text.
     pub text: String,
+    /// Tool-only lifecycle, absent for other roles and older helpers/history.
+    /// An omitted wire field means unknown, never an implied success. Missing
+    /// lifecycle data must not hide potentially active tools during a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_state: Option<ToolState>,
 }
 /// One protocol-supplied permission response choice.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -553,6 +602,7 @@ impl Chat {
     /// transcript.
     pub fn disconnect(&mut self) {
         self.file_jobs.cancel();
+        self.finish_tools(ToolState::Failed);
         self.session = None;
         self.busy = false;
         self.last_turn_succeeded = false;
@@ -1033,6 +1083,9 @@ impl Chat {
                     ),
                     _ => {}
                 }
+                if method == "item/completed" {
+                    self.tool_state(id, ToolState::codex_completed(item));
+                }
             }
             "serverRequest/resolved" => {
                 if params["threadId"]
@@ -1078,6 +1131,9 @@ impl Chat {
                 let id = update["toolCallId"].as_str().unwrap_or("tool");
                 let title = update["title"].as_str().unwrap_or("Tool");
                 self.replace(id, Role::Tool, title, &pretty(update));
+                if let Some(state) = update["status"].as_str().and_then(ToolState::acp) {
+                    self.tool_state(id, state);
+                }
                 self.changed = true;
             }
             "config_option_update" => {
@@ -1408,6 +1464,14 @@ impl Chat {
             clip(tool, 256),
             clip(&text, 4096),
         );
+        self.tool_state(
+            &format!("file-tool-{}", self.serial),
+            if success {
+                ToolState::Completed
+            } else {
+                ToolState::Failed
+            },
+        );
         Ok(())
     }
 
@@ -1416,6 +1480,11 @@ impl Chat {
             return;
         }
         self.cancel_file_work();
+        self.finish_tools(if success && !self.cancelling {
+            ToolState::Completed
+        } else {
+            ToolState::Failed
+        });
         self.busy = false;
         self.last_turn_succeeded = success && !self.cancelling;
         self.pending = None;
@@ -1520,8 +1589,33 @@ impl Chat {
             role,
             title,
             text,
+            tool_state: (role == Role::Tool).then_some(ToolState::Running),
         });
         self.trim();
+    }
+
+    /// Update an existing tool by protocol identity and publish status-only
+    /// changes. Other roles and unknown identities are intentionally untouched.
+    fn tool_state(&mut self, id: &str, state: ToolState) {
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.id == id && m.role == Role::Tool)
+        {
+            message.tool_state = Some(state);
+            self.changed = true;
+        }
+    }
+
+    /// Settle unfinished activity at turn/process exit. Already completed or
+    /// failed tools retain their own results, including those from older turns.
+    fn finish_tools(&mut self, state: ToolState) {
+        for message in &mut self.messages {
+            if message.tool_state == Some(ToolState::Running) {
+                message.tool_state = Some(state);
+                self.changed = true;
+            }
+        }
     }
     fn trim(&mut self) {
         while self.messages.len() > 128
@@ -1588,6 +1682,73 @@ fn append_bounded(target: &mut String, text: &str, limit: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_lifecycle_survives_streaming_snapshots_and_turn_exit() {
+        let mut chat = Chat {
+            busy: true,
+            ..Default::default()
+        };
+        let command =
+            json!({"item":{"id":"command","type":"commandExecution","command":"cargo check"}});
+        chat.codex_update("item/started", &command).unwrap();
+        let running = chat.messages.back().unwrap().clone();
+        assert_eq!(running.tool_state, Some(ToolState::Running));
+        chat.codex_update("item/completed", &command).unwrap();
+        let completed = chat.messages.back().unwrap();
+        assert_eq!(completed.tool_state, Some(ToolState::Completed));
+        assert_eq!(completed.text, running.text);
+        assert_eq!(completed.title, running.title);
+        assert_ne!(
+            completed, &running,
+            "A status-only change must reach native views"
+        );
+        let wire = serde_json::to_vec(&chat.view()).unwrap();
+        let mut attached = Chat::default();
+        attached.apply_view(serde_json::from_slice(&wire).unwrap());
+        assert_eq!(attached.messages, chat.messages);
+
+        chat.codex_update(
+            "item/completed",
+            &json!({"item":{
+                "id":"failed-command","type":"commandExecution","exitCode":1,"status":"completed"
+            }}),
+        )
+        .unwrap();
+        assert_eq!(
+            chat.messages.back().unwrap().tool_state,
+            Some(ToolState::Failed)
+        );
+        chat.acp_update(
+            &json!({"sessionUpdate":"tool_call","toolCallId":"acp","status":"in_progress"}),
+        );
+        assert_eq!(
+            chat.messages.back().unwrap().tool_state,
+            Some(ToolState::Running)
+        );
+        chat.acp_update(
+            &json!({"sessionUpdate":"tool_call_update","toolCallId":"acp","status":"completed"}),
+        );
+        assert_eq!(
+            chat.messages.back().unwrap().tool_state,
+            Some(ToolState::Completed)
+        );
+        chat.acp_update(
+            &json!({"sessionUpdate":"tool_call","toolCallId":"interrupted","status":"pending"}),
+        );
+        chat.finish(false, None);
+        assert_eq!(
+            chat.messages.back().unwrap().tool_state,
+            Some(ToolState::Failed)
+        );
+        assert_eq!(chat.messages[0].tool_state, Some(ToolState::Completed));
+
+        let legacy: Message = serde_json::from_value(json!({
+            "id":"old-helper", "role":"Tool", "title":"Command", "text":"output"
+        }))
+        .unwrap();
+        assert_eq!(legacy.tool_state, None);
+    }
 
     #[test]
     fn offline_guidance_covers_failed_turns_and_timeouts_for_every_provider() {

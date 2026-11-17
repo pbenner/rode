@@ -260,15 +260,13 @@ impl Store {
                 let finished = shared.finished;
                 drop(shared);
                 let order = state.chat.messages.iter().map(|m| m.id.clone()).collect();
+                // Compare the complete item, including tool lifecycle. An empty
+                // command can finish without changing either its title or body.
                 let changed: VecDeque<_> = state
                     .chat
                     .messages
                     .iter()
-                    .filter(|m| {
-                        previous.get(&m.id).is_none_or(|old| {
-                            old.text != m.text || old.title != m.title || old.role != m.role
-                        })
-                    })
+                    .filter(|m| previous.get(&m.id).is_none_or(|old| old != *m))
                     .cloned()
                     .collect();
                 previous = state

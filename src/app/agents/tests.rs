@@ -76,6 +76,22 @@ fn provider_controls_follow_native_selection_and_settings_visibility_without_sta
     assert!(!app.agents.settings);
     assert!(!has(&closed, "agent-acp-executable"));
     assert!(!app.agents.chat.busy && !app.agents.chat.connected());
+
+    app.agents.settings = true;
+    app.agents.chat.busy = true;
+    app.agents.chat.notice("Keep this conversation");
+    let config = app.agents.config.clone();
+    frame(&mut app, vec![]);
+    let state = frame(&mut app, vec![]);
+    assert!(has(&state, "agent-show-completed-tools"));
+    click(&mut app, &state, "agent-show-completed-tools");
+    assert!(app.agents.show_completed_tools && app.agents.pending);
+    assert!(app.agents.chat.busy);
+    assert_eq!(app.agents.config, config);
+    assert_eq!(
+        app.agents.chat.messages.back().unwrap().text,
+        "Keep this conversation"
+    );
 }
 
 #[test]
@@ -233,6 +249,7 @@ fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
         role: Role::User,
         title: "You".into(),
         text: "current work".into(),
+        tool_state: None,
     });
     agents.chat.busy = true;
     let queued = agents.queue.head_id();
@@ -406,6 +423,7 @@ fn long_responses_wrap_to_the_visible_chat_width_after_resizing() {
             .messages
             .push_back(agent::protocol::Message {
                 id: "wrapped-response".into(),
+                tool_state: None,
                 role: Role::Assistant,
                 title: "Agent".into(),
                 text: if code {
@@ -489,6 +507,7 @@ fn copy_response_copies_displayed_content_without_code_fences() {
             .messages
             .push_back(agent::protocol::Message {
                 id: "copy-response-test".into(),
+                tool_state: None,
                 role: Role::Assistant,
                 title: "Agent".into(),
                 text: source.into(),
@@ -815,8 +834,42 @@ impl eframe::Storage for Storage {
     fn flush(&mut self) {}
 }
 #[test]
+fn untouched_agent_display_preferences_preserve_another_windows_explicit_choice() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("app.ron");
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+    let mut stale_storage = crate::persistence::Preferences::open(path.clone(), wake.clone());
+    let stale = Agents::load(Some(&stale_storage));
+    let mut reset_storage = crate::persistence::Preferences::open(path.clone(), wake.clone());
+    let mut reset = Agents::load(Some(&reset_storage));
+    let mut editing_storage = crate::persistence::Preferences::open(path.clone(), wake.clone());
+    let mut editing = Agents::load(Some(&editing_storage));
+    editing.set_show_completed_tools(true);
+    editing.store(&mut editing_storage);
+    drop(editing_storage);
+
+    // Closing an unchanged window must not serialize its implicit false value
+    // over an explicit choice written since that window's initial load.
+    stale.store(&mut stale_storage);
+    drop(stale_storage);
+    let latest = crate::persistence::Preferences::open(path.clone(), wake.clone());
+    assert!(Agents::load(Some(&latest)).show_completed_tools);
+    drop(latest);
+
+    // An intentional reset still wins even though it equals this window's
+    // original implicit default; do not confuse it with an untouched default.
+    reset.set_show_completed_tools(false);
+    reset.store(&mut reset_storage);
+    drop(reset_storage);
+    let latest = crate::persistence::Preferences::open(path, wake);
+    assert!(!Agents::load(Some(&latest)).show_completed_tools);
+}
+
+#[test]
 fn project_preferences_restore_without_persisting_conversation_content() {
     let mut agents = Agents::load(None);
+    assert!(!agents.show_completed_tools);
+    agents.set_show_completed_tools(true);
     agents.key = "host /project".into();
     agents.config.provider = Provider::Local;
     agents.config.local_model = "installed-model".into();
@@ -825,6 +878,7 @@ fn project_preferences_restore_without_persisting_conversation_content() {
     let mut storage = Storage::default();
     agents.store(&mut storage);
     let restored = Agents::load(Some(&storage));
+    assert!(restored.show_completed_tools);
     assert_eq!(
         restored.preferences["host /project"].local_model,
         "installed-model"

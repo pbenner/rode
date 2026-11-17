@@ -71,6 +71,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
 | `src/app/execution.rs` | Shared captured host/project target, generation-bound reply endpoint and mount-work guard for file, tool and session workers; separate explicit host-mode Git preparation |
 | `src/app/agents/controller.rs`, `src/app/agents/view.rs` | Agent-owned lifecycle, queue and history admission; chat rendering receives immutable application facts and returns explicit cross-domain actions |
+| `src/app/agents/transcript.rs` | Ordered conversation rendering, reversible completed-tool groups and stable disclosure identities; no controller or retention mutations |
 | `src/app/sessions/controller.rs` | Terminal creation, retained attachment selection, bounded command routing and acknowledgement effects without access to the application coordinator |
 | `src/app/workbench/git/controller.rs` | Captured Git operations and one admission rule for commands, stash actions, patches and authentication retries; display labels do not determine mutation effects |
 | `src/app/pdf_view.rs` | Shared page-render jobs for PDF documents and slide previews, with explicit destinations and captured document/version/request identities |
@@ -163,9 +164,43 @@ Keep the desktop coordinator focused on application state and shared lifecycle g
 
 All presets use the shared component baseline in `InterfaceStyle::default`. Their optional `ui` data inherits the base theme's metrics and records only differences; an empty `"ui": {}` retains those inherited metrics. Carbon Edge adds decoration to Carbon; Studio Neutral and Studio Hacker change Studio's colors while inheriting its components. Atelier, Sumi-e and SynthWave likewise override only their distinct metrics. Presets supply data to the shared renderer. UI, syntax, terminal colors and frame treatment remain independently composable, and views must not branch on preset IDs.
 
+Illustrations live in `theme/artwork.rs` and `theme/artwork/layout.rs`. A theme
+selects a bounded native motif set, never an image path or placement script.
+Transparent ink masks are decoded once per egui context and shared across editor
+windows; palette tinting happens during painting. The editor captures its source
+viewport before either scroll offset is applied, with the gutter excluded, in
+logical egui screen coordinates. The galley's translated visible rows only
+control whether a fixed rectangle is clear of text. They cannot choose a smaller
+source picture as code scrolls past. Explorer and welcome surfaces may instead
+fit artwork around their occupied controls. Painting allocates no layout space
+or interaction IDs and preserves source selection and focus. See the
+[theme format](../themes/README.md) for inherited artwork settings.
+
 ### Native UI and work on demand
 
 Chat input and queued follow-ups share the window-local divider in `app/agents/splitter.rs`. It owns drag/keyboard resizing and retains preferred heights through viewport clamps. `app/agents/queue/view.rs` owns the bounded queue panel and responsive rows; queue payloads, acknowledgements and dispatch remain with their existing controller. Resizing and scrolling never emit queue commands or change the composer draft.
+
+Chat transcript presentation belongs to `app/agents/transcript.rs`. Compact mode
+groups only consecutive completed tools, preserving prose, active activity and
+failures in their original order. Disclosure identity uses the first retained
+item's ID rather than its changing count. Opening a group renders the same item
+widgets as the full view; neither mode deletes messages or changes backend
+history or the controller's retention budgets. The desktop-wide
+`agent_show_completed_tools` preference is separate from project-scoped
+`agent_preferences` and the host's `Config`. Saving it marks only presentation
+preferences pending, so it remains editable during active work without sending
+a backend setting or restarting a conversation. See [configuration](configuration.md).
+
+Tool lifecycle is explicit `Message.tool_state` metadata from `rode-agent-core`.
+Codex completions honor nonzero exits and explicit failures; ACP partial updates
+retain an existing outcome when status is absent or unknown. Turn completion and
+disconnect settle unfinished tools without replacing earlier terminal outcomes.
+Saved history is not active execution: pending replay records are displayed as
+finished, while explicit failures survive replay and later partial updates. Native
+service deltas compare whole messages, including lifecycle, so a command with no
+output can still collapse when it finishes. The wire field is optional for older
+helpers; without it, compact rendering keeps all tool rows visible while busy
+rather than inferring completion from titles or interleaved user replies.
 
 Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, following the chat-history, running-agent and monitor layouts. Use `page` around a tool's scrolling region, `heading` (or `header` with responsive toolbar actions), and `section` for related controls. Form grids use `field_label` to reserve a readable label column or stack labels above inputs in compact views. Lists use `card` or customize `card_frame` for selection; `empty` explains an unpopulated list. Pages cap forms/lists at 1000 logical points; the monitor keeps a wider responsive grid, while document canvases, source editors and terminals retain their own space requirements. Dialogs share `dialog_frame` and a viewport-bounded scrolling budget. These helpers own presentation only: retain stable scroll/widget IDs and controller state in each domain so docking/resizing never changes task ownership or unsaved drafts.
 

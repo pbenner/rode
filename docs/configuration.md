@@ -78,3 +78,18 @@ Shortcut presets use `keyboard.style` (`standard`, `emacs`, `vim`). Standard bin
 Interface size uses a separate `ui_scale` string preference (`"1"` for 100%, `"0.75"` for 75%, supported range 0.5–2). It multiplies the monitor's native DPI scale, while `font_size` remains the editor/terminal font size in points. The View control saves only `ui_scale`; closing an unchanged older window cannot revert it. An explicit reset to 100% is saved even if that window already displayed 100%. Invalid/nonfinite/out-of-range values fall back to system scaling. This explicit preference takes precedence over scale saved in the GUI framework's private layout snapshot. See [interface sizing](editing.md).
 
 Agent reply personality uses `agent_preferences[workspace].personality` (`default`, `jackson_lamb` or `panne`). Changes merge as one project-scoped scalar, independently of model, permission and other windows' settings. Missing or unknown personality IDs use Default. This preference controls a chat presentation hint; it never selects a new executable or operating mode. See [response personalities](agents.md#response-personalities).
+
+Completed agent activity uses the desktop-wide `agent_show_completed_tools`
+string preference. `"true"` keeps completed tool rows visible; the default
+`"false"` groups them behind disclosures. Missing or invalid values use the
+compact default. Change it under **Agent settings → Keep completed tool activity
+visible**. The choice applies across projects and survives restart; other running
+RODE processes retain their in-memory choice until relaunched, like other GUI
+preferences. It is stored separately from per-project `agent_preferences`, is
+never sent to a local or SSH agent, and does not restart active work or change
+transcript retention. See [Agent chat](agents.md).
+
+Only explicit display choices are written. Closing an unchanged older window
+cannot replace another window's choice with its implicit compact default. An
+explicit reset to compact mode is saved even when that window already showed
+the default, following the same last-explicit-save rule as other scalar settings.

@@ -531,14 +531,11 @@ impl EditorApp {
                 crate::keyboard::context_menu(&root_response, |ui| {
                     self.explorer_menu(ui, &root_entry, true, ctx)
                 });
-                if remote {
-                    ui.label(palette.tag(if connected {
-                        "● SSH WORKSPACE"
-                    } else {
-                        "○ SSH PENDING / OFFLINE"
-                    }));
-                    if !connected
-                        && crate::keyboard::button(ui, "Reconnect").clicked()
+                // The connected host already appears in the workspace banner.
+                // Reserve an extra explorer row only for actionable offline state.
+                if remote && !connected {
+                    ui.label(palette.tag("○ SSH PENDING / OFFLINE"));
+                    if crate::keyboard::button(ui, "Reconnect").clicked()
                         && let Some(profile) = self
                             .workspace
                             .as_ref()

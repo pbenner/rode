@@ -1,5 +1,8 @@
 //! Project-scoped agent chat and preferences. Processes/transcripts are kept
 //! out of app preferences; authentication remains with the installed agent.
+//! The completed-tool display preference is desktop-wide and stored separately
+//! from the host/project execution configuration; changing it cannot relaunch
+//! a controller or change the agent's retained conversation.
 //!
 //! A submitted message or explicit History starts a process. Workspace/settings/feature changes stop the
 //! old process; approvals remain bounded by the enclosing sandbox. Replies may refresh clean
@@ -25,6 +28,7 @@ mod queue;
 mod recovery;
 mod runtime;
 mod splitter;
+mod transcript;
 mod view;
 
 /// Window-owned chat presentation, host-keyed configuration and disposable backend views.
@@ -44,6 +48,13 @@ pub(super) struct Agents {
     arguments: String,
     argument_error: String,
     settings: bool,
+    /// Desktop-wide `agent_show_completed_tools` preference, defaulting to false.
+    /// Separate from Config so active work can change presentation without a
+    /// backend configuration request, restart or host/project preference edit.
+    show_completed_tools: bool,
+    /// Write the display scalar only after an explicit choice in this window.
+    /// Serializing an untouched default could overwrite a newer window's edit.
+    show_completed_tools_edited: bool,
     pending: bool,
     pub focus: bool,
     completed: u64,
@@ -61,7 +72,8 @@ pub(super) struct Agents {
     prompt_reader_failed: bool,
 }
 impl Agents {
-    /// Restore a bounded configuration map and initialize inert chat/history/setup views.
+    /// Restore a bounded host/project configuration map and the global display
+    /// choice. Initialize inert chat/history/setup views without starting work.
     pub(super) fn load(storage: Option<&dyn eframe::Storage>) -> Self {
         let preferences = storage
             .and_then(|s| s.get_string("agent_preferences"))
@@ -83,6 +95,11 @@ impl Agents {
             arguments: "[]".into(),
             argument_error: String::new(),
             settings: false,
+            show_completed_tools: storage
+                .and_then(|s| s.get_string("agent_show_completed_tools"))
+                .as_deref()
+                == Some("true"),
+            show_completed_tools_edited: false,
             pending: false,
             focus: false,
             completed: 0,
@@ -103,11 +120,25 @@ impl Agents {
                 .into(),
         }
     }
-    /// Write only agent configuration preferences, excluding transcripts, credentials and live jobs.
+    /// Save bounded host/project configuration plus the independent global
+    /// display choice, excluding transcripts, credentials and live jobs.
     pub(super) fn store(&self, storage: &mut dyn eframe::Storage) {
+        if self.show_completed_tools_edited {
+            storage.set_string(
+                "agent_show_completed_tools",
+                self.show_completed_tools.to_string(),
+            );
+        }
         if let Ok(data) = serde_json::to_string(&self.preferences) {
             storage.set_string("agent_preferences", data);
         }
+    }
+    /// Record an explicit display choice, including resetting an implicit false
+    /// default. Execution settings and the running conversation stay untouched.
+    fn set_show_completed_tools(&mut self, enabled: bool) {
+        self.show_completed_tools = enabled;
+        self.show_completed_tools_edited = true;
+        self.pending = true;
     }
     /// Record the current host/project configuration while keeping the saved map within
     /// its entry and serialized-byte budgets; mark the preference write pending.

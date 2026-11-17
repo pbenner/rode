@@ -4,7 +4,7 @@
 use super::{Config, Launch, background::Client, history::Restored};
 use anyhow::{Result, ensure};
 use rode_agent_core::attachment::{self, Attachment};
-pub use rode_agent_core::protocol::{Choice, Message, Prompt, Question, Role, clip};
+pub use rode_agent_core::protocol::{Choice, Message, Prompt, Question, Role, ToolState, clip};
 use rode_agent_core::service::{Command, Persistence};
 use serde_json::Value;
 use std::sync::Arc;
@@ -108,6 +108,7 @@ impl Chat {
             role: Role::User,
             title: "You".into(),
             text: summary,
+            tool_state: None,
         });
         self.inner.busy = true;
         self.inner.last_turn_succeeded = false;
