@@ -76,6 +76,16 @@ fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
                     .iter()
                     .find(|text| text.galley.text() == "Edit")
                     .unwrap();
+                assert!(!text.iter().any(|text| text.galley.text() == "Cell…"));
+                let edit_rect = egui::Rect::from_min_size(edit.pos, edit.galley.size());
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(rect) if rect.rect.contains_rect(edit_rect)
+                            && rect.rect.width() < 100. && rect.rect.height() < 35.
+                            && rect.fill != egui::Color32::TRANSPARENT
+                    )),
+                    "Edit must have a visible button background: {theme}/{width}/{scale}"
+                );
                 let point = edit.pos + edit.galley.size() / 2.;
                 frame(
                     &mut app,
@@ -98,7 +108,15 @@ fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
                         modifiers: egui::Modifiers::NONE,
                     }],
                 );
-                frame(&mut app, vec![]);
+                let editing = frame(&mut app, vec![]);
+                for label in ["markdown", "Preview", "Up", "Down", "Delete"] {
+                    assert!(
+                        editing.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text() == label
+                        )),
+                        "Missing editing control {label}: {theme}/{width}/{scale}"
+                    );
+                }
                 let view = app.documents[0].notebook.as_ref().unwrap();
                 assert!(!view.cells[&uid].previewing);
                 assert_eq!(view.book.cells[0].source, source);

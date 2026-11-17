@@ -4,7 +4,7 @@ Open `.ipynb` files from the explorer or **Ctrl+P**, or choose **File → New Ju
 
 ## Cells and outputs
 
-Code cells use the independent syntax theme and the kernel's language. Markdown previews use a compact, unboxed layout with restrained headings so text cells can structure the notebook. **Edit** opens the source; **Preview** or **Shift+Enter** renders it again. The small **Cell…** menu holds the type, move, delete and insert-below controls. Code and Markdown cells can also be inserted from the notebook toolbar.
+Code cells use the independent syntax theme and the kernel's language. Markdown previews use a compact, unboxed layout with restrained headings so text cells can structure the notebook. The **Edit** button opens the source and the existing cell toolbar, including the type selector, move and delete controls. Change Markdown/HTML styling in the source, then choose **Preview** or **Shift+Enter** to render it again. Code and Markdown cells can also be inserted from the notebook toolbar.
 
 Markdown cells support native headings, paragraphs, lists, tables, emphasis, links, images and embedded PNG/JPEG attachments. They can mix Markdown with static HTML equivalents: `h1`–`h6`, `p`/`div`, `br`/`hr`, `strong`/`b`, `em`/`i`, lists, links, images, code and basic tables. HTML character references are decoded, while fenced Markdown code stays literal. Line breaks and paragraphs within table cells are folded into spaces to keep each table row intact. Rendering leaves the original cell source and metadata intact.
 
@@ -31,7 +31,7 @@ Background refreshes after Git operations or agent replies preserve the notebook
 
 Use **Notebook… → Edit JSON source** for direct metadata or unsupported-cell editing. Switching to JSON stops this notebook's kernel; switching back reparses the current unsaved buffer. Invalid/unsupported notebooks remain available as ordinary JSON text, with an explanation. Their contents are never replaced by an empty notebook. The cell renderer supports **nbformat 4** and preserves untouched string/list source representations and unknown JSON fields.
 
-Use **+ Code cell** or **+ Markdown cell** in the toolbar to insert below the selected cell. The buttons after source cells and the **Cell…** menu on Markdown previews insert at that position, including at the end of the notebook. New cells receive keyboard focus immediately.
+Use **+ Code cell** or **+ Markdown cell** in the toolbar to insert below the selected cell. The same buttons after source cells insert at that position, including at the end of the notebook. Choose **Edit** on a Markdown preview to access these insertion controls. New cells receive keyboard focus immediately.
 
 ## Running cells
 
