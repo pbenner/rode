@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fixture_support import fixture_directory, fixture_environment
+from readme_tour import SCENES, THEMES
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = '''import math
@@ -50,17 +51,6 @@ ax.legend(frameon=False)
 fig.tight_layout()
 plt.show()
 """
-SCENES = (
-    "01-editor",
-    "02-ssh",
-    "03-sandbox",
-    "04-persist-off",
-    "04-persist-on",
-    "05-notebook",
-    "06-agents",
-    "07-slurm",
-    "08-git",
-)
 
 
 def wait_for(check, message, timeout=30):
@@ -77,7 +67,12 @@ def main():
     """Create isolated demo projects and deterministic service fixtures, capture native views and clean up owned processes."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "target/readme-demo/captures")
-    parser.add_argument("--sandbox-backend", choices=("landlock", "bwrap"), default="landlock")
+    parser.add_argument(
+        "--sandbox-backend",
+        choices=("landlock", "bwrap", "none"),
+        default="landlock",
+        help="Require this sandbox, or explicitly capture normal-mode SSH and setup controls with none",
+    )
     options = parser.parse_args()
     binary = Path(os.environ.get("RODE_TEST_BINARY", ROOT / "target/release/rode")).resolve()
     helper = Path(os.environ.get("RODE_SESSION_HELPER", binary.parent / "rode-sessiond")).resolve()
@@ -186,7 +181,7 @@ def main():
             GIT_CONFIG_GLOBAL="/dev/null",
         )
         # The local scenes intentionally demonstrate ordinary project mode.
-        # The remote scene below requests and verifies an active sandbox.
+        # Remote enforcement is required unless normal mode was explicitly selected.
         preferences = Path(environment["XDG_DATA_HOME"]) / "rode/app.ron"
         preferences.parent.mkdir(parents=True, exist_ok=True)
         preferences.write_text(json.dumps({"sandbox_defaults": json.dumps({"enabled": False})}))
@@ -220,7 +215,7 @@ def main():
             with (options.output / f"{name}.log").open("w") as log:
                 state_path = base / f"{name}-ui-state.json"
                 process = subprocess.Popen(
-                    [str(binary), *args, "--theme", "carbon"],
+                    [str(binary), *args, "--theme", "atelier-dark", "--syntax-theme", "ui"],
                     env=dict(env, RODE_UI_TEST_STATE=str(state_path)),
                     stdout=log,
                     stderr=log,
@@ -321,6 +316,21 @@ def main():
                 native.click("git-change-modified:4")
                 native.control("git-peek-diff")
                 capture(native, "08-git")
+                native.click("git-peek-close")
+                native.click("source-editor")
+                ui.key("Home", ("Control_L",))
+                native.control("source-editor-at-start", focused=True)
+                for theme_id, _, _ in THEMES:
+                    native.click("menu-view")
+                    native.click("submenu:Color theme")
+                    native.click(f"interface-theme:{theme_id}")
+                    native.absent(f"interface-theme:{theme_id}")
+                    native.wait(
+                        lambda: ui.read_preferences(preferences).get("color_theme") == theme_id,
+                        f"Theme selection was not saved: {theme_id}",
+                    )
+                    native.control("source-editor")
+                    capture(native, f"09-theme-{theme_id}")
         finally:
             # Only this fixture's private service and its owned terminals.
             for session in sessions():
@@ -337,7 +347,11 @@ def main():
                 )
 
         remote_environment = fixture_environment(base / "remote", environment=environment)
-        policy = {"enabled": True, "backend": options.sandbox_backend}
+        sandboxed = options.sandbox_backend != "none"
+        policy = {
+            "enabled": sandboxed,
+            "backend": options.sandbox_backend if sandboxed else "landlock",
+        }
         project_key = json.dumps(
             [["rode-test", "", "", ssh_config, ""], str(project)], separators=(",", ":")
         )
@@ -359,21 +373,26 @@ def main():
                 ssh_config,
                 "--remote-path",
                 str(project),
-                "--sandbox",
+                *(["--sandbox"] if sandboxed else []),
             ],
             remote_environment,
             "ssh",
         ) as native:
 
             def connected():
-                """Wait for the SSH fixture title to confirm prepared sandbox state rather than an opening project."""
+                """Require the requested mode after the real SSH project is prepared."""
                 info = subprocess.check_output(
                     ["xwininfo", "-id", hex(native.window)], text=True, timeout=5
                 )
-                return "[Sandbox]" in info and "[Opening project]" not in info
+                return ("[Sandbox]" in info) == sandboxed and "[Opening project]" not in info
 
+            native.layout(
+                lambda state: bool(state.get("ssh_master_socket")),
+                "The real SSH connection did not become available",
+            )
             wait_for(
-                connected, f"SSH project did not enter an actual {options.sandbox_backend} sandbox"
+                connected,
+                f"SSH project did not enter the requested {options.sandbox_backend} mode",
             )
             native.open_file("analysis.py")
             native.control("source-editor", focused=True)
@@ -390,9 +409,10 @@ def main():
             ).strip(),
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
             "sandbox_backend": options.sandbox_backend,
+            "themes": [theme_id for theme_id, _, _ in THEMES],
             "captures": {},
         }
-        for name in SCENES:
+        for name, *_ in SCENES:
             path = captures / f"{name}.png"
             manifest["captures"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
             shutil.copyfile(path, options.output / path.name)

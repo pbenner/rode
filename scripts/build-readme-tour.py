@@ -8,87 +8,16 @@ The screenshots remain unmodified inside the caption frame.
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from readme_tour import SCENES
+
 ROOT = Path(__file__).resolve().parent.parent
-SCENES = [
-    (
-        "01-editor",
-        3,
-        1,
-        "Native editing. Tools on demand.",
-        "Rust desktop | familiar keyboard controls | configurable themes",
-        "Native RODE captures | synthetic demonstration project",
-    ),
-    (
-        "02-ssh",
-        4,
-        2,
-        "Work where your files live.",
-        "SSH aliases, keys and jump hosts | tools run on the project host",
-        "Actual SSH connection to an isolated loopback host",
-    ),
-    (
-        "03-sandbox",
-        4,
-        3,
-        "One project. One sandbox policy.",
-        "Project policy for editor access, agents and tools | separate terminal and Git modes",
-        "Actual project sandbox | explicit filesystem grants",
-    ),
-    (
-        "04-persist-off",
-        1,
-        4,
-        "Keep your terminal running.",
-        "Enable Persist, then reattach after editor exit or SSH loss",
-        "Opt-in persistence | no tmux or screen dependency",
-    ),
-    (
-        "04-persist-on",
-        3,
-        4,
-        "Keep your terminal running.",
-        "Enable Persist, then reattach after editor exit or SSH loss",
-        "Opt-in persistence | no tmux or screen dependency",
-    ),
-    (
-        "05-notebook",
-        5,
-        5,
-        "Run notebooks. Inspect results.",
-        "Cells expand to fit their content | kernels run on the project host",
-        "Real Python kernel | synthetic experiment data",
-    ),
-    (
-        "06-agents",
-        3,
-        6,
-        "Choose your coding agent.",
-        "Codex, Claude Code, local models and ACP | project-host execution",
-        "Provider controls | no model call or staged conversation",
-    ),
-    (
-        "07-slurm",
-        4,
-        7,
-        "Request compute resources.",
-        "Slurm CPU / GPU allocations for shells, notebooks and debugging",
-        "Allocation form with an empty demo scheduler | no resources requested",
-    ),
-    (
-        "08-git",
-        3,
-        8,
-        "Review changes in the editor.",
-        "Change markers and inline previews | Git staging, branches and worktrees",
-        "Real Git change preview in the demonstration repository",
-    ),
-]
 
 
 def run(*args):
@@ -106,7 +35,19 @@ def main():
         if not (options.captures / f"{name}.png").is_file():
             parser.error(f"Missing native capture: {name}.png")
     manifest = options.captures / "capture.json"
-    metadata = json.loads(manifest.read_text()) if manifest.exists() else {}
+    if not manifest.is_file():
+        parser.error("Missing capture.json; record a fresh native capture set first")
+    metadata = json.loads(manifest.read_text())
+    if metadata.get("sandbox_backend") not in ("landlock", "bwrap", "none"):
+        parser.error(
+            "capture.json must identify the recorded sandbox backend or explicit normal mode"
+        )
+    for name, *_ in SCENES:
+        path = options.captures / f"{name}.png"
+        if hashlib.sha256(path.read_bytes()).hexdigest() != metadata.get("captures", {}).get(
+            path.name
+        ):
+            parser.error(f"Native capture does not match capture.json: {path.name}")
     font = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
     if not font.is_file():
         parser.error(f"Required font not found: {font}")
@@ -115,16 +56,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="rode-tour-") as directory:
         work = Path(directory)
         frames = []
+        chapters = max(scene[2] for scene in SCENES)
         for index, (name, seconds, chapter, title, subtitle, note) in enumerate(SCENES):
             if name == "03-sandbox" and metadata.get("sandbox_backend") in ("bwrap", "landlock"):
                 backend = "Landlock" if metadata["sandbox_backend"] == "landlock" else "bubblewrap"
                 note = f"Actual {backend} sandbox | explicit filesystem grants"
+            elif name == "03-sandbox" and metadata["sandbox_backend"] == "none":
+                title = "Configure project access."
+                note = "Sandbox setup controls | normal mode shown; enforcement disabled for this capture"
             filters = ["pad=1380:1040:0:100:color=0x101010"]
             for label, content, x, y, size, colour in (
                 ("title", title, "28", 16, 38, "0xe0ad37"),
                 ("subtitle", subtitle, "30", 66, 22, "0xe0e0e0"),
                 ("note", note, "28", 1012, 17, "0xb3b3b3"),
-                ("chapter", f"{chapter:02d} / 08", "w-tw-28", 24, 20, "0xb3b3b3"),
+                ("chapter", f"{chapter:02d} / {chapters:02d}", "w-tw-28", 24, 20, "0xb3b3b3"),
             ):
                 textfile = work / f"{index}-{label}.txt"
                 textfile.write_text(content)
@@ -178,7 +123,7 @@ def main():
             *ffmpeg,
             *source,
             "-filter_complex",
-            "scale=1000:-2:flags=lanczos,split[a][b];"
+            "scale=960:-2:flags=lanczos,split[a][b];"
             "[a]palettegen=max_colors=256:stats_mode=full[p];"
             "[b][p]paletteuse=dither=none:diff_mode=rectangle",
             "-t",
