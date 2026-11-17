@@ -103,6 +103,7 @@ pub(super) struct Preview {
     warnings: Vec<String>,
     appearance: Option<(String, u32, [u32; 2])>,
     notebook: bool,
+    presentation: Arc<html::Presentation>,
 }
 impl Preview {
     /// Create an inert preview backed by the application's scoped image loader.
@@ -120,6 +121,7 @@ impl Preview {
             warnings: vec![],
             appearance: None,
             notebook: false,
+            presentation: Default::default(),
         }
     }
     /// Notebook text cells accept a bounded semantic HTML subset while document
@@ -136,6 +138,7 @@ impl Preview {
             self.images.forget(&uri);
         }
         self.source.clear();
+        self.presentation = Default::default();
         self.cache = Default::default();
         self.warnings.clear();
         self.error = None;
@@ -175,12 +178,28 @@ impl Preview {
         self.token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
         self.cancelled = Arc::new(AtomicBool::new(false));
         let prepared = if self.notebook {
-            html::markdown(text).and_then(|text| prepare_images(&text, path, self.token, embedded))
+            html::prepare(text).and_then(|prepared| {
+                prepare_images(
+                    &prepared.source,
+                    path,
+                    self.token,
+                    embedded,
+                    prepared.decorations,
+                )
+            })
         } else {
-            prepare_images(text, path, self.token, embedded)
+            prepare_images(text, path, self.token, embedded, vec![])
         };
+        let prepared = prepared.and_then(|mut prepared| {
+            let presentation = html::Presentation::prepare(
+                &mut prepared.source,
+                std::mem::take(&mut prepared.decorations),
+            )?;
+            Ok((prepared, presentation))
+        });
         match prepared {
-            Ok(prepared) => {
+            Ok((prepared, presentation)) => {
+                self.presentation = Arc::new(presentation);
                 self.source = prepared.source;
                 for link in prepared.links {
                     self.cache.add_link_hook(link);
@@ -250,6 +269,14 @@ impl Preview {
         }
         // Cell typography is local: a text heading must not enlarge the next
         // cell's controls or the notebook toolbar. Keep a restrained hierarchy.
+        let clicked = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let click_target = clicked.clone();
+        let presentation = self.presentation.clone();
+        let render_html = move |ui: &mut egui::Ui, marker: &str| {
+            if let Some(url) = presentation.ui(ui, marker, font_size, palette) {
+                *click_target.borrow_mut() = Some(url);
+            }
+        };
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.y = 3.;
             for (style, font) in [
@@ -265,13 +292,17 @@ impl Preview {
             CommonMarkViewer::new()
                 .indentation_spaces(2)
                 .explicit_image_uri_scheme(true)
+                .render_html_fn(Some(&render_html))
                 .show(ui, &mut self.cache, &self.source);
         });
-        self.cache
-            .link_hooks()
-            .iter()
-            .find(|(_, clicked)| **clicked)
-            .map(|(url, _)| url.clone())
+        let clicked = clicked.borrow_mut().take();
+        clicked.or_else(|| {
+            self.cache
+                .link_hooks()
+                .iter()
+                .find(|(_, clicked)| **clicked)
+                .map(|(url, _)| url.clone())
+        })
     }
     /// Render prepared document Markdown with its own viewport and appearance-aware layout cache.
     pub(in crate::app) fn ui(
@@ -338,6 +369,7 @@ struct Prepared {
     links: HashSet<String>,
     images: Vec<(String, String)>,
     warnings: Vec<String>,
+    decorations: Vec<html::Decoration>,
 }
 fn options() -> Options {
     Options::ENABLE_TABLES
@@ -348,13 +380,14 @@ fn options() -> Options {
 }
 #[cfg(test)]
 fn prepare(text: &str, path: &str, token: u64) -> Result<Prepared, String> {
-    prepare_images(text, path, token, &HashMap::new())
+    prepare_images(text, path, token, &HashMap::new(), vec![])
 }
 fn prepare_images(
     text: &str,
     path: &str,
     token: u64,
     embedded: &HashMap<String, String>,
+    decorations: Vec<html::Decoration>,
 ) -> Result<Prepared, String> {
     if text.len() > MAX_BYTES {
         return Err("Markdown preview is limited to 256 KiB. The full document remains available in Edit mode.".into());
@@ -386,6 +419,7 @@ fn prepare_images(
         links: HashSet::new(),
         images: vec![],
         warnings: vec![],
+        decorations,
     };
     let mut edits = vec![];
     let mut events = events.into_iter();
@@ -473,6 +507,15 @@ fn prepare_images(
         }
     }
     for (range, replacement) in edits.into_iter().rev() {
+        let delta = replacement.len() as isize - range.len() as isize;
+        for decoration in &mut result.decorations {
+            if range.end <= decoration.range.start {
+                decoration.range.start = decoration.range.start.saturating_add_signed(delta);
+                decoration.range.end = decoration.range.end.saturating_add_signed(delta);
+            } else if range.start >= decoration.range.start && range.end <= decoration.range.end {
+                decoration.range.end = decoration.range.end.saturating_add_signed(delta);
+            }
+        }
         result.source.replace_range(range, &replacement);
     }
     Ok(result)

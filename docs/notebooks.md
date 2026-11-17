@@ -8,7 +8,16 @@ Code cells use the independent syntax theme and the kernel's language. Markdown 
 
 Markdown cells support native headings, paragraphs, lists, tables, emphasis, links, images and embedded PNG/JPEG attachments. They can mix Markdown with static HTML equivalents: `h1`–`h6`, `p`/`div`, `br`/`hr`, `strong`/`b`, `em`/`i`, lists, links, images, code and basic tables. HTML character references are decoded, while fenced Markdown code stays literal. Line breaks and paragraphs within table cells are folded into spaces to keep each table row intact. Rendering leaves the original cell source and metadata intact.
 
-Inline image files use the current local/SSH host and sandbox grants; HTML images go through the same bounded loader as Markdown images. External image URLs are not loaded automatically. HTML is presented through native Markdown semantics: CSS layout, scripts, embedded web frames and interactive widgets are not rendered. The JSON/source views preserve unsupported markup.
+Text headings (`h1`–`h6`) honor `align="left|center|right"` and inline `text-align`; a valid inline style takes precedence. Centered headings wrap within the cell and keep their level, emphasis and clickable links. Headings containing images retain the shared Markdown image layout. Horizontal rules accept solid `border`/`border-top` styles with widths from 0 to 8px and literal colors (hex values or common names such as `gray`). For example:
+
+```html
+<h1 align="center">Machine Learning for Bioinformatics</h1>
+<h3 align="center">Freie Universität Berlin</h3>
+<h5 align="center">Exercise Notebook - Model Selection</h5>
+<hr style="border:2px solid gray">
+```
+
+Inline image files use the current local/SSH host and sandbox grants; HTML images go through the same bounded loader as Markdown images. External image URLs are not loaded automatically. HTML is presented through native Markdown semantics with the title styles above; other CSS layout, scripts, embedded web frames and interactive widgets are not rendered. The JSON/source views preserve unsupported markup.
 
 Select a cell by clicking its header or editor. Use **+ Code cell**, **+ Markdown cell**, the cell type selector, **Up / Down** and **Delete** to arrange cells. Cell text keeps its editor undo/cursor state through tab switches and moves. Structural changes do not currently have a separate undo history. **Ctrl+F** searches cell sources and selects the next match.
 

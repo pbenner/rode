@@ -2,14 +2,19 @@
 //! CommonMark before the ordinary scoped image/link preparation. Source cells
 //! are never rewritten, and this adapter has no browser, CSS or resource loader.
 use super::{MAX_BYTES, MAX_EVENTS, MdEvent, Parser, Tag, TagEnd, options};
+use eframe::egui;
 use html5gum::{Token, Tokenizer, emitters::default::DefaultEmitter};
+
+mod presentation;
+use presentation::Kind;
+pub(super) use presentation::{Decoration, Presentation};
 
 #[cfg(test)]
 mod tests;
 
 /// Preserve Markdown and code verbatim outside HTML parser spans. Adjacent HTML
 /// spans are joined so multiline tags and raw-text elements tokenize together.
-pub(super) fn markdown(source: &str) -> Result<String, String> {
+pub(super) fn prepare(source: &str) -> Result<Prepared, String> {
     if source.len() > MAX_BYTES {
         return Err("Notebook Markdown preview is limited to 256 KiB.".into());
     }
@@ -61,11 +66,15 @@ pub(super) fn markdown(source: &str) -> Result<String, String> {
                     };
                     converted.start(
                         &name,
-                        attribute(b"href"),
-                        attribute(b"src"),
-                        attribute(b"alt"),
-                        attribute(b"start"),
-                        tag.self_closing,
+                        Attributes {
+                            href: attribute(b"href"),
+                            src: attribute(b"src"),
+                            alt: attribute(b"alt"),
+                            start: attribute(b"start"),
+                            align: attribute(b"align"),
+                            style: attribute(b"style"),
+                            self_closing: tag.self_closing,
+                        },
                     )?;
                 }
                 Token::EndTag(tag) => converted.end(&String::from_utf8_lossy(&tag.name)),
@@ -82,7 +91,22 @@ pub(super) fn markdown(source: &str) -> Result<String, String> {
         converted.close(frame.end);
     }
     converted.check_size()?;
-    Ok(converted.output)
+    Ok(Prepared {
+        source: converted.output,
+        decorations: converted.decorations,
+    })
+}
+
+/// Presentation metadata describes only converted preview bytes; the notebook
+/// source is never annotated. Asset rewriting adjusts these ranges before use.
+pub(super) struct Prepared {
+    pub source: String,
+    pub decorations: Vec<Decoration>,
+}
+
+#[cfg(test)]
+fn markdown(source: &str) -> Result<String, String> {
+    prepare(source).map(|prepared| prepared.source)
 }
 
 enum End {
@@ -98,10 +122,24 @@ enum End {
     Row,
     Cell,
     CellBlock,
+    Heading {
+        start: usize,
+        level: u8,
+        align: egui::Align,
+    },
 }
 struct Frame {
     name: String,
     end: End,
+}
+struct Attributes {
+    href: String,
+    src: String,
+    alt: String,
+    start: String,
+    align: String,
+    style: String,
+    self_closing: bool,
 }
 #[derive(Default)]
 struct Table {
@@ -140,6 +178,7 @@ struct Converter {
     hidden: Option<(String, usize)>,
     tokens: usize,
     overflow: bool,
+    decorations: Vec<Decoration>,
 }
 impl Converter {
     /// Inline HTML in a Markdown table follows the same row constraints as
@@ -216,15 +255,16 @@ impl Converter {
             }
         }
     }
-    fn start(
-        &mut self,
-        name: &str,
-        href: String,
-        src: String,
-        alt: String,
-        start: String,
-        self_closing: bool,
-    ) -> Result<(), String> {
+    fn start(&mut self, name: &str, attributes: Attributes) -> Result<(), String> {
+        let Attributes {
+            href,
+            src,
+            alt,
+            start,
+            align,
+            style,
+            self_closing,
+        } = attributes;
         if let Some((hidden, depth)) = &mut self.hidden {
             if hidden == name && !self_closing {
                 *depth += 1;
@@ -272,7 +312,16 @@ impl Converter {
             }
             "hr" => {
                 self.separate(2);
+                let start = self.output.len();
                 self.raw("---\n\n");
+                if self.can_decorate()
+                    && let Some(kind) = presentation::rule(&style)
+                {
+                    self.decorations.push(Decoration {
+                        range: start..start + 3,
+                        kind,
+                    });
+                }
                 return Ok(());
             }
             "img" => {
@@ -299,11 +348,20 @@ impl Converter {
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 self.separate(2);
-                self.raw(&format!(
-                    "{} ",
-                    "#".repeat((name.as_bytes()[1] - b'0') as usize)
-                ));
-                End::Block
+                let start = self.output.len();
+                let level = name.as_bytes()[1] - b'0';
+                self.raw(&format!("{} ", "#".repeat(level as usize)));
+                if self.can_decorate()
+                    && let Some(align) = presentation::alignment(&align, &style)
+                {
+                    End::Heading {
+                        start,
+                        level,
+                        align,
+                    }
+                } else {
+                    End::Block
+                }
             }
             "p" | "div" | "section" | "article" | "header" | "footer" | "center" => {
                 if self.stack.last().is_some_and(|frame| frame.name == "p") {
@@ -395,6 +453,14 @@ impl Converter {
         });
         Ok(())
     }
+    fn can_decorate(&self) -> bool {
+        !self.in_table_cell()
+            && self.lists.is_empty()
+            && !self
+                .stack
+                .iter()
+                .any(|frame| matches!(frame.end, End::Heading { .. }))
+    }
     fn end(&mut self, name: &str) {
         if let Some((hidden, depth)) = &mut self.hidden {
             if hidden == name {
@@ -438,6 +504,17 @@ impl Converter {
             }
             End::Link(destination) => self.raw(&format!("]({destination})")),
             End::Block => self.separate(2),
+            End::Heading {
+                start,
+                level,
+                align,
+            } => {
+                self.decorations.push(Decoration {
+                    range: start..self.output.len(),
+                    kind: Kind::Heading { level, align },
+                });
+                self.separate(2);
+            }
             End::CellBlock => self.text(" "),
             End::Item => self.separate(1),
             End::List => {
