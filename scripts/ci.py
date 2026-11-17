@@ -236,7 +236,11 @@ SUITES = {
             for scenario in ("navigation", "previews")
         ],
         ui("images", RODE_IMAGES_UI_CASE="local"),
-        ui("markdown", RODE_MARKDOWN_UI_CASE="local"),
+        # Keep ordinary timing and forced batching required in every document run.
+        *[
+            ui("markdown", RODE_MARKDOWN_UI_CASE="local", RODE_TEST_SLOW_UI=batched)
+            for batched in ("0", "1")
+        ],
         ui("pdf", RODE_PDF_UI_CASE="local"),
         ui("marp"),
         ui("latex"),
@@ -257,7 +261,10 @@ SUITES = {
             for scenario in ("navigation", "previews")
         ],
         ui("images", RODE_IMAGES_UI_CASE="ssh"),
-        ui("markdown", RODE_MARKDOWN_UI_CASE="ssh"),
+        *[
+            ui("markdown", RODE_MARKDOWN_UI_CASE="ssh", RODE_TEST_SLOW_UI=batched)
+            for batched in ("0", "1")
+        ],
         ui("pdf", RODE_PDF_UI_CASE="ssh"),
         ui("marp", RODE_MARP_UI_REMOTE_ONLY="1"),
         ui("latex", RODE_LATEX_UI_REMOTE_ONLY="1"),

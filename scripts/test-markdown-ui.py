@@ -199,7 +199,15 @@ fn main() { println!("ready"); }
                 key("s", ("Control_L",))
                 expected += "cursor-kept\n"
                 wait_for(lambda: source.read_text() == expected, "Preview reset the source cursor")
-                key("r", ("Control_L", "Shift_L"))
+                # A busy desktop can batch a view switch with the next global
+                # shortcut. The preview must retain the queued palette command.
+                with delayed_input(process):
+                    key("r", ("Control_L", "Shift_L"))
+                    key("p", ("Control_L", "Shift_L"))
+                ui.control("command-palette-input", focused=True)
+                key("Escape")
+                ui.absent("command-palette-input")
+                ui.control("markdown-preview")
                 theme("carbon", ui=ui)
                 colors(window, label + "-carbon.png")
                 ui.resize(850, 560)

@@ -135,9 +135,10 @@ async fn roundtrip(port: u16) {
     .unwrap();
 }
 
+/// Socket identities owned by this test process, independent of TCP state/dump ordering.
 #[cfg(target_os = "linux")]
-fn local_forward_sockets(port: u16) -> usize {
-    let sockets: std::collections::HashSet<_> = std::fs::read_dir("/proc/self/fd")
+fn socket_inodes() -> std::collections::HashSet<String> {
+    std::fs::read_dir("/proc/self/fd")
         .unwrap()
         .filter_map(|entry| {
             let target = std::fs::read_link(entry.ok()?.path()).ok()?;
@@ -149,17 +150,84 @@ fn local_forward_sockets(port: u16) -> usize {
                     .to_owned(),
             )
         })
-        .collect();
-    let suffix = format!(":{port:04X}");
-    std::fs::read_to_string("/proc/self/net/tcp")
-        .unwrap()
+        .collect()
+}
+
+/// Match both endpoints and deduplicate identities rather than counting live-table rows.
+#[cfg(target_os = "linux")]
+fn connection_socket_inodes(
+    table: &str,
+    owned: &std::collections::HashSet<String>,
+    local: Option<&str>,
+    remote: &str,
+) -> std::collections::HashSet<String> {
+    table
         .lines()
         .skip(1)
-        .filter(|line| {
+        .filter_map(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
-            fields.len() > 9 && fields[2].ends_with(&suffix) && sockets.contains(fields[9])
+            (fields.len() > 9
+                && local.is_none_or(|local| fields[1] == local)
+                && fields[2] == remote
+                && owned.contains(fields[9]))
+            .then(|| fields[9].to_owned())
         })
-        .count()
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn tcp_address(endpoint: std::net::SocketAddr) -> String {
+    let std::net::SocketAddr::V4(endpoint) = endpoint else {
+        panic!("The relay fixture uses IPv4 loopback");
+    };
+    format!(
+        "{:08X}:{:04X}",
+        u32::from_ne_bytes(endpoint.ip().octets()),
+        endpoint.port()
+    )
+}
+
+/// The accepted peer identifies the worker's exact outbound connection, including its source port.
+#[cfg(target_os = "linux")]
+fn forward_socket_inodes(peer: &TcpStream) -> std::collections::HashSet<String> {
+    connection_socket_inodes(
+        &std::fs::read_to_string("/proc/self/net/tcp").unwrap(),
+        &socket_inodes(),
+        Some(&tcp_address(peer.peer_addr().unwrap())),
+        &tcp_address(peer.local_addr().unwrap()),
+    )
+}
+
+/// Include unexpected forwards to the fixture target so cleanup checks cannot miss extra sockets.
+#[cfg(target_os = "linux")]
+fn target_socket_inodes(target: &TcpListener) -> std::collections::HashSet<String> {
+    connection_socket_inodes(
+        &std::fs::read_to_string("/proc/self/net/tcp").unwrap(),
+        &socket_inodes(),
+        None,
+        &tcp_address(target.local_addr().unwrap()),
+    )
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn forward_socket_matching_ignores_duplicate_rows_and_other_connections() {
+    let owned = ["41", "42", "43"].into_iter().map(str::to_owned).collect();
+    let table = "sl local_address rem_address st tx_queue tr retrnsmt uid timeout inode
+0: 0100007F:C350 0100007F:9C40 01 0:0 0:0 0 0 0 41
+1: 0100007F:C350 0100007F:9C40 01 0:0 0:0 0 0 0 41
+2: 0100007F:C351 0100007F:9C40 01 0:0 0:0 0 0 0 42
+3: 0100007F:9C40 0100007F:C350 01 0:0 0:0 0 0 0 43
+4: 0100007F:C350 0100007F:9C40 01 0:0 0:0 0 0 0 99
+";
+    assert_eq!(
+        connection_socket_inodes(table, &owned, Some("0100007F:C350"), "0100007F:9C40"),
+        ["41".to_owned()].into_iter().collect()
+    );
+    assert_eq!(
+        connection_socket_inodes(table, &owned, None, "0100007F:9C40"),
+        ["41".to_owned(), "42".to_owned()].into_iter().collect()
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -215,6 +283,7 @@ async fn relay_disconnect_releases_forwards_even_when_local_peers_stay_open() {
         .unwrap();
     let mut clients = vec![];
     let mut local_peers = vec![];
+    let mut forwarded = std::collections::HashSet::new();
     for _ in 0..3 {
         until(|| store.list()[0].status == Status::Connected).await;
         clients.push(
@@ -229,7 +298,14 @@ async fn relay_disconnect_releases_forwards_even_when_local_peers_stay_open() {
                 .unwrap()
                 .0,
         );
-        assert_eq!(local_forward_sockets(ssh_port), 1);
+        let connection = forward_socket_inodes(local_peers.last().unwrap());
+        assert_eq!(
+            connection.len(),
+            1,
+            "Expected the new worker socket: {connection:?}"
+        );
+        assert_eq!(target_socket_inodes(&target), connection);
+        forwarded.extend(connection);
         let handles = std::mem::take(&mut *relay.handles.lock().unwrap());
         for handle in handles {
             handle
@@ -244,10 +320,16 @@ async fn relay_disconnect_releases_forwards_even_when_local_peers_stay_open() {
         // Quiet peers deliberately retain their write half after remote EOF.
         // Losing the parent SSH session must still release these local sockets
         // before another connection gets its fresh forwarding-slot budget.
-        until(|| local_forward_sockets(ssh_port) == 0).await;
+        // Track descriptor identities after capture; a changing TCP-table
+        // snapshot must not claim cleanup while this process still owns them.
+        until(|| {
+            forwarded.is_disjoint(&socket_inodes()) && target_socket_inodes(&target).is_empty()
+        })
+        .await;
     }
     store.stop(&id);
-    assert_eq!(local_forward_sockets(ssh_port), 0);
+    assert!(forwarded.is_disjoint(&socket_inodes()));
+    assert!(target_socket_inodes(&target).is_empty());
     drop(local_peers);
     drop(clients);
     task.abort();

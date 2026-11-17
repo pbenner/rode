@@ -1,9 +1,10 @@
 //! Ordered source input admission, separate from pane layout and keymap interpretation.
 //!
 //! Native TextEdit remains the buffer/undo engine. A command following source input
-//! waits until that widget applies the preceding batch. Keymap translation can add
-//! earlier replay events, so those always precede the command tail. Replay belongs
-//! to one document, style and viewport and never crosses a modal or focus barrier.
+//! waits until that widget applies the preceding batch. Explicit preview switches
+//! hand later commands to the same document's rendered view. Keymap translation can
+//! add earlier replay events, so those always precede the command tail. Replay belongs
+//! to one document, view, style and viewport and never crosses a modal or focus barrier.
 use super::*;
 use navigation::Style;
 mod control;
@@ -31,10 +32,10 @@ enum DocumentShortcut {
     Cycle(isize),
     New,
     Close,
-    MarkdownSource,
+    Markdown,
 }
 impl DocumentShortcut {
-    /// These commands establish a new source destination before translating later input.
+    /// These commands establish a document/view destination before translating later input.
     /// Emacs owns Ctrl+N/Ctrl+W as source edits; navigation already consumes Vim prefixes.
     fn take(ctx: &egui::Context, style: Style) -> Option<Self> {
         if let Some(direction) = tab_shortcut(ctx) {
@@ -45,6 +46,8 @@ impl DocumentShortcut {
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::W))
         {
             Some(Self::Close)
+        } else if Command::Markdown.consume(ctx) {
+            Some(Self::Markdown)
         } else {
             None
         }
@@ -107,10 +110,30 @@ impl EditorApp {
     }
 
     fn input_context(&self, ctx: &egui::Context) -> Context {
+        let source = self.source_input_scope(ctx);
         Context {
-            source: self.source_input_scope(ctx),
+            source,
+            target: source.or_else(|| self.preview_input_scope(ctx)),
             pane: self.navigation.active,
         }
+    }
+
+    /// Preview commands remain bound to their editor/document even without a
+    /// TextEdit widget. Other panes, dialogs and native windows cannot receive them.
+    fn preview_input_scope(&self, ctx: &egui::Context) -> Option<Scope> {
+        if !self.editors.contains(ctx.viewport_id())
+            || self.documents.viewport() != ctx.viewport_id()
+            || self.navigation.active != navigation::Pane::Editor
+            || !self.editing_allowed(ctx)
+            || Terminal::focused(ctx)
+        {
+            return None;
+        }
+        self.documents.active().and_then(|doc| {
+            (doc.markdown.as_ref().is_some_and(|preview| preview.showing)
+                || doc.marp.as_ref().is_some_and(|preview| preview.showing))
+            .then(|| Scope::preview(ctx, doc.id, self.navigation.bindings.style()))
+        })
     }
 
     /// Route global editor actions after honoring modal barriers and native terminal focus.
@@ -241,7 +264,7 @@ impl EditorApp {
             DocumentShortcut::take(ctx, self.navigation.bindings.style())
         } else {
             self.markdown_source_shortcut(ctx)
-                .then_some(DocumentShortcut::MarkdownSource)
+                .then_some(DocumentShortcut::Markdown)
         };
         if let Some(command) = document_command {
             // Earlier source operations have already crossed the native edit
@@ -253,13 +276,14 @@ impl EditorApp {
                 DocumentShortcut::Close => {
                     self.guarded_source_close(&frame, ctx);
                 }
-                DocumentShortcut::MarkdownSource => self.toggle_markdown(ctx),
+                DocumentShortcut::Markdown => self.toggle_markdown(ctx),
             }
             let next = self
                 .editing_allowed(ctx)
                 .then(|| self.documents.active_source())
                 .flatten()
-                .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()));
+                .map(|source| Scope::new(ctx, source.id, self.navigation.bindings.style()))
+                .or_else(|| self.preview_input_scope(ctx));
             self.editor.input.handoff(ctx, frame, next);
             self.finish_input(ctx);
             return;

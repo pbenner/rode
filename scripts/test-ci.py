@@ -77,6 +77,16 @@ class SelectionTests(unittest.TestCase):
         )
         self.assertEqual(ci.extended_suites(["scripts/test-notebooks-ui.py"]), ["runtimes"])
 
+    def test_markdown_requires_normal_and_batched_input_locally_and_over_ssh(self):
+        for suite, host in (("documents", "local"), ("remote-documents", "ssh")):
+            with self.subTest(suite=suite):
+                modes = [
+                    (overrides.get("RODE_MARKDOWN_UI_CASE"), overrides.get("RODE_TEST_SLOW_UI"))
+                    for command, overrides, _ in ci.SUITES[suite]
+                    if "scripts/test-markdown-ui.py" in command
+                ]
+                self.assertCountEqual(modes, [(host, "0"), (host, "1")])
+
     def test_all_previous_workflow_cases_remain_reachable(self):
         required = {
             "workspace",

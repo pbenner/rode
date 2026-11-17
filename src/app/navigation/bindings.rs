@@ -345,6 +345,18 @@ impl Chord {
     pub fn matches(&self, key: Key, modifiers: egui::Modifiers, leader: bool) -> bool {
         self.key == key && self.leader == leader && modifiers.matches_exact(self.modifiers)
     }
+
+    /// Show a validated sequence without exposing the internal Leader notation.
+    /// Direct bindings stay direct; the prefix comes from the applied profile.
+    fn label(self, prefix: &str, is_mac: bool) -> String {
+        let key = egui::KeyboardShortcut::new(self.modifiers, self.key)
+            .format(&egui::ModifierNames::NAMES, is_mac);
+        if self.leader {
+            format!("{prefix} → {key}")
+        } else {
+            key
+        }
+    }
 }
 fn parse(text: &str, allow_leader: bool) -> Result<Chord, String> {
     let parts: Vec<_> = text.trim().split('+').map(str::trim).collect();
@@ -663,19 +675,53 @@ impl Profile {
             .max_height((ui.ctx().content_rect().height() - 470.).clamp(90., 300.))
             .show(ui, |ui| {
                 let label_width = (ui.available_width() * 0.42).clamp(150., 230.);
-                for (index, (entry, spec)) in self.entries.iter_mut().zip(ACTIONS).enumerate() {
-                    let fill = if index % 2 == 0 {
+                let discovery = |action| matches!(action, Action::Hints | Action::Controls);
+                // Prioritize discovery in the form without reordering the
+                // canonical entries used by routing, validation and storage.
+                let order = [true, false].into_iter().flat_map(|first| {
+                    ACTIONS.iter().enumerate().filter_map(move |(index, spec)| {
+                        (discovery(spec.0) == first).then_some(index)
+                    })
+                });
+                for (row, index) in order.enumerate() {
+                    let spec = &ACTIONS[index];
+                    let entry = &mut self.entries[index];
+                    let keys = discovery(entry.action).then(|| {
+                        if entry.chords.is_empty() {
+                            "Unassigned".into()
+                        } else {
+                            entry.chords.iter().map(|chord| {
+                                chord.label(&self.leader_value, ui.ctx().os().is_mac())
+                            }).collect::<Vec<_>>().join(" / ")
+                        }
+                    });
+                    let fill = if row % 2 == 0 {
                         ui.visuals().faint_bg_color
                     } else {
                         egui::Color32::TRANSPARENT
                     };
-                    egui::Frame::new().fill(fill).show(ui, |ui| {
+                    ui.push_id(spec.1, |ui| egui::Frame::new().fill(fill).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [label_width, 24.],
-                                egui::Label::new(spec.2).truncate().halign(Align::Min),
-                            )
-                            .on_hover_text(spec.2);
+                            if let Some(keys) = &keys {
+                                let height = ui.text_style_height(&egui::TextStyle::Body)
+                                    + ui.text_style_height(&egui::TextStyle::Small)
+                                    + ui.spacing().item_spacing.y;
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(label_width, height),
+                                    Layout::top_down(Align::Min),
+                                    |ui| {
+                                        ui.set_min_width(label_width);
+                                        ui.add(egui::Label::new(spec.2).truncate()).on_hover_text(spec.2);
+                                        ui.add(egui::Label::new(RichText::new(keys).monospace().small().weak()).truncate())
+                                            .on_hover_text(format!("Currently applied for this profile: {keys}. Edit the binding and Apply to change it."));
+                                    },
+                                );
+                            } else {
+                                ui.add_sized(
+                                    [label_width, 24.],
+                                    egui::Label::new(spec.2).truncate().halign(Align::Min),
+                                ).on_hover_text(spec.2);
+                            }
                             let response = ui.add_sized(
                                 [ui.available_width(), 24.],
                                 crate::keyboard::named(
@@ -687,7 +733,7 @@ impl Profile {
                                 response.scroll_to_me(Some(Align::Center));
                             }
                         });
-                    });
+                    }));
                 }
             });
         if !self.error.is_empty() {
@@ -719,6 +765,109 @@ impl Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_bindings_are_visible_first_with_applied_sequences_and_unassigned_states() {
+        for case in ["default", "custom", "conflict", "emacs"] {
+            let mut storage = Storage::default();
+            if case == "custom" {
+                storage
+                    .0
+                    .insert("keyboard.leader".into(), "Ctrl+Shift+F12".into());
+                storage.0.insert("keyboard.hints".into(), "F8".into());
+                storage
+                    .0
+                    .insert("keyboard.controls".into(), "Leader+Ctrl+G".into());
+            } else if case == "conflict" {
+                storage.0.insert("keyboard.left".into(), "Leader+a".into());
+            }
+            let style = if case == "emacs" {
+                Style::Emacs
+            } else {
+                Style::Standard
+            };
+            let mut profile = Profile::load(Some(&storage), style);
+            let expected = match case {
+                "custom" => ["F8", "Ctrl+Shift+F12 → Ctrl+G"],
+                "conflict" => ["Unassigned", "Ctrl+Space → G"],
+                "emacs" => ["Ctrl+X → A", "Ctrl+X → G"],
+                _ => ["Ctrl+Space → A", "Ctrl+Space → G"],
+            };
+            let before: Vec<_> = profile
+                .commands()
+                .map(|(_, name, value)| (name.to_owned(), value.to_owned()))
+                .collect();
+            for width in [480., 900.] {
+                let ctx = egui::Context::default();
+                crate::theme::install(
+                    &ctx,
+                    crate::theme::Theme::builtin("atelier-dark")
+                        .unwrap()
+                        .palette,
+                );
+                let mut output = None;
+                for _ in 0..2 {
+                    output = Some(ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 560.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                profile.ui(ui, false);
+                            });
+                        },
+                    ));
+                }
+                let output = output.unwrap();
+                let bounds = |label: &str| {
+                    let (clip, rect) = output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.job.text == label
+                            {
+                                Some((
+                                    shape.clip_rect,
+                                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| panic!("Missing {label} for {case} at {width}"));
+                    assert!(
+                        clip.contains_rect(rect),
+                        "Clipped {label} for {case} at {width}"
+                    );
+                    rect
+                };
+                let hints = bounds("Show keyboard hints");
+                let controls = bounds("Find visible control");
+                assert!(hints.top() < controls.top());
+                for sequence in expected {
+                    bounds(sequence);
+                }
+                assert_eq!(
+                    profile.entries[0].action,
+                    Action::Left,
+                    "Presentation must not reorder persisted entries"
+                );
+                assert_eq!(
+                    profile
+                        .commands()
+                        .map(|(_, name, value)| (name.to_owned(), value.to_owned()))
+                        .collect::<Vec<_>>(),
+                    before
+                );
+            }
+        }
+    }
+
     #[derive(Default)]
     /// In-memory preference fixture for profile validation and independent shortcut-persistence tests.
     pub(super) struct Storage(pub(super) std::collections::BTreeMap<String, String>);

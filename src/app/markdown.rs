@@ -647,6 +647,7 @@ impl EditorApp {
         if focus || response.clicked() {
             response.request_focus();
         }
+        ui_probe::button(ui, "markdown-preview", &response);
         let preview = self
             .documents
             .active_mut()

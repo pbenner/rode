@@ -365,6 +365,80 @@ fn save_after_batched_source_edits_uses_the_text_applied_by_the_native_editor() 
 }
 
 #[test]
+fn markdown_preview_keeps_following_commands_within_their_admitted_context() {
+    for edit_first in [false, true] {
+        for barrier in ["none", "pane", "document", "style", "modal", "focus"] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_file();
+            app.documents[0].acknowledge_save("README.md".into(), "".into(), "revision".into());
+            frame(&mut app, &ctx, vec![]);
+            frame(&mut app, &ctx, vec![]);
+            let mut events = vec![];
+            if edit_first {
+                events.push(egui::Event::Text("# Source\n".into()));
+            }
+            events.extend([
+                key(Key::R, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+                key(Key::P, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+            ]);
+            frame(&mut app, &ctx, events);
+            for _ in 0..4 {
+                if app.documents[0].markdown.as_ref().unwrap().showing {
+                    break;
+                }
+                frame(&mut app, &ctx, vec![]);
+            }
+            assert!(app.documents[0].markdown.as_ref().unwrap().showing);
+            assert!(app.editor.input.pending());
+            // Intervene after the preview rendered, before its queued command
+            // is replayed. Only this same document/view/style/pane may accept it.
+            match barrier {
+                "pane" => app.navigation.active = navigation::Pane::Explorer,
+                "document" => app.new_file(),
+                "style" => app.navigation.bindings.select_style(Style::Emacs),
+                "modal" => app.set_dialog(Dialog::Shortcuts),
+                "focus" => {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            focused: false,
+                            ..Default::default()
+                        },
+                        |ctx| app.route_input(ctx),
+                    );
+                }
+                _ => {}
+            }
+            for _ in 0..4 {
+                frame(&mut app, &ctx, vec![]);
+            }
+            assert_eq!(
+                app.documents[0].text,
+                if edit_first { "# Source\n" } else { "" }
+            );
+            if barrier == "none" {
+                assert!(
+                    app.dialog == Dialog::Commands,
+                    "The preview discarded the palette shortcut"
+                );
+            } else if barrier == "modal" {
+                assert!(
+                    app.dialog == Dialog::Shortcuts,
+                    "A queued shortcut replaced the new modal"
+                );
+            } else {
+                assert!(
+                    app.dialog == Dialog::None,
+                    "Replay crossed the {barrier} barrier"
+                );
+            }
+            assert!(!app.editor.input.pending());
+        }
+    }
+}
+
+#[test]
 fn markdown_return_undo_and_save_preserve_native_input_order() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("README.md");

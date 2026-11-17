@@ -157,7 +157,9 @@ impl EditorApp {
                 if self.notebook_ui(ui, ctx) {
                     return;
                 }
+                let preview_document = self.documents.active().unwrap().id;
                 if self.markdown_ui(ui, ctx) {
+                    self.editor.input.after_preview(ctx, preview_document);
                     return;
                 }
                 self.latex_toolbar(ui, ctx);

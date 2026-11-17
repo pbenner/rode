@@ -166,6 +166,13 @@ or **Space** then uses that control's normal behavior; choosing a hint does not
 execute the action. **Backspace** edits a partial hint and **Escape** cancels.
 Hint labels remain assigned to the same controls while the mode is open.
 
+In **View → Keyboard shortcuts…**, **Show keyboard hints** and **Find visible
+control** are the first two bindings. Their applied key sequences appear below
+the action names, for example **Ctrl+Space → A** and **Ctrl+Space → G** with the
+Standard defaults. These labels follow your configured leader and action keys;
+**Unassigned** means the action has no binding. Edit the field beside an action
+and choose **Apply bindings** to change it.
+
 Use leader **G**, or **Find visible control** in the command palette, to search
 the current window's controls by name. Up/Down chooses a result, Enter focuses
 it, and Escape returns to the previous control. This searches rendered controls,

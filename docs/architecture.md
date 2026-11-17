@@ -437,11 +437,12 @@ was already clean; a failed Save As must remain visible for recovery.
 `app/input.rs` adapts the production routing entry point for both root and detached
 windows. Its private `input/control.rs` controller owns replay and keymap state;
 adapters cannot mutate its queue or interpreter directly. Each frame receives a
-source/pane context and a navigation command-rules projection, rather than the
+source/preview/pane context and a navigation command-rules projection, rather than the
 navigation owner with its layout/focus caches. A frame token retains the ordered
 command tail until completion or an explicit document handoff. The document owner
-publishes only eligible source ID, text and display path for interpretation, keeping
-preview selection policy out of input routing.
+publishes only eligible source ID, text and display path for interpretation. The
+adapter captures preview identity separately without exposing mutable view state
+to the router.
 
 `navigation` owns pane focus/bindings and emits typed
 navigation actions; its editing interpreter translates keymaps into native
@@ -451,11 +452,15 @@ typed command dispatcher. The adapter applies those actions through domain guard
 Commands following source input wait for that source widget's application
 acknowledgement. Keymap-generated replay precedes the command tail, so a Save
 cannot snapshot text from before earlier edits in the same native frame. The
-bounded queue captures document, style and viewport identity, including recognized
+bounded queue captures document, view, style and viewport identity, including recognized
 native clipboard prefixes. Modal, document, style and focus changes invalidate
 replay. Explicit tab, new-file and clean-close shortcuts finish earlier edits on the old
 document, then admit following input only after the destination editor establishes its
 focus and cursor state. Unrelated context changes discard the old source batch.
+Explicit Markdown/Marp preview switches also transfer subsequent commands to
+the same document's preview after it renders; linked images and slide rendering
+need not finish before global shortcuts become available. Preview replay cannot
+edit the hidden source or cross a pane, dialog, document, style or window barrier.
 An explicit source Close shortcut supplies its opaque routing frame as proof that
 earlier edits were acknowledged, allowing following input to reach the next tab.
 Other menu/picker ownership actions must wait for the current native edit batch.

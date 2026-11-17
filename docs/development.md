@@ -834,6 +834,17 @@ The SSH fixture also opens two independent masters for the same alias and checks
 
 Markdown checks use `cargo test --lib markdown` for unsaved-buffer rendering, source saves, source-path resolution, input limits, image URI isolation, stale-result rejection, and texture-budget release. The production input regression batches Preview → Edit, Undo and Save in one native frame and verifies both the source buffer and saved bytes, so a save overtaking undo cannot masquerade as lost history. Native local/SSH screenshots and logs go to `target/markdown-ui/`; these checks also exercise actual sandboxed image reads, view switching, undo/redo, cursor preservation, themes, and find returning to source. Run `scripts/test-markdown-ui.py` with `RODE_TEST_SLOW_UI=1` on a private display to queue the same transition/undo/save sequence while the owned GUI is paused.
 
+The input regression also batches Edit → Preview followed immediately by the
+command-palette shortcut, with and without preceding source edits. It verifies
+that the preview retains the command and that pane, document, style, modal and
+native-focus changes cancel stale replay. The native Markdown fixture exercises
+the same preview/palette sequence locally and over SSH; `RODE_TEST_SLOW_UI=1`
+queues both shortcuts while the owned GUI is paused. Preview readiness is
+observed before the subsequent theme change, without retrying keyboard input.
+The `documents` and `remote-documents` CI suites each require both normal and
+batched Markdown cases, explicitly setting `RODE_TEST_SLOW_UI=0` and `1` so an
+inherited stress setting cannot silently remove either mode's coverage.
+
 ## Theme artwork checks
 
 Run `python3 scripts/rust_tests.py --locked --profile ci -p rode --lib theme::artwork`

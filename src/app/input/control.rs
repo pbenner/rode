@@ -5,13 +5,14 @@ use eframe::egui;
 use navigation::Style;
 use std::collections::VecDeque;
 
-/// Identity of a native source-input stream: document, editor viewport and keyboard style. Replay
-/// cannot move between unequal scopes.
+/// Identity of a document input stream: document, view, editor viewport and keyboard style.
+/// Only explicit view commands may transfer replay between source and preview scopes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) struct Scope {
     pub document: u64,
     pub style: navigation::Style,
     viewport: egui::ViewportId,
+    preview: bool,
 }
 impl Scope {
     /// Capture a source stream’s document/style identity and current native viewport.
@@ -20,19 +21,35 @@ impl Scope {
             document,
             style,
             viewport: ctx.viewport_id(),
+            preview: false,
         }
     }
-    /// Whether this stream’s viewport and document widget currently own native keyboard focus.
+    /// Commands following a view switch target its same-document preview, not the hidden source.
+    pub fn preview(ctx: &egui::Context, document: u64, style: navigation::Style) -> Self {
+        Self {
+            preview: true,
+            ..Self::new(ctx, document, style)
+        }
+    }
+    /// Whether the source widget, or an admitted preview's native window, owns keyboard focus.
     pub(super) fn focused(self, ctx: &egui::Context) -> bool {
         self.viewport == ctx.viewport_id()
-            && ctx.memory(|m| m.has_focus(egui::Id::new(("document", self.document))))
+            && if self.preview {
+                // The adapter admits a preview only while its editor pane owns
+                // the focused window, with no modal or editable source target.
+                ctx.input(|input| input.focused)
+            } else {
+                ctx.memory(|m| m.has_focus(egui::Id::new(("document", self.document))))
+            }
     }
 }
 
-/// Read-only admission authority for one viewport's current source and pane.
+/// Read-only admission authority for one viewport's source, preview and pane.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct Context {
     pub source: Option<Scope>,
+    /// Source or preview allowed to receive this window's queued document input.
+    pub target: Option<Scope>,
     pub pane: navigation::Pane,
 }
 
@@ -64,7 +81,7 @@ pub(in crate::app) struct Router {
     rendered: Option<(Scope, u64)>,
 }
 
-/// Bounded native events waiting for an acknowledged source application boundary.
+/// Bounded native events waiting for an acknowledged source or preview boundary.
 #[derive(Default)]
 pub(in crate::app) struct Replay {
     scope: Option<Scope>,
@@ -74,7 +91,7 @@ pub(in crate::app) struct Replay {
     notice: Option<String>,
 }
 impl Replay {
-    /// Acknowledge that the matching document widget rendered this source scope, allowing deferred
+    /// Acknowledge that the matching document view rendered this scope, allowing deferred
     /// events to replay on a later pass.
     pub fn acknowledge(&mut self, ctx: &egui::Context, id: u64) {
         if self
@@ -120,7 +137,7 @@ impl Replay {
             );
         }
     }
-    /// Replay only into the same focused source after its earlier batch was acknowledged. Other
+    /// Replay only into the same admitted view after its earlier batch was acknowledged. Other
     /// viewports cannot consume or cancel this queue.
     pub fn replay(&mut self, ctx: &egui::Context, scope: Option<Scope>) {
         // A tool viewport cannot consume or cancel another editor's queue.
@@ -163,13 +180,13 @@ impl Router {
             .queue
             .scope
             .is_none_or(|scope| scope.viewport == ctx.viewport_id())
-            && self.queue.scope != context.source;
+            && self.queue.scope != context.target;
         let rules = if reset_prefix {
             rules.without_prefix()
         } else {
             rules
         };
-        self.queue.replay(ctx, context.source);
+        self.queue.replay(ctx, context.target);
         let tail = context
             .source
             .map(|scope| self.fence(ctx, scope, rules))
@@ -183,7 +200,7 @@ impl Router {
 
     /// Unrelated commands cannot authorize the old source batch in a new context.
     pub fn accepts(&mut self, ctx: &egui::Context, frame: &Frame, current: Context) -> bool {
-        if frame.context.source.is_none() || frame.context == current {
+        if frame.context.target.is_none() || frame.context == current {
             return true;
         }
         self.queue.clear();
@@ -204,8 +221,8 @@ impl Router {
         false
     }
 
-    /// An explicit document command transfers later events only after the new
-    /// native widget acknowledges its focus/cursor state. Modal targets discard them.
+    /// An explicit document/view command transfers later events only after its
+    /// destination renders. Modal targets discard them; preview targets never edit source.
     pub fn handoff(&mut self, ctx: &egui::Context, frame: Frame, next: Option<Scope>) {
         self.editing.cancel_context();
         self.queue.clear();
@@ -233,7 +250,8 @@ impl Router {
     pub fn source_pending(&self, ctx: &egui::Context) -> bool {
         self.pending()
             || self.queue.scope.is_some_and(|scope| {
-                scope.focused(ctx)
+                !scope.preview
+                    && scope.focused(ctx)
                     && self.rendered != Some((scope, ctx.cumulative_pass_nr()))
                     && ctx.input(|input| {
                         input.events.iter().any(|event| {
@@ -334,6 +352,13 @@ impl Router {
             .filter(|scope| scope.document == id && scope.viewport == ui.ctx().viewport_id())
         {
             self.rendered = Some((scope, ui.ctx().cumulative_pass_nr()));
+        }
+    }
+    /// A rendered preview releases commands admitted by an explicit view switch.
+    /// Image loading need not finish before global shortcuts become available.
+    pub fn after_preview(&mut self, ctx: &egui::Context, id: u64) {
+        if self.queue.scope.is_some_and(|scope| scope.preview) {
+            self.queue.acknowledge(ctx, id);
         }
     }
     /// Fence commands behind earlier native edits/cursor movement. Translation may
