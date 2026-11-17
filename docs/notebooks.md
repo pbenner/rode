@@ -4,13 +4,17 @@ Open `.ipynb` files from the explorer or **Ctrl+P**, or choose **File → New Ju
 
 ## Cells and outputs
 
-Code cells use the independent syntax theme and the kernel's language. Markdown cells have **Edit / Preview** controls, including native tables, lists and embedded PNG/JPEG attachments. Inline image files use the current local/SSH host and sandbox grants. HTTP/file loaders and HTML execution are disabled.
+Code cells use the independent syntax theme and the kernel's language. Markdown previews use a compact, unboxed layout with restrained headings so text cells can structure the notebook. **Edit** opens the source; **Preview** or **Shift+Enter** renders it again. The small **Cell…** menu holds the type, move, delete and insert-below controls. Code and Markdown cells can also be inserted from the notebook toolbar.
+
+Markdown cells support native headings, paragraphs, lists, tables, emphasis, links, images and embedded PNG/JPEG attachments. They can mix Markdown with static HTML equivalents: `h1`–`h6`, `p`/`div`, `br`/`hr`, `strong`/`b`, `em`/`i`, lists, links, images, code and basic tables. HTML character references are decoded, while fenced Markdown code stays literal. Line breaks and paragraphs within table cells are folded into spaces to keep each table row intact. Rendering leaves the original cell source and metadata intact.
+
+Inline image files use the current local/SSH host and sandbox grants; HTML images go through the same bounded loader as Markdown images. External image URLs are not loaded automatically. HTML is presented through native Markdown semantics: CSS layout, scripts, embedded web frames and interactive widgets are not rendered. The JSON/source views preserve unsupported markup.
 
 Select a cell by clicking its header or editor. Use **+ Code cell**, **+ Markdown cell**, the cell type selector, **Up / Down** and **Delete** to arrange cells. Cell text keeps its editor undo/cursor state through tab switches and moves. Structural changes do not currently have a separate undo history. **Ctrl+F** searches cell sources and selects the next match.
 
 Editable cells grow and shrink to fit their source, including wrapped lines. Scroll the notebook to read long cells; cell editors have no separate scroll area.
 
-Saved and live outputs show stdout/stderr, tracebacks, text representations, PNGs and JPEGs. Common plots work through inline Matplotlib output. Unsupported MIME bundles, HTML, widget state, attachments, metadata and unfamiliar fields are preserved in the file even when they cannot be rendered. Live display updates and clear-output messages are supported; notebooks are never executed merely by opening them.
+Saved and live outputs show stdout/stderr, tracebacks, text representations, PNGs and JPEGs. Common plots work through inline Matplotlib output. Unsupported MIME bundles, HTML output bundles, widget state, attachments, metadata and unfamiliar fields are preserved in the file even when they cannot be rendered. Live display updates and clear-output messages are supported; notebooks are never executed merely by opening them.
 
 **Ctrl+S / Save As** use the normal atomic, revision-checked local/SSH saves. Cell edits and execution outputs mark the notebook dirty; tab close/project changes retain the unsaved-edit guard. An external change prevents overwriting it. A save records its submitted snapshot and leaves changes arriving during that save dirty. The notebook never goes through whole-file text formatting or code-run commands.
 
@@ -18,7 +22,7 @@ Background refreshes after Git operations or agent replies preserve the notebook
 
 Use **Notebook… → Edit JSON source** for direct metadata or unsupported-cell editing. Switching to JSON stops this notebook's kernel; switching back reparses the current unsaved buffer. Invalid/unsupported notebooks remain available as ordinary JSON text, with an explanation. Their contents are never replaced by an empty notebook. The cell renderer supports **nbformat 4** and preserves untouched string/list source representations and unknown JSON fields.
 
-Use **+ Code cell** or **+ Markdown cell** in the toolbar to insert below the selected cell. The same buttons after each cell insert at that position, including at the end of the notebook. New cells receive keyboard focus immediately.
+Use **+ Code cell** or **+ Markdown cell** in the toolbar to insert below the selected cell. The buttons after source cells and the **Cell…** menu on Markdown previews insert at that position, including at the end of the notebook. New cells receive keyboard focus immediately.
 
 ## Running cells
 

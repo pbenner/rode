@@ -13,6 +13,8 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event as MdEvent, Options, Parser, Tag, TagEnd};
 use std::sync::{Mutex, atomic::AtomicU64};
 
+mod html;
+
 const MAX_BYTES: usize = 256 * 1024;
 const MAX_EVENTS: usize = 12_000;
 const MAX_IMAGES: usize = 16;
@@ -100,6 +102,7 @@ pub(super) struct Preview {
     error: Option<String>,
     warnings: Vec<String>,
     appearance: Option<(String, u32, [u32; 2])>,
+    notebook: bool,
 }
 impl Preview {
     /// Create an inert preview backed by the application's scoped image loader.
@@ -116,7 +119,15 @@ impl Preview {
             error: None,
             warnings: vec![],
             appearance: None,
+            notebook: false,
         }
+    }
+    /// Notebook text cells accept a bounded semantic HTML subset while document
+    /// previews retain their original literal-HTML behavior.
+    pub(in crate::app) fn new_notebook(images: Arc<Images>) -> Self {
+        let mut preview = Self::new(images);
+        preview.notebook = true;
+        preview
     }
     /// Cancel pending asset reads, release owned loader URIs and reset rendered source/cache state.
     fn clear(&mut self) {
@@ -163,7 +174,12 @@ impl Preview {
         self.key = Some((version, path.into()));
         self.token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
         self.cancelled = Arc::new(AtomicBool::new(false));
-        match prepare_images(text, path, self.token, embedded) {
+        let prepared = if self.notebook {
+            html::markdown(text).and_then(|text| prepare_images(&text, path, self.token, embedded))
+        } else {
+            prepare_images(text, path, self.token, embedded)
+        };
+        match prepared {
             Ok(prepared) => {
                 self.source = prepared.source;
                 for link in prepared.links {
@@ -232,12 +248,25 @@ impl Preview {
             ui.colored_label(palette.error, error);
             return None;
         }
-        ui.style_mut()
-            .text_styles
-            .insert(egui::TextStyle::Body, FontId::proportional(font_size));
-        CommonMarkViewer::new()
-            .explicit_image_uri_scheme(true)
-            .show(ui, &mut self.cache, &self.source);
+        // Cell typography is local: a text heading must not enlarge the next
+        // cell's controls or the notebook toolbar. Keep a restrained hierarchy.
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 3.;
+            for (style, font) in [
+                (egui::TextStyle::Body, FontId::proportional(font_size)),
+                (
+                    egui::TextStyle::Heading,
+                    FontId::proportional(font_size * 1.5),
+                ),
+                (egui::TextStyle::Monospace, FontId::monospace(font_size)),
+            ] {
+                ui.style_mut().text_styles.insert(style, font);
+            }
+            CommonMarkViewer::new()
+                .indentation_spaces(2)
+                .explicit_image_uri_scheme(true)
+                .show(ui, &mut self.cache, &self.source);
+        });
         self.cache
             .link_hooks()
             .iter()
@@ -400,6 +429,11 @@ fn prepare_images(
                     .collect::<String>();
                 let target = embedded
                     .get(dest_url.as_ref())
+                    .or_else(|| {
+                        decode_path(&dest_url)
+                            .ok()
+                            .and_then(|decoded| embedded.get(&decoded))
+                    })
                     .cloned()
                     .map(Ok)
                     .unwrap_or_else(|| {
@@ -799,6 +833,32 @@ mod tests {
         .collect::<Vec<_>>()
         .join("\n")
     }
+    #[test]
+    fn notebook_html_assets_use_the_scoped_reader_without_changing_document_html() {
+        let source = "<h2>Notebook &amp; HTML</h2><p>Text with <b>emphasis</b>.</p><img src='attachment:plot one.png' alt='Plot'><img src='assets/figure.png'><img src='https://example.org/tracker.png'>";
+        let images = Arc::new(Images::default());
+        let mut notebook = Preview::new_notebook(images.clone());
+        let embedded =
+            HashMap::from([("attachment:plot one.png".into(), "owned-attachment".into())]);
+        let requests = notebook.prepare_embedded(1, "/project/notebook.ipynb", source, &embedded);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].1, "owned-attachment");
+        assert_eq!(requests[1].1, "/project/assets/figure.png");
+        assert!(!notebook.source.contains("<h2>"));
+        assert!(!notebook.warnings.is_empty());
+        for event in Parser::new_ext(&notebook.source, options()) {
+            if let MdEvent::Start(Tag::Image { dest_url, .. }) = event {
+                assert!(dest_url.starts_with(SCHEME));
+            }
+        }
+        let mut document = Preview::new(images);
+        document.prepare(1, "/project/README.md", source);
+        assert_eq!(
+            document.source, source,
+            "Standalone document HTML remains literal"
+        );
+    }
+
     #[test]
     fn images_are_rewritten_to_private_uris_and_paths_stay_on_the_document_host() {
         let source = "# Heading\n\n![quoted \\[alt\\]](assets/a%20🦀.png)\n\n![reference][pic]\n\n[pic]: assets/a%20🦀.png\n\n![web](https://example.org/tracker.png)\n\n[code](../main.rs) [web](https://example.org/) [blocked](javascript:alert(1))\n\n<script>alert(1)</script>";

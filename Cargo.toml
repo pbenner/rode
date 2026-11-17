@@ -52,6 +52,7 @@ hmac = "0.12"
 sha1 = "0.10"
 zeroize = "1"
 socket2 = "0.6"
+html5gum = { version = "0.8.4", default-features = false }
 
 [dev-dependencies]
 rand = "0.10"

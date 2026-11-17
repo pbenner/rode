@@ -351,16 +351,17 @@ impl EditorApp {
                     let active = view.active == uid;
                     let cell = &mut view.book.cells[at];
                     let state = view.cells.get_mut(&uid).unwrap();
+                    let reading = cell.kind() == "markdown" && state.previewing;
                     let frame = egui::Frame::new()
-                        .fill(if active { palette.raised } else { palette.panel })
-                        .stroke(Stroke::new(1_f32, if active { palette.accent } else { palette.border }))
-                        .inner_margin(8.)
-                        .outer_margin(egui::Margin::symmetric(10, 5));
+                        .fill(if reading { palette.background } else if active { palette.raised } else { palette.panel })
+                        .stroke(if reading { Stroke::NONE } else { Stroke::new(1_f32, if active { palette.accent } else { palette.border }) })
+                        .inner_margin(egui::Margin::symmetric(8, if reading { 3 } else { 8 }))
+                        .outer_margin(egui::Margin::symmetric(10, if reading { 2 } else { 5 }));
                     frame.show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         ui.push_id(("notebook-cell", id, uid), |ui| {
-                            cell_toolbar(ui, |ui| {
-                                if ui.add(crate::keyboard::Button::new(format!("Cell {}", at + 1))
+                            let mut controls = |ui: &mut egui::Ui| {
+                                if !reading && ui.add(crate::keyboard::Button::new(format!("Cell {}", at + 1))
                                     .selected(active).frame(false).min_size(egui::vec2(52., 28.))).clicked()
                                 {
                                     view.active = uid;
@@ -382,7 +383,7 @@ impl EditorApp {
                                         view.active = uid;
                                         action = Some(Action::Run(false));
                                     }
-                                } else if cell.kind() == "markdown" {
+                                } else if cell.kind() == "markdown" && !reading {
                                     if ui.add(crate::keyboard::Button::new(if state.previewing { "Edit" } else { "Preview" })
                                         .min_size(egui::vec2(68., 28.))).clicked()
                                     {
@@ -390,7 +391,7 @@ impl EditorApp {
                                         view.active = uid;
                                         view.focus = Some(uid);
                                     }
-                                } else {
+                                } else if !reading {
                                     ui.allocate_space(egui::vec2(68., 28.));
                                 }
                                 if ui.add_enabled(at > 0, crate::keyboard::Button::new("Up"))
@@ -410,10 +411,34 @@ impl EditorApp {
                                             .map(|n| n.to_string()).unwrap_or_default())
                                     })).on_hover_text("Execution count");
                                 }
-                            });
-                            ui.add_space(8.);
+                                if reading {
+                                    ui.separator();
+                                    if crate::keyboard::button(ui, "+ Code cell").clicked() {
+                                        action = Some(Action::Add("code", at + 1));
+                                        ui.close();
+                                    }
+                                    let insert = crate::keyboard::button(ui, "+ Markdown cell");
+                                    ui_probe::button(ui, &format!("notebook-insert-markdown:{at}"), &insert);
+                                    if insert.clicked() {
+                                        action = Some(Action::Add("markdown", at + 1));
+                                        ui.close();
+                                    }
+                                }
+                            };
+                            let (select, edit) = if reading {
+                                markdown_header(ui, uid, at + 1, active, &mut controls)
+                            } else {
+                                cell_toolbar(ui, &mut controls);
+                                (false, false)
+                            };
+                            if select || edit {
+                                view.active = uid;
+                                view.focus = Some(uid);
+                            }
+                            if edit { state.previewing = false; }
+                            ui.add_space(if reading { 2. } else { 8. });
                             if cell.kind() == "markdown" && state.previewing {
-                                let preview = state.preview.get_or_insert_with(|| markdown::Preview::new(view.images.clone()));
+                                let preview = state.preview.get_or_insert_with(|| markdown::Preview::new_notebook(view.images.clone()));
                                 let mut embedded = HashMap::new();
                                 let mut attachment_data = HashMap::new();
                                 if let Some(attachments) = cell.data["attachments"].as_object() {
@@ -499,7 +524,7 @@ impl EditorApp {
                             }
                         });
                     });
-                    ui.push_id(("insert-cell", id, uid), |ui| {
+                    if !reading { ui.push_id(("insert-cell", id, uid), |ui| {
                         egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 18, top: 4, bottom: 8 })
                             .show(ui, |ui| {
                                 cell_toolbar(ui, |ui| {
@@ -511,8 +536,11 @@ impl EditorApp {
                                     { action = Some(Action::Add("markdown", at + 1)); }
                                 });
                             });
-                    });
-                    state.height = (ui.cursor().top() - top).max(60.);
+                    }); }
+                    // Reading cells can be shorter than a source editor. Their
+                    // cached extent must match the allocated height so repeated
+                    // short sections do not accumulate scroll/reveal drift.
+                    state.height = (ui.cursor().top() - top).max(if reading { 1. } else { 60. });
                     y += state.height;
                 }
             });
@@ -642,6 +670,46 @@ impl EditorApp {
         }
         !source
     }
+}
+
+/// Return selection/edit intents from a compact reading header. The popup reuses
+/// the source toolbar's actions and keeps full-sized controls independently of
+/// the header's text-based height.
+fn markdown_header(
+    ui: &mut egui::Ui,
+    uid: u64,
+    number: usize,
+    active: bool,
+    controls: impl FnOnce(&mut egui::Ui),
+) -> (bool, bool) {
+    let control_height = ui.spacing().interact_size.y;
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = ui.text_style_height(&egui::TextStyle::Small) + 4.;
+        ui.horizontal(|ui| {
+            let select = ui
+                .add(
+                    crate::keyboard::Button::new(format!("Cell {number}"))
+                        .small()
+                        .frame(false)
+                        .selected(active),
+                )
+                .clicked();
+            let edit = ui.add(crate::keyboard::Button::new("Edit").small().frame(false));
+            ui_probe::button(ui, &format!("notebook-markdown-edit:{uid}"), &edit);
+            let (menu, _) = crate::keyboard::MenuButton::from_button(
+                egui::Button::new("Cell…").small().frame(false),
+                "Markdown cell actions",
+            )
+            .ui(ui, |ui| {
+                ui.spacing_mut().interact_size.y = control_height;
+                controls(ui);
+            });
+            ui_probe::button(ui, &format!("notebook-markdown-menu:{uid}"), &menu);
+            (select, edit.clicked())
+        })
+        .inner
+    })
+    .inner
 }
 
 fn cell_toolbar(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {

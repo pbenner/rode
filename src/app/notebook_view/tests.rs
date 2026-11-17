@@ -3,6 +3,112 @@
 use super::*;
 
 #[test]
+fn markdown_previews_are_compact_and_keep_html_source_through_editing() {
+    for theme in ["atelier-dark", "atelier-light"] {
+        for width in [650., 1280.] {
+            for scale in [1., 1.25, 2.] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(
+                    &cc,
+                    Startup {
+                        theme: Some(theme.into()),
+                        ..Default::default()
+                    },
+                );
+                ctx.set_pixels_per_point(scale);
+                app.new_notebook();
+                let view = app.documents[0].notebook.as_mut().unwrap();
+                let source = "## A section\n\n<p>A short <strong>HTML paragraph</strong>.</p>";
+                view.book.cells[0].change_kind("markdown");
+                view.book.cells[0].set_source(source.into());
+                view.focus = None;
+                let uid = view.book.cells[0].uid;
+                let mut next = Cell::new("code");
+                next.set_source("answer = 42".into());
+                view.book.cells.push(next);
+                let original = view.book.serialize().unwrap();
+                let frame = |app: &mut EditorApp, events| {
+                    ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 800.),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                app.notebook_ui(ui, ctx);
+                            });
+                        },
+                    )
+                };
+                frame(&mut app, vec![]);
+                let output = frame(&mut app, vec![]);
+                let view = app.documents[0].notebook.as_ref().unwrap();
+                assert!(
+                    view.cells[&uid].height < 125.,
+                    "{theme}/{width}/{scale}: {}",
+                    view.cells[&uid].height
+                );
+                assert_eq!(view.book.cells[0].source, source);
+                assert_eq!(view.book.serialize().unwrap(), original);
+                let text: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    text.iter()
+                        .any(|text| text.galley.text() == "HTML paragraph")
+                );
+                assert!(
+                    !text
+                        .iter()
+                        .any(|text| text.galley.text().contains("<strong>"))
+                );
+                let edit = text
+                    .iter()
+                    .find(|text| text.galley.text() == "Edit")
+                    .unwrap();
+                let point = edit.pos + edit.galley.size() / 2.;
+                frame(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+                frame(&mut app, vec![]);
+                let view = app.documents[0].notebook.as_ref().unwrap();
+                assert!(!view.cells[&uid].previewing);
+                assert_eq!(view.book.cells[0].source, source);
+                assert_eq!(view.book.serialize().unwrap(), original);
+            }
+        }
+    }
+}
+
+#[test]
 fn cell_sources_expand_to_fit_and_wheel_scrolls_the_notebook() {
     let multiline = (0..80)
         .map(|line| format!("# Source line {line}\n"))
