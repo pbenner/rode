@@ -274,6 +274,11 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
                 terminal_focus(ui)
             assert_pane_outline(ui, "Terminal", "terminal-focus-compact.png")
             screenshot(window, "minimum-terminal.png")
+            compact_terminal = next(
+                button["rect"]
+                for button in ui.layout()["buttons"]
+                if button["name"].startswith("terminal-input:")
+            )
             text("echo layout_terminal_ok > terminal.ok\n")
             wait_for(
                 lambda: (root / "terminal.ok").exists(),
@@ -315,7 +320,28 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
                 "Terminal input stopped working after expanding to full height",
             )
             rows, _ = map(int, (root / "terminal.size").read_text().split())
-            assert rows >= 40, f"Terminal height is still capped: {rows} rows"
+            controls = {button["name"]: button["rect"] for button in ui.layout()["buttons"]}
+            terminal = next(
+                rect for name, rect in controls.items() if name.startswith("terminal-input:")
+            )
+            cell = controls["terminal-first-cell"]
+            height = terminal[3] - terminal[1]
+            row_height = cell[3] - cell[1]
+            # A different font can fit fewer rows without losing usable space.
+            # Check viewport growth and the PTY's agreement with painted rows,
+            # rather than assuming a particular font's 40-row capacity.
+            assert height > (compact_terminal[3] - compact_terminal[1]) * 1.5, (
+                "Terminal height is still capped",
+                compact_terminal,
+                terminal,
+            )
+            assert abs(terminal[3] - controls["pane-Terminal"][3]) <= 1, controls
+            assert height - 2 * row_height <= rows * row_height <= height, (
+                "PTY rows disagree with the visible terminal",
+                rows,
+                cell,
+                terminal,
+            )
             key("t", ("Control_L", "Shift_L"))
             append_save(ui, root / "README.md", "focus_after_full_terminal")
             screenshot(window, "terminal-restored-editor.png")

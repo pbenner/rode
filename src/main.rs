@@ -117,6 +117,10 @@ fn main() -> eframe::Result {
             "Inter 4.1 — Rasmus Andersson and the Inter Project Authors\nUpstream: https://github.com/rsms/inter/releases/tag/v4.1\n\n{}\n",
             include_str!("../assets/fonts/Inter-LICENSE.txt")
         );
+        print!(
+            "JetBrains Mono 2.304 — The JetBrains Mono Project Authors\nUpstream: https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304\n\n{}\n",
+            include_str!("../assets/fonts/JetBrainsMono-OFL.txt")
+        );
         for license in two_face::acknowledgement::listing().for_themes() {
             println!("{}\n{}\n", license.rel_path.display(), license.text);
         }

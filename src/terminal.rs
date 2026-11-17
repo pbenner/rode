@@ -25,6 +25,15 @@ const SHELL_KEYS: egui::EventFilter = egui::EventFilter {
     escape: true,
 };
 
+/// Native responses and painted cell bounds from one terminal pass. UI adapters
+/// can observe these without repeating hit testing or guessing font metrics.
+pub(crate) struct TerminalView {
+    pub response: egui::Response,
+    pub error: Option<String>,
+    pub first_cell: Rect,
+    pub copy_selection: Option<egui::Response>,
+}
+
 /// One native terminal view, backed by a directly owned PTY, a persistent-service attachment,
 /// or a debugger stream. I/O and parsing run on workers; drop cleans up only this view's owned
 /// transport.
@@ -574,7 +583,7 @@ impl Terminal {
     /// Render selectable terminal cells and process focused shell input. Returns input
     /// errors; ordinary control keys remain shell input outside editor escape routes.
     pub fn ui(&mut self, ui: &mut egui::Ui, font_size: f32, palette: Palette) -> Option<String> {
-        self.ui_with_response(ui, font_size, palette).1
+        self.ui_with_response(ui, font_size, palette).error
     }
 
     /// Return the original interaction response for observation. Re-reading it
@@ -584,7 +593,7 @@ impl Terminal {
         ui: &mut egui::Ui,
         font_size: f32,
         palette: Palette,
-    ) -> (egui::Response, Option<String>) {
+    ) -> TerminalView {
         let font = FontId::monospace(font_size);
         let char_size =
             ui.fonts_mut(|fonts| Vec2::new(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
@@ -623,6 +632,7 @@ impl Terminal {
         };
         let mut bytes_to_send = Vec::new();
         let origin = rect.min + egui::vec2(6.0, 4.0);
+        let mut copy_selection = None;
         if let Ok(mut parser) = self.parser.lock() {
             if response.hovered() {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -900,29 +910,32 @@ impl Terminal {
                     .selection
                     .as_ref()
                     .and_then(|selection| selection.text(screen));
-                if ui
-                    .add_enabled(selected.is_some(), egui::Button::new("Copy selection"))
-                    .clicked()
-                {
+                let copy = ui.add_enabled(selected.is_some(), egui::Button::new("Copy selection"));
+                if copy.clicked() {
                     ui.ctx().copy_text(selected.unwrap_or_default());
                     ui.close();
                 }
+                copy_selection = Some(copy);
                 if ui.button("Copy visible output").clicked() {
                     ui.ctx().copy_text(screen.contents());
                     ui.close();
                 }
             });
         }
-        if !bytes_to_send.is_empty() {
-            return (
-                response,
-                self.send(bytes_to_send)
-                    .err()
-                    .map(|e| e.to_string())
-                    .or(resize_error),
-            );
+        let error = if !bytes_to_send.is_empty() {
+            self.send(bytes_to_send)
+                .err()
+                .map(|e| e.to_string())
+                .or(resize_error)
+        } else {
+            resize_error
+        };
+        TerminalView {
+            response,
+            error,
+            first_cell: Rect::from_min_size(origin, char_size),
+            copy_selection,
         }
-        (response, resize_error)
     }
 }
 

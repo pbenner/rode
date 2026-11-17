@@ -37,9 +37,9 @@ while tool cards and the sidebar have distinct surface layers. The header
 provides a compact workspace/command control, and the welcome page groups the
 main project actions. Command results use flat rows with labels on the left and
 shortcuts in a separate trailing column. Workbench forms share padded input
-fields with the project dialogs. Editor and terminal text keep their independent monospace
-font and size. Sumi-e and Samurai artwork and decorated themes retain their own character.
-Inter is included in the binary with its [font license](licensing.md), with no
+fields with the project dialogs. Editor and terminal text use bundled JetBrains Mono
+with their existing text-size setting. Sumi-e and Samurai artwork and decorated themes retain their own character.
+Both font faces are included in the binary with their [font licenses](licensing.md), with no
 font installation or network access required.
 
 Every built-in palette uses separate quiet divider and input-boundary colors.

@@ -339,7 +339,7 @@ impl EditorApp {
             font_size: storage
                 .and_then(|s| s.get_string("font_size"))
                 .and_then(|s| s.parse::<f32>().ok())
-                .unwrap_or(14.0)
+                .unwrap_or(15.0)
                 .clamp(10.0, 26.0),
             ui_scale,
             ui_scale_save_pending: false,

@@ -44,8 +44,16 @@ Andersson and the Inter Project Authors. The release and extracted files are
 SHA-256 pinned in `assets/fonts/manifest.json`; `assets/fonts/Inter-LICENSE.txt`
 retains its complete SIL Open Font License 1.1 and copyright notice.
 `rode --theme-licenses` prints this notice, and the Debian collector includes it
-in `THIRD-PARTY-NOTICES.gz`. Inter replaces only proportional interface text;
-the monospace and fallback fonts below remain embedded with their own terms.
+in `THIRD-PARTY-NOTICES.gz`. Inter replaces only proportional interface text.
+
+Monospace text uses the unmodified JetBrains Mono Regular face from the official
+[2.304 release](https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304),
+by the JetBrains Mono Project Authors. Its archive and extracted files are also
+SHA-256 pinned in `assets/fonts/manifest.json`; `assets/fonts/JetBrainsMono-OFL.txt`
+retains its complete SIL Open Font License 1.1 and copyright notice. Both font
+notices are embedded in `rode --theme-licenses` and collected for Debian packages.
+The original egui monospace and fallback fonts below remain available with their
+own terms.
 
 `vendor/vt100` contains the MIT-licensed `vt100` 0.16.2 parser with RODE's
 character-set support patch. Its original license is retained beside the source;

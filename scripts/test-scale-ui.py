@@ -86,7 +86,7 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             original = header_height(f"dpi-{dpi}-original.png", dpi)
             key("equal", ("Control_L",))
             ui.wait(
-                lambda: preferences(saved).get("font_size") == "15",
+                lambda: preferences(saved).get("font_size") == "16",
                 "Editor font did not change",
             )
             screenshot(ui.window, f"dpi-{dpi}-font.png")
@@ -130,7 +130,7 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
                 lambda: preferences(saved).get("ui_scale") == "0.75",
                 "Interface scale was not saved",
             )
-            assert preferences(saved)["font_size"] == "15"
+            assert preferences(saved)["font_size"] == "16"
             assert source.read_text() == "Original text\n", "Scaling saved a dirty buffer"
             ui.navigate("f")
             assert_pane_outline(ui, "Explorer", f"dpi-{dpi}-explorer-focus-75.png")
@@ -166,7 +166,7 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             )
             screenshot(ui.window, f"dpi-{dpi}-restart.png")
             assert abs(header_height(f"dpi-{dpi}-restart.png", dpi) - original * 0.75) <= 2
-            assert preferences(saved)["font_size"] == "15"
+            assert preferences(saved)["font_size"] == "16"
         print(
             f"Native {dpi}x DPI: font size, interface scale, reset, dirty buffer and restart passed."
         )

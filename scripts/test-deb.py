@@ -203,6 +203,8 @@ def main():
             for notice in [
                 "Inter 4.1",
                 "Copyright (c) 2016 The Inter Project Authors",
+                "JetBrains Mono 2.304",
+                "Copyright 2020 The JetBrains Mono Project Authors",
                 "fonts/Hack-Regular.txt",
                 "fonts/OFL.txt",
                 "fonts/UFL.txt",

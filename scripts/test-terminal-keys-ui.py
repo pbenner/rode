@@ -14,7 +14,6 @@ from ui_harness import (
     ARTIFACTS,
     BINARY,
     NativeUI,
-    click,
     click_button,
     close_window,
     display,
@@ -54,13 +53,25 @@ def check_selection(window, root, click_control, command, focus_terminal, ui):
     """Exercise actual mouse selection and the native system clipboard."""
     text("python3 selection-input.py\n")
     wait_for(lambda: (root / "selection-ready").exists(), "Selection fixture not ready")
-    # The isolated window uses the harness's fixed 1380x900 size and scale 1.
-    # Row zero starts at x=320, with 13-point monospace cells about 7.8 px wide.
-    mouse_button(320, 150, 1, True)
-    xtest.XTestFakeMotionEvent(display, -1, 390, 150, 0)
+    # Observe the painted cell rather than assuming a font, size or display scale.
+    state = ui.layout(
+        lambda state: any(
+            b["name"] == "terminal-first-cell" and b["enabled"] for b in state["buttons"]
+        ),
+        "Terminal cell geometry was not rendered",
+    )
+    left, top, right, bottom = next(
+        b["rect"] for b in state["buttons"] if b["name"] == "terminal-first-cell"
+    )
+    scale = state["pixels_per_point"]
+    cell = right - left
+    start = (round((left + 0.1 * cell) * scale), round((top + bottom) * 0.5 * scale))
+    end = (round((left + (len("SELECT_ME") + 0.1) * cell) * scale), start[1])
+    mouse_button(*start, 1, True)
+    xtest.XTestFakeMotionEvent(display, -1, *end, 0)
     x11.XFlush(display)
     time.sleep(0.08)
-    mouse_button(390, 150, 1, False)
+    mouse_button(*end, 1, False)
     screenshot(window, "selected-text.png")
 
     def assert_copy(label, action):
@@ -94,14 +105,14 @@ def check_selection(window, root, click_control, command, focus_terminal, ui):
     assert_copy("Palette Copy", lambda: command("Terminal: Copy output"))
 
     def context_copy():
-        mouse_button(420, 150, 3, True)
-        mouse_button(420, 150, 3, False)
+        mouse_button(*start, 3, True)
+        mouse_button(*start, 3, False)
         ui.layout(
             lambda state: any(b["name"] == "terminal-context-menu" for b in state["buttons"]),
             "Terminal context menu did not open",
         )
         key("x")  # Menu typing must not leak into the raw terminal fixture.
-        click(470, 162)
+        ui.click("terminal-copy-selection")
 
     assert_copy("Context Copy", context_copy)
     focus_terminal()  # Clear selection and return focus after using the header/palette.

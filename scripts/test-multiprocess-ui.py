@@ -130,9 +130,7 @@ with fixture_directory(prefix="rode-multiprocess-ui-") as base:
             key("space", ("Control_L",))
             key("e")
             key("equal", ("Control_L",))
-            wait_for(
-                lambda: float(preferences(saved).get("font_size", "14")) > 14, "Font was not saved"
-            )
+            wait_for(lambda: preferences(saved).get("font_size") == "16", "Font was not saved")
             expected_font = preferences(saved)["font_size"]
             agent(windows[0], "agent-one")
             agent(windows[1], "agent-two")

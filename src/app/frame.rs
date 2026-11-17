@@ -355,14 +355,21 @@ impl EditorApp {
             ui.allocate_space(ui.available_size().max(egui::Vec2::ZERO));
         }
         if let Some(terminal) = self.terminal.as_mut().or(self.ssh_master.as_mut()) {
-            let (response, error) = terminal.ui_with_response(ui, self.font_size - 1.0, palette);
+            let view = terminal.ui_with_response(ui, self.font_size - 1.0, palette);
+            let response = view.response;
+            let mut first_cell = response.clone();
+            first_cell.rect = view.first_cell;
+            super::ui_probe::button(ui, "terminal-first-cell", &first_cell);
+            if let Some(copy) = view.copy_selection {
+                super::ui_probe::button(ui, "terminal-copy-selection", &copy);
+            }
             if response.context_menu_opened() {
                 super::ui_probe::button(ui, "terminal-context-menu", &response);
             }
             if !terminal.is_alive() {
                 super::ui_probe::button(ui, "terminal-output-ended", &response);
             }
-            if let Some(error) = error {
+            if let Some(error) = view.error {
                 self.notify(error, true);
             }
             if !self.session_busy()

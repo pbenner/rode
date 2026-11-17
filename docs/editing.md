@@ -140,6 +140,9 @@ Choose a percentage in **View → Interface scale** to resize the entire GUI, in
 
 **View → Editor font size** adjusts source/terminal text without resizing the menus and icons. **Ctrl+0** or **View → Interface scale → Reset to system default** resets the whole-interface scale. The command palette offers **Interface: Zoom in**, **Interface: Zoom out**, and **Interface: Reset scale**. Interface scaling leaves buffers, terminal sessions, source font preferences and theme choices intact; it continues to follow monitor DPI when moving the window between displays.
 
+Source text defaults to **15 pt**. Saved text sizes are retained; use the existing
+**Editor font size** control or **Ctrl+Plus / Ctrl+Minus** to adjust them.
+
 The explorer remains at the left. The workspace beside it switches between **Code**, **Chat**, **Terminal**, and project tools such as **Git** and **Debugger**. Opening tools replaces the code view instead of shrinking it. Choose **Code** or open a file in the explorer to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 
 Choose **Detach** in the workspace toolbar to move the selected tools or terminal into a separate native window while the editor stays visible in the main window. The tools tab bar moves with it, leaving the main window's full editor space available. Switch tools using the tabs in the detached window. **Dock back**, or closing the tools window, returns it and its tab bar beside the explorer without stopping its work. Use an activity icon to bring the tools window to the front, or **Ctrl+~** to hide or restore it.
