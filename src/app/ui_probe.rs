@@ -1,7 +1,8 @@
 //! Opt-in, read-only geometry for native UI fixtures. Normal startup installs no
 //! hooks or file I/O. Fixtures still use real X11 input and observe real effects;
 //! this reports controls' geometry, focus, native pointer and edit revisions, plus opaque IDs in
-//! the open session manager and the current SSH endpoint, never chat or document text.
+//! the open session manager, the current SSH endpoint and bounded debugger diagnostics,
+//! never chat or document text.
 use eframe::egui::{self, Id};
 use serde::Serialize;
 use std::{
@@ -32,6 +33,8 @@ struct Controls {
     session_ids: Option<Vec<String>>,
     ssh_master_socket: Option<PathBuf>,
     notebook: Option<serde_json::Value>,
+    debugger: Option<serde_json::Value>,
+    project: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Default)]
@@ -59,6 +62,8 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             controls.session_ids = None;
             controls.ssh_master_socket = None;
             controls.notebook = None;
+            controls.debugger = None;
+            controls.project = None;
         }),
     );
     ctx.on_end_pass(
@@ -74,6 +79,8 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             let session_ids = controls.session_ids.clone();
             let ssh_master_socket = controls.ssh_master_socket.clone();
             let notebook = controls.notebook.clone();
+            let debugger = controls.debugger.clone();
+            let project = controls.project.clone();
             // Keep revisions across repaints, but discard hidden/closed widgets.
             controls
                 .last_change
@@ -113,6 +120,8 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
                 "session_ids": session_ids,
                 "ssh_master_socket": ssh_master_socket,
                 "notebook": notebook,
+                "debugger": debugger,
+                "project": project,
             });
             let destination = viewport_path(&path, ctx.viewport_id());
             if let Err(error) = publish(&destination, &value) {
@@ -123,6 +132,43 @@ pub(super) fn install_at(ctx: &egui::Context, path: PathBuf) {
             }
         }),
     );
+}
+
+/// A named SSH window can precede host preparation. Report the actual project
+/// guard so a fixture cannot send file commands while that guard is still closed.
+pub(super) fn project(ctx: &egui::Context, root: &str, ready: bool) {
+    if let Some(probe) = ctx.data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe"))) {
+        probe
+            .0
+            .lock()
+            .unwrap()
+            .entry(ctx.viewport_id())
+            .or_default()
+            .project = Some(serde_json::json!({"root": root, "ready": ready}));
+    }
+}
+
+/// Observe the controller independently of panel visibility. A granted host
+/// lease precedes desktop replay; only a healthy, paused replay with no pending
+/// lifetime change acknowledges readiness. Diagnostics stay bounded and opt-in.
+pub(super) fn debugger(ctx: &egui::Context, client: &crate::debugger::protocol::Client) {
+    if let Some(probe) = ctx.data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe"))) {
+        let paused = client.phase == crate::debugger::protocol::Phase::Paused;
+        probe
+            .0
+            .lock()
+            .unwrap()
+            .entry(ctx.viewport_id())
+            .or_default()
+            .debugger = Some(serde_json::json!({
+            "id": client.native_id(),
+            "phase": client.phase,
+            "ready": paused && client.attached_ready() && !client.lifetime_pending() && client.error.is_empty(),
+            "persistent": client.persistent(),
+            "status": client.status.chars().take(8192).collect::<String>(),
+            "error": client.error.chars().take(8192).collect::<String>(),
+        }));
+    }
 }
 
 /// Observe bounded notebook execution and source revisions, without exposing cell

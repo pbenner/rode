@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 os.environ["RODE_UI_ARTIFACTS"] = str(ROOT / "target/debugger-ui")
+from ui_fixture import capture_failure
 from ui_harness import (
     ARTIFACTS,
     BINARY,
@@ -64,6 +65,7 @@ def run(remote=False, isolated=False):
                     [str(BINARY), "--session-service", "request"],
                     input=json.dumps(dict(action=action, **values)).encode(),
                     env=environment,
+                    timeout=10,
                 )
             )
             assert result["kind"] != "error", result
@@ -125,7 +127,9 @@ def run(remote=False, isolated=False):
             window = None
             try:
                 window = wait_for_window(process, log_path)
-                wait_for_project(window, process, log_path, project)
+                wait_for_project(
+                    window, process, log_path, project, state_path=base / "ui-state.json"
+                )
                 focus_window(window)
                 ui = NativeUI(window, process, log_path, base / "ui-state.json", project)
                 ui.open_file("main.py")
@@ -157,22 +161,39 @@ def run(remote=False, isolated=False):
                 screenshot(window, label + "-paused.png")
                 if not remote and not isolated:
                     ui.command("Debug: Show debugger")
+                    paused = ui.paused_debugger()
                     screenshot(window, "persistent-controls.png")
-                    runtime = next(i for i in service_rpc("runtimes") if i["kind"] == "debugger")
+                    runtimes = service_rpc("runtimes")
+                    matching = [
+                        item
+                        for item in runtimes
+                        if item["kind"] == "debugger"
+                        and item["root"] == str(project)
+                        and item["document"] == str(source)
+                    ]
+                    assert len(matching) == 1, f"Expected this project's debugger: {runtimes}"
+                    runtime = matching[0]
+                    assert runtime["alive"] and runtime["attached"], runtime
+                    assert paused["id"] == runtime["id"], (paused, runtime)
                     ui.click("debugger-persist")
                     # Quit immediately after requesting persistence; closing must
                     # preserve the mutation until the host acknowledges it.
                     close_window(window, process)
                     wait_for(
                         lambda: any(
-                            i["id"] == runtime["id"] and i["persistent"] and not i["attached"]
+                            i["id"] == runtime["id"]
+                            and i["alive"]
+                            and i["persistent"]
+                            and not i["attached"]
                             for i in service_rpc("runtimes")
                         ),
                         "Debugger persistence/quit was not acknowledged",
                     )
                     process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
                     window = wait_for_window(process, log_path)
-                    wait_for_project(window, process, log_path, project)
+                    wait_for_project(
+                        window, process, log_path, project, state_path=base / "ui-state.json"
+                    )
                     focus_window(window)
                     ui = NativeUI(window, process, log_path, base / "ui-state.json", project)
                     ui.command("Debug: Show debugger")
@@ -180,11 +201,15 @@ def run(remote=False, isolated=False):
                     ui.click("debugger-reattach")
                     wait_for(
                         lambda: any(
-                            i["id"] == runtime["id"] and i["attached"]
+                            i["id"] == runtime["id"] and i["alive"] and i["attached"]
                             for i in service_rpc("runtimes")
                         ),
                         "Debugger did not reattach",
                     )
+                    # The host grants the lease before replay reaches the UI.
+                    # Require this controller's paused snapshot before Step;
+                    # neither attachment metadata nor a screenshot is a barrier.
+                    ui.paused_debugger(runtime["id"])
                     screenshot(window, "reattached.png")
                 messages = read_json_lines(rpc)
                 assert any(
@@ -272,14 +297,26 @@ def run(remote=False, isolated=False):
                 assert process.returncode == 0
                 print(label + " debugger UI passed")
             except Exception:
-                if window is not None and process.poll() is None:
-                    screenshot(window, label + "-failure.png")
-                for source_path, suffix in (
-                    (base / "ui-state.json", "layout.json"),
-                    (project / "debug-rpc.jsonl", "rpc.jsonl"),
-                ):
-                    if source_path.exists():
-                        shutil.copyfile(source_path, ARTIFACTS / (label + "-failure-" + suffix))
+                capture_failure(
+                    label,
+                    process,
+                    window,
+                    files=(
+                        (base / "ui-state.json", "-layout.json"),
+                        (project / "debug-rpc.jsonl", "-rpc.jsonl"),
+                        (base / "runtime/service.log", "-service.log"),
+                        (log_path, ".log"),
+                    ),
+                    observations=(
+                        (
+                            "debugger",
+                            lambda: json.loads((base / "ui-state.json").read_text()).get(
+                                "debugger"
+                            ),
+                        ),
+                        ("runtimes", lambda: service_rpc("runtimes")),
+                    ),
+                )
                 raise
             finally:
                 stop_process(process)

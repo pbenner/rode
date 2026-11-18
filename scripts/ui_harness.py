@@ -714,6 +714,18 @@ class NativeUI:
         )
         return name
 
+    def paused_debugger(self, runtime_id=None, *, timeout=20):
+        """Await healthy desktop replay, even when source navigation hides its panel."""
+
+        def ready(state):
+            debugger = state.get("debugger") or {}
+            assert not debugger.get("error"), f"Debugger failed: {debugger}"
+            return debugger.get("ready") and (
+                runtime_id is None or debugger.get("id") == runtime_id
+            )
+
+        return self.layout(ready, "Debugger did not replay its paused state", timeout)["debugger"]
+
     def terminal(self):
         """Select the terminal surface and acknowledge its attached, focused input."""
         self.click("workspace-tab:Terminal")
@@ -841,8 +853,20 @@ def window_pid(window):
     return int(match[1]) if result.returncode == 0 and match else None
 
 
-def wait_for_project(window, process, log_path, project, timeout=20):
-    """Wait for project preparation before sending shortcuts or using layout coordinates."""
+def wait_for_project(window, process, log_path, project, timeout=20, *, state_path=None):
+    """Observe the actual host guard when available; retain titles for legacy fixtures."""
+    if state_path is not None:
+        return wait_for_ui_state(
+            process,
+            log_path,
+            state_path,
+            lambda state: (
+                (state.get("project") or {}).get("root") == str(project)
+                and (state.get("project") or {}).get("ready")
+            ),
+            f"Project {project} was not prepared",
+            timeout,
+        )
     deadline = time.monotonic() + timeout
     environment = dict(os.environ, LC_ALL="C.UTF-8")
     expected = f"RODE · {Path(project).name}"

@@ -325,6 +325,22 @@ class WindowReadinessTests(unittest.TestCase):
                 wait_for_project(0x123, self.process, "startup.log", "/tmp/project")
                 self.assertEqual(self.query_attributes.call_count, 5)
 
+    def test_project_snapshot_waits_for_the_host_guard_and_exact_root_without_trusting_titles(self):
+        snapshots = [
+            dict(pid=41, project=dict(root="/tmp/project", ready=True)),
+            dict(pid=42, project=None),
+            dict(pid=42, project=dict(root="/tmp/another", ready=True)),
+            dict(pid=42, project=dict(root="/tmp/project", ready=False)),
+            dict(pid=42, project=dict(root="/tmp/project", ready=True)),
+        ]
+        with patch("ui_harness.Path.read_text", side_effect=map(json.dumps, snapshots)) as read:
+            result = wait_for_project(
+                0x123, self.process, "startup.log", "/tmp/project", state_path="state.json"
+            )
+        self.assertEqual(result, snapshots[-1])
+        self.assertEqual(read.call_count, len(snapshots))
+        self.query_attributes.assert_not_called()
+
     def test_project_timeout_reports_pending_title(self):
         self.query_attributes.return_value = subprocess.CompletedProcess(
             [], 0, stdout='xwininfo: Window id: 0x123 "RODE · project [Opening project]"\n'
@@ -914,6 +930,41 @@ class NativeUIReadinessTests(unittest.TestCase):
         self.process = Mock(pid=42)
         self.process.poll.return_value = None
         self.ui = NativeUI(0x123, self.process, "log", "state", "/project")
+
+    def test_debugger_readiness_requires_matching_desktop_replay_without_a_visible_panel(self):
+        snapshots = [
+            None,
+            dict(id="owned", ready=False, phase="Starting", error=""),
+            dict(id="another", ready=True, phase="Paused", error=""),
+            dict(id="owned", ready=False, phase="Paused", error=""),
+            dict(id="owned", ready=True, phase="Paused", error=""),
+        ]
+        layouts = [
+            json.dumps(dict(pid=42, debugger=snapshot, buttons=[], **{"pass": index}))
+            for index, snapshot in enumerate(snapshots)
+        ]
+        with (
+            patch("ui_harness.Path.read_text", side_effect=layouts) as read,
+            patch("ui_harness.time.sleep"),
+            patch("ui_harness.click") as click,
+            patch("ui_harness.key") as key,
+        ):
+            self.assertEqual(self.ui.paused_debugger("owned"), snapshots[-1])
+            self.assertEqual(read.call_count, len(snapshots))
+            click.assert_not_called()
+            key.assert_not_called()
+
+    def test_debugger_failure_is_reported_without_retrying_or_waiting_for_a_timeout(self):
+        failure = dict(id="owned", ready=False, phase="Ended", error="Runtime view disconnected")
+        with (
+            patch(
+                "ui_harness.Path.read_text", return_value=json.dumps(dict(pid=42, debugger=failure))
+            ),
+            patch("ui_harness.time.sleep") as sleep,
+        ):
+            with self.assertRaisesRegex(AssertionError, "Runtime view disconnected"):
+                self.ui.paused_debugger("owned")
+            sleep.assert_not_called()
 
     def test_navigation_never_sends_the_second_chord_before_leader_acknowledgement(self):
         with (

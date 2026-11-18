@@ -738,7 +738,18 @@ bash scripts/test-ssh.sh
 
 This requires `openssh-server`, `ssh-keygen`, and Python 3. The tests use a local login PTY and binary channels to the remote helper, which owns real project PTYs. Raw SSH PTY channels are also checked when the fixture daemon has permission to allocate them. Direct and ProxyJump sessions check real authentication/multiplexing, switching project folders without disconnecting, terminal working directories, quoted Unicode paths, multi-megabyte reads/writes, save conflicts, sandbox file operations, and disconnection.
 
-For native UI checks on Debian/Ubuntu, install `xvfb`, `xauth`, `x11-utils`, `imagemagick`, `libxtst6`, `libxkbcommon-x11-0`, `libegl1`, `libegl-mesa0`, `libglx-mesa0` and `libgl1-mesa-dri`. The scripts use `xwininfo` from `x11-utils` to find and inspect windows, ImageMagick to capture/inspect screenshots, and libXtst to send input. The editor dynamically loads the X11 keyboard library, so installing `libxkbcommon-dev` alone does not provide its X11 runtime. CI explicitly installs the runtime libraries, selects Mesa software rendering and uses a 1600×1100 virtual screen so the fixtures’ 1380×900 windows fit without being clamped by the window system. Set `LIBGL_ALWAYS_SOFTWARE=1`, `__GLX_VENDOR_LIBRARY_NAME=mesa` and `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` when reproducing CI on a host with vendor GPU drivers. Early debugger-window failures print the exit code and the last 16 KiB of the captured startup log directly in the Actions output; the full log remains in the `native-ui-smoke` artifact.
+For native UI checks on Debian/Ubuntu, install `xvfb`, `xauth`, `x11-utils`, `imagemagick`, `libxtst6`, `libxkbcommon-x11-0`, `libegl1`, `libegl-mesa0`, `libglx-mesa0` and `libgl1-mesa-dri`. The scripts use `xwininfo` from `x11-utils` to find and inspect windows, ImageMagick to capture/inspect screenshots, and libXtst to send input. The editor dynamically loads the X11 keyboard library, so installing `libxkbcommon-dev` alone does not provide its X11 runtime. CI explicitly installs the runtime libraries, selects Mesa software rendering and uses a 1600×1100 virtual screen so the fixtures’ 1380×900 windows fit without being clamped by the window system. Set `LIBGL_ALWAYS_SOFTWARE=1`, `__GLX_VENDOR_LIBRARY_NAME=mesa` and `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` when reproducing CI on a host with vendor GPU drivers. Early debugger-window failures print the exit code and the last 16 KiB of the captured startup log directly in the Actions output.
+
+Download a failed runtime lane's `ci-extended-runtimes` artifact from the workflow
+run's summary. Debugger screenshots and logs are under `debugger-ui/`, or
+`ci-results/ui/debugger-ui/` when `RODE_CI_RESULTS_DIR` relocates them. Search for
+`local-failure.png` and `local-failure-diagnostics.json`. The latter records the
+process exit code, runtime discovery results, saved files, and the reason a
+screenshot was skipped or failed. Layout, DAP requests, and the fixture's service
+log are collected independently before screenshot capture and temporary-directory
+cleanup. Their bounded tails and runtime metadata also appear in the test log, so
+diagnosis does not require a PNG. Shared document fixtures use the same failure
+collector. The workflow retains these artifacts for seven days.
 
 Use `python3 scripts/ui_display.py -- python3 scripts/test-workbench-ui.py` for
 local UI validation. The launcher requires Xvfb, removes inherited X11/Wayland
@@ -1087,6 +1098,32 @@ It lays out 100 warmed frames at 390×900 with 1,600 variables, 1,024 breakpoint
 Regression coverage includes full-sized configurations with a slow adapter, request-buffer retries, old watch/frame/breakpoint replies, delayed source opens, invalid setting rollback, and terminal-view lifecycle. Shutdown drains output in batches so verbose targets do not consume the grace period one message at a time.
 
 `cargo test --test runtimes slow_debugger_views` deliberately stops reading an attached debugger during a multi-megabyte PTY output burst. The host retains unread terminal events within its bounded replay queue and propagates backpressure to the target instead of disconnecting the view. The test requires every output line, stepping and subsequent terminal input on the same attachment. A second case detaches the stalled reader, verifies the persistent target continues without a view, then reattaches and checks controls and input again.
+
+Authentication's socket deadlines apply only during the handshake. Established
+runtime streams clear both read and write deadlines before cloning their duplex
+halves; otherwise a slow output reader can expire the controlling lease and end
+a nonpersistent debugger. Peer shutdown still releases blocked I/O. The
+`rode-session` regression
+`attached_runtime_backpressure_does_not_inherit_handshake_deadlines` starts with
+short handshake deadlines and a small socket buffer, pauses during a large frame,
+then checks lossless delivery, commands on the same attachment, and disconnect
+cleanup for both persistence modes. It fails with the inherited write deadline.
+
+The native debugger fixture matches the runtime's project and document, requires
+it to remain alive after desktop shutdown, and waits for the editor's paused
+snapshot of the same runtime after reattachment before sending Step. A granted
+host lease alone does not acknowledge desktop replay. The read-only
+`debugger` snapshot also requires completed lifetime changes and no debugger
+error for its `ready` flag. It includes the controller identity and bounded status
+and error text independently of panel visibility, so opening the paused source
+cannot hide readiness or failure diagnostics. The probe starts no work and
+retries no input.
+
+Debugger and shared document fixtures also pass their snapshot path to
+`wait_for_project`, which checks the exact project root and the application's
+actual prepared/connected guard. A mapped SSH window or its project title can
+exist before preparation completes or after it fails. Legacy callers without a
+snapshot path retain title-based observation.
 
 The runtime worker drains productive bounded batches immediately, checking
 queued controls between batches. It sleeps only when idle or waiting for replay

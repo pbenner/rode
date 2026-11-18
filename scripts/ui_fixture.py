@@ -5,6 +5,7 @@ only the launched process, its window, and its diagnostic artifacts.
 """
 
 import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -50,11 +51,64 @@ def project_args(project, *, remote=False, sandbox=False):
 def project_ui(process, environment, project, log_path):
     """Attach observations only after this process has mapped and prepared its project."""
     window = wait_for_window(process, log_path)
-    wait_for_project(window, process, log_path, project)
+    wait_for_project(
+        window, process, log_path, project, state_path=environment["RODE_UI_TEST_STATE"]
+    )
     focus_window(window)
     ui = NativeUI(window, process, log_path, Path(environment["RODE_UI_TEST_STATE"]), project)
     ui.layout()
     return ui
+
+
+def capture_failure(label, process, window=None, *, files=(), observations=()):
+    """Retain independent, read-only evidence without replacing the scenario failure.
+
+    Each (source, suffix) file and (name, callable) observation is independent of
+    screenshot capture. Callers must bound any observation that performs I/O.
+    Console excerpts are bounded; the manifest records missing or failed captures
+    as well as saved paths, so a missing PNG has an explicit explanation.
+    """
+    report = dict(pid=process.pid, exit_code=process.poll(), files={}, observations={})
+
+    def excerpt(name, value):
+        print(f"{label} failure {name}:\n{value[-16 * 1024 :]}", file=sys.stderr, flush=True)
+
+    for source, suffix in files:
+        destination = ARTIFACTS / f"{label}-failure{suffix}"
+        try:
+            shutil.copyfile(source, destination)
+            report["files"][suffix] = dict(path=str(destination))
+            with destination.open("rb") as contents:
+                contents.seek(0, os.SEEK_END)
+                contents.seek(max(0, contents.tell() - 16 * 1024))
+                excerpt(suffix, contents.read().decode("utf-8", errors="replace"))
+        except Exception as error:
+            report["files"][suffix] = dict(error=str(error))
+
+    for name, observe in observations:
+        try:
+            value = observe()
+            excerpt(name, json.dumps(value, ensure_ascii=True, indent=2))
+            report["observations"][name] = dict(value=value)
+        except Exception as error:
+            report["observations"][name] = dict(error=str(error))
+
+    if window is None or report["exit_code"] is not None:
+        report["screenshot"] = dict(skipped="No live, mapped fixture window")
+    else:
+        try:
+            screenshot(window, f"{label}-failure.png")
+            report["screenshot"] = dict(path=str(ARTIFACTS / f"{label}-failure.png"))
+        except Exception as error:
+            report["screenshot"] = dict(error=str(error))
+
+    manifest = ARTIFACTS / f"{label}-failure-diagnostics.json"
+    try:
+        manifest.write_text(json.dumps(report, indent=2) + "\n")
+    except Exception as error:
+        print(f"Cannot write {manifest}: {error}", file=sys.stderr, flush=True)
+    excerpt(f"artifacts ({manifest})", json.dumps(report, ensure_ascii=True, indent=2))
+    return report
 
 
 @contextlib.contextmanager
@@ -78,13 +132,7 @@ def native_session(args, environment, project, label):
             else:
                 assert process.returncode == 0, f"RODE exited with {process.returncode}: {log_path}"
         except BaseException:
-            try:
-                if state.is_file():
-                    shutil.copyfile(state, ARTIFACTS / f"{label}-failure.json")
-                if window is not None and process.poll() is None:
-                    screenshot(window, f"{label}-failure.png")
-            except Exception as error:
-                print(f"Cannot capture {label} failure artifacts: {error}", file=sys.stderr)
+            capture_failure(label, process, window, files=((state, ".json"), (log_path, ".log")))
             raise
         finally:
             stop_process(process)

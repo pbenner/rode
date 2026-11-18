@@ -784,6 +784,12 @@ impl eframe::App for EditorApp {
         self.handle_close_request(ctx);
         self.finish_editor_frame(ctx);
         self.activate_editor(egui::ViewportId::ROOT);
+        if let Some(workspace) = self.workspace.as_ref() {
+            ui_probe::project(ctx, &workspace.root, self.project_ready());
+        }
+        if let Some(client) = &self.debugger.client {
+            ui_probe::debugger(ctx, client);
+        }
         if let Some(remote) = self
             .workspace
             .as_ref()

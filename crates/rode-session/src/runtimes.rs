@@ -288,7 +288,11 @@ impl Store {
             }
         }
         let _lease = Lease(job.clone(), self.jobs.clone(), id.into());
+        // Authentication deadlines bound startup, not an established view. A
+        // slow reader must apply backpressure without expiring its lease and
+        // stopping a nonpersistent controller. Peer shutdown releases blocked I/O.
         stream.set_read_timeout(None)?;
+        stream.set_write_timeout(None)?;
         let mut writer = stream.try_clone()?;
         let writing = job.clone();
         let stopped = Arc::new(AtomicBool::new(false));
@@ -921,7 +925,10 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
             policy: policy.into(),
         },
     )?;
+    // This is now a long-lived duplex stream; bounded queues and peer shutdown
+    // govern flow and cancellation after the authenticated handshake.
     stream.set_read_timeout(None)?;
+    stream.set_write_timeout(None)?;
     super::attachment::forward_commands::<Envelope>(stream.try_clone()?, FRAME_LIMIT - 1, send);
     let mut output = std::io::BufWriter::new(rode_host_core::connection::Output::stdout()?);
     loop {
@@ -944,6 +951,147 @@ pub(super) fn bridge(id: &str, policy: &str) -> Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn attached_runtime_backpressure_does_not_inherit_handshake_deadlines() {
+        use std::os::fd::AsRawFd;
+
+        for persistent in [false, true] {
+            let store = Arc::new(Store::default());
+            let id = new_id().unwrap();
+            let policy = "fixture-policy";
+            let (input, commands) = mpsc::sync_channel(64);
+            let mut cells = display_cells();
+            let mut cell = cells.remove("cell-0").unwrap();
+            cell.outputs[0].value = json!({"text/plain": "payload".repeat(64 * 1024)});
+            let expected = cell.outputs[0].value.clone();
+            let job = Arc::new(Job {
+                shared: Mutex::new(Shared {
+                    view: View {
+                        acknowledgement: String::new(),
+                        acknowledgements: vec![],
+                        info: Info {
+                            sources: BTreeMap::new(),
+                            id: id.clone(),
+                            name: "Slow reader fixture".into(),
+                            kind: service::Kind::Notebook,
+                            root: "/fixture".into(),
+                            policy: policy.into(),
+                            mode: "NORMAL MODE".into(),
+                            document: "/fixture/notebook.ipynb".into(),
+                            target: None,
+                            python: "python3".into(),
+                            configuration: "python3".into(),
+                            alive: true,
+                            busy: false,
+                            status: "Idle".into(),
+                            attached: false,
+                            persistent,
+                            created: 0,
+                        },
+                        runs: vec![],
+                        language: Value::Null,
+                        python: "python3".into(),
+                        execution: "Project host".into(),
+                        debugger: None,
+                        error: String::new(),
+                    },
+                    cells: BTreeMap::from([("cell-0".into(), cell)]),
+                    revision: 0,
+                    terminals: BTreeMap::new(),
+                    events: VecDeque::new(),
+                    event_sequence: 0,
+                    terminal_read_sequence: 0,
+                    ever_attached: false,
+                    finished: false,
+                }),
+                changed: Condvar::new(),
+                input,
+                stop: AtomicBool::new(false),
+                discard: AtomicBool::new(false),
+                completed: AtomicBool::new(false),
+                created: Instant::now(),
+            });
+            store.jobs.lock().unwrap().insert(id.clone(), job);
+            let (server, mut peer) = UnixStream::pair().unwrap();
+            let buffer: libc::c_int = 4096;
+            // SAFETY: server owns the descriptor and buffer is a live c_int of
+            // the exact length required by SO_SNDBUF.
+            assert_eq!(
+                unsafe {
+                    libc::setsockopt(
+                        server.as_raw_fd(),
+                        libc::SOL_SOCKET,
+                        libc::SO_SNDBUF,
+                        (&buffer as *const libc::c_int).cast(),
+                        std::mem::size_of_val(&buffer) as libc::socklen_t,
+                    )
+                },
+                0
+            );
+            let handshake = Some(Duration::from_millis(40));
+            server.set_read_timeout(handshake).unwrap();
+            server.set_write_timeout(handshake).unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let (done, finished) = mpsc::channel();
+            let attached = store.clone();
+            let attaching_id = id.clone();
+            let worker = std::thread::spawn(move || {
+                done.send(attached.attach(server, &attaching_id, policy))
+                    .unwrap();
+            });
+            assert!(matches!(
+                receive::<Update>(&mut peer).unwrap(),
+                Update::State(_)
+            ));
+            // Read the next frame's header and one payload byte. The remaining
+            // cell exceeds SO_SNDBUF, so the writer must wait for this reader.
+            let mut header = [0; 5];
+            peer.read_exact(&mut header).unwrap();
+            assert_eq!(header[4], b'J');
+            let size = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+            assert!(
+                (2..=FRAME_LIMIT).contains(&size),
+                "Invalid output frame size: {size}"
+            );
+            let mut payload = vec![0; size - 1];
+            peer.read_exact(&mut payload[..1]).unwrap();
+            assert!(matches!(
+                finished.recv_timeout(Duration::from_millis(250)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            assert!(store.list()[0].attached);
+            peer.read_exact(&mut payload[1..]).unwrap();
+            let Update::Cell(delivered) = serde_json::from_slice::<Update>(&payload).unwrap()
+            else {
+                panic!("Expected the complete retained output cell")
+            };
+            assert_eq!(delivered.outputs[0].value, expected);
+
+            // The command reader must also survive an idle period longer than
+            // its handshake deadline, while retaining the same attachment.
+            let token = new_id().unwrap();
+            send(
+                &mut peer,
+                &Envelope {
+                    id: token.clone(),
+                    command: Action::Persistence { persistent },
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                commands.recv_timeout(Duration::from_secs(5)).unwrap().id,
+                token
+            );
+            peer.shutdown(std::net::Shutdown::Both).unwrap();
+            finished
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            worker.join().unwrap();
+            assert!(!store.list()[0].attached);
+        }
+    }
 
     fn display_cells() -> BTreeMap<String, Cell> {
         (0..20)
