@@ -176,6 +176,10 @@ impl State {
         self.pending = Some(pane);
         self.pending_viewport = viewport;
     }
+    /// Whether this native host must restore its editor before routing the next input packet.
+    pub(super) fn editor_focus_pending(&self, viewport: egui::ViewportId) -> bool {
+        self.pending == Some(Pane::Editor) && self.pending_viewport == viewport
+    }
     /// Whether asynchronous file completion may take editor focus without overriding a deliberately
     /// selected tool pane.
     pub fn accepts_editor_focus(&self) -> bool {

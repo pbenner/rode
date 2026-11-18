@@ -546,3 +546,80 @@ fn batched_emacs_edits_finish_before_the_native_save_prefix() {
         "The save prefix must still open Save As"
     );
 }
+
+#[test]
+fn an_armed_leader_survives_editor_focus_restoration() {
+    struct StoredLeader;
+    impl eframe::Storage for StoredLeader {
+        fn get_string(&self, name: &str) -> Option<String> {
+            (name == "keyboard.leader").then(|| "Ctrl+Shift+F12".into())
+        }
+        fn set_string(&mut self, _: &str, _: String) {}
+        fn flush(&mut self) {}
+    }
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_file();
+    app.navigation.bindings = bindings::Bindings::load(Some(&StoredLeader));
+    let render = |app: &mut EditorApp, events| {
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(850., 560.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                app.route_input(ctx);
+                app.editor(ctx);
+                app.navigation_finish(ctx);
+            },
+        );
+    };
+    render(&mut app, vec![]);
+    render(&mut app, vec![]);
+    let document = app.documents.active().unwrap().id;
+    let target = egui::Id::new(("document", document));
+    ctx.memory_mut(|m| m.surrender_focus(target));
+    app.navigation
+        .request_focus(Pane::Editor, egui::ViewportId::ROOT);
+    render(
+        &mut app,
+        vec![egui::Event::Key {
+            key: Key::F12,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+        }],
+    );
+    assert!(app.navigation.leader.is_some());
+    assert!(ctx.memory(|m| m.has_focus(target)));
+    render(&mut app, vec![]);
+    assert!(
+        app.navigation.leader.is_some(),
+        "Restoring the same editor focus discarded an accepted global prefix"
+    );
+    render(
+        &mut app,
+        vec![
+            egui::Event::Key {
+                key: Key::F,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::Text("f".into()),
+        ],
+    );
+    assert!(app.navigation.leader.is_none());
+    assert_eq!(app.navigation.active, Pane::Explorer);
+    assert!(
+        app.documents.active().unwrap().text.is_empty(),
+        "The leader selector leaked into the source buffer"
+    );
+}

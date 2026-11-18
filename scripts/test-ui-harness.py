@@ -968,13 +968,39 @@ class NativeUIReadinessTests(unittest.TestCase):
 
     def test_navigation_never_sends_the_second_chord_before_leader_acknowledgement(self):
         with (
+            patch("ui_harness.focus_window") as focus,
             patch.object(self.ui, "layout", return_value={"pass": 10}),
             patch.object(self.ui, "control", side_effect=AssertionError("Leader never appeared")),
             patch("ui_harness.key") as key,
         ):
             with self.assertRaisesRegex(AssertionError, "Leader never appeared"):
                 self.ui.navigate("t")
+            focus.assert_called_once_with(self.ui.window)
             key.assert_called_once_with("space", ("Control_L",))
+
+    def test_navigation_acknowledges_native_focus_before_sending_a_remapped_leader(self):
+        observed = Mock()
+        with (
+            patch("ui_harness.focus_window", observed.focus),
+            patch.object(self.ui, "layout", observed.layout),
+            patch.object(self.ui, "control", observed.control),
+            patch.object(self.ui, "absent", observed.absent),
+            patch("ui_harness.key", observed.key),
+        ):
+            observed.layout.side_effect = [{"pass": 10}, {"pass": 12}]
+            self.ui.navigate("t", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
+        self.assertEqual(
+            observed.mock_calls,
+            [
+                call.focus(self.ui.window),
+                call.layout(),
+                call.key("F12", ("Control_L", "Shift_L")),
+                call.control("navigation-leader", after_pass=10),
+                call.layout(),
+                call.key("t", ()),
+                call.absent("navigation-leader", after_pass=12),
+            ],
+        )
 
     def test_terminal_readiness_requires_enabled_focused_input_without_clicking(self):
         def snapshot(*, ready=False, focused=False):

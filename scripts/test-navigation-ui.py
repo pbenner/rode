@@ -291,6 +291,10 @@ def run():
                 screenshot(window, "bindings-compact.png")
                 key("Escape")
                 ui.absent("navigation-leader-input")
+                # Removing the dialog precedes the editor's deferred focus
+                # restoration. Acknowledge the input destination before testing
+                # the newly applied leader; an absent form alone is insufficient.
+                ui.document(second)
                 nav("t", leader="F12", leader_modifiers=("Control_L", "Shift_L"))
                 ui.terminal_input()
                 text("echo remapped > remapped.out\n")

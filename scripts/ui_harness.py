@@ -447,7 +447,8 @@ class NativeUI:
         )
 
     def navigate(self, name, modifiers=(), *, leader="space", leader_modifiers=("Control_L",)):
-        """Send a leader chord once; wait until each half is processed, without clicking."""
+        """Focus the owned native window, then acknowledge each chord half without clicking."""
+        focus_window(self.window)
         before = self.layout()["pass"]
         with delayed_input(self.process):
             key(leader, leader_modifiers)

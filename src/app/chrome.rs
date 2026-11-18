@@ -314,9 +314,13 @@ impl EditorApp {
         self.focus_editor_in(self.documents.viewport(), ctx);
     }
 
-    /// A selection committed after layout must own the next frame's keyboard
-    /// events before keymap translation, including the first key after a tab click.
-    pub(super) fn prepare_editor_input(&self, ctx: &egui::Context) {
+    /// A selection or modal focus restoration must own the next input packet
+    /// before keymap translation. Deferring it to layout would let an accepted
+    /// leader cross a source-context change and be cancelled on the next pass.
+    pub(super) fn prepare_editor_input(&mut self, ctx: &egui::Context) {
+        if self.navigation.editor_focus_pending(ctx.viewport_id()) {
+            self.focus_editor_in(ctx.viewport_id(), ctx);
+        }
         if self.documents.viewport() == ctx.viewport_id()
             && self.editing_allowed(ctx)
             && ctx.memory(|memory| memory.allows_interaction(egui::LayerId::background()))
