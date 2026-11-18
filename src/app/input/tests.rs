@@ -694,3 +694,152 @@ fn replay_requires_native_application_and_rejects_a_changed_context() {
         });
     }
 }
+
+#[test]
+fn closing_a_pdf_precedes_a_batched_palette_and_preserves_the_unsaved_source() {
+    for pane in [
+        navigation::Pane::Editor,
+        navigation::Pane::Menus,
+        navigation::Pane::Explorer,
+    ] {
+        for palette_first in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let notes = directory.path().join("notes.txt");
+            let original = "Keep this note.\n";
+            let edited = "Keep this note.\n\n// keep_dirty_text";
+            std::fs::write(&notes, original).unwrap();
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            app.new_file();
+            let source = &mut app.documents[0];
+            source.fixture_content().text = original.into();
+            source.acknowledge_save(
+                notes.to_string_lossy().into(),
+                original.into(),
+                files::digest(original.as_bytes()),
+            );
+            source.fixture_content().text = edited.into();
+            source.sync_source_fixture();
+            source.set_dirty_fixture(true);
+            let source_id = source.id;
+            app.new_file();
+            let loaded = crate::pdf::load_bytes(
+                include_bytes!("../../../tests/fixtures/pages.pdf").to_vec(),
+                1,
+                &app.image_budget,
+                128,
+            )
+            .unwrap();
+            let preview = app.documents.active_mut().unwrap();
+            preview.pdf = Some(pdf_view::PdfView::new(loaded));
+            preview.set_dirty_fixture(false);
+            let preview_id = preview.id;
+            frame(&mut app, &ctx, vec![]);
+            frame(&mut app, &ctx, vec![]);
+            let mut events = vec![
+                key(Key::W, egui::Modifiers::COMMAND),
+                key(Key::P, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+            ];
+            if palette_first {
+                events.reverse();
+            }
+            // X11 can batch IME shutdown with Close/Palette after a text
+            // dialog. These lifecycle events must not block the first command.
+            events.splice(
+                0..0,
+                [
+                    egui::Event::Ime(egui::ImeEvent::Enabled),
+                    egui::Event::Ime(egui::ImeEvent::Preedit(String::new())),
+                    egui::Event::Ime(egui::ImeEvent::Disabled),
+                ],
+            );
+            app.navigation.active = pane;
+            frame(&mut app, &ctx, events);
+            if palette_first {
+                assert_eq!(
+                    app.documents.selected_id(),
+                    Some(preview_id),
+                    "Close overtook an earlier palette"
+                );
+                assert!(app.dialog == Dialog::Commands);
+                assert_eq!(app.documents[0].text, edited);
+                assert_eq!(std::fs::read_to_string(&notes).unwrap(), original);
+                continue;
+            }
+            assert_eq!(
+                app.documents.selected_id(),
+                Some(source_id),
+                "The palette overtook closing the PDF"
+            );
+            assert_eq!(app.documents.active().unwrap().text, edited);
+            assert!(app.documents.active().unwrap().dirty());
+            assert_eq!(std::fs::read_to_string(&notes).unwrap(), original);
+            for _ in 0..8 {
+                if app.dialog == Dialog::Commands {
+                    break;
+                }
+                frame(&mut app, &ctx, vec![]);
+            }
+            assert!(
+                app.dialog == Dialog::Commands,
+                "The command following Close was discarded"
+            );
+            app.execute_command(Command::Save, &ctx);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.documents.active().unwrap().dirty() || app.documents.active().unwrap().saving
+            {
+                frame(&mut app, &ctx, vec![]);
+                assert!(
+                    Instant::now() < deadline,
+                    "Saving the restored source stalled"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(std::fs::read_to_string(notes).unwrap(), edited);
+        }
+    }
+}
+
+#[test]
+fn closing_an_image_hands_batched_commands_to_the_remaining_preview() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    for _ in 0..2 {
+        app.new_file();
+        let decoded = crate::images::Decoded {
+            pixels: Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE])),
+            original: [1, 1],
+            format: "PNG".into(),
+            encoded_bytes: 0,
+            lease: Arc::new(app.image_budget.reserve(4).unwrap()),
+        };
+        let document = app.documents.active_mut().unwrap();
+        document.image = Some(image_view::ImageView::new(decoded));
+        document.set_dirty_fixture(false);
+    }
+    let remaining = app.documents[0].id;
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![]);
+    frame(
+        &mut app,
+        &ctx,
+        vec![
+            key(Key::W, egui::Modifiers::COMMAND),
+            key(Key::P, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+        ],
+    );
+    assert_eq!(app.documents.selected_id(), Some(remaining));
+    for _ in 0..8 {
+        if app.dialog == Dialog::Commands {
+            break;
+        }
+        frame(&mut app, &ctx, vec![]);
+    }
+    assert!(
+        app.dialog == Dialog::Commands,
+        "The rendered preview did not release its queued command"
+    );
+    assert!(!app.editor.input.pending());
+}

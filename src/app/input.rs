@@ -9,7 +9,7 @@ use super::*;
 use navigation::Style;
 mod control;
 pub(super) use control::Replay;
-pub(super) use control::{Context, Frame, Router, Scope};
+pub(super) use control::{Context, Router, Scope};
 
 /// Share tab recognition between source admission and shortcuts in other widgets.
 fn tab_shortcut(ctx: &egui::Context) -> Option<isize> {
@@ -32,6 +32,7 @@ enum DocumentShortcut {
     Cycle(isize),
     New,
     Close,
+    ClosePreview(u64),
     Markdown,
 }
 impl DocumentShortcut {
@@ -55,44 +56,54 @@ impl DocumentShortcut {
 }
 
 impl EditorApp {
-    /// Returning from a preview establishes a source destination before later
-    /// keys in the same native batch. Do not move this command ahead of earlier
-    /// input, or admit it through modal, terminal or other-viewport barriers.
-    fn markdown_source_shortcut(&self, ctx: &egui::Context) -> bool {
+    /// Preview Close/return commands establish the destination before later
+    /// shortcuts in the same packet. Only the first keyboard event may initiate
+    /// a handoff, so Close cannot overtake an earlier palette or input command.
+    fn preview_document_shortcut(&self, ctx: &egui::Context) -> Option<DocumentShortcut> {
         if !self.editors.contains(ctx.viewport_id())
             || self.documents.viewport() != ctx.viewport_id()
             || !self.editing_allowed(ctx)
             || Terminal::focused(ctx)
-            || !self.documents.active().is_some_and(|doc| {
-                doc.markdown.as_ref().is_some_and(|preview| preview.showing)
-                    || doc.marp.as_ref().is_some_and(|preview| preview.showing)
-            })
         {
-            return false;
+            return None;
+        }
+        let doc = self.documents.active()?;
+        let markdown = doc.markdown.as_ref().is_some_and(|preview| preview.showing)
+            || doc.marp.as_ref().is_some_and(|preview| preview.showing);
+        if !markdown && doc.pdf.is_none() && doc.image.is_none() {
+            return None;
         }
         let shortcut = Command::Markdown.shortcut().unwrap();
         ctx.input_mut(|input| {
-            let Some(index) = input.events.iter().position(|event| {
-                matches!(
-                    event,
-                    egui::Event::Key { pressed: true, .. }
-                        | egui::Event::Text(_)
-                        | egui::Event::Paste(_)
-                        | egui::Event::Cut
-                        | egui::Event::Copy
-                        | egui::Event::Ime(_)
-                )
-            }) else {
-                return false;
+            let index = input.events.iter().position(|event| match event {
+                egui::Event::Key { pressed: true, .. }
+                | egui::Event::Text(_)
+                | egui::Event::Paste(_)
+                | egui::Event::Cut
+                | egui::Event::Copy => true,
+                egui::Event::Ime(
+                    egui::ImeEvent::Preedit(value) | egui::ImeEvent::Commit(value),
+                ) => !value.is_empty(),
+                // Native IME enable/disable and empty preedit notifications
+                // contain no text and may precede the first real shortcut.
+                _ => false,
+            })?;
+            let egui::Event::Key { key, modifiers, .. } = &input.events[index] else {
+                return None;
             };
-            if matches!(&input.events[index], egui::Event::Key { key, modifiers, .. }
-                if *key == shortcut.logical_key && modifiers.matches_logically(shortcut.modifiers))
+            let command = if *key == Key::W && modifiers.matches_logically(egui::Modifiers::COMMAND)
             {
-                input.events.remove(index);
-                true
+                DocumentShortcut::ClosePreview(doc.id)
+            } else if markdown
+                && *key == shortcut.logical_key
+                && modifiers.matches_logically(shortcut.modifiers)
+            {
+                DocumentShortcut::Markdown
             } else {
-                false
-            }
+                return None;
+            };
+            input.events.remove(index);
+            Some(command)
         })
     }
 
@@ -130,7 +141,9 @@ impl EditorApp {
             return None;
         }
         self.documents.active().and_then(|doc| {
-            (doc.markdown.as_ref().is_some_and(|preview| preview.showing)
+            (doc.image.is_some()
+                || doc.pdf.is_some()
+                || doc.markdown.as_ref().is_some_and(|preview| preview.showing)
                 || doc.marp.as_ref().is_some_and(|preview| preview.showing))
             .then(|| Scope::preview(ctx, doc.id, self.navigation.bindings.style()))
         })
@@ -263,8 +276,7 @@ impl EditorApp {
         let document_command = if context.source.is_some() {
             DocumentShortcut::take(ctx, self.navigation.bindings.style())
         } else {
-            self.markdown_source_shortcut(ctx)
-                .then_some(DocumentShortcut::Markdown)
+            self.preview_document_shortcut(ctx)
         };
         if let Some(command) = document_command {
             // Earlier source operations have already crossed the native edit
@@ -274,8 +286,11 @@ impl EditorApp {
                 DocumentShortcut::Cycle(direction) => self.cycle_tab(direction, ctx),
                 DocumentShortcut::New => self.new_file(),
                 DocumentShortcut::Close => {
-                    self.guarded_source_close(&frame, ctx);
+                    if let Some(id) = frame.document() {
+                        self.guarded_input_close(id, ctx);
+                    }
                 }
+                DocumentShortcut::ClosePreview(id) => self.guarded_input_close(id, ctx),
                 DocumentShortcut::Markdown => self.toggle_markdown(ctx),
             }
             let next = self

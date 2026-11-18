@@ -128,17 +128,10 @@ impl EditorApp {
         }
         self.request_guarded(action, ctx, false);
     }
-    /// The input owner proves that earlier source edits already crossed their widget boundary.
-    /// Events after this explicit Close command belong to its destination, not the old buffer.
-    pub(in crate::app) fn guarded_source_close(
-        &mut self,
-        frame: &input::Frame,
-        ctx: &egui::Context,
-    ) {
-        if let Some(id) = frame
-            .document()
-            .filter(|id| Some(*id) == self.documents.selected_id())
-        {
+    /// The input owner proves earlier source edits crossed their widget boundary,
+    /// or owns a read-only preview. Events after Close belong to its destination.
+    pub(in crate::app) fn guarded_input_close(&mut self, id: u64, ctx: &egui::Context) {
+        if Some(id) == self.documents.selected_id() {
             self.request_guarded(Action::CloseTab(id), ctx, true);
         }
     }

@@ -137,6 +137,7 @@ impl EditorApp {
                     return;
                 }
                 if self.pdf_ui(ui, ctx) {
+                    self.editor.input.after_preview(ctx, self.documents.active().unwrap().id);
                     return;
                 }
                 if self.documents[self.documents.active_index()].image.is_some() {
@@ -152,6 +153,7 @@ impl EditorApp {
                     if reload {
                         self.reload_image(id, ctx);
                     }
+                    self.editor.input.after_preview(ctx, id);
                     return;
                 }
                 if self.notebook_ui(ui, ctx) {

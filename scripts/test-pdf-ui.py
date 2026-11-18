@@ -9,12 +9,14 @@ import time
 from pathlib import Path
 
 os.environ["RODE_UI_ARTIFACTS"] = str(Path(__file__).resolve().parent.parent / "target/pdf-ui")
+from ui_fixture import capture_failure
 from ui_harness import (
     ARTIFACTS,
     BINARY,
     NativeUI,
     click,
     close_window,
+    delayed_input,
     display,
     fixture_directory,
     fixture_environment,
@@ -213,20 +215,41 @@ def run(remote=False):
                 assert color(window, label + "-failed-reload.png", "green"), (
                     "Failed reload lost previous page"
                 )
-                key("w", ("Control_L",))
-                ui.command("Save file")
-                wait_for(
-                    lambda: "keep_dirty_text" in notes.read_text(),
-                    "Switching previews lost unsaved text",
+                # A delayed-input run queues both shortcuts before the GUI
+                # resumes. The palette must belong to the restored notes tab.
+                focus_window(window)
+                with delayed_input(process):
+                    key("w", ("Control_L",))
+                    key("p", ("Control_L", "Shift_L"))
+                ui.control("command-palette-input", focused=True)
+                expected = "Keep this note.\n\n// keep_dirty_text"
+                ui.value("active-document", str(notes), enabled=False)
+                ui.value("source-editor-value", expected, enabled=False)
+                assert notes.read_text() == "Keep this note.\n", (
+                    "Preview switching wrote the dirty source"
                 )
+                text("Save file")
+                ui.control("command-match:Save file")
+                ui.control("command-palette-input", focused=True)
+                before = ui.layout()["pass"]
+                key("Return")
+                ui.absent("command-palette-input", after_pass=before)
+                ui.document(notes)
+                ui.source(expected)
+                ui.control("source-editor-saved")
+                ui.wait(lambda: notes.read_text() == expected, "Restored notes did not save")
                 close_window(window, process)
                 print(
                     label
                     + ": Bundled PDF rendering, single/continuous pages, fit modes, keyboard/wheel navigation, zoom, read-only saves, reload and dirty-buffer preservation passed."
                 )
             except Exception:
-                if window and process.poll() is None:
-                    screenshot(window, label + "-failure.png")
+                capture_failure(
+                    label,
+                    process,
+                    window,
+                    files=((environment["RODE_UI_TEST_STATE"], ".json"), (log_path, ".log")),
+                )
                 raise
             finally:
                 stop_process(process)
