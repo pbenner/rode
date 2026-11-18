@@ -237,6 +237,17 @@ def notices(binary):
                 if not path.is_file():
                     raise ValueError(f"Missing bundled font license: {path}")
                 candidates.append(path)
+        pdf_assets = {
+            "hayro-font": "assets/LICENSE_FOXIT",
+            "hayro-cmap": "assets/LICENSE.txt",
+            "hayro-interpret": "assets/CGATS_LICENSE.txt",
+        }
+        if package["name"] in pdf_assets:
+            # Embedded PDF fonts, CMaps and color profiles have separate notices.
+            path = source / pdf_assets[package["name"]]
+            if not path.is_file():
+                raise ValueError(f"Missing bundled PDF asset notice: {path}")
+            candidates.append(path)
         if package["name"] == "latex-rust":
             for name in ["fonts/stix-two-math/OFL.txt", "data/dvipsnames.tsv"]:
                 path = source / name

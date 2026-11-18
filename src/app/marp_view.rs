@@ -256,7 +256,7 @@ impl EditorApp {
             && !egui::Popup::is_any_open(ctx);
         let view = self.documents.active_mut().unwrap().marp.as_mut().unwrap();
         let Some(pdf) = &mut view.pdf else {
-            ui.label("Slides use an installed Marp CLI and browser on the project host, and desktop Poppler for display.");
+            ui.label("Slides use an installed Marp CLI and browser on the project host, and the bundled Rust PDF renderer on the desktop for display.");
             ui.label("The current buffer is rendered without saving it.");
             return;
         };

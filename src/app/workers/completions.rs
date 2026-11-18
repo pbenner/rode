@@ -63,7 +63,7 @@ impl EditorApp {
                         image.loading = false;
                     }
                     if let Some(pdf) = &mut doc.pdf {
-                        pdf.image.loading = false;
+                        pdf.reload_failed();
                     }
                 }
             }

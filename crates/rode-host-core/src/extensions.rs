@@ -330,7 +330,7 @@ impl Registry {
             (
                 Feature::Pdf,
                 "PDF previews",
-                "Bounded, read-only Poppler document views.",
+                "Bundled Rust PDF reader with cached and continuous pages.",
                 "Opened PDF",
             ),
             (

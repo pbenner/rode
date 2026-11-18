@@ -287,7 +287,7 @@ and deployment tests protect compatibility with already installed runtimes.
 
 ### Document models and editing history
 
-Native image/PDF views avoid a viewer/browser runtime and remote rendering dependencies. Static/page-at-a-time rendering trades general viewer features for bounded resources. Shared leases account for old previews and worker snapshots during reload, while serialized image transfer/decode reduces temporary peaks at the cost of parallel loading. PDF documents and slide previews share one page worker and completion path; the captured destination, document version and request token identify the view that may accept each reply. Separate text/byte/read-only paths prevent source formatting or saving from corrupting binary previews. See `src/images.rs`, [images](images.md), [PDFs](pdf.md) and [binary editing](binary.md).
+Native image/PDF views avoid a viewer/browser runtime and remote rendering dependencies. PDFs retain a parsed Hayro document and bounded raster caches, with virtual continuous or single-page layouts; only visible and nearby pages are rendered. Shared leases account for old previews and worker snapshots during reload, while serialized image transfer/decode reduces temporary peaks at the cost of parallel loading. PDF documents and slide previews share one page worker and completion path; the captured destination, document version and request token identify the view that may accept each reply. Separate text/byte/read-only paths prevent source formatting or saving from corrupting binary previews. See `src/images.rs`, [images](images.md), [PDFs](pdf.md) and [binary editing](binary.md).
 
 Notebook cells retain unknown JSON/metadata/output bundles so native editing does not silently destroy another tool's data. This duplicates some state within explicit size limits. Kernels start separately from parsing/saving, keeping execution dependencies and lifetime out of ordinary notebook viewing. Rationale lives in `src/notebook.rs`.
 
@@ -668,10 +668,14 @@ UTF-8 chunks, and controllers retain only its latest 8 KiB. Display previews
 stop formatting at their own 16 KiB budget. These presentation limits never
 truncate protocol identifiers, permission requests or executable tool arguments.
 
-PDF tools share the host's bounded binary capture through `capture_bounded`;
-their adapter retains the renderer's limits and diagnostics. Capture keeps its
-scoped child guard for synchronous error cleanup, while `ProcessGroup` shares
-asynchronous Stop state with transport workers.
+The desktop PDF renderer runs in a retained instance of the installed executable,
+with bounded JSON metadata and raw pixel frames over a private socket. A sealed
+Linux memory snapshot avoids plaintext temporary files; cancellation/deadlines kill
+and reap the direct child. Socket lifetime monitoring stops an orphaned worker
+even if its interpreter is busy. The UI admits one page job per reader and
+coalesces navigation while preserving version/request guards. Ordinary command
+capture keeps its scoped child guard for synchronous error cleanup, while
+`ProcessGroup` shares asynchronous Stop state with transport workers.
 
 Both owners use `rode_runtime_core::process::wait` for kernel exit observation.
 Its polling and blocking entry points use one `waitid(WNOWAIT)` implementation,

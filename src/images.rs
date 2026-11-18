@@ -20,7 +20,7 @@ use std::{
     io::Cursor,
     path::Path,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -32,20 +32,54 @@ pub const MAX_RETAINED: usize = 128 * 1024 * 1024;
 /// Maximum accepted source width or height in pixels.
 pub const MAX_DIMENSION: u32 = 16_384;
 
+/// Opportunistic preview storage that may release an old entry under pressure.
+/// Active views retain their own leases; eviction never invalidates shown pixels.
+pub(crate) trait PreviewCache: Send + Sync {
+    fn release_one(&self) -> bool;
+}
+
 /// Thread-safe shared preview accounting and transfer/decode serialization.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Budget {
     used: AtomicUsize,
     sources: AtomicUsize,
+    caches: Mutex<Vec<Weak<dyn PreviewCache>>>,
     /// Serialize byte transfer/decode, including temporary transport buffers.
     pub io: Mutex<()>,
 }
+impl std::fmt::Debug for Budget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Budget")
+            .field("used", &self.used())
+            .finish_non_exhaustive()
+    }
+}
 impl Budget {
+    /// Register weak cache ownership, without extending a document's lifetime.
+    pub(crate) fn register_cache(&self, cache: &Arc<dyn PreviewCache>) {
+        let mut caches = self.caches.lock().unwrap_or_else(|e| e.into_inner());
+        caches.retain(|cache| cache.strong_count() != 0);
+        caches.push(Arc::downgrade(cache));
+    }
+    fn release_cached(&self) -> bool {
+        let caches: Vec<_> = self
+            .caches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        caches.iter().any(|cache| cache.release_one())
+    }
     /// Atomically reserve decoded bytes within the shared retained-preview budget;
     /// return a lease whose final drop releases the exact reservation, or fail before allocation.
     pub(crate) fn reserve(self: &Arc<Self>, bytes: usize) -> Result<Lease> {
         let mut used = self.used.load(Ordering::Acquire);
         loop {
+            if used.saturating_add(bytes) > MAX_RETAINED && self.release_cached() {
+                used = self.used.load(Ordering::Acquire);
+                continue;
+            }
             let next=used.checked_add(bytes).filter(|total|*total<=MAX_RETAINED)
                 .context("Preview memory limit reached (128 MiB). Close another image or PDF tab and try again.")?;
             match self

@@ -35,6 +35,7 @@ pub(super) struct ImageView {
     preview_size: [usize; 2],
     _lease: Arc<images::Lease>,
     zoom: Option<f32>,
+    fit_width: bool,
     displayed_zoom: f32,
     reset_scroll: Option<ScrollOrigin>,
     pub loading: bool,
@@ -51,6 +52,7 @@ impl ImageView {
             texture: None,
             _lease: decoded.lease,
             zoom: None,
+            fit_width: false,
             displayed_zoom: 1.,
             reset_scroll: Some(ScrollOrigin::Start),
             loading: false,
@@ -59,8 +61,10 @@ impl ImageView {
     /// Replace successfully decoded content while preserving the user's selected zoom mode.
     pub fn replace(&mut self, decoded: images::Decoded) {
         let zoom = self.zoom;
+        let fit_width = self.fit_width;
         *self = Self::new(decoded);
         self.zoom = zoom;
+        self.fit_width = fit_width;
     }
     /// Multiply the displayed/explicit zoom, clamp it to 1–1600% and reveal the image start.
     pub fn zoom_by(&mut self, factor: f32) {
@@ -84,6 +88,20 @@ impl ImageView {
         palette: theme::Palette,
         focus: bool,
     ) -> ImageResponse {
+        self.show(ui, ctx, id, palette, focus, false)
+    }
+    /// Render a PDF page with reader zoom controls and without image-file metadata.
+    pub fn pdf_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        id: u64,
+        palette: theme::Palette,
+        focus: bool,
+    ) -> ImageResponse {
+        self.show(ui, ctx, id, palette, focus, true)
+    }
+    fn upload(&mut self, ctx: &egui::Context, id: u64) {
         if let Some(pixels) = self.pixels.take() {
             self.texture = Some(ctx.load_texture(
                 format!("image-{id}"),
@@ -91,13 +109,66 @@ impl ImageView {
                 egui::TextureOptions::LINEAR,
             ));
         }
+    }
+    /// Paint a cached page into a virtual document; upload its texture only once.
+    pub fn paint(&mut self, ui: &egui::Ui, ctx: &egui::Context, id: u64, rect: egui::Rect) {
+        self.upload(ctx, id);
+        if let Some(texture) = &self.texture {
+            ui.painter().image(
+                texture.id(),
+                rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+    /// Reuse page pixels/textures while adopting the active reader's zoom mode.
+    pub fn adopt_presentation(&mut self, other: &Self) {
+        self.zoom = other.zoom;
+        self.fit_width = other.fit_width;
+        self.displayed_zoom = other.displayed_zoom;
+        self.reset_scroll = Some(ScrollOrigin::Start);
+        self.loading = false;
+    }
+    /// Explicit reader zoom; None selects a fit mode.
+    pub fn zoom_factor(&self) -> Option<f32> {
+        self.zoom
+    }
+    /// Whether the active fit mode fills the available width.
+    pub fn fitting_width(&self) -> bool {
+        self.fit_width
+    }
+    /// Update the actual display scale for subsequent zoom shortcuts.
+    pub fn displayed_at(&mut self, scale: f32) {
+        self.displayed_zoom = scale;
+    }
+    /// Draw shared preview/reader zoom and reload controls.
+    pub fn controls(&mut self, ui: &mut egui::Ui, palette: theme::Palette, pdf: bool) -> bool {
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
-            let fit = crate::keyboard::selectable_label(ui, self.zoom.is_none(), "Fit");
+            let fit = crate::keyboard::selectable_label(
+                ui,
+                self.zoom.is_none() && !self.fit_width,
+                if pdf { "Fit page" } else { "Fit" },
+            );
             super::ui_probe::button(ui, "image-fit", &fit);
             if fit.clicked() {
                 self.zoom = None;
+                self.fit_width = false;
                 self.reset_scroll = Some(ScrollOrigin::Start);
+            }
+            if pdf {
+                let width = crate::keyboard::selectable_label(
+                    ui,
+                    self.zoom.is_none() && self.fit_width,
+                    "Fit width",
+                );
+                ui_probe::button(ui, "image-fit-width", &width);
+                if width.clicked() {
+                    self.fit_width = true;
+                    self.zoom = None;
+                    self.reset_scroll = Some(ScrollOrigin::Start);
+                }
             }
             if crate::keyboard::button(ui, "100%")
                 .on_hover_text("Actual size in image pixels")
@@ -130,25 +201,45 @@ impl ImageView {
             }
             ui.label(palette.tag("READ ONLY"));
         });
-        let metadata = format!(
-            "{} · {} × {} px · {:.1} KiB{}",
-            self.format,
-            self.original[0],
-            self.original[1],
-            self.encoded_bytes as f64 / 1024.,
-            if self.preview_size != [self.original[0] as usize, self.original[1] as usize] {
-                " · reduced preview"
-            } else {
-                ""
-            }
-        );
-        ui.add(egui::Label::new(palette.tag(&metadata)).truncate()).on_hover_text(format!("{metadata}\nScroll or drag to pan. Large images are downsampled to the GPU preview limit. Animated images show their first frame."));
+        reload
+    }
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        id: u64,
+        palette: theme::Palette,
+        focus: bool,
+        pdf: bool,
+    ) -> ImageResponse {
+        self.upload(ctx, id);
+        let reload = self.controls(ui, palette, pdf);
+        if !pdf {
+            let metadata = format!(
+                "{} · {} × {} px · {:.1} KiB{}",
+                self.format,
+                self.original[0],
+                self.original[1],
+                self.encoded_bytes as f64 / 1024.,
+                if self.preview_size != [self.original[0] as usize, self.original[1] as usize] {
+                    " · reduced preview"
+                } else {
+                    ""
+                }
+            );
+            ui.add(egui::Label::new(palette.tag(&metadata)).truncate()).on_hover_text(format!("{metadata}\nScroll or drag to pan. Large images are downsampled to the GPU preview limit. Animated images show their first frame."));
+        }
         ui.separator();
         let viewport = ui.available_size().max(egui::vec2(1., 1.));
         let original = egui::vec2(self.original[0] as f32, self.original[1] as f32);
-        let fit = ((viewport.x - 16.).max(1.) / original.x)
-            .min((viewport.y - 16.).max(1.) / original.y)
-            .min(1.);
+        let width_fit = (viewport.x - 16.).max(1.) / original.x;
+        let fit = if self.fit_width {
+            width_fit
+        } else {
+            width_fit
+                .min((viewport.y - 16.).max(1.) / original.y)
+                .min(1.)
+        };
         let zoom = self.zoom.unwrap_or(fit).max(0.001);
         if (self.displayed_zoom - zoom).abs() > f32::EPSILON {
             self.displayed_zoom = zoom;

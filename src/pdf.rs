@@ -1,61 +1,53 @@
-//! On-demand PDF rasterization on the desktop. Only bytes cross the host file
-//! channel; no renderer is installed or run on SSH hosts.
+//! Bundled Hayro PDF interpretation on the desktop, with a retained document
+//! worker and bounded decoded-page cache. SSH hosts transfer original bytes only.
 use crate::images;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
+    collections::VecDeque,
     path::Path,
     process::Command,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-/// Maximum accepted page count in one PDF.
-pub const MAX_PAGES: usize = 10_000;
-/// Maximum requested raster side in pixels before GPU-limit adjustment.
-pub const RENDER_SIDE: usize = 2048;
+mod renderer;
+mod text;
 
-/// Recognize a `.pdf` path without accessing its bytes.
+/// Maximum accepted number of pages in a document.
+pub const MAX_PAGES: usize = 10_000;
+/// Default raster quality, in pixels on the longer side.
+pub const RENDER_SIDE: usize = 2048;
+const CACHE_PAGES: usize = 4;
+const CACHE_BYTES: usize = 48 * 1024 * 1024;
+
+/// Recognize a PDF extension without accessing its bytes.
 pub fn is_path(path: &str) -> bool {
     Path::new(path)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
 }
 
-/// Extract complete PDF text on a worker using the desktop's bounded Poppler runner.
-/// Scanned/image-only PDFs need OCR or image attachments instead.
+/// Extract bounded Unicode text with the bundled desktop interpreter.
 pub fn extract_text(bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String> {
-    ensure!(bytes.starts_with(b"%PDF-"), "Invalid PDF attachment.");
-    let text = run(
-        "pdftotext",
-        &[
-            "-layout".into(),
-            "-enc".into(),
-            "UTF-8".into(),
-            "-".into(),
-            "-".into(),
-        ],
-        bytes.into(),
-        rode_agent_core::attachment::CONTENT_LIMIT,
-        cancel,
-    )?;
-    let text = String::from_utf8(text).context("PDF text is not UTF-8")?;
-    ensure!(
-        !text.trim().is_empty(),
-        "This PDF contains no extractable text. Attach page images or an OCR text version."
-    );
-    Ok(text)
+    let (mut renderer, _) = renderer::Renderer::open(&bytes, cancel)?;
+    renderer.text(cancel)
 }
 
-/// Immutable PDF byte snapshot with a retained-memory lease; pages are rasterized only on
-/// demand.
+/// Immutable source snapshot and a private, persistent desktop renderer.
+/// The page cache shares its leases with displayed textures and evicts old
+/// entries before exceeding either its page count or retained-pixel allowance.
 pub struct Source {
     bytes: Arc<[u8]>,
-    /// Validated number of pages in the snapshot.
+    /// Validated page count.
     pub pages: usize,
+    /// Rotated/cropped page dimensions in PDF points, used for virtual layout.
+    pub sizes: Vec<[f32; 2]>,
+    renderer: Mutex<Option<renderer::Renderer>>,
+    cache: Mutex<VecDeque<(usize, usize, images::Decoded)>>,
     _lease: images::Lease,
 }
 impl std::fmt::Debug for Source {
@@ -66,19 +58,17 @@ impl std::fmt::Debug for Source {
             .finish()
     }
 }
-/// One rendered PDF page and its shared original source snapshot.
+/// A rendered page with its retained original document.
 #[derive(Clone, Debug)]
 pub struct Loaded {
-    /// Retained source used for subsequent page requests without another host transfer.
+    /// Original source reused by all page requests.
     pub source: Arc<Source>,
-    /// One-based page number currently represented by the raster.
+    /// One-based page number.
     pub page: usize,
-    /// CPU raster pixels and their shared preview-memory reservation.
+    /// Raster pixels and their preview-memory reservation.
     pub pixels: images::Decoded,
 }
-
-/// Decode base64 PDF data and rasterize one page using installed desktop Poppler tools. This
-/// blocks and belongs on a worker.
+/// Decode base64 source bytes and render a page on a background worker.
 pub fn load(
     encoded: &str,
     page: usize,
@@ -93,8 +83,7 @@ pub fn load(
         &AtomicBool::new(false),
     )
 }
-
-/// Load/rasterize with explicit cancellation; never run a renderer on the SSH host.
+/// Load a source and initial page with explicit cancellation.
 pub fn load_cancellable(
     encoded: &str,
     page: usize,
@@ -103,13 +92,17 @@ pub fn load_cancellable(
     cancel: &AtomicBool,
 ) -> Result<Loaded> {
     ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
-    let bytes = STANDARD
-        .decode(encoded)
-        .context("Invalid PDF data from the file helper")?;
-    load_bytes_cancellable(bytes, page, budget, texture_limit, cancel)
+    load_bytes_cancellable(
+        STANDARD
+            .decode(encoded)
+            .context("Invalid PDF data from the file helper")?,
+        page,
+        budget,
+        texture_limit,
+        cancel,
+    )
 }
-
-/// Retain owned PDF source bytes and rasterize one page under decoded-pixel limits.
+/// Load an owned snapshot and initial page without any external PDF tools.
 pub fn load_bytes(
     bytes: Vec<u8>,
     page: usize,
@@ -118,7 +111,6 @@ pub fn load_bytes(
 ) -> Result<Loaded> {
     load_bytes_cancellable(bytes, page, budget, texture_limit, &AtomicBool::new(false))
 }
-
 fn load_bytes_cancellable(
     bytes: Vec<u8>,
     page: usize,
@@ -130,30 +122,22 @@ fn load_bytes_cancellable(
     ensure!(
         bytes[..bytes.len().min(1024)]
             .windows(5)
-            .any(|bytes| bytes == b"%PDF-"),
+            .any(|s| s == b"%PDF-"),
         "Cannot open PDF: missing PDF header."
     );
     let lease = budget.reserve_source(bytes.len())?;
-    let bytes: Arc<[u8]> = bytes.into();
-    let info = run("pdfinfo", &["-".into()], bytes.clone(), 64 * 1024, cancel)?;
-    let info = std::str::from_utf8(&info).context("PDF metadata is not UTF-8")?;
-    let pages = info
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("Pages:")
-                .and_then(|s| s.trim().parse::<usize>().ok())
-        })
-        .context("PDF renderer did not report a page count")?;
-    ensure!(
-        pages > 0 && pages <= MAX_PAGES,
-        "PDF previews support 1–10,000 pages."
-    );
+    let (renderer, sizes) = renderer::Renderer::open(&bytes, cancel)?;
     let source = Arc::new(Source {
-        bytes,
-        pages,
+        bytes: bytes.into(),
+        pages: sizes.len(),
+        sizes,
+        renderer: Mutex::new(Some(renderer)),
+        cache: Mutex::new(VecDeque::new()),
         _lease: lease,
     });
-    let page = page.clamp(1, pages);
+    let cache: Arc<dyn images::PreviewCache> = source.clone();
+    budget.register_cache(&cache);
+    let page = page.clamp(1, source.pages);
     let pixels = source.render(page, budget, texture_limit, cancel)?;
     Ok(Loaded {
         source,
@@ -161,9 +145,31 @@ fn load_bytes_cancellable(
         pixels,
     })
 }
+impl images::PreviewCache for Source {
+    fn release_one(&self) -> bool {
+        self.cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop_front()
+            .is_some()
+    }
+}
 impl Source {
-    /// Rasterize a one-based page from this retained source with cancellation and a
-    /// texture-side limit. Other pages are not retained automatically.
+    /// Return a cached page immediately, without starting work or taking the
+    /// renderer lock. Clones share the exact pixels and memory reservation.
+    pub fn cached(&self, page: usize, texture_limit: usize) -> Option<images::Decoded> {
+        let side = RENDER_SIDE.min(texture_limit.clamp(1, 4096));
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let index = cache
+            .iter()
+            .position(|(p, s, _)| *p == page && *s == side)?;
+        let entry = cache.remove(index)?;
+        let decoded = entry.2.clone();
+        cache.push_back(entry);
+        Some(decoded)
+    }
+    /// Render a page with persistent parsing/font caches; cancellation or a
+    /// failed worker discards that worker and the next request can restart it.
     pub fn render(
         &self,
         page: usize,
@@ -176,44 +182,62 @@ impl Source {
             "Page is outside this PDF."
         );
         ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
-        let png = run(
-            "pdftoppm",
-            &[
-                "-f".into(),
-                page.to_string(),
-                "-l".into(),
-                page.to_string(),
-                "-singlefile".into(),
-                "-scale-to".into(),
-                RENDER_SIDE.min(texture_limit.max(1)).to_string(),
-                "-png".into(),
-                "-".into(),
-            ],
-            self.bytes.clone(),
-            32 * 1024 * 1024, // Rendered-page PNG output bound, independent of source file size.
-            cancel,
-        )?;
+        if let Some(pixels) = self.cached(page, texture_limit) {
+            return Ok(pixels);
+        }
+        let mut renderer = self.renderer.lock().unwrap_or_else(|e| e.into_inner());
         ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
-        let mut pixels = images::decode_bytes(&png, "page.png", budget, texture_limit)?;
-        pixels.format = "PDF".into();
-        pixels.encoded_bytes = self.bytes.len();
-        Ok(pixels)
+        if let Some(pixels) = self.cached(page, texture_limit) {
+            return Ok(pixels);
+        }
+        let side = RENDER_SIDE.min(texture_limit.clamp(1, 4096));
+        {
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            while cache.len() >= CACHE_PAGES
+                || cache
+                    .iter()
+                    .map(|e| e.2.pixels.pixels.len() * 4)
+                    .sum::<usize>()
+                    + side * side * 4
+                    > CACHE_BYTES
+            {
+                if cache.pop_front().is_none() {
+                    break;
+                }
+            }
+        }
+        if renderer.is_none() {
+            *renderer = Some(renderer::Renderer::open(&self.bytes, cancel)?.0);
+        }
+        let result =
+            renderer
+                .as_mut()
+                .unwrap()
+                .render(page, side, budget, self.bytes.len(), cancel);
+        match result {
+            Ok(pixels) => {
+                ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+                self.cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_back((page, side, pixels.clone()));
+                Ok(pixels)
+            }
+            Err(error) => {
+                *renderer = None;
+                Err(error)
+            }
+        }
     }
 }
 
-/// Bounded binary stdout, concurrent pipes, cancellation, and process-group cleanup.
-/// Rendering receives a snapshot on stdin, never the source host's path.
-fn run(
-    program: &str,
-    args: &[String],
-    bytes: Arc<[u8]>,
-    limit: usize,
-    cancel: &AtomicBool,
-) -> Result<Vec<u8>> {
+/// Internal renderer entry point. The editor calls this before GUI initialization.
+pub fn coordinator(path: &Path) -> Result<()> {
+    renderer::serve(path)
+}
+
+fn limit_process(command: &mut Command) {
     use std::os::unix::process::CommandExt;
-    ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
-    let mut command = Command::new(program);
-    command.args(args).env("LC_ALL", "C");
     // Bound the decoder's address space in addition to pixels and pipe output.
     unsafe {
         command.pre_exec(|| {
@@ -224,90 +248,43 @@ fn run(
             if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            #[cfg(target_os = "linux")]
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
             Ok(())
         });
     }
-    let output = rode_host_core::command::capture_bounded(
-        command,
-        std::io::Cursor::new(bytes),
-        Duration::from_secs(20),
-        cancel,
-        limit,
-    )
-    .map_err(|error| {
-        if cancel.load(Ordering::Acquire) {
-            anyhow::anyhow!("PDF rendering cancelled.")
-        } else if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-            error.kind() == std::io::ErrorKind::NotFound
-        }) {
-            error.context(format!("PDF tools need Poppler's pdfinfo, pdftoppm and pdftotext on this desktop (for example: install poppler-utils). Cannot run {program}"))
-        } else {
-            error
-        }
-    })?;
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        if error.to_ascii_lowercase().contains("password") {
-            bail!("Password-protected PDFs are not supported by this preview.");
-        }
-        bail!(
-            "Cannot render PDF: {}",
-            error.chars().take(2000).collect::<String>().trim()
-        );
-    }
-    Ok(output.stdout)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
     #[test]
-    fn cancelled_and_excessive_renderer_processes_are_stopped() {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let flag = cancel.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(80));
-            flag.store(true, Ordering::Release);
-        });
-        let before = Instant::now();
-        let result = run(
-            "/bin/sh",
-            &["-c".into(), "sleep 30 & wait".into()],
-            Arc::from([]),
-            1024,
-            &cancel,
-        );
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
-        assert!(before.elapsed() < Duration::from_secs(3));
-        assert!(
-            run(
-                "/bin/sh",
-                &["-c".into(), "head -c 2048 /dev/zero".into()],
-                Arc::from([]),
-                16,
-                &AtomicBool::new(false)
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn renderer_exit_closes_descendant_pipes_before_collecting_output() {
-        let before = Instant::now();
-        let output = run(
-            "/bin/sh",
-            &["-c".into(), "/bin/sleep 3 & printf done".into()],
-            Arc::from([]),
-            1024,
-            &AtomicBool::new(false),
+    fn memory_pressure_evicts_page_caches_without_invalidating_displayed_pixels() {
+        let budget = Arc::new(images::Budget::default());
+        let loaded = load_bytes(
+            include_bytes!("../tests/fixtures/pages.pdf").to_vec(),
+            1,
+            &budget,
+            128,
         )
         .unwrap();
-        assert_eq!(output, b"done");
-        assert!(before.elapsed() < Duration::from_secs(2));
+        let second = loaded
+            .source
+            .render(2, &budget, 128, &AtomicBool::new(false))
+            .unwrap();
+        drop(second);
+        let shown_bytes = loaded.pixels.pixels.pixels.len() * 4;
+        let remaining = budget.reserve(images::MAX_RETAINED - shown_bytes).unwrap();
+        assert!(loaded.source.cached(1, 128).is_none());
+        assert!(loaded.source.cached(2, 128).is_none());
+        assert_eq!(loaded.pixels.pixels.size, [103, 128]);
+        assert!(
+            budget.reserve(1).is_err(),
+            "An active view's reservation cannot be evicted"
+        );
+        drop((loaded, remaining));
+        assert_eq!(
+            budget.used(),
+            0,
+            "Weak cache registration must not retain a source"
+        );
     }
 }

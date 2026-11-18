@@ -17,6 +17,7 @@ from ui_harness import (
     close_window,
     display,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -74,9 +75,7 @@ def run(remote=False):
         private = base / "private.pdf"
         private.write_bytes(FIXTURE.read_bytes())
         (root / "escape.pdf").symlink_to(private)
-        environment = dict(
-            os.environ, XDG_CONFIG_HOME=str(base / "config"), XDG_DATA_HOME=str(base / "data")
-        )
+        environment = fixture_environment(base)
         args = [str(BINARY), "--sandbox", "--theme", "carbon"]
         if remote:
             tools = base / "ssh-fixture"
@@ -106,7 +105,9 @@ def run(remote=False):
             window = None
             try:
                 window = wait_for_window(process, log_path)
-                wait_for_project(window, process, log_path, root)
+                wait_for_project(
+                    window, process, log_path, root, state_path=environment["RODE_UI_TEST_STATE"]
+                )
                 focus_window(window)
                 ui = NativeUI(window, process, log_path, environment["RODE_UI_TEST_STATE"], root)
                 ui.open_file("report.PDF")
@@ -150,6 +151,39 @@ def run(remote=False):
                 key("equal", ("Control_L",))
                 screenshot(window, label + "-zoom.png")
                 key("minus", ("Control_L",))
+                # Continuous mode must display adjacent pages together and keep
+                # real keyboard/fit navigation working across mixed orientations.
+                ui.click("pdf-continuous")
+                ui.click("image-fit")
+                ui.click("pdf-document")
+                ui.control("pdf-document", focused=True)
+                key("Home")
+                ui.control("pdf-current-page:1")
+                ui.control("pdf-page-ready:1")
+                wheel(False, 4)
+                ui.layout(
+                    lambda state: {"pdf-page-ready:1", "pdf-page-ready:2"}.issubset(
+                        button["name"] for button in state["buttons"]
+                    ),
+                    "Continuous PDF did not show adjacent rendered pages",
+                )
+                screenshot(window, label + "-continuous.png")
+                ui.click("image-fit-width")
+                ui.click("pdf-document")
+                key("End")
+                ui.control("pdf-current-page:2")
+                ui.control("pdf-page-ready:2")
+                key("Home")
+                ui.control("pdf-current-page:1")
+                key("End")
+                ui.control("pdf-current-page:2")
+                ui.click("pdf-single")
+                ui.click("image-fit")
+                ui.control("pdf-page-ready:2")
+                wait_for(
+                    lambda: color(window, label + "-single-again.png", "blue"),
+                    "Returning to single-page mode lost the selected page",
+                )
                 original = pdf.read_bytes()
                 ui.command("Save file")
                 ui.notice("Image and PDF previews are read-only.")
@@ -188,7 +222,7 @@ def run(remote=False):
                 close_window(window, process)
                 print(
                     label
-                    + ": PDF rendering, wheel scrolling/paging, navigation, zoom, read-only saves, reload and dirty-buffer preservation passed."
+                    + ": Bundled PDF rendering, single/continuous pages, fit modes, keyboard/wheel navigation, zoom, read-only saves, reload and dirty-buffer preservation passed."
                 )
             except Exception:
                 if window and process.poll() is None:

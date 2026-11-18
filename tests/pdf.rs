@@ -1,4 +1,4 @@
-//! Desktop Poppler page rendering, source/budget lifetime and bounded desktop/headless PDF transfer.
+//! Bundled Rust page rendering, source/budget lifetime and bounded desktop/headless PDF transfer.
 
 use rode::sandbox::PlanExt as _;
 #[path = "support/native.rs"]
@@ -36,18 +36,8 @@ fn peer(request: &Request) -> anyhow::Result<files::Response> {
     );
     Ok(serde_json::from_slice(&output.stdout)?)
 }
-fn available() -> bool {
-    if sandbox::find_program("pdfinfo").is_none() || sandbox::find_program("pdftoppm").is_none() {
-        eprintln!("Install poppler-utils to test actual PDF rendering.");
-        return false;
-    }
-    true
-}
 #[test]
 fn pdf_pages_render_with_distinct_content_and_release_the_shared_budget() {
-    if !available() {
-        return;
-    }
     let budget = Arc::new(Budget::default());
     let loaded = pdf::load_bytes(FIXTURE.to_vec(), 1, &budget, 1024).unwrap();
     assert_eq!(loaded.source.pages, 2);
@@ -185,12 +175,88 @@ fn sandbox_pdf_reads_cannot_escape_through_paths_or_symlinks() {
 
 #[test]
 fn document_attachments_extract_pdf_text_and_reject_cancelled_conversion() {
-    if sandbox::find_program("pdftotext").is_none() {
-        return;
-    }
     let text = pdf::extract_text(FIXTURE.to_vec(), &AtomicBool::new(false)).unwrap();
     assert!(!text.trim().is_empty());
     assert!(!text.contains("%PDF-"));
     assert!(pdf::extract_text(FIXTURE.to_vec(), &AtomicBool::new(true)).is_err());
     assert!(pdf::extract_text(b"not a PDF".to_vec(), &AtomicBool::new(false)).is_err());
+}
+
+#[test]
+fn renderer_survives_its_opening_thread_and_reuses_cached_pixels() {
+    let budget = Arc::new(Budget::default());
+    let worker_budget = budget.clone();
+    let loaded = std::thread::spawn(move || {
+        pdf::load_bytes(FIXTURE.to_vec(), 1, &worker_budget, 512).unwrap()
+    })
+    .join()
+    .unwrap();
+    let source = loaded.source.clone();
+    let second = source
+        .render(2, &budget, 512, &AtomicBool::new(false))
+        .unwrap();
+    let used = budget.used();
+    let start = std::time::Instant::now();
+    for _ in 0..1000 {
+        let back = source
+            .render(1, &budget, 512, &AtomicBool::new(false))
+            .unwrap();
+        assert!(Arc::ptr_eq(&loaded.pixels.pixels, &back.pixels));
+        let forward = source
+            .render(2, &budget, 512, &AtomicBool::new(false))
+            .unwrap();
+        assert!(Arc::ptr_eq(&second.pixels, &forward.pixels));
+    }
+    eprintln!("2,000 cached page accesses: {:?}", start.elapsed());
+    assert_eq!(budget.used(), used);
+    drop((loaded, source, second));
+    assert_eq!(budget.used(), 0);
+}
+
+#[test]
+fn bundled_renderer_and_text_extraction_work_with_an_empty_path() {
+    use std::io::Read;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("document.pdf");
+    fs::write(&path, FIXTURE).unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rode"))
+        .args([std::ffi::OsStr::new("--pdf-helper"), path.as_os_str()])
+        .env("PATH", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = child.stdout.take().unwrap();
+    let header = |output: &mut std::process::ChildStdout| {
+        let mut length = [0; 4];
+        output.read_exact(&mut length).unwrap();
+        let length = u32::from_be_bytes(length) as usize;
+        assert!(length <= 512 * 1024);
+        let mut bytes = vec![0; length];
+        output.read_exact(&mut bytes).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+    };
+    let document = header(&mut output);
+    assert_eq!(document["kind"], "document");
+    assert_eq!(document["sizes"].as_array().unwrap().len(), 2);
+    input
+        .write_all(b"{\"action\":\"render\",\"page\":2,\"side\":256}\n")
+        .unwrap();
+    let raster = header(&mut output);
+    assert_eq!(raster["kind"], "page");
+    let length = raster["width"].as_u64().unwrap() * raster["height"].as_u64().unwrap() * 4;
+    assert!(length > 0 && length <= 256 * 256 * 4);
+    let mut pixels = vec![0; length as usize];
+    output.read_exact(&mut pixels).unwrap();
+    input.write_all(b"{\"action\":\"text\"}\n").unwrap();
+    let text = header(&mut output);
+    assert_eq!(text["kind"], "text");
+    let mut bytes = vec![0; text["bytes"].as_u64().unwrap() as usize];
+    output.read_exact(&mut bytes).unwrap();
+    assert!(String::from_utf8(bytes).unwrap().contains("RODE"));
+    drop(input);
+    drop(output);
+    assert!(child.wait().unwrap().success());
 }

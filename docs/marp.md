@@ -33,7 +33,7 @@ Conversion runs on the **project host**, within its actual sandbox and grants. I
 npm install --save-dev @marp-team/marp-cli
 ```
 
-RODE checks the project's `node_modules/.bin/marp`, then `marp` on PATH. It never uses npx, downloads tools/browsers, uploads an executable, or falls back from SSH to desktop execution. **HTML export** needs the CLI. **Slide preview, PDF and PowerPoint export** also need an installed browser supported by Marp. Slide display needs desktop Poppler (`pdfinfo` and `pdftoppm`, normally `poppler-utils`), as for [PDF previews](pdf.md).
+RODE checks the project's `node_modules/.bin/marp`, then `marp` on PATH. It never uses npx, downloads tools/browsers, uploads an executable, or falls back from SSH to desktop execution. **HTML export** needs the CLI. **Slide preview, PDF and PowerPoint export** also need an installed browser supported by Marp. Slide display uses the bundled Rust Hayro renderer, as for [PDF previews](pdf.md), with no additional PDF tool installation.
 
 Use **Marp settings** in Slides or **Project settings → Presentations** to select the CLI executable, browser type/path and optional custom theme CSS. **Save changes** persists them per host/project. Paths refer to that host; relative settings paths resolve from the project root. Open a project to save custom settings; standalone files can use default PATH tools.
 

@@ -47,7 +47,14 @@ def build_preview(ui, source, label):
     def rendered(color, name):
         screenshot(ui.window, name)
         raw = subprocess.check_output(["convert", str(ARTIFACTS / name), "-depth", "8", "rgb:-"])
-        choices = [(255, 0, 0), (229, 38, 38)] if color == "red" else [(0, 0, 255), (38, 38, 229)]
+        # PDF engines round the fixture's 0.9 channel to either 229 or 230.
+        # Accept that one-byte quantization while still requiring a large,
+        # document-colored region rather than interface text or a loading label.
+        choices = (
+            [(255, 0, 0), (229, 38, 38), (230, 38, 38)]
+            if color == "red"
+            else [(0, 0, 255), (38, 38, 229), (38, 38, 230)]
+        )
         return sum(raw.count(bytes(rgb)) for rgb in choices) > 8000
 
     ui.command("LaTeX: Build and preview PDF")

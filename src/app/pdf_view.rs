@@ -1,4 +1,4 @@
-//! Read-only PDF document view. Only the displayed page retains a texture.
+//! Read-only PDF reader with virtual continuous pages and bounded page/texture caches.
 //!
 //! Retain encoded source separately from the displayed page. Page workers are cancellable and
 //! versioned; wheel navigation crosses page boundaries only after the current page scroll
@@ -82,53 +82,229 @@ impl PageScroll {
     }
 }
 
-/// Retained encoded PDF plus one displayed page texture and a cancellable requested-page token.
+/// One admitted page job. A view keeps at most one worker alive; a newer
+/// navigation updates the desired page and cancels obsolete work, rather than
+/// spawning an unbounded queue of threads behind the renderer.
+struct Work {
+    token: u64,
+    page: usize,
+}
+
+/// Cached virtual-document geometry. Only the visible page range is painted;
+/// page dimensions are known before any of their rasters have been generated.
+#[derive(Default)]
+struct PageLayout {
+    size: egui::Vec2,
+    scale: f32,
+    tops: Vec<f32>,
+    sizes: Vec<egui::Vec2>,
+    total: egui::Vec2,
+}
+impl PageLayout {
+    fn new(source: &pdf::Source, viewport: egui::Vec2, scale: f32) -> Self {
+        let mut result = Self {
+            size: viewport,
+            scale,
+            ..Default::default()
+        };
+        let mut top = 16.;
+        let mut width = (viewport.x - 16.).max(1.);
+        for [w, h] in &source.sizes {
+            let factor = pdf::RENDER_SIDE as f32 / w.max(*h);
+            let size = egui::vec2(w * factor, h * factor) * scale;
+            result.tops.push(top);
+            result.sizes.push(size);
+            top += size.y + 24.;
+            width = width.max(size.x + 32.);
+        }
+        result.total = egui::vec2(width, top);
+        result
+    }
+    fn page_at(&self, y: f32) -> usize {
+        self.tops
+            .partition_point(|top| *top <= y)
+            .saturating_sub(1)
+            .min(self.tops.len().saturating_sub(1))
+    }
+}
+
+/// Per-tab reader state, a bounded texture cache and a cancellable render
+/// admission. CPU page/font caches belong to the shared original source.
 pub(super) struct PdfView {
     pub source: Arc<pdf::Source>,
     pub page: usize,
     requested: usize,
+    wanted: usize,
+    image_page: usize,
     token: u64,
     cancel: Arc<AtomicBool>,
+    work: Option<Work>,
+    reloading: bool,
     pub image: image_view::ImageView,
+    textures: std::collections::VecDeque<(usize, image_view::ImageView)>,
+    failed: std::collections::HashSet<usize>,
     scroll: PageScroll,
     entry: PageEntry,
+    continuous: bool,
+    layout: PageLayout,
+    offset: egui::Vec2,
+    jump: Option<(usize, PageEntry)>,
+    visible: Vec<usize>,
 }
 impl PdfView {
-    /// Initialize the viewer from a bounded, already rendered page snapshot.
+    /// Initialize the reader from a bounded initial raster.
     pub fn new(loaded: pdf::Loaded) -> Self {
         Self {
             source: loaded.source,
             page: loaded.page,
             requested: loaded.page,
+            wanted: loaded.page,
+            image_page: loaded.page,
             token: 0,
             cancel: Arc::new(AtomicBool::new(false)),
+            work: None,
+            reloading: false,
             image: image_view::ImageView::new(loaded.pixels),
-            scroll: PageScroll::default(),
+            textures: Default::default(),
+            failed: Default::default(),
+            scroll: Default::default(),
             entry: PageEntry::Start,
+            continuous: false,
+            layout: Default::default(),
+            offset: egui::Vec2::ZERO,
+            jump: None,
+            visible: vec![],
         }
     }
-    /// Clone the cancellation flag that the current page worker must observe.
+    /// Cancellation flag for the current page request or a guarded reload.
     pub fn cancellation(&self) -> Arc<AtomicBool> {
         self.cancel.clone()
     }
-    /// Cancel page work, advance the token and retain the last displayed page as the stable view.
+    /// Cancel obsolete work while retaining the last successful document.
     pub fn invalidate(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.token = self.token.wrapping_add(1);
+        self.work = None;
+        self.reloading = false;
         self.image.loading = false;
+        self.wanted = self.page;
         self.requested = self.page;
         self.scroll.reset();
         self.entry = PageEntry::Start;
     }
-    /// Invalidate old page work before installing a successfully reloaded PDF and page image.
+    /// Install a fresh source only after a successful reload, preserving reading mode.
     pub fn replace(&mut self, loaded: pdf::Loaded) {
         self.invalidate();
         self.source = loaded.source;
         self.page = loaded.page;
+        self.wanted = loaded.page;
+        self.image_page = loaded.page;
         self.requested = loaded.page;
         self.image.replace(loaded.pixels);
+        self.textures.clear();
+        self.failed.clear();
+        self.layout = Default::default();
+        self.jump = Some((self.page, PageEntry::Start));
     }
-    /// Render PDF navigation and the current image; return page/reload intents to the owning app.
+    /// End a failed reload while preserving its previous source and caches.
+    pub fn reload_failed(&mut self) {
+        self.reloading = false;
+        self.image.loading = false;
+    }
+    fn has_texture(&self, page: usize) -> bool {
+        self.image_page == page || self.textures.iter().any(|(p, _)| *p == page)
+    }
+    fn activate(&mut self, page: usize, mut image: image_view::ImageView) {
+        image.adopt_presentation(&self.image);
+        let old = std::mem::replace(&mut self.image, image);
+        if self.continuous {
+            self.textures.push_back((self.image_page, old));
+        }
+        while self.textures.len() > 2 {
+            self.textures.pop_front();
+        }
+        self.image_page = page;
+        if !self.continuous {
+            self.page = page;
+            self.requested = page;
+        }
+        if matches!(self.entry, PageEntry::End) {
+            self.image.scroll_to_end();
+        }
+    }
+    fn cached_page(&mut self, page: usize, limit: usize) -> bool {
+        if self.image_page == page {
+            self.image.loading = false;
+            return true;
+        }
+        let image = if let Some(index) = self.textures.iter().position(|(p, _)| *p == page) {
+            self.textures.remove(index).map(|(_, image)| image)
+        } else {
+            self.source
+                .cached(page, limit)
+                .map(image_view::ImageView::new)
+        };
+        if let Some(image) = image {
+            self.activate(page, image);
+            true
+        } else {
+            false
+        }
+    }
+    fn navigate(&mut self, page: usize, entry: PageEntry, limit: usize) {
+        let page = page.clamp(1, self.source.pages);
+        self.wanted = page;
+        self.requested = page;
+        self.entry = entry;
+        self.failed.remove(&page);
+        if self.continuous {
+            self.page = page;
+            self.jump = Some((page, entry));
+        }
+        let cached = self.cached_page(page, limit);
+        self.image.loading = !cached;
+        if self.work.as_ref().is_some_and(|w| w.page != page) {
+            self.cancel.store(true, Ordering::Release);
+        }
+    }
+    /// Select one foreground/visible page before bounded neighbour prefetch.
+    fn next_page(&mut self, limit: usize) -> Option<(usize, PageEntry)> {
+        if self.reloading {
+            return None;
+        }
+        // Scrolling may return to a ready page before obsolete work completes.
+        // Derive loading from the desired page, rather than the outstanding job,
+        // so its completion cannot leave the spinner and Reload stuck.
+        let cached = self.cached_page(self.wanted, limit);
+        self.image.loading = !cached && !self.failed.contains(&self.wanted);
+        if self.work.is_some() {
+            return None;
+        }
+        if self.image.loading {
+            return Some((self.wanted, self.entry));
+        }
+        let mut pages = if self.continuous {
+            self.visible.clone()
+        } else {
+            vec![]
+        };
+        pages.sort_by_key(|page| page.abs_diff(self.page));
+        pages.truncate(3);
+        for page in [self.page.saturating_add(1), self.page.saturating_sub(1)] {
+            if (1..=self.source.pages).contains(&page) && !pages.contains(&page) {
+                pages.push(page);
+            }
+        }
+        pages
+            .into_iter()
+            .find(|page| {
+                !self.has_texture(*page)
+                    && !self.failed.contains(page)
+                    && self.source.cached(*page, limit).is_none()
+            })
+            .map(|page| (page, PageEntry::Start))
+    }
+    /// Render navigation immediately from caches; schedule only missing rasters.
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -139,138 +315,384 @@ impl PdfView {
         kind: &str,
     ) -> (bool, Option<(usize, PageEntry)>) {
         let ctx = ui.ctx().clone();
+        let limit = ctx.input(|i| i.max_texture_side);
         let mut page = None;
         let mut entry = PageEntry::Start;
         let arrow_size = egui::Vec2::splat(layout::control_height(ui));
         ui.horizontal_wrapped(|ui| {
-            ui.add_enabled_ui(!self.image.loading, |ui| {
-                if ui
-                    .add_enabled(
-                        self.page > 1,
-                        IconButton::icon(Icon::ChevronLeft, "Previous page").min_size(arrow_size),
-                    )
-                    .clicked()
-                {
-                    page = Some(self.page - 1);
-                }
-                ui.label(kind);
-                let page_response = ui.add(crate::keyboard::named(
+            let previous = ui.add_enabled(
+                !self.reloading && self.wanted > 1,
+                IconButton::icon(Icon::ChevronLeft, "Previous page").min_size(arrow_size),
+            );
+            ui_probe::button(ui, "pdf-previous", &previous);
+            if previous.clicked() {
+                page = Some(self.wanted - 1);
+            }
+            ui.label(kind);
+            let number = ui.add_enabled(
+                !self.reloading,
+                crate::keyboard::named(
                     "Page number",
                     egui::DragValue::new(&mut self.requested)
                         .range(1..=self.source.pages)
                         .speed(0.1),
-                ));
-                ui.label(format!("of {}", self.source.pages));
-                if crate::keyboard::button(ui, "Go").clicked()
-                    || (page_response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
-                {
-                    page = Some(self.requested);
+                ),
+            );
+            ui_probe::button(ui, "pdf-page-number", &number);
+            ui_probe::button(ui, &format!("pdf-current-page:{}", self.page), &number);
+            ui.label(format!("of {}", self.source.pages));
+            let go = ui.add_enabled(!self.reloading, crate::keyboard::Button::new("Go"));
+            ui_probe::button(ui, "pdf-go", &go);
+            if go.clicked() || (number.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
+                page = Some(self.requested);
+            }
+            let next = ui.add_enabled(
+                !self.reloading && self.wanted < self.source.pages,
+                IconButton::icon(Icon::ChevronRight, "Next page").min_size(arrow_size),
+            );
+            ui_probe::button(ui, "pdf-next", &next);
+            if next.clicked() {
+                page = Some(self.wanted + 1);
+            }
+            if kind != "Slide" {
+                ui.separator();
+                for (value, label, name) in [
+                    (false, "Single page", "pdf-single"),
+                    (true, "Continuous", "pdf-continuous"),
+                ] {
+                    let mode =
+                        crate::keyboard::selectable_label(ui, self.continuous == value, label);
+                    ui_probe::button(ui, name, &mode);
+                    if mode.clicked() && self.continuous != value {
+                        self.continuous = value;
+                        self.jump = Some((self.page, PageEntry::Start));
+                        self.scroll.reset();
+                        self.wanted = self.page;
+                        if !value {
+                            self.cached_page(self.page, limit);
+                            self.textures.clear();
+                        }
+                    }
                 }
-                if ui
-                    .add_enabled(
-                        self.page < self.source.pages,
-                        IconButton::icon(Icon::ChevronRight, "Next page").min_size(arrow_size),
-                    )
-                    .clicked()
-                {
-                    page = Some(self.page + 1);
-                }
-            });
-            ui.label(palette.tag(if kind == "Slide" { "MARP" } else { "PDF" }))
-                .on_hover_text(
-                    "Scroll to pan; at the bottom/top, continue to the next/previous page.",
-                );
+            }
+            ui.label(palette.tag(if kind == "Slide" { "MARP" } else { "PDF" }));
+            if self.image.loading {
+                ui.label(palette.tag(format!("Loading page {}…", self.wanted)));
+            }
         });
-        if keyboard && ctx.memory(|memory| memory.has_focus(image_view::ImageView::focus_id(id))) {
-            ctx.input(|input| {
-                if input.modifiers.is_none() {
-                    if input.key_pressed(Key::PageDown) {
-                        page = Some((self.page + 1).min(self.source.pages));
+        let focused = keyboard
+            && !self.reloading
+            && ctx.memory(|m| m.has_focus(image_view::ImageView::focus_id(id)));
+        if focused && !self.continuous {
+            ctx.input(|i| {
+                if i.modifiers.is_none() {
+                    if i.key_pressed(Key::PageDown) {
+                        page = Some((self.wanted + 1).min(self.source.pages));
                     }
-                    if input.key_pressed(Key::PageUp) {
-                        page = Some(self.page.saturating_sub(1).max(1));
+                    if i.key_pressed(Key::PageUp) {
+                        page = Some(self.wanted.saturating_sub(1).max(1));
                     }
-                    if input.key_pressed(Key::Home) {
+                    if i.key_pressed(Key::Home) {
                         page = Some(1);
                     }
-                    if input.key_pressed(Key::End) {
+                    if i.key_pressed(Key::End) {
                         page = Some(self.source.pages);
                     }
                 }
             });
         }
-        let response = self.image.ui(ui, &ctx, id, palette, focus);
-        if keyboard && response.hovered && ctx.input(|input| input.modifiers.is_none()) {
-            // The image scroll area consumes movement within the page. Only
-            // movement remaining at an edge may navigate the PDF itself.
-            ctx.input_mut(|input| input.smooth_scroll_delta.y = 0.);
-            let at_edge = (response.edge_scroll > 0. && response.at_start)
-                || (response.edge_scroll < 0. && response.at_end);
-            if !self.image.loading && page.is_none() && at_edge {
-                if let Some((target, position)) = self.scroll.turn(
-                    response.edge_scroll,
-                    ctx.input(|input| input.time),
-                    self.page,
-                    self.source.pages,
-                ) {
-                    page = Some(target);
-                    entry = position;
+        let reload = if self.continuous {
+            let reload = self.image.controls(ui, palette, true);
+            ui.separator();
+            self.continuous_ui(ui, &ctx, id, palette, focus, focused);
+            reload
+        } else {
+            let response = self.image.pdf_ui(ui, &ctx, id, palette, focus);
+            if keyboard && response.hovered && ctx.input(|i| i.modifiers.is_none()) {
+                ctx.input_mut(|i| i.smooth_scroll_delta.y = 0.);
+                let edge = (response.edge_scroll > 0. && response.at_start)
+                    || (response.edge_scroll < 0. && response.at_end);
+                if !self.image.loading && page.is_none() && edge {
+                    if let Some((p, e)) = self.scroll.turn(
+                        response.edge_scroll,
+                        ctx.input(|i| i.time),
+                        self.page,
+                        self.source.pages,
+                    ) {
+                        page = Some(p);
+                        entry = e;
+                    }
+                } else {
+                    self.scroll.reset();
                 }
-            } else if self.image.loading
-                || page.is_some()
-                || response.edge_scroll.abs() > 0.01
-                || (!response.at_start && !response.at_end)
-            {
+            } else {
                 self.scroll.reset();
             }
-        } else {
-            self.scroll.reset();
+            if !self.image.loading {
+                ui_probe::button(
+                    ui,
+                    &format!("pdf-page-ready:{}", self.image_page),
+                    &ui.interact(
+                        ui.clip_rect(),
+                        egui::Id::new(("pdf-ready", id)),
+                        Sense::hover(),
+                    ),
+                );
+            }
+            response.reload
+        };
+        if let Some(page) = page {
+            self.navigate(page, entry, limit);
+            ctx.request_repaint();
         }
-        (response.reload, page.map(|page| (page, entry)))
+        (reload, self.next_page(limit))
     }
-    /// Reserve a page raster request and return its immutable PDF source, cancellation flag and
-    /// admission token. An already-current or loading page starts no second worker.
+    fn continuous_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        id: u64,
+        palette: theme::Palette,
+        focus: bool,
+        keyboard: bool,
+    ) {
+        let limit = ctx.input(|i| i.max_texture_side);
+        let viewport = ui.available_size().max(egui::vec2(1., 1.));
+        let mut largest = egui::Vec2::ZERO;
+        for [w, h] in &self.source.sizes {
+            let factor = pdf::RENDER_SIDE as f32 / w.max(*h);
+            largest = largest.max(egui::vec2(w * factor, h * factor));
+        }
+        let width_fit = ((viewport.x - 40.).max(1.) / largest.x).max(0.001);
+        let fit = if self.image.fitting_width() {
+            width_fit
+        } else {
+            width_fit
+                .min((viewport.y - 32.).max(1.) / largest.y)
+                .min(1.)
+        };
+        let scale = self.image.zoom_factor().unwrap_or(fit).max(0.001);
+        self.image.displayed_at(scale);
+        let mut reposition = false;
+        if self.layout.size != viewport
+            || (self.layout.scale - scale).abs() > f32::EPSILON
+            || self.layout.tops.is_empty()
+        {
+            let (anchor, fraction) = if self.layout.tops.is_empty() {
+                (self.page - 1, 0.)
+            } else {
+                let index = self.layout.page_at(self.offset.y + viewport.y * 0.3);
+                (
+                    index,
+                    ((self.offset.y + viewport.y * 0.3 - self.layout.tops[index])
+                        / self.layout.sizes[index].y)
+                        .clamp(0., 1.),
+                )
+            };
+            reposition = true;
+            self.layout = PageLayout::new(&self.source, viewport, scale);
+            self.offset.y = (self.layout.tops[anchor] + fraction * self.layout.sizes[anchor].y
+                - viewport.y * 0.3)
+                .max(0.);
+        }
+        if let Some((page, entry)) = self.jump.take() {
+            reposition = true;
+            self.offset.y = self.layout.tops[page - 1];
+            if matches!(entry, PageEntry::End) {
+                self.offset.y += (self.layout.sizes[page - 1].y - viewport.y).max(0.);
+            }
+        }
+        if keyboard {
+            let before = self.offset;
+            ctx.input(|i| {
+                if i.modifiers.is_none() {
+                    if i.key_pressed(Key::PageDown)
+                        || (i.key_pressed(Key::Space) && !i.modifiers.shift)
+                    {
+                        self.offset.y += viewport.y * 0.9;
+                    }
+                    if i.key_pressed(Key::PageUp) {
+                        self.offset.y -= viewport.y * 0.9;
+                    }
+                    if i.key_pressed(Key::ArrowDown) {
+                        self.offset.y += 40.;
+                    }
+                    if i.key_pressed(Key::ArrowUp) {
+                        self.offset.y -= 40.;
+                    }
+                    if i.key_pressed(Key::Home) {
+                        self.offset.y = 0.;
+                    }
+                    if i.key_pressed(Key::End) {
+                        self.offset.y = self.layout.total.y;
+                    }
+                }
+            });
+            reposition |= self.offset != before;
+        }
+        self.offset.y = self
+            .offset
+            .y
+            .clamp(0., (self.layout.total.y - viewport.y).max(0.));
+        let mut scroller = egui::ScrollArea::both()
+            .id_salt(("pdf-continuous", id))
+            .auto_shrink([false, false]);
+        if reposition {
+            scroller = scroller.scroll_offset(self.offset).animated(false);
+        }
+        let output = scroller.show_viewport(ui, |ui, visible| {
+            ui.set_min_size(self.layout.total);
+            self.visible.clear();
+            let first = self.layout.page_at(visible.top()).saturating_sub(1);
+            let last = (self.layout.page_at(visible.bottom()) + 1).min(self.source.pages - 1);
+            for index in first..=last {
+                let page = index + 1;
+                let size = self.layout.sizes[index];
+                let rect = egui::Rect::from_min_size(
+                    ui.min_rect().min
+                        + egui::vec2(
+                            (self.layout.total.x - size.x) * 0.5,
+                            self.layout.tops[index],
+                        ),
+                    size,
+                );
+                if !rect.intersects(ui.clip_rect()) {
+                    continue;
+                }
+                self.visible.push(page);
+                ui.painter().rect_filled(rect, 2, egui::Color32::WHITE);
+                ui.painter().rect_stroke(
+                    rect.expand(0.5),
+                    2,
+                    egui::Stroke::new(1_f32, palette.border),
+                    egui::StrokeKind::Outside,
+                );
+                let ready = if self.image_page == page {
+                    self.image.paint(ui, ctx, id, rect);
+                    true
+                } else {
+                    if !self.textures.iter().any(|(p, _)| *p == page)
+                        && let Some(pixels) = self.source.cached(page, limit)
+                    {
+                        self.textures
+                            .push_back((page, image_view::ImageView::new(pixels)));
+                        while self.textures.len() > 2 {
+                            self.textures.pop_front();
+                        }
+                    }
+                    if let Some((_, image)) = self.textures.iter_mut().find(|(p, _)| *p == page) {
+                        image.paint(ui, ctx, id.wrapping_add(page as u64), rect);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                let response =
+                    ui.interact(rect, egui::Id::new(("pdf-page", id, page)), Sense::hover());
+                if ready {
+                    ui_probe::button(ui, &format!("pdf-page-ready:{page}"), &response);
+                } else {
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        if self.failed.contains(&page) {
+                            format!("Page {page} · Could not render. Use Go to retry.")
+                        } else {
+                            format!("Page {page} · Rendering…")
+                        },
+                        egui::FontId::proportional(14.),
+                        egui::Color32::GRAY,
+                    );
+                }
+            }
+            let response = ui.interact(
+                ui.min_rect(),
+                image_view::ImageView::focus_id(id),
+                Sense::click(),
+            );
+            ui_probe::button(ui, "pdf-document", &response);
+            if focus || response.clicked() {
+                response.request_focus();
+            }
+            let selected = self.layout.page_at(visible.center().y) + 1;
+            if self.page != selected {
+                self.page = selected;
+                self.requested = selected;
+                ctx.request_repaint();
+            }
+            self.wanted = selected;
+        });
+        self.offset = output.state.offset;
+        self.textures
+            .retain(|(page, _)| self.visible.contains(page));
+        if self.work.as_ref().is_some_and(|work| {
+            !self.visible.contains(&work.page) && work.page.abs_diff(self.page) > 1
+        }) {
+            self.cancel.store(true, Ordering::Release);
+        }
+    }
+    /// Admit a single worker. Navigation remains available while it runs; later
+    /// targets coalesce and are scheduled after cancellation is acknowledged.
     pub fn begin_page(
         &mut self,
         page: usize,
         entry: PageEntry,
     ) -> Option<(Arc<pdf::Source>, Arc<AtomicBool>, u64)> {
-        if self.image.loading || self.page == page {
-            self.requested = self.page;
+        if self.work.is_some() || self.reloading || !(1..=self.source.pages).contains(&page) {
             return None;
         }
-        self.invalidate();
+        self.token = self.token.wrapping_add(1);
         self.cancel = Arc::new(AtomicBool::new(false));
-        self.image.loading = true;
+        self.work = Some(Work {
+            token: self.token,
+            page,
+        });
         self.entry = entry;
+        if page == self.wanted && page != self.image_page {
+            self.image.loading = true;
+        }
         Some((self.source.clone(), self.cancel.clone(), self.token))
     }
-    /// Apply only the current page request token, replacing pixels and restoring requested scroll
-    /// placement on success. A matching failure restores the prior page choice and returns its
-    /// diagnostic.
+    /// Admit only the active token, retaining the previous page on failures and
+    /// keeping speculative-render failures quiet until an explicit navigation.
     pub fn complete_page(
         &mut self,
         token: u64,
         page: usize,
         result: Result<crate::images::Decoded, String>,
     ) -> Option<String> {
-        if self.token != token {
+        if self
+            .work
+            .as_ref()
+            .is_none_or(|work| work.token != token || work.page != page)
+        {
             return None;
         }
-        self.image.loading = false;
+        self.work = None;
+        if self.cancel.load(Ordering::Acquire) {
+            return None;
+        }
         match result {
             Ok(pixels) => {
-                self.image.replace(pixels);
-                if matches!(self.entry, PageEntry::End) {
-                    self.image.scroll_to_end();
+                if page == self.wanted {
+                    self.activate(page, image_view::ImageView::new(pixels));
+                    self.image.loading = false;
                 }
-                self.page = page;
-                self.requested = page;
                 None
             }
             Err(error) => {
-                self.requested = self.page;
-                Some(error)
+                self.failed.insert(page);
+                if page == self.wanted {
+                    self.wanted = self.image_page;
+                    if !self.continuous {
+                        self.page = self.image_page;
+                    }
+                    self.requested = self.page;
+                    self.image.loading = false;
+                    Some(error)
+                } else {
+                    None
+                }
             }
         }
     }
@@ -336,7 +758,6 @@ impl EditorApp {
         let vault_work = self.vaults.work();
         std::thread::spawn(move || {
             let _vault_work = vault_work;
-            let _io = budget.io.lock().unwrap_or_else(|error| error.into_inner());
             let result = source
                 .render(page, &budget, texture_limit, &cancel)
                 .map_err(|error| format!("{error:#}"));
@@ -385,12 +806,13 @@ impl EditorApp {
         let Some(view) = &mut doc.pdf else {
             return;
         };
-        if view.image.loading {
+        if view.reloading {
             return;
         }
         view.invalidate();
         view.cancel = Arc::new(AtomicBool::new(false));
         view.image.loading = true;
+        view.reloading = true;
         let version = doc.begin_preview_reload();
         self.dispatch(
             Request::ReadBinary { path },
@@ -437,10 +859,6 @@ mod tests {
 
     #[test]
     fn pdf_tabs_are_read_only_and_discard_stale_page_results() {
-        if sandbox::find_program("pdfinfo").is_none() || sandbox::find_program("pdftoppm").is_none()
-        {
-            return;
-        }
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
@@ -467,7 +885,10 @@ mod tests {
         assert!(matches!(app.dialog, Dialog::None));
         assert!(!root.path().join("copy.pdf").exists());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        for token in [1, 0] {
+        let view = app.documents[0].pdf.as_mut().unwrap();
+        view.navigate(2, PageEntry::Start, 128);
+        let (_, _, admitted) = view.begin_page(2, PageEntry::Start).unwrap();
+        for token in [admitted.wrapping_add(1), admitted] {
             let pixels = app.documents[0]
                 .pdf
                 .as_ref()
@@ -478,11 +899,20 @@ mod tests {
             app.pdf_page(Target::Document, id, 0, token, 2, Ok(pixels));
             assert_eq!(
                 app.documents[0].pdf.as_ref().unwrap().page,
-                if token == 0 { 2 } else { 1 }
+                if token == admitted { 2 } else { 1 }
             );
         }
-        app.documents[0].pdf.as_mut().unwrap().image.loading = true;
-        app.pdf_page(Target::Document, id, 0, 0, 1, Err("Renderer failed".into()));
+        let view = app.documents[0].pdf.as_mut().unwrap();
+        view.wanted = 1;
+        let (_, _, failed) = view.begin_page(1, PageEntry::Start).unwrap();
+        app.pdf_page(
+            Target::Document,
+            id,
+            0,
+            failed,
+            1,
+            Err("Renderer failed".into()),
+        );
         assert_eq!(app.documents[0].pdf.as_ref().unwrap().page, 2);
         assert!(!app.documents[0].preview_loading());
         app.clear_project(
@@ -501,5 +931,87 @@ mod tests {
         assert!(!app.documents[0].dirty());
         drop(app);
         assert_eq!(budget.used(), 0);
+    }
+    fn fixture() -> (PdfView, Arc<crate::images::Budget>) {
+        let budget = Arc::new(crate::images::Budget::default());
+        let loaded = pdf::load_bytes(
+            include_bytes!("../../tests/fixtures/pages.pdf").to_vec(),
+            1,
+            &budget,
+            128,
+        )
+        .unwrap();
+        (PdfView::new(loaded), budget)
+    }
+    #[test]
+    fn rapid_navigation_coalesces_and_cached_back_navigation_stays_immediate() {
+        let (mut view, _budget) = fixture();
+        view.navigate(2, PageEntry::Start, 128);
+        let (_, cancel, token) = view.begin_page(2, PageEntry::Start).unwrap();
+        view.navigate(1, PageEntry::Start, 128);
+        assert_eq!(view.page, 1);
+        assert!(!view.image.loading);
+        assert!(cancel.load(Ordering::Acquire));
+        view.navigate(2, PageEntry::Start, 128);
+        assert!(
+            view.next_page(128).is_none(),
+            "Keep one admitted worker until it acknowledges cancellation"
+        );
+        assert!(view.begin_page(2, PageEntry::Start).is_none());
+        assert!(
+            view.complete_page(token, 2, Err("cancelled".into()))
+                .is_none()
+        );
+        assert_eq!(view.next_page(128), Some((2, PageEntry::Start)));
+    }
+    #[test]
+    fn scrolling_back_to_cached_content_clears_loading_before_other_work_finishes() {
+        let (mut view, _budget) = fixture();
+        view.continuous = true;
+        view.wanted = 2;
+        let (_, _, token) = view.begin_page(2, PageEntry::Start).unwrap();
+        assert!(view.image.loading);
+        // Continuous scrolling updates the desired page independently of the
+        // toolbar's navigation method, while an adjacent page may keep rendering.
+        view.wanted = 1;
+        assert!(view.next_page(128).is_none());
+        assert!(!view.image.loading);
+        assert!(view.work.is_some());
+        assert!(
+            view.complete_page(token, 2, Err("unsupported page".into()))
+                .is_none()
+        );
+        assert!(!view.image.loading);
+        assert_eq!(view.page, 1);
+    }
+    #[test]
+    fn speculative_failures_do_not_spin_and_reload_blocks_page_admission() {
+        let (mut view, _budget) = fixture();
+        let (_, _, token) = view.begin_page(2, PageEntry::Start).unwrap();
+        assert!(
+            view.complete_page(token, 2, Err("unsupported page".into()))
+                .is_none()
+        );
+        assert!(view.next_page(128).is_none());
+        view.navigate(2, PageEntry::Start, 128);
+        assert_eq!(view.next_page(128), Some((2, PageEntry::Start)));
+        view.reloading = true;
+        assert!(view.next_page(128).is_none());
+        assert!(view.begin_page(2, PageEntry::Start).is_none());
+        view.reload_failed();
+        assert_eq!(view.next_page(128), Some((2, PageEntry::Start)));
+    }
+    #[test]
+    fn continuous_geometry_preserves_orientation_spacing_and_page_lookup() {
+        let (view, _) = fixture();
+        let layout = PageLayout::new(&view.source, egui::vec2(900., 700.), 0.4);
+        assert!(layout.sizes[0].y > layout.sizes[0].x);
+        assert!(layout.sizes[1].x > layout.sizes[1].y);
+        assert_eq!(layout.tops[1], layout.tops[0] + layout.sizes[0].y + 24.);
+        for (index, top) in layout.tops.iter().enumerate() {
+            assert_eq!(layout.page_at(top + layout.sizes[index].y * 0.5), index);
+        }
+        assert_eq!(layout.page_at(-10.), 0);
+        assert_eq!(layout.page_at(f32::MAX), 1);
     }
 }

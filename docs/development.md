@@ -112,8 +112,9 @@ Synchronous binary helpers and UTF-8 project commands share
 its final group signal and clean up on normal exit as well as errors. Run
 `cargo test -p rode-host-core command::` for real-process cleanup, independent
 work, exact/uncapped binary limits and oversized diagnostics. Run
-`cargo test --lib pdf::tests` for the PDF adapter's capture cleanup and
-`cargo test --test pdf` for actual desktop Poppler tools. Run
+`cargo build --bin rode` followed by `cargo test --lib pdf::tests` for PDF cache
+eviction and `cargo test --test pdf` for bundled Hayro rendering. The renderer
+uses the sibling desktop executable; no external PDF tools are needed. Run
 `cargo test --test project command_` for the project runner checks and
 `cargo test --test security` for the real-PTY harness and file-security checks.
 LaTeX, Marp and extension suites cover cancellation/renderer cleanup; terminal,
@@ -984,7 +985,7 @@ Run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x
 
 ## PDF checks
 
-Install desktop Poppler tools (`pdfinfo` / `pdftoppm`). `cargo test --test pdf --lib pdf` checks real two-page rendering, portrait/landscape content, page limits and cancellation, malformed input, read-only commands, stale results, shared-budget release, native/Python binary parity and actual sandbox reads/symlink escapes. The isolated direct/ProxyJump tests also transfer PDFs under the project policy.
+Build the desktop executable before focused tests (`cargo build --profile ci --bin rode`). `python3 scripts/rust_tests.py --locked --profile ci --lib pdf` and `python3 scripts/rust_tests.py --locked --profile ci --test pdf` check real Hayro rendering, portrait/landscape content, cached pixel reuse, renderer lifetime across opening-thread exit, empty-PATH operation, framed transport/cancellation, malformed input, read-only commands, stale results, shared-budget eviction/release, native binary transfers and actual sandbox reads/symlink escapes. `scripts/test-pdf-ui.py` checks single-page and continuous navigation, fit modes, zoom, reload and dirty-buffer preservation locally and over SSH. The isolated direct/ProxyJump tests also transfer PDFs under the project policy.
 
 For native local and SSH viewing: `RODE_TEST_BINARY="$PWD/target/release/rode" RODE_PDF_UI=1 xvfb-run -a -s "-screen 0 1600x1100x24" bash scripts/test-ssh.sh`. This checks pages, wheel scrolling within/across pages, zoom, source reload preserving the selected page, failed-reload preservation, themes, read-only saves and dirty code buffers. `scripts/test-pdf-ui.py` can run locally on its own. Screenshots/logs go to `target/pdf-ui/`. The two-page vector fixture at `tests/fixtures/pages.pdf` is generated test data with colored shapes and built-in Helvetica text, requiring no PDF-generation library.
 

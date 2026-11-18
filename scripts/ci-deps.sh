@@ -9,10 +9,10 @@ case "$suite" in
         packages+=(libxkbcommon-dev libwayland-dev libgl1-mesa-dev)
         ;;
     *)
-        packages+=(xvfb xauth x11-utils xclip imagemagick libxtst6 bubblewrap poppler-utils)
+        packages+=(xvfb xauth x11-utils xclip imagemagick libxtst6 bubblewrap)
         ;;
 esac
-if [[ "$suite" == build ]]; then packages+=(musl-tools poppler-utils bubblewrap); fi
+if [[ "$suite" == build ]]; then packages+=(musl-tools bubblewrap); fi
 case "$suite" in
     ssh|remote|runtimes) packages+=(openssh-server) ;;
 esac

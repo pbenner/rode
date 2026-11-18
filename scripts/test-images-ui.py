@@ -19,6 +19,7 @@ from ui_harness import (
     click_button,
     close_window,
     fixture_directory,
+    fixture_environment,
     focus_window,
     key,
     screenshot,
@@ -131,12 +132,7 @@ def run(remote=False):
         (root / "corrupt.png").write_bytes(b"not a PNG")
         original = hashlib.sha256(image.read_bytes()).digest()
         state_path = base / "ui-state.json"
-        environment = dict(
-            os.environ,
-            XDG_CONFIG_HOME=str(base / "config"),
-            XDG_DATA_HOME=str(base / "data"),
-            RODE_UI_TEST_STATE=str(state_path),
-        )
+        environment = fixture_environment(base)
         args = [str(BINARY), "--sandbox"]
         if remote:
             real_ssh = shutil.which("ssh")
@@ -166,7 +162,7 @@ def run(remote=False):
             window = None
             try:
                 window = wait_for_window(process, log_path)
-                wait_for_project(window, process, log_path, root)
+                wait_for_project(window, process, log_path, root, state_path=state_path)
                 focus_window(window)
                 ui = NativeUI(window, process, log_path, state_path, root)
                 ui.open_file("alpha.png")

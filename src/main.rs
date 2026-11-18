@@ -13,6 +13,13 @@ fn main() -> eframe::Result {
         std::process::exit(1);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 2 && args[0] == "--pdf-helper" {
+        if let Err(error) = rode::pdf::coordinator(std::path::Path::new(&args[1])) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if args
         .first()
         .is_some_and(|arg| matches!(arg.as_str(), "--ssh-client-master" | "--ssh-client-channel"))

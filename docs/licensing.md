@@ -76,6 +76,14 @@ Agent-chat maths uses `latex-rust`, whose Rust code is MIT OR Apache-2.0. It emb
 
 The collector covers the workspace's normal/build dependency graph for the build host, including license directories and REUSE copyright headers. Some published crates omit their upstream license files. For these, `packaging/licenses/` keeps unchanged upstream texts, with package versions, immutable source URLs and SHA-256 hashes in its manifest. Snapshots use the crate-recorded upstream revision where available. The SWC entries explicitly record an exception: those source revisions returned HTTP 404, so their complete Apache-2.0 license is pinned to the upstream commit that last changed that file, retaining SWC's attribution and the original crate revisions in the manifest. Packaging verifies the hashes and requires a license text for every collected dependency; an SPDX declaration alone is insufficient. Collection runs offline. When updating dependencies, review any changed or missing notices before updating the snapshots. See [Debian packaging](packaging.md) for the validation command.
 
+PDF rendering and text extraction use [Hayro](https://github.com/LaurenzV/hayro)
+and its Rust dependencies under their upstream terms. `hayro-font` embeds
+standard PDF substitute fonts with the complete PDFium Authors/Foxit notice in
+`assets/LICENSE_FOXIT`; the Debian collector explicitly requires and includes
+that notice alongside the crate's MIT/Apache-2.0 texts. Embedded Adobe CMaps
+and the CGATS color profile retain their separate asset notices too. No PDFium
+native engine is linked or installed. Standalone distributions must retain those notices too.
+
 Bundled web/configuration formatters use dprint's TypeScript, JSON and Markdown libraries plus `markup_fmt`, Malva and Pretty YAML under their upstream MIT terms. Their parser/printing dependencies retain their own licenses, including Apache-2.0 for SWC. The normal dependency notice collector includes these engines and the supplemental upstream texts; no formatter extension or npm package is redistributed.
 
 `rode --syntax-licenses` and `rode --theme-licenses` print the separate acknowledgements for embedded grammars, syntax themes and Inter; they are not a complete dependency/fallback-font license listing.

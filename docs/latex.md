@@ -6,7 +6,7 @@ RODE highlights LaTeX (`.tex`, `.ltx`, `.sty`, `.cls`, `.dtx`, `.ins`) and BibTe
 
 Open a project and source file, save your changes, then use **Build PDF** or **Build & preview** above the editor. The same actions appear in the command palette. **Code → Build current file / project** builds; **Run current file / project** builds and opens the PDF.
 
-The compiler runs on the local or SSH project host, inside its actual sandbox. The native [PDF viewer](pdf.md) displays results using desktop Poppler tools. **Open PDF** reopens or reloads the last successful result. Failed builds preserve an already-open preview. Builds use saved files and never replace source buffers.
+The compiler runs on the local or SSH project host, inside its actual sandbox. The native [PDF viewer](pdf.md) displays results using the bundled Rust Hayro renderer. **Open PDF** reopens or reloads the last successful result. Failed builds preserve an already-open preview. Builds use saved files and never replace source buffers.
 
 **Output**, or **LaTeX: Show build output**, shows compiler output and clickable source errors. Errors for unchanged open sources also appear in Problems and the editor. New edits invalidate those highlights. **Stop build** cancels owned compiler processes. Changing projects/settings, disabling LaTeX tools or closing RODE also cancels a build. RODE coordinates builds sharing an output directory across windows and SSH.
 
