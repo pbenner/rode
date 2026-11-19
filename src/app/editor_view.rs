@@ -112,15 +112,22 @@ impl EditorApp {
                     .and_then(|w| path.strip_prefix(&w.root))
                     .and_then(|p| p.strip_prefix('/'))
                     .unwrap_or(path);
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(18, 7))
-                    .show(ui, |ui| {
-                        let response = layout::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
-                            .on_hover_text(path);
-                        if !self.documents[self.documents.active_index()].preview_loading() {
-                            ui_probe::value(ui, "active-document", &response, path);
-                        }
-                    });
+                let doc = &self.documents[self.documents.active_index()];
+                if doc.notebook.is_none() && doc.pdf.is_none() {
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(18, 7))
+                        .show(ui, |ui| {
+                            let response = layout::bounded_label(ui, palette.tag(relative), ui.available_width(), 18.)
+                                .on_hover_text(path);
+                            if !self.documents[self.documents.active_index()].preview_loading() {
+                                ui_probe::value(ui, "active-document", &response, path);
+                            }
+                        });
+                } else if !doc.preview_loading() {
+                    // Notebook and reader toolbars follow the tabs directly. Keep
+                    // the fixture's ready-document identity without allocating a title row.
+                    ui_probe::value(ui, "active-document", &ui.response(), path);
+                }
                 if self.documents[self.documents.active_index()].is_recovery() {
                     let doc = self.documents.active().unwrap();
                     let message = if doc.is_preview() && doc.notebook.is_none() {
