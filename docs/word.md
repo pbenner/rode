@@ -8,6 +8,8 @@ Local and SSH projects use the same desktop renderer. The existing authenticated
 
 ## Reading and navigation
 
+The shared reader uses a compact toolbar with a full-width divider above the document. Expand **View settings** for single/continuous mode, fit options, actual size and reload; navigation, zoom and fullscreen remain visible.
+
 - Use previous/next, the page-number field and **Go**, or **Page Up / Page Down** with the page canvas focused. **Home / End** reach the first/last page.
 - Choose **Single page** or **Continuous**, **Fit page**, **Fit width**, or a zoom level. Page rasters share the PDF reader's cache; returning to a cached page needs no file transfer or conversion.
 - **Fullscreen**, **F11** with the editor pane focused, or **Word: Toggle fullscreen** hides the surrounding interface in that editor window. **Escape**, **F11**, or **Exit fullscreen** restores it.

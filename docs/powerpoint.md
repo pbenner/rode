@@ -8,6 +8,8 @@ RODE includes the native Rust [BetterOffice](https://github.com/openooxml/better
 
 ## Reading a presentation
 
+The shared reader uses a compact toolbar with a full-width divider above the document. Expand **View settings** for single/continuous mode, fit options, actual size and reload; navigation, zoom and fullscreen remain visible.
+
 - Use the previous/next arrows, the slide-number field and **Go**, or **Left / Right** and **Page Up / Page Down** with the slide canvas focused. **Home / End** reach the first/last slide.
 - Choose **Single page** or **Continuous**, with the same fit, zoom, wheel scrolling and pan controls as the [PDF reader](pdf.md). Slide colors remain those of the presentation when the editor theme changes.
 - Choose **Fullscreen**, press **F11** with the editor pane focused, or run **PPTX: Toggle fullscreen**. **Escape**, **F11**, or **Exit fullscreen** restores the previous window layout. Each editor window owns its own presentation state.

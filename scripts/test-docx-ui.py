@@ -91,6 +91,7 @@ def run(remote=False):
             screenshot(ui.window, label + "-fullscreen.png")
             key("Escape")
             ui.absent("pdf-fullscreen")
+            ui.click("pdf-view-settings")
             ui.click("pdf-continuous")
             ui.click("image-fit-width")
             screenshot(ui.window, label + "-continuous.png")

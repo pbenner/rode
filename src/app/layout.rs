@@ -12,6 +12,29 @@ use eframe::egui::{self, Align, Layout, RichText};
 #[cfg(test)]
 pub(super) mod tests;
 
+/// Shared fixed document header and full-width boundary above a scrolling canvas.
+/// Callers own actions and optional rows; the surface never borrows cell/page scroll state.
+pub(super) fn document_toolbar<R>(
+    ui: &mut egui::Ui,
+    palette: Palette,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let toolbar = egui::Frame::new()
+        .fill(palette.panel)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            contents(ui)
+        });
+    let (_, rule) = ui.allocate_space(egui::vec2(ui.available_width(), 6.));
+    ui.painter().hline(
+        rule.x_range(),
+        rule.center().y,
+        egui::Stroke::new(1.5_f32, palette.control_border.unwrap_or(palette.border)),
+    );
+    toolbar
+}
+
 /// A bounded pane with a separate gutter for its keyboard-focus outline.
 ///
 /// Own the panel's normal padding inside its boundary, even when unfocused, so

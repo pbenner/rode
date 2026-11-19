@@ -7,6 +7,7 @@ use super::*;
 use crate::pdf;
 
 mod fullscreen;
+mod toolbar;
 pub(super) use fullscreen::Fullscreen;
 
 /// Toolbar capabilities for a standalone reader or an embedded slide preview.
@@ -163,6 +164,7 @@ pub(super) struct PdfView {
     scroll: PageScroll,
     entry: PageEntry,
     continuous: bool,
+    settings_open: bool,
     layout: PageLayout,
     offset: egui::Vec2,
     jump: Option<(usize, PageEntry)>,
@@ -187,6 +189,7 @@ impl PdfView {
             scroll: Default::default(),
             entry: PageEntry::Start,
             continuous: false,
+            settings_open: false,
             layout: Default::default(),
             offset: egui::Vec2::ZERO,
             jump: None,
@@ -332,108 +335,10 @@ impl PdfView {
         display: Display,
     ) -> Response {
         let ctx = ui.ctx().clone();
-        let kind = if matches!(display, Display::Slides) || self.source.format == pdf::Format::Pptx
-        {
-            "Slide"
-        } else {
-            "Page"
-        };
         let limit = ctx.input(|i| i.max_texture_side);
-        let mut page = None;
-        let mut toggle_fullscreen = false;
+        let controls = self.toolbar(ui, palette, display);
+        let mut page = controls.page;
         let mut entry = PageEntry::Start;
-        let arrow_size = egui::Vec2::splat(layout::control_height(ui));
-        ui.horizontal_wrapped(|ui| {
-            let previous = ui.add_enabled(
-                !self.reloading && self.wanted > 1,
-                IconButton::icon(Icon::ChevronLeft, "Previous page").min_size(arrow_size),
-            );
-            ui_probe::button(ui, "pdf-previous", &previous);
-            if previous.clicked() {
-                page = Some(self.wanted - 1);
-            }
-            ui.label(kind);
-            let number = ui.add_enabled(
-                !self.reloading,
-                crate::keyboard::named(
-                    "Page number",
-                    egui::DragValue::new(&mut self.requested)
-                        .range(1..=self.source.pages)
-                        .speed(0.1),
-                ),
-            );
-            ui_probe::button(ui, "pdf-page-number", &number);
-            ui_probe::button(ui, &format!("pdf-current-page:{}", self.page), &number);
-            ui.label(format!("of {}", self.source.pages));
-            let go = ui.add_enabled(!self.reloading, crate::keyboard::Button::new("Go"));
-            ui_probe::button(ui, "pdf-go", &go);
-            if go.clicked() || (number.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))) {
-                page = Some(self.requested);
-            }
-            let next = ui.add_enabled(
-                !self.reloading && self.wanted < self.source.pages,
-                IconButton::icon(Icon::ChevronRight, "Next page").min_size(arrow_size),
-            );
-            ui_probe::button(ui, "pdf-next", &next);
-            if next.clicked() {
-                page = Some(self.wanted + 1);
-            }
-            if matches!(display, Display::Document { .. }) {
-                ui.separator();
-                for (value, label, name) in [
-                    (false, "Single page", "pdf-single"),
-                    (true, "Continuous", "pdf-continuous"),
-                ] {
-                    let mode =
-                        crate::keyboard::selectable_label(ui, self.continuous == value, label);
-                    ui_probe::button(ui, name, &mode);
-                    if mode.clicked() && self.continuous != value {
-                        self.continuous = value;
-                        self.jump = Some((self.page, PageEntry::Start));
-                        self.scroll.reset();
-                        self.wanted = self.page;
-                        if !value {
-                            self.cached_page(self.page, limit);
-                            self.textures.clear();
-                        }
-                    }
-                }
-            }
-            let format = ui.label(palette.tag(if matches!(display, Display::Slides) { "MARP" } else { self.source.format.label() }))
-                .on_hover_text(match self.source.format {
-                    pdf::Format::Pptx => "Native PowerPoint preview. Uses bundled Inter when original fonts are unavailable; layout may differ from PowerPoint.",
-                    pdf::Format::Docx => "Native Word preview with bundled fonts. Font substitution and unsupported content may change layout and pagination.",
-                    pdf::Format::Pdf => "Native PDF preview",
-                });
-            ui_probe::button(ui, &format!("preview-format:{}", self.source.format.label()), &format);
-            if !self.source.warnings.is_empty() {
-                let warning = ui.label(palette.tag("Preview limitations")).on_hover_text(self.source.warnings.join("\n"));
-                ui_probe::button(ui, "document-preview-warning", &warning);
-            }
-            let skipped = self.source.skipped_images(self.page);
-            if skipped > 0 {
-                let unit = if skipped == 1 { "image" } else { "images" };
-                let warning = ui.colored_label(palette.error, format!("{skipped} {unit} could not be displayed"));
-                ui_probe::button(ui, "presentation-missing-images", &warning);
-            }
-            if let Display::Document { fullscreen } = display {
-                let button = ui
-                    .add(
-                        crate::keyboard::Button::new(if fullscreen {
-                            "Exit fullscreen"
-                        } else {
-                            "Fullscreen"
-                        })
-                        .shortcut_text("F11"),
-                    )
-                    .on_hover_text("Toggle reader fullscreen · F11\nEscape exits fullscreen");
-                ui_probe::button(ui, "pdf-fullscreen-toggle", &button);
-                toggle_fullscreen = button.clicked();
-            }
-            if self.image.loading {
-                ui.label(palette.tag(format!("Loading page {}…", self.wanted)));
-            }
-        });
         let focused = keyboard
             && !self.reloading
             && ctx.memory(|m| m.has_focus(image_view::ImageView::focus_id(id)));
@@ -461,11 +366,8 @@ impl PdfView {
                 }
             });
         }
-        let reload = if self.continuous {
-            let reload = self.image.controls(ui, palette, true);
-            ui.separator();
+        if self.continuous {
             self.continuous_ui(ui, &ctx, id, palette, focus, focused);
-            reload
         } else {
             let response = self.image.pdf_ui(ui, &ctx, id, palette, focus);
             if keyboard && response.hovered && ctx.input(|i| i.modifiers.is_none()) {
@@ -499,16 +401,15 @@ impl PdfView {
                     ),
                 );
             }
-            response.reload
-        };
+        }
         if let Some(page) = page {
             self.navigate(page, entry, limit);
             ctx.request_repaint();
         }
         Response {
-            reload,
+            reload: controls.reload,
             page: self.next_page(limit),
-            toggle_fullscreen,
+            toggle_fullscreen: controls.toggle_fullscreen,
         }
     }
     fn continuous_ui(

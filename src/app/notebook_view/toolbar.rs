@@ -16,87 +16,120 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         let id = self.documents[index].id;
         let mut action = None;
-        let toolbar = egui::Frame::new()
-            .fill(palette.panel)
-            .inner_margin(egui::Margin::symmetric(10, 4))
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    if view.source_mode {
-                        ui.label(palette.tag("JSON SOURCE"));
-                        if crate::keyboard::button(ui, "Back to cells").clicked() {
-                            action = Some(Action::Source);
-                        }
-                        return;
+        let toolbar = layout::document_toolbar(ui, palette, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if view.source_mode {
+                    ui.label(palette.tag("JSON SOURCE"));
+                    if crate::keyboard::button(ui, "Back to cells").clicked() {
+                        action = Some(Action::Source);
                     }
-                    let busy = view.kernel.as_ref().is_some_and(Kernel::busy);
-                    if ui
-                        .add_enabled(!busy, IconButton::new(Icon::Play, "Run cell"))
-                        .clicked()
-                    {
-                        action = Some(Action::Run(false));
-                    }
-                    if ui
-                        .add_enabled(!busy, crate::keyboard::Button::new("Run all"))
-                        .clicked()
-                    {
-                        action = Some(Action::Run(true));
-                    }
-                    if ui
-                        .add_enabled(view.kernel.is_some(), crate::keyboard::Button::new("Interrupt"))
-                        .clicked()
-                    {
-                        action = Some(Action::Interrupt);
-                    }
-                    let insert = crate::keyboard::menu_button(ui, "Insert…", |ui| {
-                    let insert_at = view.active_index().map_or(view.book.cells.len(), |at| at + 1);
-                    let code = crate::keyboard::button(ui, "Code cell").on_hover_text("Insert a code cell below the selected cell");
+                    return;
+                }
+                let busy = view.kernel.as_ref().is_some_and(Kernel::busy);
+                if ui
+                    .add_enabled(!busy, IconButton::new(Icon::Play, "Run cell"))
+                    .clicked()
+                {
+                    action = Some(Action::Run(false));
+                }
+                if ui
+                    .add_enabled(!busy, crate::keyboard::Button::new("Run all"))
+                    .clicked()
+                {
+                    action = Some(Action::Run(true));
+                }
+                if ui
+                    .add_enabled(
+                        view.kernel.is_some(),
+                        crate::keyboard::Button::new("Interrupt"),
+                    )
+                    .clicked()
+                {
+                    action = Some(Action::Interrupt);
+                }
+                let insert = crate::keyboard::menu_button(ui, "Insert…", |ui| {
+                    let insert_at = view
+                        .active_index()
+                        .map_or(view.book.cells.len(), |at| at + 1);
+                    let code = crate::keyboard::button(ui, "Code cell")
+                        .on_hover_text("Insert a code cell below the selected cell");
                     ui_probe::button(ui, "notebook-add-code", &code);
                     if code.clicked() {
                         action = Some(Action::Add("code", insert_at));
                         ui.close();
                     }
-                    let markdown = crate::keyboard::button(ui, "Markdown cell").on_hover_text("Insert a text cell below the selected cell");
+                    let markdown = crate::keyboard::button(ui, "Markdown cell")
+                        .on_hover_text("Insert a text cell below the selected cell");
                     ui_probe::button(ui, "notebook-add-markdown", &markdown);
                     if markdown.clicked() {
                         action = Some(Action::Add("markdown", insert_at));
                         ui.close();
                     }
-                    });
-                    ui_probe::button(ui, "notebook-insert", &insert.response);
-                    crate::keyboard::menu_button(ui, "Notebook…", |ui| {
-                        if crate::keyboard::button(ui, "Clear all outputs").clicked() {
-                            action = Some(Action::Clear(None));
-                            ui.close();
-                        }
-                        if ui.add_enabled(view.kernel.is_some(), crate::keyboard::Button::new("Shut down kernel")).clicked() {
-                            action = Some(Action::Shutdown);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if crate::keyboard::button(ui, "Edit JSON source").clicked() {
-                            action = Some(Action::Source);
-                            ui.close();
-                        }
-                    });
-                    let settings = ui.add(crate::keyboard::Button::new("Kernel settings").selected(view.settings_open));
-                    ui_probe::button(ui, "notebook-settings", &settings);
-                    if settings.clicked() { view.settings_open = !view.settings_open; }
-                    let status = view.kernel.as_ref().map(|k| k.status.as_str()).unwrap_or("Not started");
-                    let execution = view.kernel.as_ref().map(|k| k.execution.clone()).unwrap_or_else(||
-                        view.execution_target.as_ref().map(|t| format!("Slurm job {}", t.id)).unwrap_or_else(|| "Project host".into()));
-                    if busy { ui.spinner(); }
-                    let target = view.execution_target.as_ref().map(|t| format!("Slurm {}", t.id))
-                        .unwrap_or_else(|| "Project host".into());
-                    ui.add(egui::Label::new(palette.tag(format!("{status} · {target}"))).truncate())
-                        .on_hover_text(format!("{}\n{} · {}\n{}", status, view.kernel_name, execution, view.status));
                 });
-                if !view.source_mode {
-                    if view.settings_open {
-                        ui.add_space(6.);
-                        // Reserve room for cells even with large fonts or a short viewport.
-                        let height = (ui.available_height() - 120.).clamp(1., 240.);
-                        egui::ScrollArea::vertical().id_salt(("notebook-settings", id))
+                ui_probe::button(ui, "notebook-insert", &insert.response);
+                crate::keyboard::menu_button(ui, "Notebook…", |ui| {
+                    if crate::keyboard::button(ui, "Clear all outputs").clicked() {
+                        action = Some(Action::Clear(None));
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(
+                            view.kernel.is_some(),
+                            crate::keyboard::Button::new("Shut down kernel"),
+                        )
+                        .clicked()
+                    {
+                        action = Some(Action::Shutdown);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if crate::keyboard::button(ui, "Edit JSON source").clicked() {
+                        action = Some(Action::Source);
+                        ui.close();
+                    }
+                });
+                let settings = ui.add(
+                    crate::keyboard::Button::new("Kernel settings").selected(view.settings_open),
+                );
+                ui_probe::button(ui, "notebook-settings", &settings);
+                if settings.clicked() {
+                    view.settings_open = !view.settings_open;
+                }
+                let status = view
+                    .kernel
+                    .as_ref()
+                    .map(|k| k.status.as_str())
+                    .unwrap_or("Not started");
+                let execution = view
+                    .kernel
+                    .as_ref()
+                    .map(|k| k.execution.clone())
+                    .unwrap_or_else(|| {
+                        view.execution_target
+                            .as_ref()
+                            .map(|t| format!("Slurm job {}", t.id))
+                            .unwrap_or_else(|| "Project host".into())
+                    });
+                if busy {
+                    ui.spinner();
+                }
+                let target = view
+                    .execution_target
+                    .as_ref()
+                    .map(|t| format!("Slurm {}", t.id))
+                    .unwrap_or_else(|| "Project host".into());
+                ui.add(egui::Label::new(palette.tag(format!("{status} · {target}"))).truncate())
+                    .on_hover_text(format!(
+                        "{}\n{} · {}\n{}",
+                        status, view.kernel_name, execution, view.status
+                    ));
+            });
+            if !view.source_mode {
+                if view.settings_open {
+                    ui.add_space(6.);
+                    // Reserve room for cells even with large fonts or a short viewport.
+                    let height = (ui.available_height() - 120.).clamp(1., 240.);
+                    egui::ScrollArea::vertical().id_salt(("notebook-settings", id))
                             .max_height(height).auto_shrink([false, true]).show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         let on = view.kernel.as_ref().map_or(view.persistent, Kernel::persistent);
@@ -247,64 +280,61 @@ impl EditorApp {
                         if previous != view.kernel_name { action = Some(Action::Kernel); }
                     });
                     });
-                    }
-                    if self.editor.show_find {
-                        ui.horizontal(|ui| {
-                            let response = ui.add(crate::keyboard::named("Find in cell sources…", egui::TextEdit::singleline(&mut self.editor.find)
-                                    .hint_text("Find in cell sources…")
-                                    .desired_width(220.)));
-                            if self.editor.find_focus {
-                                response.request_focus();
-                                self.editor.find_focus = false;
-                            }
-                            ui_probe::button(ui, "notebook-find", &response);
-                            ui_probe::value(ui, "notebook-find-value", &response, &self.editor.find);
-                            if (crate::keyboard::button(ui, "Next").clicked()
-                                || (response.has_focus() || response.lost_focus())
-                                    && ui.input(|i| i.key_pressed(Key::Enter)))
-                                && !self.editor.find.is_empty()
-                            {
-                                let start = view.active_index().unwrap_or(0);
-                                if let Some((at, range)) = (0..view.book.cells.len())
-                                    .map(|n| (start + n + 1) % view.book.cells.len())
-                                    .find_map(|at| {
-                                        find_matches(
-                                            &view.book.cells[at].source,
-                                            &self.editor.find,
-                                            self.editor.case_sensitive,
-                                        )
-                                        .first()
-                                        .copied()
-                                        .map(|r| (at, r))
-                                    })
-                                {
-                                    let cell = &view.book.cells[at];
-                                    let a = cell.source[..range.0].chars().count();
-                                    let b = cell.source[..range.1].chars().count();
-                                    view.active = cell.uid;
-                                    view.selection = Some((cell.uid, a, b));
-                                    view.focus = Some(cell.uid);
-                                    view.reveal = true;
-                                    view.cells.entry(cell.uid).or_default().previewing = false;
-                                }
-                            }
-                            if crate::keyboard::button(ui, "Close").clicked() {
-                                self.editor.show_find = false;
-                            }
-                        });
-                    }
-                    if !view.error.is_empty() {
-                        ui.colored_label(palette.error, &view.error);
-                    }
                 }
-            });
+                if self.editor.show_find {
+                    ui.horizontal(|ui| {
+                        let response = ui.add(crate::keyboard::named(
+                            "Find in cell sources…",
+                            egui::TextEdit::singleline(&mut self.editor.find)
+                                .hint_text("Find in cell sources…")
+                                .desired_width(220.),
+                        ));
+                        if self.editor.find_focus {
+                            response.request_focus();
+                            self.editor.find_focus = false;
+                        }
+                        ui_probe::button(ui, "notebook-find", &response);
+                        ui_probe::value(ui, "notebook-find-value", &response, &self.editor.find);
+                        if (crate::keyboard::button(ui, "Next").clicked()
+                            || (response.has_focus() || response.lost_focus())
+                                && ui.input(|i| i.key_pressed(Key::Enter)))
+                            && !self.editor.find.is_empty()
+                        {
+                            let start = view.active_index().unwrap_or(0);
+                            if let Some((at, range)) = (0..view.book.cells.len())
+                                .map(|n| (start + n + 1) % view.book.cells.len())
+                                .find_map(|at| {
+                                    find_matches(
+                                        &view.book.cells[at].source,
+                                        &self.editor.find,
+                                        self.editor.case_sensitive,
+                                    )
+                                    .first()
+                                    .copied()
+                                    .map(|r| (at, r))
+                                })
+                            {
+                                let cell = &view.book.cells[at];
+                                let a = cell.source[..range.0].chars().count();
+                                let b = cell.source[..range.1].chars().count();
+                                view.active = cell.uid;
+                                view.selection = Some((cell.uid, a, b));
+                                view.focus = Some(cell.uid);
+                                view.reveal = true;
+                                view.cells.entry(cell.uid).or_default().previewing = false;
+                            }
+                        }
+                        if crate::keyboard::button(ui, "Close").clicked() {
+                            self.editor.show_find = false;
+                        }
+                    });
+                }
+                if !view.error.is_empty() {
+                    ui.colored_label(palette.error, &view.error);
+                }
+            }
+        });
         ui_probe::button(ui, "notebook-toolbar", &toolbar.response);
-        let (_, rule) = ui.allocate_space(egui::vec2(ui.available_width(), 6.));
-        ui.painter().hline(
-            rule.x_range(),
-            rule.center().y,
-            Stroke::new(1.5_f32, palette.control_border.unwrap_or(palette.border)),
-        );
         action
     }
 }

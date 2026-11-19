@@ -90,7 +90,7 @@ impl ImageView {
     ) -> ImageResponse {
         self.show(ui, ctx, id, palette, focus, false)
     }
-    /// Render a PDF page with reader zoom controls and without image-file metadata.
+    /// Render only the page canvas; the shared paged reader owns its fixed toolbar.
     pub fn pdf_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -99,7 +99,7 @@ impl ImageView {
         palette: theme::Palette,
         focus: bool,
     ) -> ImageResponse {
-        self.show(ui, ctx, id, palette, focus, true)
+        self.canvas(ui, ctx, id, palette, focus)
     }
     fn upload(&mut self, ctx: &egui::Context, id: u64) {
         if let Some(pixels) = self.pixels.take() {
@@ -146,50 +146,8 @@ impl ImageView {
     pub fn controls(&mut self, ui: &mut egui::Ui, palette: theme::Palette, pdf: bool) -> bool {
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
-            let fit = crate::keyboard::selectable_label(
-                ui,
-                self.zoom.is_none() && !self.fit_width,
-                if pdf { "Fit page" } else { "Fit" },
-            );
-            super::ui_probe::button(ui, "image-fit", &fit);
-            if fit.clicked() {
-                self.zoom = None;
-                self.fit_width = false;
-                self.reset_scroll = Some(ScrollOrigin::Start);
-            }
-            if pdf {
-                let width = crate::keyboard::selectable_label(
-                    ui,
-                    self.zoom.is_none() && self.fit_width,
-                    "Fit width",
-                );
-                ui_probe::button(ui, "image-fit-width", &width);
-                if width.clicked() {
-                    self.fit_width = true;
-                    self.zoom = None;
-                    self.reset_scroll = Some(ScrollOrigin::Start);
-                }
-            }
-            if crate::keyboard::button(ui, "100%")
-                .on_hover_text("Actual size in image pixels")
-                .clicked()
-            {
-                self.zoom = Some(1.);
-                self.reset_scroll = Some(ScrollOrigin::Start);
-            }
-            if crate::keyboard::button(ui, "−")
-                .on_hover_text("Zoom out")
-                .clicked()
-            {
-                self.zoom_by(1. / 1.25);
-            }
-            if crate::keyboard::button(ui, "+")
-                .on_hover_text("Zoom in")
-                .clicked()
-            {
-                self.zoom_by(1.25);
-            }
-            ui.label(palette.tag(format!("{:.0}%", self.displayed_zoom * 100.)));
+            self.fit_controls(ui, pdf);
+            self.zoom_controls(ui, palette);
             if ui
                 .add_enabled(!self.loading, crate::keyboard::Button::new("Reload"))
                 .clicked()
@@ -203,6 +161,68 @@ impl ImageView {
         });
         reload
     }
+    /// Fit and actual-size choices shared by image previews and expanded reader controls.
+    pub fn fit_controls(&mut self, ui: &mut egui::Ui, pdf: bool) {
+        let fit = crate::keyboard::selectable_label(
+            ui,
+            self.zoom.is_none() && !self.fit_width,
+            if pdf { "Fit page" } else { "Fit" },
+        );
+        super::ui_probe::button(ui, "image-fit", &fit);
+        if fit.clicked() {
+            self.zoom = None;
+            self.fit_width = false;
+            self.reset_scroll = Some(ScrollOrigin::Start);
+        }
+        if pdf {
+            let width = crate::keyboard::selectable_label(
+                ui,
+                self.zoom.is_none() && self.fit_width,
+                "Fit width",
+            );
+            ui_probe::button(ui, "image-fit-width", &width);
+            if width.clicked() {
+                self.fit_width = true;
+                self.zoom = None;
+                self.reset_scroll = Some(ScrollOrigin::Start);
+            }
+        }
+        if crate::keyboard::button(ui, "100%")
+            .on_hover_text("Actual size in image pixels")
+            .clicked()
+        {
+            self.zoom = Some(1.);
+            self.reset_scroll = Some(ScrollOrigin::Start);
+        }
+    }
+    /// Compact zoom actions for the fixed reader row and ordinary image previews.
+    pub fn zoom_controls(&mut self, ui: &mut egui::Ui, palette: theme::Palette) {
+        if crate::keyboard::button(ui, "−")
+            .on_hover_text("Zoom out")
+            .clicked()
+        {
+            self.zoom_by(1. / 1.25);
+        }
+        if crate::keyboard::button(ui, "+")
+            .on_hover_text("Zoom in")
+            .clicked()
+        {
+            self.zoom_by(1.25);
+        }
+        // Reserve the longest percentage so Fit recalculation cannot wrap the
+        // toolbar, change the canvas height and feed back into Fit again.
+        let font = FontId::proportional(palette.ui.unwrap_or_default().small_size);
+        let width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap("1600%".into(), font, palette.muted)
+                .size()
+                .x
+        });
+        ui.add_sized(
+            egui::vec2(width, layout::control_height(ui)),
+            egui::Label::new(palette.tag(format!("{:.0}%", self.displayed_zoom * 100.))).truncate(),
+        );
+    }
     fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -212,7 +232,6 @@ impl ImageView {
         focus: bool,
         pdf: bool,
     ) -> ImageResponse {
-        self.upload(ctx, id);
         let reload = self.controls(ui, palette, pdf);
         if !pdf {
             let metadata = format!(
@@ -230,6 +249,20 @@ impl ImageView {
             ui.add(egui::Label::new(palette.tag(&metadata)).truncate()).on_hover_text(format!("{metadata}\nScroll or drag to pan. Large images are downsampled to the GPU preview limit. Animated images show their first frame."));
         }
         ui.separator();
+        let mut response = self.canvas(ui, ctx, id, palette, focus);
+        response.reload = reload;
+        response
+    }
+    /// Paint and scroll cached pixels inside the remaining body rectangle.
+    fn canvas(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        id: u64,
+        palette: theme::Palette,
+        focus: bool,
+    ) -> ImageResponse {
+        self.upload(ctx, id);
         let viewport = ui.available_size().max(egui::vec2(1., 1.));
         let original = egui::vec2(self.original[0] as f32, self.original[1] as f32);
         let width_fit = (viewport.x - 16.).max(1.) / original.x;
@@ -315,7 +348,7 @@ impl ImageView {
             ctx.request_repaint();
         }
         ImageResponse {
-            reload,
+            reload: false,
             hovered: ui.rect_contains_pointer(output.inner_rect),
             edge_scroll: if origin.is_some() {
                 0.

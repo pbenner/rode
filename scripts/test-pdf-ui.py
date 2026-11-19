@@ -186,6 +186,7 @@ def run(remote=False):
                 key("minus", ("Control_L",))
                 # Continuous mode must display adjacent pages together and keep
                 # real keyboard/fit navigation working across mixed orientations.
+                ui.click("pdf-view-settings")
                 ui.click("pdf-continuous")
                 ui.click("image-fit")
                 ui.click("pdf-document")
