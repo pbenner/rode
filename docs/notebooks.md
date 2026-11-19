@@ -46,6 +46,8 @@ uv pip install --python .venv/bin/python matplotlib
 
 Do not recreate an existing environment. You can also use pip or an already prepared interpreter. Select it through **Environment → Python interpreter and virtual environments**; automatic selection uses the project's `.venv` when available. The editor installs no notebook dependencies. The default Python kernelspec uses that interpreter; a custom kernelspec may explicitly select a different executable.
 
+The compact notebook toolbar keeps run controls, **Insert…**, **Notebook…**, **Kernel settings** and kernel status together. **Insert…** adds code or Markdown cells below the selection; inline insertion remains available between cells. Kernel settings are hidden until opened and scroll within a bounded area, leaving room for cells. A distinct toolbar surface and separator mark the start of the scrolling notebook. Hover kernel status for interpreter/target details.
+
 - **Run cell / Shift+Enter:** execute the selected code cell in a stateful kernel. Variables persist across runs. Shift+Enter on Markdown switches it to Preview.
 - **Run all:** execute code cells in document order. An execution error stops the remaining queue. Edits to queued cells invalidate their queued snapshots; outputs from an already running edited/deleted cell are discarded.
 - **Interrupt:** interrupt the current execution and discard queued cells. The kernel can be reused afterward.
@@ -76,6 +78,12 @@ In **Kernel settings**, click **Refresh Slurm targets**, then choose a running a
 RODE rechecks the selected job's UID-filtered ID, name and RUNNING state before each kernel start. It launches a noninteractive `srun --jobid=… --overlap` step through the existing SSH channel, with the notebook bridge and kernel together on one allocated node. They communicate through private IPC sockets there; no Jupyter server or forwarded ports are required. The selected Python environment, installed kernelspec, `jupyter_client`, project libraries and project/data paths must be available on the compute node. Interpreter selection is resolved there. GPU visibility comes from Slurm, not queue output. An active sandbox is applied on both hosts; a failed compute-node policy never falls back to the login host or unsandboxed execution.
 
 Kernels share the selected allocation's resources with its other steps, including GPU memory; this does not reserve a separate GPU per notebook. Selecting an interactive allocation also retains that allocation's existing shell-owned lifetime. **Reserve for notebooks** avoids that dependency and does not occupy a compute step while idle. Allocation expiry/cancellation ends its kernels visibly. Kernel interruption and shutdown affect only that notebook's step, not the allocation, other notebooks or the workspace SSH connection. Enable **Persist kernel** as well as retaining the allocation to survive desktop disconnect/exit.
+
+## Saving plots
+
+Each displayed PNG or JPEG output has a **Save image as…** button. It opens the shared file picker and saves the original image bytes at their full resolution, rather than the reduced on-screen preview. For SSH notebooks, the destination is on the project host and obeys the workspace's file permissions. Choose a new filename; existing files are never overwritten. A missing extension is filled in automatically, and the format is preserved without conversion.
+
+The image is captured when you select Save, so a subsequent cell rerun or display update cannot substitute a different plot. Export does not change notebook content, dirty state or file identity. Quit waits for submitted exports; a failed save keeps the editor open and reports the error. Unsupported or oversized image payloads retain their existing preview limits and remain preserved in notebook JSON.
 
 ## Limits
 

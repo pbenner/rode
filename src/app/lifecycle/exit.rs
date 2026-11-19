@@ -43,15 +43,16 @@ pub(in crate::app) struct Readiness {
     pub notebooks: bool,
     pub debugger: bool,
     pub installation: bool,
+    pub exports: bool,
 }
 impl Readiness {
     /// Whether any terminal, runtime, notebook or debugger owner still has pending lifetime work.
     pub fn runtime_pending(&self) -> bool {
         self.terminals || self.runtimes || self.notebooks || self.debugger
     }
-    /// Whether runtime work or an installation acknowledgement still blocks normal window exit.
+    /// Whether runtime work, installation or a file export still blocks normal window exit.
     pub fn pending(&self) -> bool {
-        self.runtime_pending() || self.installation
+        self.runtime_pending() || self.installation || self.exports
     }
 }
 
@@ -120,6 +121,7 @@ mod tests {
             notebooks,
             debugger: false,
             installation,
+            exports: false,
         }
     }
     #[test]

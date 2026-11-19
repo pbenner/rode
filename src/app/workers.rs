@@ -17,7 +17,7 @@ mod inbox;
 #[cfg(test)]
 mod tests;
 pub(super) use events::{Job, WorkspaceEvent};
-pub(super) use inbox::{Inbox, Message, ProfileSender, WorkspaceSender};
+pub(super) use inbox::{ExportGuard, Inbox, Message, ProfileSender, WorkspaceSender};
 
 /// Resolve a local startup file to its parent before restoring that folder's
 /// saved policy. Run on the dispatch worker; project pickers and SSH requests
@@ -102,7 +102,7 @@ impl EditorApp {
         let file_operation_pending = self.explorer_state.busy
             && matches!(
                 &job,
-                Job::Open(_) | Job::Save { .. } | Job::SaveBinary { .. }
+                Job::Open(_) | Job::Save { .. } | Job::SaveBinary { .. } | Job::ExportImage(_)
             );
         if file_operation_pending
             || self.vaults.locking()
@@ -153,6 +153,9 @@ impl EditorApp {
         };
         let work = self.capture_work(scope, ctx);
         let mut job = job;
+        if let Job::ExportImage(pending) = &mut job {
+            *pending = Some(self.workers.export_guard(ctx));
+        }
         let restore_policies = if matches!(
             job,
             Job::Prepare {

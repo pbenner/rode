@@ -278,9 +278,14 @@ pub(super) fn is_file_dialog(dialog: &Dialog) -> bool {
         Dialog::Open
             | Dialog::HexOpen
             | Dialog::Save(_)
+            | Dialog::NotebookImage(_)
             | Dialog::AgentAttachLocal
             | Dialog::AgentAttachHost
     )
+}
+/// Destination pickers retain filenames while browsing; export never becomes a document save.
+fn is_save_dialog(dialog: &Dialog) -> bool {
+    matches!(dialog, Dialog::Save(_) | Dialog::NotebookImage(_))
 }
 fn parent(path: &str) -> String {
     std::path::Path::new(path)
@@ -323,7 +328,7 @@ impl EditorApp {
         }
     }
     fn picker_directory(&mut self, path: String, ctx: &egui::Context) {
-        self.dialog_input = if matches!(self.dialog, Dialog::Save(_)) {
+        self.dialog_input = if is_save_dialog(&self.dialog) {
             ssh::display_name(&self.dialog_input).into()
         } else {
             String::new()
@@ -338,9 +343,7 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         if self.file_browser.needs_load {
             self.file_browser.needs_load = false;
-            let directory = if matches!(self.dialog, Dialog::Save(_))
-                && self.dialog_input.starts_with('/')
-            {
+            let directory = if is_save_dialog(&self.dialog) && self.dialog_input.starts_with('/') {
                 parent(&self.dialog_input)
             } else {
                 self.workspace
@@ -423,10 +426,13 @@ impl EditorApp {
             match self.dialog {
                 Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach image or document",
                 Dialog::Save(_) => "Save file as",
+                Dialog::NotebookImage(_) => "Save notebook image",
                 Dialog::HexOpen => "Open as hex / inspect binary",
                 _ => "Open file",
             },
-            if matches!(self.dialog, Dialog::Save(_)) {
+            if matches!(self.dialog, Dialog::NotebookImage(_)) {
+                "Save the original image on the project host. Choose a new filename; existing files are preserved."
+            } else if is_save_dialog(&self.dialog) {
                 "Browse folders or enter a destination path. Select a file to reuse its name."
             } else {
                 "Browse folders or enter a path. Double-click folders and files to open them."
@@ -448,7 +454,7 @@ impl EditorApp {
             egui::TextEdit::singleline(&mut self.dialog_input)
                 .id(path_id)
                 .desired_width(f32::INFINITY)
-                .hint_text(if matches!(self.dialog, Dialog::Save(_)) {
+                .hint_text(if is_save_dialog(&self.dialog) {
                     "File name or path…"
                 } else {
                     "File name, search, or path…"
@@ -564,9 +570,7 @@ impl EditorApp {
                 Choice::Parent => browse = Some(parent(&self.file_browser.directory)),
                 Choice::Select(entry) if entry.dir => self.file_browser.selected = Some(entry.path),
                 Choice::Open(entry) if entry.dir => browse = Some(entry.path),
-                Choice::Select(entry) | Choice::Open(entry)
-                    if matches!(self.dialog, Dialog::Save(_)) =>
-                {
+                Choice::Select(entry) | Choice::Open(entry) if is_save_dialog(&self.dialog) => {
                     self.dialog_input = entry.path.clone();
                     self.file_browser.selected = Some(entry.path);
                     self.file_browser.query.clear();
@@ -584,7 +588,7 @@ impl EditorApp {
         ui.add_space(8.);
         ui.horizontal(|ui| {
             let label = match self.dialog {
-                Dialog::Save(_) => "Save",
+                Dialog::Save(_) | Dialog::NotebookImage(_) => "Save",
                 Dialog::HexOpen => "Open as hex",
                 Dialog::AgentAttachLocal | Dialog::AgentAttachHost => "Attach",
                 _ => "Open",
@@ -632,6 +636,10 @@ impl EditorApp {
             match dialog {
                 Dialog::Save(id) => {
                     self.save_document(id, path, true, ctx);
+                    self.focus_editor(ctx);
+                }
+                Dialog::NotebookImage(snapshot) => {
+                    self.save_notebook_image(*snapshot, path, ctx);
                     self.focus_editor(ctx);
                 }
                 Dialog::HexOpen => self.open_hex(path, ctx),

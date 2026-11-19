@@ -450,6 +450,7 @@ impl EditorApp {
                 std::mem::discriminant(&self.dialog),
                 match self.dialog {
                     Dialog::Save(id) | Dialog::MarpExport(id, _) => id,
+                    Dialog::NotebookImage(ref image) => image.document,
                     _ => 0,
                 },
             ),

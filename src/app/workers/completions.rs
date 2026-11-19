@@ -39,7 +39,7 @@ impl EditorApp {
                 return;
             }
             Job::BrowseFiles { .. } => self.file_browser.loading = false,
-            Job::AgentAttachment { .. } => {}
+            Job::AgentAttachment { .. } | Job::ExportImage(_) => {}
             Job::Prepare { .. } | Job::StandaloneFile { .. } => {}
             Job::Browse { .. } => self.project_picker.loading = false,
             Job::List(path, _) => {
@@ -75,6 +75,7 @@ impl EditorApp {
                 | Job::Open(_)
                 | Job::Save { .. }
                 | Job::SaveBinary { .. }
+                | Job::ExportImage(_)
         ) {
             self.file_browser.invalidate_rows();
         }
@@ -90,6 +91,14 @@ impl EditorApp {
         match result {
             Err(error) => {
                 if matches!(&job, Job::Save { .. } | Job::SaveBinary { .. }) {
+                    self.abort_lifecycle(error, ctx);
+                } else if matches!(&job, Job::ExportImage(_)) {
+                    let error = if error.starts_with("Save conflict:") {
+                        "Image not saved: the destination already exists. Choose a new filename."
+                            .into()
+                    } else {
+                        error
+                    };
                     self.abort_lifecycle(error, ctx);
                 } else if let Job::AgentAttachment { token, .. } = job {
                     self.agents.files.finish(token, Err(error));
@@ -173,6 +182,12 @@ impl EditorApp {
                         },
                         ctx,
                     );
+                }
+                Job::ExportImage(_) => {
+                    self.notify(format!("Saved image {}", response.path), false);
+                    if let Some(root) = self.workspace.as_ref().map(|w| w.root.clone()) {
+                        self.list(root, ctx);
+                    }
                 }
                 Job::SaveBinary { id, bytes, .. } => {
                     if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {

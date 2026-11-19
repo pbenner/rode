@@ -5,6 +5,7 @@
 //! for each dequeued message so a disconnect handled earlier in the same frame
 //! immediately invalidates later workspace replies. Both senders wake the UI.
 use super::*;
+use std::sync::atomic::AtomicUsize;
 
 /// Only this module can construct transport envelopes or access the raw channel.
 enum Envelope {
@@ -27,6 +28,7 @@ pub(in crate::app) struct Inbox {
     generation: u64,
     tx: mpsc::Sender<Envelope>,
     rx: mpsc::Receiver<Envelope>,
+    pending_exports: Arc<AtomicUsize>,
 }
 
 impl Default for Inbox {
@@ -36,11 +38,38 @@ impl Default for Inbox {
             generation: 0,
             tx,
             rx,
+            pending_exports: Arc::default(),
         }
     }
 }
 
+/// Keep an explicit file export pending through I/O and reply admission, even
+/// when a workspace switch expires its completion. Dropping the final job wakes Quit.
+pub(in crate::app) struct ExportGuard {
+    pending: Arc<AtomicUsize>,
+    ctx: egui::Context,
+}
+impl Drop for ExportGuard {
+    fn drop(&mut self) {
+        self.pending.fetch_sub(1, Ordering::AcqRel);
+        self.ctx.request_repaint();
+    }
+}
+
 impl Inbox {
+    /// Explicit image exports block Quit until their result is consumed or expires.
+    pub(in crate::app) fn exports_pending(&self) -> bool {
+        self.pending_exports.load(Ordering::Acquire) != 0
+    }
+    /// Dispatch installs this non-cloneable guard only after admitting the file write.
+    pub(super) fn export_guard(&self, ctx: &egui::Context) -> ExportGuard {
+        self.pending_exports.fetch_add(1, Ordering::AcqRel);
+        ExportGuard {
+            pending: self.pending_exports.clone(),
+            ctx: ctx.clone(),
+        }
+    }
+
     /// Read-only identity for project-bound UI drafts and cached views.
     pub(in crate::app) fn generation(&self) -> u64 {
         self.generation
@@ -244,4 +273,33 @@ mod tests {
         assert!(workspace.send(connected()).is_err());
         assert!(profiles.send(profile()).is_err());
     }
+}
+
+#[cfg(test)]
+#[test]
+fn export_guards_survive_project_changes_and_drain_with_expired_replies() {
+    let ctx = egui::Context::default();
+    let mut inbox = Inbox::default();
+    let sender = inbox.workspace(&ctx);
+    let first = inbox.export_guard(&ctx);
+    let second = inbox.export_guard(&ctx);
+    inbox.invalidate_workspace();
+    assert!(inbox.exports_pending());
+    sender
+        .send(WorkspaceEvent::Done {
+            job: Job::ExportImage(Some(first)),
+            result: Box::new(Ok(Response::default())),
+        })
+        .unwrap();
+    assert!(
+        inbox.exports_pending(),
+        "Publishing is not receipt admission"
+    );
+    assert!(matches!(inbox.receive(), Some(Message::Expired)));
+    assert!(
+        inbox.exports_pending(),
+        "One completed export cannot release another"
+    );
+    drop(second);
+    assert!(!inbox.exports_pending());
 }

@@ -39,6 +39,8 @@ pub(in crate::app) enum Job {
     List(String, u64),
     Explorer(explorer::Change),
     Open(String),
+    /// Save a selected notebook image without changing document identity or dirty state.
+    ExportImage(Option<ExportGuard>),
     SaveBinary {
         id: u64,
         bytes: Arc<Vec<u8>>,

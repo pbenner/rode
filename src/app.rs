@@ -145,6 +145,7 @@ enum Dialog {
     AgentAttachLocal,
     AgentAttachHost,
     Save(u64),
+    NotebookImage(Box<notebook_view::export::ImageExport>),
     Commands,
     Sessions,
     Tunnels,
@@ -551,6 +552,7 @@ impl EditorApp {
                         },
                     )
                 }),
+            Dialog::NotebookImage(ref image) => image.suggested_path.clone(),
             Dialog::MarpExport(id, format) => self
                 .documents
                 .iter()

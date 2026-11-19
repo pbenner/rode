@@ -506,3 +506,75 @@ fn unchanged_notebook_reload_keeps_view_state_and_source_identity() {
     assert_eq!(doc.notebook.as_ref().unwrap().error, "retained view state");
     assert_eq!(doc.version(), 0);
 }
+
+#[test]
+fn toolbar_is_compact_and_expanded_settings_leave_a_separated_cell_viewport() {
+    for theme in ["atelier-dark", "atelier-light"] {
+        for width in [320., 650., 1100.] {
+            for scale in [1., 1.5, 2.] {
+                let ctx = egui::Context::default();
+                let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                let mut app = EditorApp::new(
+                    &cc,
+                    Startup {
+                        theme: Some(theme.into()),
+                        ..Default::default()
+                    },
+                );
+                ctx.set_pixels_per_point(scale);
+                app.new_notebook();
+                let mut view = app.documents[0].notebook.take().unwrap();
+                let mut closed_height = 0.;
+                for expanded in [false, true] {
+                    view.settings_open = expanded;
+                    for _ in 0..3 {
+                        let mut body = egui::Rect::NOTHING;
+                        let mut top = 0.;
+                        let output = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 560.),
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                egui::CentralPanel::default().show(ctx, |ui| {
+                                    top = ui.cursor().top();
+                                    app.notebook_toolbar(ui, ctx, 0, &mut view);
+                                    body = ui.available_rect_before_wrap();
+                                });
+                            },
+                        );
+                        assert!(
+                            body.height() >= 100.,
+                            "{theme}/{width}/{scale}, expanded={expanded}: {body:?}"
+                        );
+                        if !expanded {
+                            closed_height = body.top() - top;
+                            assert!(
+                                closed_height < if width >= 1100. { 65. } else { 155. },
+                                "Header too tall: {theme}/{width}/{scale}: {closed_height}"
+                            );
+                        } else {
+                            assert!(body.top() - top <= closed_height + 260.);
+                        }
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Rect(rect) if rect.fill == app.themes.active().palette.panel
+                                && rect.rect.width() >= width - 20. && (rect.rect.top() - top).abs() < 1.
+                        )), "Toolbar surface must span the cell viewport");
+                        assert!(
+                            output.shapes.iter().any(|shape| matches!(&shape.shape,
+                                egui::Shape::LineSegment { points, stroke } if stroke.width == 1.5
+                                    && points[0].y < body.top() && points[0].y > top
+                                    && (points[1].x - points[0].x) >= width - 20.
+                            )),
+                            "Missing full-width toolbar boundary: {theme}/{width}/{scale}"
+                        );
+                    }
+                }
+                assert!(view.kernel.is_none());
+            }
+        }
+    }
+}

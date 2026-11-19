@@ -176,3 +176,61 @@ fn a_disconnect_during_a_batch_rejects_later_host_replies_but_keeps_global_compl
     assert!(app.documents.active().unwrap().dirty());
     assert_eq!(app.connection_profiles.profiles[0].name, "81");
 }
+
+#[test]
+fn export_completion_keeps_notebook_identity_and_dirty_state() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    app.new_notebook();
+    let original = app.documents[0].text.clone();
+    let id = app.documents[0].id;
+    assert!(app.documents[0].dirty());
+    app.file_completed(
+        Job::ExportImage(None),
+        Ok(files::Response {
+            path: "/project/plot.png".into(),
+            ..Default::default()
+        }),
+        &ctx,
+    );
+    assert_eq!(app.documents[0].text, original);
+    assert_eq!(app.documents[0].id, id);
+    assert!(app.documents[0].path.is_none());
+    assert!(app.documents[0].dirty());
+}
+
+#[test]
+fn pending_image_exports_hold_quit_until_their_reply_and_save_errors_cancel_exit() {
+    for fail in [false, true] {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let guard = app.workers.export_guard(&ctx);
+        app.request_exit(&ctx);
+        assert!(app.exit.waiting());
+        assert!(!app.exit.closing());
+        app.advance_exit(&ctx);
+        assert!(
+            app.exit.waiting(),
+            "An unacknowledged export cannot finish Quit"
+        );
+        let result = if fail {
+            Err("Image write failed".into())
+        } else {
+            Ok(files::Response {
+                path: "/plot.png".into(),
+                ..Default::default()
+            })
+        };
+        app.file_completed(Job::ExportImage(Some(guard)), result, &ctx);
+        assert!(!app.workers.exports_pending());
+        if fail {
+            assert!(!app.exit.waiting() && !app.exit.closing());
+            assert_eq!(app.notice.as_ref().unwrap().0, "Image write failed");
+        } else {
+            app.advance_exit(&ctx);
+            assert!(app.exit.closing());
+        }
+    }
+}

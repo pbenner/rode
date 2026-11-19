@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native notebook execution, protected saves and cell editing, locally and over SSH."""
 
+import base64
 import json
 import os
 import shutil
@@ -118,6 +119,30 @@ def execution(ui, source, original, label):
     ui.control(f"notebook-cell:{plot['uid']}", focused=True)
     key("Escape")
     ui.control("notebook-output-image")
+    output_index = next(
+        i for i, o in enumerate(book["cells"][3]["outputs"]) if "image/png" in o.get("data", {})
+    )
+    original_image = book["cells"][3]["outputs"][output_index]["data"]["image/png"]
+    if isinstance(original_image, list):
+        original_image = "".join(original_image)
+    image_path = ui.project_root / "exported-plot.png"
+    ui.click(f"notebook-save-image:{plot['uid']}:{output_index}")
+    ui.fill_path(str(image_path))
+    key("Return")
+    ui.absent("file-dialog-path")
+    ui.wait(image_path.exists, "Plot image was not saved on its project host")
+    assert image_path.read_bytes() == base64.b64decode(original_image), (
+        "Export changed the original image"
+    )
+    assert json.loads(source.read_text()) == book, "Image export changed the notebook"
+    # Existing destinations stay intact and a failed export leaves the notebook usable.
+    ui.dismiss_notice()
+    ui.click(f"notebook-save-image:{plot['uid']}:{output_index}")
+    ui.fill_path(str(image_path))
+    key("Return")
+    ui.notice("Image not saved: the destination already exists. Choose a new filename.")
+    assert image_path.read_bytes() == base64.b64decode(original_image)
+    ui.dismiss_notice()
     screenshot(ui.window, label + "-plot.png")
     key("f", ("Control_L",))
     ui.fill("notebook-find", "counter = 40")
@@ -192,6 +217,7 @@ def insertion(ui, label):
         ("notebook-add-code", 1, "inserted_code = 7"),
         ("notebook-add-markdown", 2, "Inserted markdown"),
     ]:
+        ui.click("notebook-insert")
         ui.click(button)
         current = ui.layout(
             lambda state: len((state.get("notebook") or {}).get("cells", [])) == index + 1,

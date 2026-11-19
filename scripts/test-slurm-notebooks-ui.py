@@ -159,7 +159,8 @@ with fixture_directory(prefix="rode-slurm-notebook-ui-") as base:
             command = ui.command
             ui.open_file("demo.ipynb")
             screenshot(window, "before-reattach.png")
-            # The expanded settings state survives the desktop restart.
+            # A newly opened view starts compact; reveal its lifetime controls.
+            ui.click("notebook-settings")
             ui.click("notebook-reattach")
             wait_for(
                 lambda: any(i["id"] == kernel["id"] and i["attached"] for i in rpc("runtimes")),

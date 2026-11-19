@@ -5,14 +5,17 @@
 //! cleanup follows project/interpreter/tab lifecycle and never affects persistent project
 //! terminals.
 use crate::sandbox::PlanExt as _;
+pub(super) mod export;
 mod shutdowns;
 mod source;
+mod toolbar;
 mod ui;
 use super::*;
 use crate::notebook::{
     self, Cell, Notebook,
     kernel::{self, Kernel, Run},
 };
+use export::image_bundle;
 use serde_json::{Value, json};
 pub(super) use shutdowns::Shutdowns;
 
@@ -69,6 +72,7 @@ impl Default for CellUi {
 pub(super) struct View {
     pub book: Notebook,
     source_mode: bool,
+    settings_open: bool,
     active: u64,
     focus: Option<u64>,
     selection: Option<(u64, usize, usize)>,
@@ -109,6 +113,7 @@ impl View {
             focus: Some(active),
             selection: None,
             source_mode: false,
+            settings_open: false,
             kernel: None,
             shutdowns,
             execution_target: None,
