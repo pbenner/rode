@@ -1,4 +1,4 @@
-//! Read-only PDF reader with virtual continuous pages and bounded page/texture caches.
+//! Shared read-only PDF/PowerPoint reader with virtual continuous pages and bounded caches.
 //!
 //! Retain encoded source separately from the displayed page. Page workers are cancellable and
 //! versioned; wheel navigation crosses page boundaries only after the current page scroll
@@ -332,7 +332,8 @@ impl PdfView {
         display: Display,
     ) -> Response {
         let ctx = ui.ctx().clone();
-        let kind = if matches!(display, Display::Slides) {
+        let kind = if matches!(display, Display::Slides) || self.source.format == pdf::Format::Pptx
+        {
             "Slide"
         } else {
             "Page"
@@ -377,7 +378,7 @@ impl PdfView {
             if next.clicked() {
                 page = Some(self.wanted + 1);
             }
-            if kind != "Slide" {
+            if matches!(display, Display::Document { .. }) {
                 ui.separator();
                 for (value, label, name) in [
                     (false, "Single page", "pdf-single"),
@@ -398,7 +399,15 @@ impl PdfView {
                     }
                 }
             }
-            ui.label(palette.tag(if kind == "Slide" { "MARP" } else { "PDF" }));
+            let format = ui.label(palette.tag(if matches!(display, Display::Slides) { "MARP" } else { self.source.format.label() }))
+                .on_hover_text(if self.source.format == pdf::Format::Pptx { "Native PowerPoint preview. Uses bundled Inter when original fonts are unavailable; layout may differ from PowerPoint." } else { "Native PDF preview" });
+            ui_probe::button(ui, &format!("preview-format:{}", self.source.format.label()), &format);
+            let skipped = self.source.skipped_images(self.page);
+            if skipped > 0 {
+                let unit = if skipped == 1 { "image" } else { "images" };
+                let warning = ui.colored_label(palette.error, format!("{skipped} {unit} could not be displayed"));
+                ui_probe::button(ui, "presentation-missing-images", &warning);
+            }
             if let Display::Document { fullscreen } = display {
                 let button = ui
                     .add(
@@ -409,7 +418,7 @@ impl PdfView {
                         })
                         .shortcut_text("F11"),
                     )
-                    .on_hover_text("Toggle PDF fullscreen · F11\nEscape exits fullscreen");
+                    .on_hover_text("Toggle reader fullscreen · F11\nEscape exits fullscreen");
                 ui_probe::button(ui, "pdf-fullscreen-toggle", &button);
                 toggle_fullscreen = button.clicked();
             }
@@ -423,10 +432,16 @@ impl PdfView {
         if focused && !self.continuous {
             ctx.input(|i| {
                 if i.modifiers.is_none() {
-                    if i.key_pressed(Key::PageDown) {
+                    if i.key_pressed(Key::PageDown)
+                        || (self.source.format == pdf::Format::Pptx
+                            && i.key_pressed(Key::ArrowRight))
+                    {
                         page = Some((self.wanted + 1).min(self.source.pages));
                     }
-                    if i.key_pressed(Key::PageUp) {
+                    if i.key_pressed(Key::PageUp)
+                        || (self.source.format == pdf::Format::Pptx
+                            && i.key_pressed(Key::ArrowLeft))
+                    {
                         page = Some(self.wanted.saturating_sub(1).max(1));
                     }
                     if i.key_pressed(Key::Home) {
@@ -877,6 +892,56 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn powerpoint_stays_read_only_and_uses_its_own_feature_gate() {
+        use base64::Engine as _;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(include_bytes!("../../tests/fixtures/slides.pptx"));
+        let loaded = pdf::load_format_cancellable(
+            &encoded,
+            pdf::Format::Pptx,
+            1,
+            &app.image_budget,
+            128,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        app.new_file();
+        let doc = app.documents.active_mut().unwrap();
+        doc.pdf = Some(PdfView::new(loaded));
+        doc.set_dirty_fixture(false);
+        assert_eq!(doc.paged_feature(), Some(crate::extensions::Feature::Pptx));
+        assert!(app.documents.active_source().is_none());
+        for save_as in [false, true] {
+            app.save_active(&ctx, save_as);
+            assert!(app.dialog == Dialog::None);
+            assert_eq!(
+                app.notice.as_ref().unwrap().0,
+                "PowerPoint previews are read-only."
+            );
+        }
+        app.set_extension(crate::extensions::Feature::Pdf.id(), false);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.toggle_pdf_fullscreen(ctx)
+        });
+        assert!(
+            app.editor.pdf_fullscreen.is_some(),
+            "PDF settings must not disable PowerPoint"
+        );
+        app.set_extension(crate::extensions::Feature::Pptx.id(), false);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            assert!(!app.pdf_fullscreen_ui(ctx));
+            app.toggle_pdf_fullscreen(ctx);
+        });
+        assert!(
+            app.editor.pdf_fullscreen.is_none(),
+            "Fullscreen must honor the disabled presentation feature"
+        );
+        assert!(!app.documents.active().unwrap().dirty());
+    }
     #[test]
     fn wheel_paging_accumulates_trackpad_motion_and_keeps_document_boundaries() {
         let mut scroll = PageScroll::default();

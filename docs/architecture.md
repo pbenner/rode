@@ -117,7 +117,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/agent/personality.rs` | Bounded response-style hints, explicit default resets and display-only history cleanup; independent of tools and execution policies |
 | `crates/rode-agent-core/src/controls.rs`, `controls/catalog.rs`, `src/agent/controls.rs`, `src/app/agents/controls.rs` | Shared bounded model paging, metadata-only discovery and native model/access selectors |
 | `src/debugger/`, `src/debugger.rs`, `src/app/debugging/`, `crates/rode-host-core/src/debugger/bridge.rs` | DAP framing/client, shared adapter/debug-PTY coordinator and interactive debugger UI |
-| `src/images.rs`, `src/pdf.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, memory leases, retained snapshots and specialized tabs |
+| `src/images.rs`, `src/pdf.rs`, `src/pdf/renderer.rs`, `src/pdf/pptx.rs`, `src/binary.rs`, corresponding `src/app/*_view.rs` | Bounded desktop decoding/analysis, shared PDF/PowerPoint page workers, memory leases, retained snapshots and specialized tabs |
 | `src/app/markdown.rs` | Unsaved-source Markdown rendering and sandbox-aware linked assets |
 | `src/notebook/`, `src/notebook.rs`, `crates/rode-host-core/src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` and `crates/rode-host-core/src/` modules | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |

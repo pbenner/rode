@@ -17,6 +17,140 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 const FIXTURE: &[u8] = include_bytes!("fixtures/pages.pdf");
+const PPTX: &[u8] = include_bytes!("fixtures/slides.pptx");
+
+#[test]
+fn custom_powerpoint_page_sizes_fit_the_admitted_raster_at_every_resolution() {
+    // The width is 787.795 points: the engine snaps the page box up to 788.
+    // Scaling from the raw EMU size used to exceed the admitted raster edge.
+    let encoded = STANDARD.encode(include_bytes!("fixtures/custom-slides.pptx"));
+    let budget = Arc::new(Budget::default());
+    for side in [128, 512, 2048] {
+        let loaded = pdf::load_format_cancellable(
+            &encoded,
+            pdf::Format::Pptx,
+            1,
+            &budget,
+            side,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(loaded.source.sizes[0], [788., 405.]);
+        assert_eq!(loaded.pixels.pixels.size[0], side);
+        assert!(loaded.pixels.pixels.size[1] > 0 && loaded.pixels.pixels.size[1] <= side);
+        drop(loaded);
+        assert_eq!(budget.used(), 0);
+    }
+}
+
+#[test]
+fn native_powerpoint_slides_preserve_source_cache_pixels_and_report_missing_images() {
+    let budget = Arc::new(Budget::default());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("quoted ' deck.PPTX");
+    fs::write(&path, PPTX).unwrap();
+    let reply = files::local(&Request::ReadBinary {
+        path: path.to_string_lossy().into(),
+    })
+    .unwrap();
+    let loaded = pdf::load_format_cancellable(
+        &reply.binary.unwrap(),
+        pdf::Format::Pptx,
+        1,
+        &budget,
+        512,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(loaded.source.pages, 3);
+    assert_eq!(loaded.source.format, pdf::Format::Pptx);
+    assert_eq!(loaded.pixels.pixels.size, [512, 288]);
+    let first = &loaded.pixels.pixels;
+    let center = first.pixels[144 * 512 + 256];
+    assert!(center.r() > 180 && center.b() < 90);
+    assert!(
+        first
+            .pixels
+            .iter()
+            .filter(|p| p.r() > 230 && p.g() > 230 && p.b() > 230)
+            .count()
+            > 100,
+        "Title text must render with the bundled font"
+    );
+    let second = loaded
+        .source
+        .render(2, &budget, 512, &AtomicBool::new(false))
+        .unwrap();
+    let center = second.pixels.pixels[144 * 512 + 256];
+    assert!(center.b() > 180 && center.r() < 90);
+    let picture = second.pixels.pixels[200 * 512 + 400];
+    assert!(
+        picture.g() > 150 && picture.r() < 80,
+        "Embedded images must be drawn"
+    );
+    assert_eq!(loaded.source.skipped_images(2), 0);
+    let third = loaded
+        .source
+        .render(3, &budget, 512, &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(
+        loaded.source.skipped_images(3),
+        1,
+        "Missing image content must be reported"
+    );
+    let cached = loaded
+        .source
+        .render(1, &budget, 512, &AtomicBool::new(false))
+        .unwrap();
+    assert!(Arc::ptr_eq(&loaded.pixels.pixels, &cached.pixels));
+    assert_eq!(
+        fs::read(path).unwrap(),
+        PPTX,
+        "A preview must never save the source"
+    );
+    drop((cached, second, third, loaded));
+    assert_eq!(budget.used(), 0);
+}
+
+#[test]
+fn powerpoint_rejects_bad_packages_and_cancellation_without_retaining_resources() {
+    let budget = Arc::new(Budget::default());
+    for bytes in [
+        b"not PPTX".as_slice(),
+        b"PK\x03\x04bad zip".as_slice(),
+        FIXTURE,
+    ] {
+        assert!(
+            pdf::load_format_cancellable(
+                &STANDARD.encode(bytes),
+                pdf::Format::Pptx,
+                1,
+                &budget,
+                256,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert_eq!(budget.used(), 0);
+    }
+    assert!(
+        pdf::load_format_cancellable(
+            &STANDARD.encode(PPTX),
+            pdf::Format::Pptx,
+            1,
+            &budget,
+            256,
+            &AtomicBool::new(true)
+        )
+        .is_err()
+    );
+    assert_eq!(budget.used(), 0);
+    assert_eq!(
+        pdf::Format::for_path("remote/deck.PPTX"),
+        Some(pdf::Format::Pptx)
+    );
+    assert_eq!(pdf::Format::for_path("deck.pptx.rs"), None);
+}
 fn peer(request: &Request) -> anyhow::Result<files::Response> {
     let mut child = native_peer::command()
         .stdin(Stdio::piped())

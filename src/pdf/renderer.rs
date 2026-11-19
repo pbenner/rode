@@ -1,6 +1,6 @@
-//! Persistent desktop Hayro worker. Raw RGBA frames avoid codec round trips;
+//! Persistent desktop PDF/PowerPoint worker. Raw RGBA frames avoid transport codec round trips;
 //! a private source snapshot, pipe bounds and a killable process retain the
-//! preview's cancellation, memory and deadline guarantees for malformed PDFs.
+//! preview's cancellation, memory and deadline guarantees for malformed documents.
 use super::*;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
@@ -20,10 +20,21 @@ const DEADLINE: Duration = Duration::from_secs(20);
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Header {
-    Document { sizes: Vec<[f32; 2]> },
-    Page { width: usize, height: usize },
-    Text { bytes: usize },
-    Error { message: String },
+    Document {
+        sizes: Vec<[f32; 2]>,
+    },
+    Page {
+        width: usize,
+        height: usize,
+        #[serde(default)]
+        skipped_images: usize,
+    },
+    Text {
+        bytes: usize,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -36,6 +47,7 @@ enum Request {
 pub(super) struct Renderer {
     child: Child,
     stream: UnixStream,
+    format: Format,
 }
 
 /// Linux passes a sealed anonymous memory file, avoiding plaintext temporary
@@ -112,8 +124,15 @@ impl Drop for Renderer {
     }
 }
 impl Renderer {
-    pub(super) fn open(bytes: &[u8], cancel: &AtomicBool) -> Result<(Self, Vec<[f32; 2]>)> {
-        ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+    pub(super) fn open(
+        bytes: &[u8],
+        format: Format,
+        cancel: &AtomicBool,
+    ) -> Result<(Self, Vec<[f32; 2]>)> {
+        ensure!(
+            !cancel.load(Ordering::Acquire),
+            "Document rendering cancelled."
+        );
         let snapshot = Snapshot::new(bytes)?;
         let (stream, child_stream) = UnixStream::pair()?;
         stream.set_read_timeout(Some(Duration::from_millis(50)))?;
@@ -123,7 +142,11 @@ impl Renderer {
         let executable = desktop_executable()?;
         let mut command = Command::new(executable);
         let path = snapshot.path();
-        command.args([std::ffi::OsStr::new("--pdf-helper"), path.as_os_str()]);
+        let helper = match format {
+            Format::Pdf => "--pdf-helper",
+            Format::Pptx => "--pptx-helper",
+        };
+        command.args([std::ffi::OsStr::new(helper), path.as_os_str()]);
         command
             .stdin(Stdio::from(stdin))
             .stdout(Stdio::from(stdout))
@@ -131,10 +154,14 @@ impl Renderer {
         super::limit_process(&mut command);
         let child = command
             .spawn()
-            .context("Cannot start the bundled Rust PDF renderer")?;
-        let mut renderer = Self { child, stream };
+            .context("Cannot start the bundled Rust document renderer")?;
+        let mut renderer = Self {
+            child,
+            stream,
+            format,
+        };
         let Header::Document { sizes } = renderer.header(cancel, Instant::now())? else {
-            bail!("PDF renderer did not return document metadata")
+            bail!("Document renderer did not return metadata")
         };
         validate_sizes(&sizes)?;
         Ok((renderer, sizes))
@@ -145,20 +172,23 @@ impl Renderer {
         bytes.push(b'\n');
         self.stream
             .write_all(&bytes)
-            .context("PDF renderer input disconnected")?;
+            .context("Document renderer input disconnected")?;
         Ok(())
     }
     fn read(&mut self, bytes: &mut [u8], cancel: &AtomicBool, start: Instant) -> Result<()> {
         let mut offset = 0;
         while offset < bytes.len() {
-            ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+            ensure!(
+                !cancel.load(Ordering::Acquire),
+                "Document rendering cancelled."
+            );
             ensure!(
                 start.elapsed() < DEADLINE,
-                "PDF rendering timed out after 20 seconds."
+                "Document rendering timed out after 20 seconds."
             );
             match self.stream.read(&mut bytes[offset..]) {
                 Ok(0) => bail!(
-                    "The Rust PDF renderer stopped. This PDF may exceed the renderer's memory limit or contain unsupported data."
+                    "The bundled document renderer stopped. This file may exceed the renderer's memory limit or contain unsupported data."
                 ),
                 Ok(count) => offset += count,
                 Err(error)
@@ -196,34 +226,42 @@ impl Renderer {
         budget: &Arc<images::Budget>,
         source_bytes: usize,
         cancel: &AtomicBool,
-    ) -> Result<images::Decoded> {
+    ) -> Result<(images::Decoded, usize)> {
         let start = Instant::now();
         self.request(Request::Render { page, side })?;
-        let Header::Page { width, height } = self.header(cancel, start)? else {
-            bail!("Invalid PDF page response")
+        let Header::Page {
+            width,
+            height,
+            skipped_images,
+        } = self.header(cancel, start)?
+        else {
+            bail!("Invalid document page response")
         };
         ensure!(
             width > 0 && height > 0 && width <= side && height <= side,
-            "Invalid PDF raster dimensions."
+            "Invalid document raster dimensions."
         );
         let size = width
             .checked_mul(height)
             .and_then(|v| v.checked_mul(4))
             .filter(|v| *v <= images::MAX_DECODED)
-            .context("PDF raster exceeds its memory limit")?;
+            .context("Document raster exceeds its memory limit")?;
         let lease = Arc::new(budget.reserve(size)?);
         let mut pixels = vec![0; size];
         self.read(&mut pixels, cancel, start)?;
-        Ok(images::Decoded {
-            pixels: Arc::new(eframe::egui::ColorImage::from_rgba_unmultiplied(
-                [width, height],
-                &pixels,
-            )),
-            original: [width as u32, height as u32],
-            format: "PDF".into(),
-            encoded_bytes: source_bytes,
-            lease,
-        })
+        Ok((
+            images::Decoded {
+                pixels: Arc::new(eframe::egui::ColorImage::from_rgba_unmultiplied(
+                    [width, height],
+                    &pixels,
+                )),
+                original: [width as u32, height as u32],
+                format: self.format.label().into(),
+                encoded_bytes: source_bytes,
+                lease,
+            },
+            skipped_images,
+        ))
     }
     pub(super) fn text(&mut self, cancel: &AtomicBool) -> Result<String> {
         let start = Instant::now();
@@ -287,7 +325,7 @@ fn header(output: &mut impl Write, value: &Header) -> Result<()> {
 }
 
 /// Run inside the desktop executable's private helper mode, before GUI startup.
-pub(super) fn serve(path: &Path) -> Result<()> {
+pub(super) fn serve(path: &Path, format: Format) -> Result<()> {
     // A persistent child outlives the GUI thread that opened its document.
     // PDEATHSIG follows that spawning thread on Linux, so monitor the owning
     // process's socket instead. HUP terminates even a stuck interpreter without
@@ -315,7 +353,7 @@ pub(super) fn serve(path: &Path) -> Result<()> {
         }
     });
     let mut output = std::io::BufWriter::new(std::io::stdout().lock());
-    if let Err(error) = serve_document(path, &mut output) {
+    if let Err(error) = serve_document(path, format, &mut output) {
         header(
             &mut output,
             &Header::Error {
@@ -326,50 +364,128 @@ pub(super) fn serve(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Parse once and retain interpreter/font state for the connection's lifetime.
-fn serve_document(path: &Path, mut output: &mut impl Write) -> Result<()> {
-    use hayro::{
-        hayro_interpret::{InterpreterSettings, util::TransformExt},
-        hayro_syntax::Pdf,
-        vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, TargetInit},
-    };
-    let document = match Pdf::new(std::fs::read(path)?) {
-        Ok(document) => document,
-        Err(error) => {
-            let message = if matches!(error, hayro::hayro_syntax::LoadPdfError::Decryption(_)) {
-                "Password-protected PDFs are not supported by this preview."
-            } else {
-                "Cannot open this PDF: invalid or unsupported document."
-            };
-            header(
-                &mut output,
-                &Header::Error {
-                    message: message.into(),
-                },
-            )?;
-            return Ok(());
-        }
-    };
-    let pages = document.pages();
-    ensure!(
-        !pages.is_empty() && pages.len() <= MAX_PAGES,
-        "PDF previews support 1–10,000 pages."
-    );
-    let sizes: Vec<_> = pages
-        .iter()
-        .map(|p| {
-            let (w, h) = p.render_dimensions();
-            [w, h]
+/// A bounded, opaque page frame shared by the PDF and presentation interpreters.
+pub(super) struct Raster {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<u8>,
+    pub skipped_images: usize,
+}
+
+struct Hayro {
+    document: hayro::hayro_syntax::Pdf,
+}
+
+enum Backend {
+    Pdf(Box<Hayro>),
+    Pptx(Box<super::pptx::Presentation>),
+}
+impl Backend {
+    fn open(path: &Path, format: Format) -> Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Ok(match format {
+            Format::Pptx => Self::Pptx(Box::new(super::pptx::Presentation::open(&bytes)?)),
+            Format::Pdf => {
+                let document = hayro::hayro_syntax::Pdf::new(bytes).map_err(|error| {
+                    if matches!(error, hayro::hayro_syntax::LoadPdfError::Decryption(_)) {
+                        anyhow::anyhow!(
+                            "Password-protected PDFs are not supported by this preview."
+                        )
+                    } else {
+                        anyhow::anyhow!("Cannot open this PDF: invalid or unsupported document.")
+                    }
+                })?;
+                Self::Pdf(Box::new(Hayro { document }))
+            }
         })
-        .collect();
+    }
+    fn sizes(&self) -> Vec<[f32; 2]> {
+        match self {
+            Self::Pdf(pdf) => pdf
+                .document
+                .pages()
+                .iter()
+                .map(|page| {
+                    let (w, h) = page.render_dimensions();
+                    [w, h]
+                })
+                .collect(),
+            Self::Pptx(deck) => deck.sizes(),
+        }
+    }
+    fn render<'a>(
+        &'a self,
+        page: usize,
+        side: usize,
+        cache: &mut hayro::RenderCache<'a>,
+    ) -> Result<Raster> {
+        match self {
+            Self::Pdf(pdf) => pdf.render(page, side, cache),
+            Self::Pptx(deck) => deck.render(page, side),
+        }
+    }
+    fn text(&self) -> Result<String> {
+        match self {
+            Self::Pdf(pdf) => super::text::extract(&pdf.document),
+            Self::Pptx(_) => bail!("PPTX text extraction is not available in this preview."),
+        }
+    }
+}
+impl Hayro {
+    fn render<'a>(
+        &'a self,
+        page: usize,
+        side: usize,
+        cache: &mut hayro::RenderCache<'a>,
+    ) -> Result<Raster> {
+        use hayro::{
+            hayro_interpret::{InterpreterSettings, util::TransformExt},
+            vello_cpu::{Pixmap, RasterizerSettings, RenderContext, Resources, TargetInit},
+        };
+        let page = &self.document.pages()[page - 1];
+        let (width, height) = page.render_dimensions();
+        let scale = side as f32 / width.max(height);
+        let w = (width * scale).ceil().clamp(1., side as f32) as u16;
+        let h = (height * scale).ceil().clamp(1., side as f32) as u16;
+        let mut context = RenderContext::new(w, h);
+        hayro::render_into(
+            page,
+            cache,
+            &InterpreterSettings::default(),
+            &hayro::RenderSettings::default(),
+            &mut context,
+            hayro::kurbo::Affine::scale(scale as f64) * page.initial_transform(true).to_kurbo(),
+        );
+        context.flush();
+        let mut pixels = Pixmap::new(w, h);
+        context.render_with(
+            &mut pixels,
+            &mut Resources::default(),
+            RasterizerSettings {
+                target_init: TargetInit::Clear(hayro::vello_cpu::color::palette::css::WHITE),
+                ..Default::default()
+            },
+        );
+        Ok(Raster {
+            width: usize::from(w),
+            height: usize::from(h),
+            pixels: pixels.data_as_u8_slice().to_vec(),
+            skipped_images: 0,
+        })
+    }
+}
+
+/// Parse once and retain the original presentation model and font/render caches.
+/// This loop owns only immutable snapshots; it exposes no file mutation or external resource loading.
+fn serve_document(path: &Path, format: Format, mut output: &mut impl Write) -> Result<()> {
+    let document = Backend::open(path, format)?;
+    let sizes = document.sizes();
     validate_sizes(&sizes)?;
-    header(
-        &mut output,
-        &Header::Document {
-            sizes: sizes.clone(),
-        },
-    )?;
+    let pages = sizes.len();
+    header(&mut output, &Header::Document { sizes })?;
     let mut input = BufReader::new(std::io::stdin().lock());
+    // Hayro's cache borrows its parsed document. Keep both local to this
+    // lifetime instead of making the retained backend self-referential.
     let mut cache = hayro::RenderCache::new();
     let mut renders = 0;
     loop {
@@ -380,59 +496,44 @@ fn serve_document(path: &Path, mut output: &mut impl Write) -> Result<()> {
         }
         ensure!(
             count <= 4096 && line.ends_with(b"\n"),
-            "Invalid PDF renderer request"
+            "Invalid document renderer request"
         );
-        let request: Request = serde_json::from_slice(&line)?;
-        match request {
+        match serde_json::from_slice::<Request>(&line)? {
             Request::Render { page, side } => {
                 ensure!(
-                    (1..=pages.len()).contains(&page) && (1..=4096).contains(&side),
-                    "Invalid PDF page request"
+                    (1..=pages).contains(&page) && (1..=4096).contains(&side),
+                    "Invalid document page request"
                 );
                 if renders == 16 {
                     cache = hayro::RenderCache::new();
                     renders = 0;
                 }
-                let page = &pages[page - 1];
-                let (width, height) = page.render_dimensions();
-                let scale = side as f32 / width.max(height);
-                let w = (width * scale).ceil().clamp(1., side as f32) as u16;
-                let h = (height * scale).ceil().clamp(1., side as f32) as u16;
-                let mut context = RenderContext::new(w, h);
-                hayro::render_into(
-                    page,
-                    &cache,
-                    &InterpreterSettings::default(),
-                    &hayro::RenderSettings::default(),
-                    &mut context,
-                    hayro::kurbo::Affine::scale(scale as f64)
-                        * page.initial_transform(true).to_kurbo(),
+                let raster = document.render(page, side, &mut cache)?;
+                renders += 1;
+                ensure!(
+                    raster.width > 0
+                        && raster.height > 0
+                        && raster.width <= side
+                        && raster.height <= side,
+                    "Invalid document raster dimensions"
                 );
-                context.flush();
-                let mut pixels = Pixmap::new(w, h);
-                context.render_with(
-                    &mut pixels,
-                    &mut Resources::default(),
-                    RasterizerSettings {
-                        target_init: TargetInit::Clear(
-                            hayro::vello_cpu::color::palette::css::WHITE,
-                        ),
-                        ..Default::default()
-                    },
+                ensure!(
+                    raster.pixels.len() == raster.width * raster.height * 4,
+                    "Invalid document raster payload"
                 );
                 header(
                     &mut output,
                     &Header::Page {
-                        width: usize::from(w),
-                        height: usize::from(h),
+                        width: raster.width,
+                        height: raster.height,
+                        skipped_images: raster.skipped_images,
                     },
                 )?;
-                output.write_all(pixels.data_as_u8_slice())?;
+                output.write_all(&raster.pixels)?;
                 output.flush()?;
-                renders += 1;
             }
             Request::Text => {
-                let text = super::text::extract(&document)?;
+                let text = document.text()?;
                 header(&mut output, &Header::Text { bytes: text.len() })?;
                 output.write_all(text.as_bytes())?;
                 output.flush()?;
@@ -450,7 +551,14 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(20)))
             .unwrap();
         let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        (Renderer { child, stream }, peer)
+        (
+            Renderer {
+                child,
+                stream,
+                format: Format::Pdf,
+            },
+            peer,
+        )
     }
     #[test]
     fn page_geometry_rejects_nonfinite_and_degenerate_sizes_before_layout() {

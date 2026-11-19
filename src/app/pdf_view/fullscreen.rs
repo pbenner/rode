@@ -42,10 +42,25 @@ impl EditorApp {
                 .filter(|doc| doc.pdf.is_some())
                 .map(|doc| doc.id)
             else {
-                app.notify("Open a PDF to use fullscreen reading.", false);
+                app.notify(
+                    "Open a PDF or PowerPoint file to use fullscreen reading.",
+                    false,
+                );
                 return;
             };
             if app.vaults.locking() {
+                return;
+            }
+            if app
+                .documents
+                .active()
+                .and_then(|doc| doc.paged_feature())
+                .is_some_and(|feature| !app.feature(feature))
+            {
+                app.notify(
+                    "Enable this document's preview in View → Extensions.",
+                    false,
+                );
                 return;
             }
             let restore_native = ctx
@@ -129,6 +144,9 @@ impl EditorApp {
                     .as_ref()
                     .is_some_and(|state| state.document == doc.id)
                     && doc.pdf.is_some()
+                    && doc
+                        .paged_feature()
+                        .is_some_and(|feature| self.feature(feature))
             });
         if !valid {
             self.leave_pdf_fullscreen(ctx);

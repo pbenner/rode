@@ -601,7 +601,7 @@ impl EditorApp {
     fn save_target(&mut self, id: u64, ctx: &egui::Context, save_as: bool) {
         if let Some(doc) = self.documents.by_id(id) {
             if doc.is_preview() && doc.hex.is_none() && doc.notebook.is_none() {
-                self.notify("Image and PDF previews are read-only.", false);
+                self.notify(doc.read_only_preview_notice(), false);
                 return;
             }
             if save_as || doc.path.is_none() {
@@ -659,12 +659,12 @@ impl EditorApp {
             self.save_hex(id, path, save_as, ctx);
             return;
         }
-        if self
+        if let Some(doc) = self
             .documents
             .iter()
-            .any(|d| d.id == id && d.is_preview() && d.notebook.is_none())
+            .find(|d| d.id == id && d.is_preview() && d.notebook.is_none())
         {
-            self.notify("Image and PDF previews are read-only.", false);
+            self.notify(doc.read_only_preview_notice(), false);
             return;
         }
         if self
@@ -872,6 +872,9 @@ pub fn language(path: Option<&str>) -> &'static str {
 }
 
 fn file_icon(name: &str) -> &'static str {
+    if crate::pdf::Format::for_path(name) == Some(crate::pdf::Format::Pptx) {
+        return "ppt";
+    }
     if crate::pdf::is_path(name) {
         return "pdf";
     }

@@ -297,8 +297,15 @@ impl EditorApp {
                             response.hex =
                                 Some(crate::binary::Loaded::decode(&encoded, &image_budget)?);
                         } else {
-                            response.pdf = Some(crate::pdf::load_cancellable(
+                            let format = if let Request::ReadBinary { path } = &request {
+                                crate::pdf::Format::for_path(path)
+                                    .unwrap_or(crate::pdf::Format::Pdf)
+                            } else {
+                                crate::pdf::Format::Pdf
+                            };
+                            response.pdf = Some(crate::pdf::load_format_cancellable(
                                 &encoded,
+                                format,
                                 pdf_page,
                                 &image_budget,
                                 texture_limit,
@@ -392,8 +399,8 @@ impl EditorApp {
         }
         self.editor_intent_in(viewport);
         if self.documents.begin_open_in(path.clone(), viewport) {
-            let request = if crate::pdf::is_path(&path) {
-                self.status = "Opening PDF preview…".into();
+            let request = if let Some(format) = crate::pdf::Format::for_path(&path) {
+                self.status = format!("Opening {} preview…", format.label());
                 Request::ReadBinary { path: path.clone() }
             } else if crate::images::format_for(&path).is_some() {
                 Request::ReadImage { path: path.clone() }

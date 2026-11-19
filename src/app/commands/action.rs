@@ -58,6 +58,8 @@ pub(in crate::app) enum Command {
     Build,
     ReloadPdf,
     PdfFullscreen,
+    PptxReload,
+    PptxFullscreen,
     PersistentTerminal,
     NewTerminal,
     Sessions,
@@ -146,6 +148,8 @@ impl Command {
         Self::Build,
         Self::ReloadPdf,
         Self::PdfFullscreen,
+        Self::PptxReload,
+        Self::PptxFullscreen,
         Self::NewTerminal,
         Self::Slurm,
         Self::PersistentTerminal,
@@ -286,6 +290,8 @@ impl Command {
                 .palette("Code: Build current file / project"),
             Self::ReloadPdf => Definition::new("PDF: Reload preview", Icon::Refresh),
             Self::PdfFullscreen => Definition::new("PDF: Toggle fullscreen", Icon::Files),
+            Self::PptxReload => Definition::new("PPTX: Reload preview", Icon::Refresh),
+            Self::PptxFullscreen => Definition::new("PPTX: Toggle fullscreen", Icon::Files),
             Self::NewTerminal => Definition::new("Terminal: New terminal", Icon::Terminal),
             Self::Slurm => Definition::new("Terminal: Allocate Slurm resources", Icon::Terminal),
             Self::PersistentTerminal => {
@@ -561,12 +567,12 @@ impl EditorApp {
             Command::TemporaryTerminal => self.new_temporary_terminal(ctx),
             Command::Extensions => self.set_dialog(Dialog::Extensions),
             Command::Hex => self.set_dialog(Dialog::HexOpen),
-            Command::ReloadPdf => {
+            Command::ReloadPdf | Command::PptxReload => {
                 if let Some(doc) = self.documents.active() {
                     self.reload_pdf(doc.id, ctx);
                 }
             }
-            Command::PdfFullscreen => self.toggle_pdf_fullscreen(ctx),
+            Command::PdfFullscreen | Command::PptxFullscreen => self.toggle_pdf_fullscreen(ctx),
             Command::Panel(panel) => self.toggle_panel(panel, ctx),
             Command::UiScaleStep(step) => self.set_ui_scale(self.ui_scale + step, ctx),
             Command::UiScaleReset => self.set_ui_scale(1., ctx),

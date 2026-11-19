@@ -84,6 +84,7 @@ CONTEXT_ENV = (
     "RODE_TEST_REQUIRED_CAPABILITIES",
     "RODE_TEST_AWKWARD_PATHS",
     "RODE_TEST_SLOW_UI",
+    "RODE_PPTX_UI_CASE",
 )
 
 
@@ -242,6 +243,7 @@ SUITES = {
             for batched in ("0", "1")
         ],
         ui("pdf", RODE_PDF_UI_CASE="local"),
+        ui("pptx", RODE_PPTX_UI_CASE="local"),
         ui("marp"),
         ui("latex"),
         ui("vaults"),
@@ -266,6 +268,7 @@ SUITES = {
             for batched in ("0", "1")
         ],
         ui("pdf", RODE_PDF_UI_CASE="ssh"),
+        ui("pptx", RODE_PPTX_UI_CASE="ssh"),
         ui("marp", RODE_MARP_UI_REMOTE_ONLY="1"),
         ui("latex", RODE_LATEX_UI_REMOTE_ONLY="1"),
         ui("vaults", RODE_VAULT_UI_REMOTE_ONLY="1"),

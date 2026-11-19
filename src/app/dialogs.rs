@@ -244,7 +244,10 @@ impl EditorApp {
                                 ("F5 / Shift+F5", "Debug: start/continue / stop/detach"),
                                 ("F6 / F9", "Debug: pause / toggle breakpoint"),
                                 ("F10 / F11 / Shift+F11", "Debug: step over / into / out"),
-                                ("F11 / Escape in PDF", "Toggle / exit PDF fullscreen"),
+                                (
+                                    "F11 / Escape in PDF/PPTX",
+                                    "Toggle / exit document fullscreen",
+                                ),
                                 ("Ctrl+B", "Toggle explorer"),
                                 (
                                     "Ctrl+~ / Ctrl+`",

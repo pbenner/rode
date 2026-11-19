@@ -19,6 +19,7 @@ nav:
       - Editing and shortcuts: editing.md
       - Image previews: images.md
       - PDF previews: pdf.md
+      - PowerPoint previews: powerpoint.md
       - Hex and binary analysis: binary.md
       - Extensions: extensions.md
       - mise environments and tasks: mise.md

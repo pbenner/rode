@@ -128,7 +128,9 @@ impl EditorApp {
                 self.workbench.panel = None;
             }
             for doc in &mut self.documents {
-                if id == Feature::Pdf.id()
+                if doc
+                    .paged_feature()
+                    .is_some_and(|feature| id == feature.id())
                     && let Some(pdf) = &mut doc.pdf
                 {
                     pdf.invalidate();
@@ -152,17 +154,19 @@ impl EditorApp {
             Some(Feature::Binary)
         } else if doc.image.is_some() {
             Some(Feature::Images)
-        } else if doc.pdf.is_some() {
-            Some(Feature::Pdf)
         } else {
-            None
+            doc.paged_feature()
         };
         if let Some(feature) = feature
             && !self.feature(feature)
         {
             ui.label("This document's extension is disabled. Enable it in View → Extensions.");
             ui.label(
-                "The open document and unsaved edits are preserved. Saving is still available.",
+                if matches!(feature, Feature::Images | Feature::Pdf | Feature::Pptx) {
+                    "The open preview is preserved. It remains read-only."
+                } else {
+                    "The open document and unsaved edits are preserved. Saving is still available."
+                },
             );
             return true;
         }

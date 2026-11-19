@@ -312,5 +312,43 @@
         "source": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE"
       }
     ]
+  },
+  {
+    "packages": [
+      "betteroffice-drawingml@0.5.1",
+      "betteroffice-metafile@0.5.1",
+      "betteroffice-ooxml-diff@0.5.1",
+      "betteroffice-ooxml-text@0.5.1",
+      "betteroffice-opc@0.5.1",
+      "betteroffice-pptx-edit@0.5.1",
+      "betteroffice-pptx-parse@0.5.1",
+      "betteroffice-pptx-raster@0.5.1",
+      "betteroffice-pptx-render@0.5.1",
+      "betteroffice-pptx@0.5.1"
+    ],
+    "files": [
+      {
+        "file": "betteroffice-LICENSE",
+        "sha256": "db17c7e4531fd3e1a376cd87ad1ddf9a195118e47fde7f26b9feb657c8c114af",
+        "source": "https://raw.githubusercontent.com/openooxml/betteroffice/4e982c3aea0065578604c3fe7727938533888f66/LICENSE"
+      },
+      {
+        "file": "betteroffice-NOTICE",
+        "sha256": "1e164585e2ba125f0113403e0e1323cfc876efc60e9796f5908b4d9e6f873686",
+        "source": "https://raw.githubusercontent.com/openooxml/betteroffice/4e982c3aea0065578604c3fe7727938533888f66/NOTICE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "yrs@0.27.4"
+    ],
+    "files": [
+      {
+        "file": "yrs-LICENSE",
+        "sha256": "b6d81564e9c46473907bd3c09d4d5ab0f21cfbe6ac35d46daf1bdb0423182a5b",
+        "source": "https://raw.githubusercontent.com/y-crdt/y-crdt/a473befc5a380bd9228396af51ca0e102b228f36/LICENSE"
+      }
+    ]
   }
 ]

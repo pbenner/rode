@@ -1,4 +1,4 @@
-//! Bundled Hayro PDF interpretation on the desktop, with a retained document
+//! Bundled PDF/PPTX interpretation on the desktop, with a retained document
 //! worker and bounded decoded-page cache. SSH hosts transfer original bytes only.
 use crate::images;
 use anyhow::{Context, Result, ensure};
@@ -14,8 +14,38 @@ use std::{
     time::Duration,
 };
 
+mod pptx;
 mod renderer;
 mod text;
+
+/// Desktop interpreter selected from the submitted path, independently of host software.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// PDF pages interpreted by Hayro.
+    Pdf,
+    /// PowerPoint slides interpreted by BetterOffice.
+    Pptx,
+}
+impl Format {
+    /// Recognize a supported paged preview without reading the file.
+    pub fn for_path(path: &str) -> Option<Self> {
+        let extension = Path::new(path).extension()?;
+        if extension.eq_ignore_ascii_case("pdf") {
+            Some(Self::Pdf)
+        } else if extension.eq_ignore_ascii_case("pptx") {
+            Some(Self::Pptx)
+        } else {
+            None
+        }
+    }
+    /// Short format name shared by toolbars and diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pdf => "PDF",
+            Self::Pptx => "PPTX",
+        }
+    }
+}
 
 /// Maximum accepted number of pages in a document.
 pub const MAX_PAGES: usize = 10_000;
@@ -33,7 +63,7 @@ pub fn is_path(path: &str) -> bool {
 
 /// Extract bounded Unicode text with the bundled desktop interpreter.
 pub fn extract_text(bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String> {
-    let (mut renderer, _) = renderer::Renderer::open(&bytes, cancel)?;
+    let (mut renderer, _) = renderer::Renderer::open(&bytes, Format::Pdf, cancel)?;
     renderer.text(cancel)
 }
 
@@ -42,17 +72,21 @@ pub fn extract_text(bytes: Vec<u8>, cancel: &AtomicBool) -> Result<String> {
 /// entries before exceeding either its page count or retained-pixel allowance.
 pub struct Source {
     bytes: Arc<[u8]>,
+    /// Interpreter and document kind retained across reload, caching and fullscreen.
+    pub format: Format,
     /// Validated page count.
     pub pages: usize,
     /// Rotated/cropped page dimensions in PDF points, used for virtual layout.
     pub sizes: Vec<[f32; 2]>,
     renderer: Mutex<Option<renderer::Renderer>>,
     cache: Mutex<VecDeque<(usize, usize, images::Decoded)>>,
+    skipped_images: Mutex<std::collections::BTreeMap<usize, usize>>,
     _lease: images::Lease,
 }
 impl std::fmt::Debug for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PdfSource")
+        f.debug_struct("PagedSource")
+            .field("format", &self.format)
             .field("pages", &self.pages)
             .field("bytes", &self.bytes.len())
             .finish()
@@ -91,15 +125,30 @@ pub fn load_cancellable(
     texture_limit: usize,
     cancel: &AtomicBool,
 ) -> Result<Loaded> {
-    ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+    load_format_cancellable(encoded, Format::Pdf, page, budget, texture_limit, cancel)
+}
+/// Load a PDF or PowerPoint snapshot through the same bounded desktop worker.
+pub fn load_format_cancellable(
+    encoded: &str,
+    format: Format,
+    page: usize,
+    budget: &Arc<images::Budget>,
+    texture_limit: usize,
+    cancel: &AtomicBool,
+) -> Result<Loaded> {
+    ensure!(
+        !cancel.load(Ordering::Acquire),
+        "Document rendering cancelled."
+    );
     load_bytes_cancellable(
         STANDARD
             .decode(encoded)
-            .context("Invalid PDF data from the file helper")?,
+            .context("Invalid document data from the file helper")?,
         page,
         budget,
         texture_limit,
         cancel,
+        format,
     )
 }
 /// Load an owned snapshot and initial page without any external PDF tools.
@@ -109,7 +158,14 @@ pub fn load_bytes(
     budget: &Arc<images::Budget>,
     texture_limit: usize,
 ) -> Result<Loaded> {
-    load_bytes_cancellable(bytes, page, budget, texture_limit, &AtomicBool::new(false))
+    load_bytes_cancellable(
+        bytes,
+        page,
+        budget,
+        texture_limit,
+        &AtomicBool::new(false),
+        Format::Pdf,
+    )
 }
 fn load_bytes_cancellable(
     bytes: Vec<u8>,
@@ -117,22 +173,29 @@ fn load_bytes_cancellable(
     budget: &Arc<images::Budget>,
     texture_limit: usize,
     cancel: &AtomicBool,
+    format: Format,
 ) -> Result<Loaded> {
-    ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
     ensure!(
-        bytes[..bytes.len().min(1024)]
-            .windows(5)
-            .any(|s| s == b"%PDF-"),
+        !cancel.load(Ordering::Acquire),
+        "Document rendering cancelled."
+    );
+    ensure!(
+        format != Format::Pdf
+            || bytes[..bytes.len().min(1024)]
+                .windows(5)
+                .any(|s| s == b"%PDF-"),
         "Cannot open PDF: missing PDF header."
     );
     let lease = budget.reserve_source(bytes.len())?;
-    let (renderer, sizes) = renderer::Renderer::open(&bytes, cancel)?;
+    let (renderer, sizes) = renderer::Renderer::open(&bytes, format, cancel)?;
     let source = Arc::new(Source {
         bytes: bytes.into(),
+        format,
         pages: sizes.len(),
         sizes,
         renderer: Mutex::new(Some(renderer)),
         cache: Mutex::new(VecDeque::new()),
+        skipped_images: Default::default(),
         _lease: lease,
     });
     let cache: Arc<dyn images::PreviewCache> = source.clone();
@@ -155,6 +218,16 @@ impl images::PreviewCache for Source {
     }
 }
 impl Source {
+    /// Number of missing or unsupported images skipped on a rendered page.
+    /// Counts survive pixel-cache eviction and are bounded by the document's page count.
+    pub fn skipped_images(&self, page: usize) -> usize {
+        self.skipped_images
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&page)
+            .copied()
+            .unwrap_or(0)
+    }
     /// Return a cached page immediately, without starting work or taking the
     /// renderer lock. Clones share the exact pixels and memory reservation.
     pub fn cached(&self, page: usize, texture_limit: usize) -> Option<images::Decoded> {
@@ -179,14 +252,20 @@ impl Source {
     ) -> Result<images::Decoded> {
         ensure!(
             (1..=self.pages).contains(&page),
-            "Page is outside this PDF."
+            "Page is outside this document."
         );
-        ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+        ensure!(
+            !cancel.load(Ordering::Acquire),
+            "Document rendering cancelled."
+        );
         if let Some(pixels) = self.cached(page, texture_limit) {
             return Ok(pixels);
         }
         let mut renderer = self.renderer.lock().unwrap_or_else(|e| e.into_inner());
-        ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+        ensure!(
+            !cancel.load(Ordering::Acquire),
+            "Document rendering cancelled."
+        );
         if let Some(pixels) = self.cached(page, texture_limit) {
             return Ok(pixels);
         }
@@ -207,7 +286,7 @@ impl Source {
             }
         }
         if renderer.is_none() {
-            *renderer = Some(renderer::Renderer::open(&self.bytes, cancel)?.0);
+            *renderer = Some(renderer::Renderer::open(&self.bytes, self.format, cancel)?.0);
         }
         let result =
             renderer
@@ -215,8 +294,15 @@ impl Source {
                 .unwrap()
                 .render(page, side, budget, self.bytes.len(), cancel);
         match result {
-            Ok(pixels) => {
-                ensure!(!cancel.load(Ordering::Acquire), "PDF rendering cancelled.");
+            Ok((pixels, skipped)) => {
+                self.skipped_images
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(page, skipped);
+                ensure!(
+                    !cancel.load(Ordering::Acquire),
+                    "Document rendering cancelled."
+                );
                 self.cache
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -233,7 +319,11 @@ impl Source {
 
 /// Internal renderer entry point. The editor calls this before GUI initialization.
 pub fn coordinator(path: &Path) -> Result<()> {
-    renderer::serve(path)
+    coordinator_for(path, Format::Pdf)
+}
+/// Internal paged-document renderer entry point; never starts a GUI or host service.
+pub fn coordinator_for(path: &Path, format: Format) -> Result<()> {
+    renderer::serve(path, format)
 }
 
 fn limit_process(command: &mut Command) {

@@ -55,6 +55,8 @@ pub enum Feature {
     Markdown,
     /// Read-only PDF document previews.
     Pdf,
+    /// Read-only native PowerPoint presentation previews.
+    Pptx,
     /// Hex editing and static binary analysis.
     Binary,
     /// Native notebook cells and explicitly started kernels.
@@ -80,6 +82,7 @@ impl Feature {
             Self::Images => "rode.images",
             Self::Markdown => "rode.markdown",
             Self::Pdf => "rode.pdf",
+            Self::Pptx => "rode.pptx",
             Self::Binary => "rode.binary",
             Self::Notebooks => "rode.notebooks",
             Self::Marp => "rode.marp",
@@ -332,6 +335,12 @@ impl Registry {
                 "PDF previews",
                 "Bundled Rust PDF reader with cached and continuous pages.",
                 "Opened PDF",
+            ),
+            (
+                Feature::Pptx,
+                "PowerPoint previews",
+                "Bundled native PPTX reader with cached slides, zoom and fullscreen.",
+                "Opened PPTX",
             ),
             (
                 Feature::Binary,

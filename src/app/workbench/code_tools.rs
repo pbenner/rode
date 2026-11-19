@@ -382,7 +382,7 @@ impl EditorApp {
         };
         if doc.is_preview() {
             self.notify(
-                "Image and PDF previews are read-only; code tools apply to text files.",
+                "Document previews are read-only; code tools apply to text files.",
                 false,
             );
             return;
