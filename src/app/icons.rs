@@ -21,6 +21,7 @@ pub(super) enum Icon {
     Terminal,
     Git,
     Monitor,
+    Stocks,
     Problems,
     Environment,
     Settings,
@@ -207,6 +208,11 @@ impl Icon {
                 c.circle([6., 5.], 2.5);
                 c.circle([6., 19.], 2.5);
                 c.circle([18., 5.], 2.5);
+            }
+            Self::Stocks => {
+                c.path(&[[3., 3.], [3., 21.], [22., 21.]]);
+                c.path(&[[6., 16.], [11., 11.], [15., 14.], [21., 5.]]);
+                c.path(&[[16., 5.], [21., 5.], [21., 10.]]);
             }
             Self::Monitor => {
                 c.rect([2., 3., 22., 18.], 2.);

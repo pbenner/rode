@@ -27,6 +27,7 @@ fn registry_keeps_bundled_features_and_never_activates_installed_tools_implicitl
     extensions::install(&source, &destination).unwrap();
     assert!(extensions::install(&source, &destination).is_err());
     let mut registry = Registry::load(&destination, Default::default());
+    assert!(registry.feature(Feature::Stocks));
     assert!(registry.feature(Feature::Git));
     assert!(registry.feature(Feature::Binary));
     assert!(!registry.feature(Feature::Mise));

@@ -27,6 +27,7 @@ pub(super) use workspace::{Surface, ToolTab};
 pub(super) enum Panel {
     Git,
     Monitor,
+    Stocks,
     Problems,
     Environment,
     Tasks,
@@ -39,6 +40,7 @@ impl Panel {
         match self {
             Self::Git => "SOURCE CONTROL",
             Self::Monitor => "SYSTEM MONITOR",
+            Self::Stocks => "STOCKS",
             Self::Problems => "PROBLEMS",
             Self::Environment => "ENVIRONMENT",
             Self::Tasks => "TASKS",
@@ -381,6 +383,10 @@ impl EditorApp {
             return;
         }
         let palette = self.themes.active().palette;
+        if panel == Panel::Stocks {
+            layout::page(ui, 1740., |ui| self.stocks_ui(ui, ctx));
+            return;
+        }
         if panel == Panel::Debug {
             layout::page(ui, layout::PAGE_WIDTH, |ui| self.debugger_ui(ui, ctx));
             return;
@@ -440,7 +446,9 @@ impl EditorApp {
                         Panel::Problems => self.problems_ui(ui, ctx),
                         Panel::Environment => self.environment_ui(ui, ctx),
                         Panel::Tasks => self.tasks_ui(ui, ctx),
-                        Panel::Settings | Panel::Agent | Panel::Debug => unreachable!(),
+                        Panel::Settings | Panel::Agent | Panel::Debug | Panel::Stocks => {
+                            unreachable!()
+                        }
                     });
             },
         );

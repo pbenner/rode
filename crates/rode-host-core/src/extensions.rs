@@ -43,6 +43,8 @@ pub enum Feature {
     Git,
     /// On-demand host and GPU monitoring.
     Monitor,
+    /// Desktop stock search, watchlists and interactive market charts.
+    Stocks,
     /// Project-host Python environment discovery/creation.
     Python,
     /// Registered language formatting/check/run/build tools.
@@ -78,6 +80,7 @@ impl Feature {
             Self::Mise => "rode.mise",
             Self::Git => "rode.git",
             Self::Monitor => "rode.monitor",
+            Self::Stocks => "rode.stocks",
             Self::Python => "rode.python",
             Self::Languages => "rode.languages",
             Self::Agents => "rode.agents",
@@ -302,6 +305,12 @@ impl Registry {
                 "System monitor",
                 "Read-only host CPU, memory and GPU telemetry.",
                 "Visible panel only",
+            ),
+            (
+                Feature::Stocks,
+                "Stocks",
+                "Global symbol search, saved watchlists and native price/volume charts. Uses desktop internet access on demand.",
+                "Opened panel / explicit search or refresh",
             ),
             (
                 Feature::Python,

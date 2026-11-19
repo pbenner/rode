@@ -22,6 +22,10 @@ def run():
         other.write_text("second\n")
         environment = fixture_environment(base)
         with native_session([str(BINARY), str(source)], environment, root, "controls") as ui:
+            # Project readiness can precede the asynchronous startup-file delivery.
+            # Do not send a leader while that delivery can still replace its input scope.
+            ui.document(source)
+            ui.source("original\n")
             ui.hint("File menu")
             ui.control("menu-file", focused=True)
             # Selecting the hint focuses; only Enter opens the existing menu.

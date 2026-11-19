@@ -10,7 +10,7 @@ Filter the list by extension name or ID. The filter receives keyboard focus when
 
 ## Bundled features
 
-Project bookmarks, Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, [PowerPoint previews](powerpoint.md), [Word previews](word.md), hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.
+Project bookmarks, Stocks, Git, the system/GPU monitor, Python environments, language tools, agent chat, image previews, Markdown previews, PDF previews, [PowerPoint previews](powerpoint.md), [Word previews](word.md), hex/binary analysis, Jupyter notebooks, Marp presentations, LaTeX and the [interactive debugger](debugger.md) are bundled native modules, enabled by default. The editor, syntax renderer/grammars, Problems UI, files, SSH, sandbox, preferences and persistent terminals remain core services. Interface and syntax themes retain their existing bounded data formats; they execute no plugin code.
 
 Disabling a feature preserves open documents and unsaved edits. Binary edits can still be saved while their view is disabled. Monitoring polls only while visible. Python environment discovery starts when a Python file or environment panel is used, rather than probing every opened project. New terminals still honor configured environments; disabling the Python module leaves existing terminals alone and omits its environment activation from new ones. Chat still starts a process only on Send; disabling it stops its process. Debug adapters start only on explicit launch/attach; disabling the debugger stops its session.
 
@@ -44,6 +44,53 @@ while retaining saved projects. The library supports up to 128 entries within
 Encrypted projects continue to use **Open encrypted project**; temporary decrypted
 mounts cannot be bookmarked. Bookmarking is available once ordinary local or SSH
 project preparation has finished.
+
+## Stocks
+
+The bundled **Stocks** extension (`rode.stocks`) adds a native market viewer. Open
+it from the rising-chart icon in the activity bar, **View → Stocks**, or the
+command palette: **Stocks: Market charts and watchlist**. It works without an
+open project and can use the existing **Detach tab** control for its own window.
+Enable or disable it in the extension manager.
+
+- Search by company name or ticker, then select a result. **Open ticker** opens
+  an exact exchange symbol directly, including international symbols such as
+  `SIE.DE`, `7203.T` and `VOD.L`. The provider also supports many ETFs, indices,
+  currencies and other instruments; availability varies by market.
+- **Add to watchlist** saves the current symbol. Select a saved symbol to reopen
+  it; **Remove from watchlist** removes it. Up to 32 symbols are saved in desktop
+  extension preferences, with individual records merged across editor processes.
+- Choose **1D**, **5D**, **1M**, **3M**, **6M**, **1Y**, **5Y** or **All**. Short
+  ranges use intraday bars; longer ranges use daily, weekly or monthly bars.
+  Switch between **Line** and **Candles**, and toggle **Volume**.
+- Roll the wheel over the chart to zoom around the pointer; drag to pan and
+  double-click to reset. The **−**, **+**, arrow and **Reset view** buttons provide
+  the same actions. Focus the chart with Tab or keyboard hints, then use **+ / −**,
+  **Left / Right** and **Home**. Hover an observation for its date, OHLC and volume.
+
+No API key, Python, npm or external program is required. The viewer requests
+[Yahoo Finance](https://finance.yahoo.com/) public search/chart data over HTTPS
+from the desktop. It uses unofficial endpoints (also used by the
+[yfinance-rs client](https://docs.rs/yfinance-rs/latest/src/yfinance_rs/core/client/constants.rs.html));
+the service can change, reject requests or return delayed/unavailable data.
+Use remains subject to the provider's terms. The panel identifies its source,
+currency, exchange and last observation time; times are shown in UTC. Prices are
+provider OHLC values, and the displayed range change is the first-to-last close
+change rather than a dividend-adjusted total return.
+The percentage is omitted for a nonpositive initial price or a nonfinite result.
+Display choices edited through the extension's JSON settings are reapplied when
+returning to the viewer; removing those fields restores their defaults.
+
+Requests start only when the panel is first opened or a search, uncached selection
+or **Refresh** is requested. Zooming and panning operate entirely on cached data.
+Up to 12 recent charts are retained in memory; selections are reused for five minutes.
+**Refresh** explicitly requests newer data. There is no automatic quote polling.
+A single background worker, response/time limits and selection generations keep
+network stalls or late results from blocking editing or replacing a newer chart.
+Disabling the extension discards pending results; a request already on the wire
+may finish within its timeout. No stock requests run on an SSH host, execute
+project tools, start an agent or alter document buffers. Only watchlist/display
+preferences are saved; market responses are kept in memory.
 
 ## Installing a tool adapter
 

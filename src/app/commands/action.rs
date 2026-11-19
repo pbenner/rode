@@ -130,6 +130,7 @@ impl Command {
         Self::UiScaleReset,
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
+        Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Problems),
         Self::Python,
         Self::Panel(Panel::Environment),
@@ -187,6 +188,7 @@ impl Command {
     pub(in crate::app) const PANELS: &'static [Self] = &[
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
+        Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Problems),
         Self::Panel(Panel::Environment),
         Self::Panel(Panel::Tasks),
@@ -250,6 +252,8 @@ impl Command {
             Self::Panel(Panel::Monitor) => {
                 Definition::new("System monitor", Icon::Monitor).palette("System: Monitor")
             }
+            Self::Panel(Panel::Stocks) => Definition::new("Stocks", Icon::Stocks)
+                .palette("Stocks: Market charts and watchlist"),
             Self::Panel(Panel::Problems) => {
                 Definition::new("Problems", Icon::Problems).palette("Code: Problems")
             }

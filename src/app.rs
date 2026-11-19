@@ -64,6 +64,7 @@ mod project_dialog;
 mod sandbox_presets;
 mod saved_connections;
 mod sessions;
+mod stocks;
 mod terminal_colors;
 mod tunnels;
 mod ui_probe;
@@ -220,6 +221,7 @@ pub struct EditorApp {
     ui_scale_save_pending: bool,
     themes: theme::Themes,
     terminal_colors: terminal_colors::State,
+    stocks: stocks::State,
     theme_save_pending: bool,
     syntax_save_pending: bool,
     started: Instant,
@@ -345,6 +347,7 @@ impl EditorApp {
             ui_scale,
             ui_scale_save_pending: false,
             terminal_colors: terminal_colors::State::load(storage, &themes),
+            stocks: Default::default(),
             themes,
             theme_save_pending: startup.theme.is_some(),
             syntax_save_pending: startup.syntax_theme.is_some(),
@@ -747,6 +750,7 @@ impl eframe::App for EditorApp {
         self.poll_vaults(ctx);
         self.poll_agents(ctx);
         self.poll_debugger(ctx);
+        self.stocks.poll(ctx);
         self.poll_notebooks(ctx);
         self.marp_tick();
         self.workbench_tick(ctx);

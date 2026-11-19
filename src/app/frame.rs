@@ -279,6 +279,7 @@ impl EditorApp {
                     Command::Panel(Panel::Agent),
                     Command::Extensions,
                     Command::Panel(Panel::Debug),
+                    Command::Panel(Panel::Stocks),
                 ];
                 let button_height =
                     ((ui.available_height() - 68.) / commands.len() as f32 - 6.).clamp(22., 40.);

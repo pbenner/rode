@@ -19,7 +19,7 @@ pub(in crate::app) enum ToolTab {
 }
 
 impl ToolTab {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Panel(Panel::Agent),
         Self::Terminal,
         Self::Panel(Panel::Git),
@@ -29,6 +29,7 @@ impl ToolTab {
         Self::Panel(Panel::Tasks),
         Self::Panel(Panel::Settings),
         Self::Panel(Panel::Debug),
+        Self::Panel(Panel::Stocks),
     ];
 
     fn label(self) -> &'static str {
@@ -42,6 +43,7 @@ impl ToolTab {
             Self::Panel(Panel::Tasks) => "Tasks",
             Self::Panel(Panel::Settings) => "Settings",
             Self::Panel(Panel::Debug) => "Debugger",
+            Self::Panel(Panel::Stocks) => "Stocks",
         }
     }
 

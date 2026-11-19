@@ -17,7 +17,13 @@ FIXTURE = Path(__file__).resolve().parent.parent / "tests/fixtures/word.docx"
 def red_heading(ui, label):
     """Acknowledge actual new page pixels, rather than stale page-ready controls."""
     state = ui.layout()
-    canvas = next(button for button in state["buttons"] if button["name"] == "image-preview")
+    canvas = next(
+        (button for button in state["buttons"] if button["name"] == "image-preview"), None
+    )
+    # Reload can replace the view before its new rasterized page is available.
+    # Keep waiting for actual heading pixels through that intermediate layout.
+    if canvas is None:
+        return False
     left, top, right, bottom = (round(n * state["pixels_per_point"]) for n in canvas["rect"])
     name = label + "-reload.png"
     screenshot(ui.window, name)

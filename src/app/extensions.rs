@@ -63,6 +63,7 @@ impl EditorApp {
         match panel {
             Panel::Git => Some(Feature::Git),
             Panel::Monitor => Some(Feature::Monitor),
+            Panel::Stocks => Some(Feature::Stocks),
             Panel::Agent => Some(Feature::Agents),
             Panel::Debug => Some(Feature::Debugger),
             _ => None,
@@ -116,6 +117,9 @@ impl EditorApp {
             }
             if id == Feature::Agents.id() {
                 self.stop_project_agent();
+            }
+            if id == Feature::Stocks.id() {
+                self.stocks.invalidate();
             }
             if id == Feature::Monitor.id() {
                 self.workbench.reset_monitor();
@@ -254,7 +258,10 @@ impl EditorApp {
                                 "INSTALLED TOOL"
                             });
                             if (entry.manifest.is_some()
-                                || entry.feature == Some(Feature::ProjectBookmarks))
+                                || matches!(
+                                    entry.feature,
+                                    Some(Feature::ProjectBookmarks | Feature::Stocks)
+                                ))
                                 && crate::keyboard::small_button(ui, "Settings").clicked()
                             {
                                 settings = Some(entry.id.clone());
@@ -318,6 +325,9 @@ impl EditorApp {
                         self.extensions.registry.revision =
                             self.extensions.registry.revision.wrapping_add(1);
                         self.workbench.invalidate_tools();
+                        if self.extensions.settings_id == Feature::Stocks.id() {
+                            self.stocks.invalidate();
+                        }
                         self.extensions.settings_id.clear();
                     }
                     Err(error) => self.notify(format!("Invalid settings: {error}"), true),
