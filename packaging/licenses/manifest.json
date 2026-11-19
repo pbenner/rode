@@ -350,5 +350,40 @@
         "source": "https://raw.githubusercontent.com/y-crdt/y-crdt/a473befc5a380bd9228396af51ca0e102b228f36/LICENSE"
       }
     ]
+  },
+  {
+    "packages": [
+      "oxml-chart@0.15.0",
+      "oxml-core@0.15.0",
+      "oxml-drawing@0.15.0",
+      "oxml-layout@0.15.0",
+      "oxml-media@0.15.0",
+      "oxml-opc@0.15.0",
+      "oxml-pdf@0.15.0",
+      "oxml-sml@0.15.0",
+      "rdocx@0.17.0",
+      "rdocx-html@0.17.0",
+      "rdocx-layout@0.17.0",
+      "rdocx-oxml@0.17.0"
+    ],
+    "files": [
+      {
+        "file": "rdocx-LICENSE",
+        "sha256": "758ff824fa4418fadbdd5be334b33a13fa82ae78488cc776234c31e58187ae52",
+        "source": "https://raw.githubusercontent.com/tensorbee/rdocx/eb980e94c8ae1f8b42612f918482bc627e0141a0/LICENSE"
+      }
+    ]
+  },
+  {
+    "packages": [
+      "selectors@0.38.0"
+    ],
+    "files": [
+      {
+        "file": "selectors-LICENSE",
+        "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+        "source": "https://www.mozilla.org/media/MPL/2.0/index.txt"
+      }
+    ]
   }
 ]

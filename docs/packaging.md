@@ -23,7 +23,7 @@ This produces downloadable workflow artifacts. Installing packages or publishing
 
 ## Build
 
-Install Rust 1.92+ with rustup and the native [build prerequisites](getting-started.md). Debian packaging additionally uses `dpkg-dev`, binutils, and Python 3. Desktop validation is provided by `desktop-file-utils`:
+Install Rust 1.93+ with rustup and the native [build prerequisites](getting-started.md). Debian packaging additionally uses `dpkg-dev`, binutils, and Python 3. Desktop validation is provided by `desktop-file-utils`:
 
 ```sh
 sudo apt install build-essential pkg-config musl-tools dpkg-dev binutils python3 \
@@ -115,7 +115,7 @@ The override replaces only automatic ELF dependency scanning; the declared displ
 
 The headless session helper includes the russh client for explicitly started
 [compute-node return tunnels](remote.md#compute-node-return-tunnels). The editor
-requires Rust 1.92 and the headless helper requires Rust 1.89; no system SSH
+requires Rust 1.93 and the headless helper requires Rust 1.89; no system SSH
 client or GSSAPI library is needed for
 that key/agent-authenticated outbound connection. The static musl helper retains
 its existing deployment size/ABI checks. The session protocol defined by

@@ -60,7 +60,7 @@ Choose a thread/frame to inspect its scopes, expand children, add watch expressi
 | F11 | Step into |
 | Shift+F11 | Step out |
 
-With a PDF or PowerPoint editor pane focused, unmodified **F11** toggles the reader's fullscreen mode. Switch to a source tab or focus the debugger pane to use **F11** for Step into.
+With a PDF, PowerPoint or Word editor pane focused, unmodified **F11** toggles the reader's fullscreen mode. Switch to a source tab or focus the debugger pane to use **F11** for Step into.
 
 Normal terminal keys, including Tab and control keys, keep working. While a debug session is active, its function-key controls remain available from the terminal; otherwise terminal function keys belong to the shell. F9 remains a source-editor shortcut.
 

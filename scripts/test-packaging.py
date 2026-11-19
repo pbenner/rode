@@ -45,6 +45,12 @@ class DependencyNotices(unittest.TestCase):
             vendor.mkdir(parents=True)
             notice = "MIT license fixture; Copyright parser author"
             (vendor / "LICENSE").write_text(notice)
+            word = root / "vendor/word"
+            (word / "fonts").mkdir(parents=True)
+            (word / "LICENSE").write_text("Word engine license fixture")
+            for name in ["LICENSE-Face", "NOTICE-Face", "SUBSET-Face.md"]:
+                (word / "fonts" / name).write_text(f"font attribution fixture: {name}")
+            (word / "fonts/Face.ttf").write_bytes(b"font bytes must not appear in notices")
             metadata = {
                 "workspace_members": ["own-crate"],
                 "packages": [
@@ -58,6 +64,14 @@ class DependencyNotices(unittest.TestCase):
                         "license": "MIT",
                     },
                     {"id": "unused", "name": "unused-parser", "version": "9", "source": None},
+                    {
+                        "id": "word-layout",
+                        "name": "oxml-layout",
+                        "version": "0.15.0",
+                        "source": "registry",
+                        "manifest_path": str(word / "Cargo.toml"),
+                        "license": "MIT OR Apache-2.0",
+                    },
                 ],
             }
 
@@ -65,7 +79,7 @@ class DependencyNotices(unittest.TestCase):
                 if "metadata" in command:
                     return json.dumps(metadata)
                 if "tree" in command:
-                    return "rode v0.1.0\nfixture-parser v1.2.3 (local path)\n"
+                    return "rode v0.1.0\nfixture-parser v1.2.3 (local path)\noxml-layout v0.15.0\n"
                 if "-vV" in command:
                     return "host: fixture-host\n"
                 if "--print" in command:
@@ -80,6 +94,9 @@ class DependencyNotices(unittest.TestCase):
             self.assertIn(notice, result)
             self.assertNotIn("rode 0.1.0", result)
             self.assertNotIn("unused-parser", result)
+            for name in ["LICENSE-Face", "NOTICE-Face", "SUBSET-Face.md"]:
+                self.assertIn(f"font attribution fixture: {name}", result)
+            self.assertNotIn("font bytes must not appear in notices", result)
 
 
 @contextlib.contextmanager

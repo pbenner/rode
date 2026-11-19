@@ -13,11 +13,16 @@ fn main() -> eframe::Result {
         std::process::exit(1);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.len() == 2 && matches!(args[0].as_str(), "--pdf-helper" | "--pptx-helper") {
-        let format = if args[0] == "--pptx-helper" {
-            rode::pdf::Format::Pptx
-        } else {
-            rode::pdf::Format::Pdf
+    if args.len() == 2
+        && matches!(
+            args[0].as_str(),
+            "--pdf-helper" | "--pptx-helper" | "--docx-helper"
+        )
+    {
+        let format = match args[0].as_str() {
+            "--pptx-helper" => rode::pdf::Format::Pptx,
+            "--docx-helper" => rode::pdf::Format::Docx,
+            _ => rode::pdf::Format::Pdf,
         };
         if let Err(error) = rode::pdf::coordinator_for(std::path::Path::new(&args[1]), format) {
             eprintln!("{error:#}");

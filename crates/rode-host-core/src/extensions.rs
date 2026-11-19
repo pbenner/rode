@@ -57,6 +57,8 @@ pub enum Feature {
     Pdf,
     /// Read-only native PowerPoint presentation previews.
     Pptx,
+    /// Read-only native Word document previews.
+    Docx,
     /// Hex editing and static binary analysis.
     Binary,
     /// Native notebook cells and explicitly started kernels.
@@ -83,6 +85,7 @@ impl Feature {
             Self::Markdown => "rode.markdown",
             Self::Pdf => "rode.pdf",
             Self::Pptx => "rode.pptx",
+            Self::Docx => "rode.docx",
             Self::Binary => "rode.binary",
             Self::Notebooks => "rode.notebooks",
             Self::Marp => "rode.marp",
@@ -341,6 +344,12 @@ impl Registry {
                 "PowerPoint previews",
                 "Bundled native PPTX reader with cached slides, zoom and fullscreen.",
                 "Opened PPTX",
+            ),
+            (
+                Feature::Docx,
+                "Word previews",
+                "Bundled native DOCX reader with cached pages, zoom and fullscreen.",
+                "Opened DOCX",
             ),
             (
                 Feature::Binary,

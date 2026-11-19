@@ -3,7 +3,7 @@ name = "rode"
 default-run = "rode"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.93"
 description = "A small native Rust code editor for local and SSH workspaces"
 license = "MIT"
 repository = "https://github.com/pbenner/rode"
@@ -55,6 +55,7 @@ socket2 = "0.6"
 html5gum = { version = "0.8.4", default-features = false }
 hayro = "=0.9.0"
 betteroffice-pptx = { version = "=0.5.1", features = ["raster"] }
+rdocx = { version = "=0.17.0", default-features = false }
 
 [dev-dependencies]
 rand = "0.10"

@@ -271,28 +271,25 @@ impl Document {
     }
     /// Explain disabled saves without suggesting that a presentation has become editable text.
     pub(super) fn read_only_preview_notice(&self) -> &'static str {
-        if self
-            .pdf
-            .as_ref()
-            .is_some_and(|view| view.source.format == crate::pdf::Format::Pptx)
-        {
-            "PowerPoint previews are read-only."
-        } else {
-            "Image and PDF previews are read-only."
+        match self.pdf.as_ref().map(|view| view.source.format) {
+            Some(crate::pdf::Format::Docx) => "Word previews are read-only.",
+            Some(crate::pdf::Format::Pptx) => "PowerPoint previews are read-only.",
+            _ => "Image and PDF previews are read-only.",
         }
     }
     /// Report an in-flight image/PDF decode without treating source-only documents as previews.
     ///
-    /// PDF and PowerPoint readers use the same loading and lifetime boundary.
+    /// PDF, PowerPoint and Word readers use the same loading and lifetime boundary.
     pub(super) fn preview_loading(&self) -> bool {
         self.image.as_ref().is_some_and(|image| image.loading)
             || self.pdf.as_ref().is_some_and(|pdf| pdf.image.loading)
     }
-    /// Native feature owning this paged preview; PDF and PPTX can be enabled independently.
+    /// Native feature owning this paged preview; PDF, PPTX and DOCX can be enabled independently.
     pub(super) fn paged_feature(&self) -> Option<crate::extensions::Feature> {
         self.pdf.as_ref().map(|view| match view.source.format {
             crate::pdf::Format::Pdf => crate::extensions::Feature::Pdf,
             crate::pdf::Format::Pptx => crate::extensions::Feature::Pptx,
+            crate::pdf::Format::Docx => crate::extensions::Feature::Docx,
         })
     }
     /// Return the cached edit state maintained by ordinary source/structured editing paths.

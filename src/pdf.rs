@@ -1,4 +1,4 @@
-//! Bundled PDF/PPTX interpretation on the desktop, with a retained document
+//! Bundled PDF/PPTX/DOCX interpretation on the desktop, with a retained document
 //! worker and bounded decoded-page cache. SSH hosts transfer original bytes only.
 use crate::images;
 use anyhow::{Context, Result, ensure};
@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+mod docx;
 mod pptx;
 mod renderer;
 mod text;
@@ -25,6 +26,8 @@ pub enum Format {
     Pdf,
     /// PowerPoint slides interpreted by BetterOffice.
     Pptx,
+    /// Word pages laid out by rdocx and painted by Hayro.
+    Docx,
 }
 impl Format {
     /// Recognize a supported paged preview without reading the file.
@@ -34,6 +37,8 @@ impl Format {
             Some(Self::Pdf)
         } else if extension.eq_ignore_ascii_case("pptx") {
             Some(Self::Pptx)
+        } else if extension.eq_ignore_ascii_case("docx") {
+            Some(Self::Docx)
         } else {
             None
         }
@@ -43,6 +48,7 @@ impl Format {
         match self {
             Self::Pdf => "PDF",
             Self::Pptx => "PPTX",
+            Self::Docx => "DOCX",
         }
     }
 }
@@ -78,6 +84,8 @@ pub struct Source {
     pub pages: usize,
     /// Rotated/cropped page dimensions in PDF points, used for virtual layout.
     pub sizes: Vec<[f32; 2]>,
+    /// Bounded, plain-language rendering approximations reported by the interpreter.
+    pub warnings: Vec<String>,
     renderer: Mutex<Option<renderer::Renderer>>,
     cache: Mutex<VecDeque<(usize, usize, images::Decoded)>>,
     skipped_images: Mutex<std::collections::BTreeMap<usize, usize>>,
@@ -127,7 +135,7 @@ pub fn load_cancellable(
 ) -> Result<Loaded> {
     load_format_cancellable(encoded, Format::Pdf, page, budget, texture_limit, cancel)
 }
-/// Load a PDF or PowerPoint snapshot through the same bounded desktop worker.
+/// Load a PDF, PowerPoint or Word snapshot through the same bounded desktop worker.
 pub fn load_format_cancellable(
     encoded: &str,
     format: Format,
@@ -187,12 +195,13 @@ fn load_bytes_cancellable(
         "Cannot open PDF: missing PDF header."
     );
     let lease = budget.reserve_source(bytes.len())?;
-    let (renderer, sizes) = renderer::Renderer::open(&bytes, format, cancel)?;
+    let (renderer, metadata) = renderer::Renderer::open(&bytes, format, cancel)?;
     let source = Arc::new(Source {
         bytes: bytes.into(),
         format,
-        pages: sizes.len(),
-        sizes,
+        pages: metadata.sizes.len(),
+        sizes: metadata.sizes,
+        warnings: metadata.warnings,
         renderer: Mutex::new(Some(renderer)),
         cache: Mutex::new(VecDeque::new()),
         skipped_images: Default::default(),

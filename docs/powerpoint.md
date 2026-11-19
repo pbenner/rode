@@ -1,5 +1,7 @@
 # PowerPoint previews
 
+For Word documents, see [Word previews](word.md), which share the same reading controls.
+
 Open a `.pptx` file from Explorer or **Ctrl+P** to view it in a read-only editor tab. Extensions are case-insensitive. **PowerPoint previews** is an independently switchable bundled feature in **View → Extensions**.
 
 RODE includes the native Rust [BetterOffice](https://github.com/openooxml/betteroffice) renderer. Microsoft Office, LibreOffice, a browser, Node.js and NPM are not required. With an SSH workspace, the existing authenticated file channel transfers the original bytes and the desktop renders the slides; no presentation software is installed or executed on the remote host.

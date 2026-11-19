@@ -1,4 +1,4 @@
-//! Window-local PDF fullscreen presentation. Reuse the existing reader and its workers;
+//! Window-local document fullscreen presentation. Reuse the existing reader and its workers;
 //! leaving restores native fullscreen state without changing pane preferences or services.
 use super::*;
 
@@ -17,7 +17,7 @@ impl EditorApp {
             .is_some_and(|state| self.documents.selected_in(viewport) == Some(state.document))
     }
 
-    /// Toggle the selected PDF in its owning editor window. A palette in a tool window
+    /// Toggle the selected document in its owning editor window. A palette in a tool window
     /// addresses the remembered editor; native commands never target that tool window.
     pub(in crate::app) fn toggle_pdf_fullscreen(&mut self, ctx: &egui::Context) {
         let viewport = self.command_editor(ctx);
@@ -43,7 +43,7 @@ impl EditorApp {
                 .map(|doc| doc.id)
             else {
                 app.notify(
-                    "Open a PDF or PowerPoint file to use fullscreen reading.",
+                    "Open a PDF, PowerPoint or Word file to use fullscreen reading.",
                     false,
                 );
                 return;
@@ -109,7 +109,7 @@ impl EditorApp {
         }
     }
 
-    /// PDF-local F11 takes priority over debugger Step Into. Modified F11, terminals,
+    /// Reader-local F11 takes priority over debugger Step Into. Modified F11, terminals,
     /// tool viewports, modals and keyboard-discovery overlays retain their existing input.
     pub(in crate::app) fn pdf_fullscreen_shortcuts(&mut self, ctx: &egui::Context) {
         if self.documents.viewport() != ctx.viewport_id()

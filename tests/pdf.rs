@@ -18,6 +18,136 @@ use std::{
 };
 const FIXTURE: &[u8] = include_bytes!("fixtures/pages.pdf");
 const PPTX: &[u8] = include_bytes!("fixtures/slides.pptx");
+const DOCX: &[u8] = include_bytes!("fixtures/word.docx");
+
+#[test]
+fn word_pages_render_text_tables_images_and_related_stories_without_changing_source() {
+    let budget = Arc::new(Budget::default());
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("quoted ' document.DOCX");
+    fs::write(&path, DOCX).unwrap();
+    let reply = files::local(&Request::ReadBinary {
+        path: path.to_string_lossy().into(),
+    })
+    .unwrap();
+    let loaded = pdf::load_format_cancellable(
+        &reply.binary.unwrap(),
+        pdf::Format::Docx,
+        1,
+        &budget,
+        768,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(loaded.source.format, pdf::Format::Docx);
+    assert_eq!(loaded.source.pages, 3);
+    assert_eq!(loaded.source.sizes, vec![[612., 792.]; 3]);
+    let pixels = &loaded.pixels.pixels.pixels;
+    assert!(
+        pixels.iter().filter(|p| p.b() > 150 && p.r() < 100).count() > 100,
+        "Blue heading must render"
+    );
+    assert!(
+        pixels
+            .iter()
+            .filter(|p| p.g() > 150 && p.r() < 100 && p.b() < 120)
+            .count()
+            > 100,
+        "Embedded image must render"
+    );
+    let second = loaded
+        .source
+        .render(2, &budget, 768, &AtomicBool::new(false))
+        .unwrap();
+    assert!(
+        second
+            .pixels
+            .pixels
+            .iter()
+            .filter(|p| p.r() > 150 && p.b() < 100)
+            .count()
+            > 100,
+        "Second page must contain its red heading"
+    );
+    let third = loaded
+        .source
+        .render(3, &budget, 768, &AtomicBool::new(false))
+        .unwrap();
+    assert!(
+        third
+            .pixels
+            .pixels
+            .iter()
+            .filter(|p| p.g() > 150 && p.r() < 100 && p.b() < 120)
+            .count()
+            > 100,
+        "Third page must contain its green heading"
+    );
+    let cached = loaded
+        .source
+        .render(1, &budget, 768, &AtomicBool::new(false))
+        .unwrap();
+    assert!(Arc::ptr_eq(&loaded.pixels.pixels, &cached.pixels));
+    let snapshot = rdocx::Document::from_bytes(DOCX)
+        .unwrap()
+        .to_pdf_deterministic()
+        .unwrap();
+    // Text runs may be separate PDF operators. Normalize their whitespace
+    // while still checking that body, table, header/footer and note text survived.
+    let text = pdf::extract_text(snapshot, &AtomicBool::new(false)).unwrap();
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    for expected in [
+        "RODE header",
+        "RODE footer",
+        "Word footnote content",
+        "Native rendering",
+        "Final Word page",
+    ] {
+        assert!(
+            text.contains(expected),
+            "Missing Word content {expected:?}: {text}"
+        );
+    }
+    assert_eq!(fs::read(path).unwrap(), DOCX);
+    drop((cached, second, third, loaded));
+    assert_eq!(budget.used(), 0);
+}
+
+#[test]
+fn word_previews_reject_other_formats_and_cancelled_loads_without_leaking_leases() {
+    let budget = Arc::new(Budget::default());
+    for bytes in [b"not DOCX".as_slice(), FIXTURE, PPTX] {
+        assert!(
+            pdf::load_format_cancellable(
+                &STANDARD.encode(bytes),
+                pdf::Format::Docx,
+                1,
+                &budget,
+                256,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert_eq!(budget.used(), 0);
+    }
+    assert!(
+        pdf::load_format_cancellable(
+            &STANDARD.encode(DOCX),
+            pdf::Format::Docx,
+            1,
+            &budget,
+            256,
+            &AtomicBool::new(true)
+        )
+        .is_err()
+    );
+    assert_eq!(budget.used(), 0);
+    assert_eq!(
+        pdf::Format::for_path("remote/document.DOCX"),
+        Some(pdf::Format::Docx)
+    );
+    assert_eq!(pdf::Format::for_path("document.doc"), None);
+}
 
 #[test]
 fn custom_powerpoint_page_sizes_fit_the_admitted_raster_at_every_resolution() {

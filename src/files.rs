@@ -53,7 +53,7 @@ pub struct Response {
     /// Standard base64-encoded binary/preview bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
-    /// Desktop-only rendered PDF/PowerPoint document and retained source snapshot.
+    /// Desktop-only rendered PDF/PowerPoint/Word document and retained source snapshot.
     #[serde(skip)]
     pub pdf: Option<crate::pdf::Loaded>,
     /// Desktop-only decoded raster pixels and budget lease.

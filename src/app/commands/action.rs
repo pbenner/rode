@@ -60,6 +60,8 @@ pub(in crate::app) enum Command {
     PdfFullscreen,
     PptxReload,
     PptxFullscreen,
+    DocxReload,
+    DocxFullscreen,
     PersistentTerminal,
     NewTerminal,
     Sessions,
@@ -150,6 +152,8 @@ impl Command {
         Self::PdfFullscreen,
         Self::PptxReload,
         Self::PptxFullscreen,
+        Self::DocxReload,
+        Self::DocxFullscreen,
         Self::NewTerminal,
         Self::Slurm,
         Self::PersistentTerminal,
@@ -292,6 +296,8 @@ impl Command {
             Self::PdfFullscreen => Definition::new("PDF: Toggle fullscreen", Icon::Files),
             Self::PptxReload => Definition::new("PPTX: Reload preview", Icon::Refresh),
             Self::PptxFullscreen => Definition::new("PPTX: Toggle fullscreen", Icon::Files),
+            Self::DocxReload => Definition::new("Word: Reload preview", Icon::Refresh),
+            Self::DocxFullscreen => Definition::new("Word: Toggle fullscreen", Icon::Files),
             Self::NewTerminal => Definition::new("Terminal: New terminal", Icon::Terminal),
             Self::Slurm => Definition::new("Terminal: Allocate Slurm resources", Icon::Terminal),
             Self::PersistentTerminal => {
@@ -453,7 +459,9 @@ impl EditorApp {
             Command::Connect => self.dialog == Dialog::Connect,
             Command::Terminal => self.terminal_any_visible(),
             Command::WordWrap => self.word_wrap,
-            Command::PdfFullscreen => self.editor.pdf_fullscreen.is_some(),
+            Command::PdfFullscreen | Command::PptxFullscreen | Command::DocxFullscreen => {
+                self.editor.pdf_fullscreen.is_some()
+            }
             Command::Extensions => self.dialog == Dialog::Extensions,
             _ => false,
         }
@@ -567,12 +575,14 @@ impl EditorApp {
             Command::TemporaryTerminal => self.new_temporary_terminal(ctx),
             Command::Extensions => self.set_dialog(Dialog::Extensions),
             Command::Hex => self.set_dialog(Dialog::HexOpen),
-            Command::ReloadPdf | Command::PptxReload => {
+            Command::ReloadPdf | Command::PptxReload | Command::DocxReload => {
                 if let Some(doc) = self.documents.active() {
                     self.reload_pdf(doc.id, ctx);
                 }
             }
-            Command::PdfFullscreen | Command::PptxFullscreen => self.toggle_pdf_fullscreen(ctx),
+            Command::PdfFullscreen | Command::PptxFullscreen | Command::DocxFullscreen => {
+                self.toggle_pdf_fullscreen(ctx)
+            }
             Command::Panel(panel) => self.toggle_panel(panel, ctx),
             Command::UiScaleStep(step) => self.set_ui_scale(self.ui_scale + step, ctx),
             Command::UiScaleReset => self.set_ui_scale(1., ctx),

@@ -1,4 +1,4 @@
-//! Shared read-only PDF/PowerPoint reader with virtual continuous pages and bounded caches.
+//! Shared read-only PDF/PowerPoint/Word reader with virtual continuous pages and bounded caches.
 //!
 //! Retain encoded source separately from the displayed page. Page workers are cancellable and
 //! versioned; wheel navigation crosses page boundaries only after the current page scroll
@@ -400,8 +400,16 @@ impl PdfView {
                 }
             }
             let format = ui.label(palette.tag(if matches!(display, Display::Slides) { "MARP" } else { self.source.format.label() }))
-                .on_hover_text(if self.source.format == pdf::Format::Pptx { "Native PowerPoint preview. Uses bundled Inter when original fonts are unavailable; layout may differ from PowerPoint." } else { "Native PDF preview" });
+                .on_hover_text(match self.source.format {
+                    pdf::Format::Pptx => "Native PowerPoint preview. Uses bundled Inter when original fonts are unavailable; layout may differ from PowerPoint.",
+                    pdf::Format::Docx => "Native Word preview with bundled fonts. Font substitution and unsupported content may change layout and pagination.",
+                    pdf::Format::Pdf => "Native PDF preview",
+                });
             ui_probe::button(ui, &format!("preview-format:{}", self.source.format.label()), &format);
+            if !self.source.warnings.is_empty() {
+                let warning = ui.label(palette.tag("Preview limitations")).on_hover_text(self.source.warnings.join("\n"));
+                ui_probe::button(ui, "document-preview-warning", &warning);
+            }
             let skipped = self.source.skipped_images(self.page);
             if skipped > 0 {
                 let unit = if skipped == 1 { "image" } else { "images" };
@@ -893,54 +901,65 @@ impl EditorApp {
 mod tests {
     use super::*;
     #[test]
-    fn powerpoint_stays_read_only_and_uses_its_own_feature_gate() {
+    fn office_previews_stay_read_only_and_use_their_own_feature_gates() {
         use base64::Engine as _;
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = EditorApp::new(&cc, Startup::default());
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(include_bytes!("../../tests/fixtures/slides.pptx"));
-        let loaded = pdf::load_format_cancellable(
-            &encoded,
-            pdf::Format::Pptx,
-            1,
-            &app.image_budget,
-            128,
-            &AtomicBool::new(false),
-        )
-        .unwrap();
-        app.new_file();
-        let doc = app.documents.active_mut().unwrap();
-        doc.pdf = Some(PdfView::new(loaded));
-        doc.set_dirty_fixture(false);
-        assert_eq!(doc.paged_feature(), Some(crate::extensions::Feature::Pptx));
-        assert!(app.documents.active_source().is_none());
-        for save_as in [false, true] {
-            app.save_active(&ctx, save_as);
-            assert!(app.dialog == Dialog::None);
-            assert_eq!(
-                app.notice.as_ref().unwrap().0,
-                "PowerPoint previews are read-only."
+        for (format, feature, bytes, notice) in [
+            (
+                pdf::Format::Pptx,
+                crate::extensions::Feature::Pptx,
+                include_bytes!("../../tests/fixtures/slides.pptx").as_slice(),
+                "PowerPoint previews are read-only.",
+            ),
+            (
+                pdf::Format::Docx,
+                crate::extensions::Feature::Docx,
+                include_bytes!("../../tests/fixtures/word.docx").as_slice(),
+                "Word previews are read-only.",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            let mut app = EditorApp::new(&cc, Startup::default());
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            let loaded = pdf::load_format_cancellable(
+                &encoded,
+                format,
+                1,
+                &app.image_budget,
+                128,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            app.new_file();
+            let doc = app.documents.active_mut().unwrap();
+            doc.pdf = Some(PdfView::new(loaded));
+            doc.set_dirty_fixture(false);
+            assert_eq!(doc.paged_feature(), Some(feature));
+            assert!(app.documents.active_source().is_none());
+            for save_as in [false, true] {
+                app.save_active(&ctx, save_as);
+                assert!(app.dialog == Dialog::None);
+                assert_eq!(app.notice.as_ref().unwrap().0, notice);
+            }
+            app.set_extension(crate::extensions::Feature::Pdf.id(), false);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                app.toggle_pdf_fullscreen(ctx)
+            });
+            assert!(
+                app.editor.pdf_fullscreen.is_some(),
+                "PDF settings must not disable Office previews"
             );
+            app.set_extension(feature.id(), false);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                assert!(!app.pdf_fullscreen_ui(ctx));
+                app.toggle_pdf_fullscreen(ctx);
+            });
+            assert!(
+                app.editor.pdf_fullscreen.is_none(),
+                "Fullscreen must honor the disabled document feature"
+            );
+            assert!(!app.documents.active().unwrap().dirty());
         }
-        app.set_extension(crate::extensions::Feature::Pdf.id(), false);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            app.toggle_pdf_fullscreen(ctx)
-        });
-        assert!(
-            app.editor.pdf_fullscreen.is_some(),
-            "PDF settings must not disable PowerPoint"
-        );
-        app.set_extension(crate::extensions::Feature::Pptx.id(), false);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            assert!(!app.pdf_fullscreen_ui(ctx));
-            app.toggle_pdf_fullscreen(ctx);
-        });
-        assert!(
-            app.editor.pdf_fullscreen.is_none(),
-            "Fullscreen must honor the disabled presentation feature"
-        );
-        assert!(!app.documents.active().unwrap().dirty());
     }
     #[test]
     fn wheel_paging_accumulates_trackpad_motion_and_keeps_document_boundaries() {

@@ -162,7 +162,10 @@ impl EditorApp {
         {
             ui.label("This document's extension is disabled. Enable it in View → Extensions.");
             ui.label(
-                if matches!(feature, Feature::Images | Feature::Pdf | Feature::Pptx) {
+                if matches!(
+                    feature,
+                    Feature::Images | Feature::Pdf | Feature::Pptx | Feature::Docx
+                ) {
                     "The open preview is preserved. It remains read-only."
                 } else {
                     "The open document and unsaved edits are preserved. Saving is still available."

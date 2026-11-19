@@ -872,11 +872,12 @@ pub fn language(path: Option<&str>) -> &'static str {
 }
 
 fn file_icon(name: &str) -> &'static str {
-    if crate::pdf::Format::for_path(name) == Some(crate::pdf::Format::Pptx) {
-        return "ppt";
-    }
-    if crate::pdf::is_path(name) {
-        return "pdf";
+    if let Some(format) = crate::pdf::Format::for_path(name) {
+        return match format {
+            crate::pdf::Format::Pdf => "pdf",
+            crate::pdf::Format::Pptx => "ppt",
+            crate::pdf::Format::Docx => "doc",
+        };
     }
     if crate::images::format_for(name).is_some() {
         return "img";

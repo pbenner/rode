@@ -4,7 +4,7 @@
 
 For Debian/Ubuntu, `scripts/build-deb.sh` creates an installable editor package with the desktop launcher and terminal helper. Codex is a separate optional package built with `scripts/build-deb.sh --component codex`. See [package prerequisites and installation](packaging.md).
 
-Install Rust (1.92 or newer) with rustup and the native build prerequisites below, including a musl C toolchain (`musl-tools` on Debian/Ubuntu). Then run the source installer on Linux x86_64 or aarch64:
+Install Rust (1.93 or newer) with rustup and the native build prerequisites below, including a musl C toolchain (`musl-tools` on Debian/Ubuntu). Then run the source installer on Linux x86_64 or aarch64:
 
 ```sh
 cargo xtask install

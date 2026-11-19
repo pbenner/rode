@@ -7,6 +7,14 @@ NOTICE at the revision recorded in those crate archives. Its `yrs` dependency
 has a separate pinned MIT notice. RODE's PowerPoint viewer does not bundle the
 upstream JavaScript UI or its separate font packages.
 
+The rdocx/oxml snapshots cover the Word engine at the revision recorded by its
+crate archives. The notice collector also includes the licenses, attribution
+notices and subset descriptions beside `oxml-layout`'s embedded fonts.
+
+The `selectors` archive and its upstream tree omit the full MPL-2.0 text.
+Its snapshot therefore uses Mozilla's official versioned license text, with
+its contents pinned by SHA-256; source copyright headers are collected too.
+
 `manifest.json` records the applicable package/version pairs, immutable upstream source URLs and SHA-256 hashes. Upstream commits match the `.cargo_vcs_info.json` shipped in those crate versions, with an explicitly recorded exception for SWC: its crate-recorded revisions returned HTTP 404 during review. Those entries retain the original revisions and use the upstream commit that last changed the complete Apache-2.0 `LICENSE`, including SWC's attribution. The builder verifies every used snapshot and collects the crate's own notices too, including egui's separate font licenses and REUSE license directories/copyright headers.
 
 When updating dependencies, review the license files at the new crate's upstream revision, update the applicable manifest entries and snapshots, then build a package and run `python3 scripts/test-deb.py <package.deb>`. Do not substitute a generic SPDX identifier for an upstream copyright/permission notice. Snapshots are build inputs; their complete contents and source URLs appear in `THIRD-PARTY-NOTICES.gz`.

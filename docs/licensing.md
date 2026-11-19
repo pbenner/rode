@@ -2,6 +2,8 @@
 
 RODE's own code is covered by the repository's [MIT license](https://github.com/pbenner/rode/blob/main/LICENSE). Bundled fonts, parser grammars, syntax themes and other dependencies retain their own terms.
 
+The native Word viewer uses the MIT-licensed [rdocx engine](https://github.com/tensorbee/rdocx), pinned in `Cargo.lock`. Its bundled substitute fonts retain their own licenses and notices. Debian dependency notices include the upstream engine license, font licenses, font notices and subset descriptions; no Microsoft Office fonts are redistributed.
+
 The native PowerPoint viewer uses the Apache-2.0 licensed [BetterOffice](https://github.com/openooxml/betteroffice) Rust crates, pinned through `Cargo.lock`. Distribution dependency notices include their upstream license texts. It reuses the unmodified bundled Inter face and its existing SIL Open Font License notice; no Microsoft Office fonts or proprietary presentation engine are redistributed.
 
 The Sumi-e pine/crane, bamboo/bird and plum-blossom illustrations and the Samurai

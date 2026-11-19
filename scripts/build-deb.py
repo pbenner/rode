@@ -248,6 +248,19 @@ def notices(binary):
             if not path.is_file():
                 raise ValueError(f"Missing bundled PDF asset notice: {path}")
             candidates.append(path)
+        if package["name"] == "oxml-layout":
+            # Native Word layout embeds substitute fonts, whose terms and
+            # subset notices are separate from the Rust engine's license.
+            fonts = source / "fonts"
+            font_notices = [
+                path
+                for path in fonts.iterdir()
+                if path.is_file()
+                and re.match(r"^(LICENSE|NOTICE|SUBSET)(?:[.\-]|$)", path.name, re.I)
+            ]
+            if not font_notices:
+                raise ValueError("Missing bundled Word font notices")
+            candidates.extend(font_notices)
         if package["name"] == "latex-rust":
             for name in ["fonts/stix-two-math/OFL.txt", "data/dvipsnames.tsv"]:
                 path = source / name

@@ -4,6 +4,8 @@ Open a `.pdf` file from the explorer or **Ctrl+P**. It opens in a read-only tab 
 
 PowerPoint `.pptx` files use the same reading controls with a separate native renderer; see [PowerPoint previews](powerpoint.md).
 
+Word `.docx` files also use these controls, with native pagination and an in-memory PDF snapshot; see [Word previews](word.md).
+
 RODE bundles the pure-Rust [Hayro](https://github.com/LaurenzV/hayro) renderer and standard PDF substitute fonts. No Poppler tools, PDFium shared library, browser, or separate PDF installation is required. Local and SSH projects use the same desktop renderer: only original file bytes travel through the existing authenticated, sandbox-aware file channel. Opening and changing pages do not run PDF software on the remote host.
 
 ## Navigation and display

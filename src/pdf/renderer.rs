@@ -1,4 +1,4 @@
-//! Persistent desktop PDF/PowerPoint worker. Raw RGBA frames avoid transport codec round trips;
+//! Persistent desktop PDF/PowerPoint/Word worker. Raw RGBA frames avoid transport codec round trips;
 //! a private source snapshot, pipe bounds and a killable process retain the
 //! preview's cancellation, memory and deadline guarantees for malformed documents.
 use super::*;
@@ -20,9 +20,7 @@ const DEADLINE: Duration = Duration::from_secs(20);
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Header {
-    Document {
-        sizes: Vec<[f32; 2]>,
-    },
+    Document(Metadata),
     Page {
         width: usize,
         height: usize,
@@ -35,6 +33,14 @@ enum Header {
     Error {
         message: String,
     },
+}
+
+/// Geometry and bounded diagnostics acknowledged before the source snapshot is released.
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct Metadata {
+    pub sizes: Vec<[f32; 2]>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -128,7 +134,7 @@ impl Renderer {
         bytes: &[u8],
         format: Format,
         cancel: &AtomicBool,
-    ) -> Result<(Self, Vec<[f32; 2]>)> {
+    ) -> Result<(Self, Metadata)> {
         ensure!(
             !cancel.load(Ordering::Acquire),
             "Document rendering cancelled."
@@ -145,6 +151,7 @@ impl Renderer {
         let helper = match format {
             Format::Pdf => "--pdf-helper",
             Format::Pptx => "--pptx-helper",
+            Format::Docx => "--docx-helper",
         };
         command.args([std::ffi::OsStr::new(helper), path.as_os_str()]);
         command
@@ -160,11 +167,19 @@ impl Renderer {
             stream,
             format,
         };
-        let Header::Document { sizes } = renderer.header(cancel, Instant::now())? else {
+        let Header::Document(metadata) = renderer.header(cancel, Instant::now())? else {
             bail!("Document renderer did not return metadata")
         };
-        validate_sizes(&sizes)?;
-        Ok((renderer, sizes))
+        validate_sizes(&metadata.sizes)?;
+        ensure!(
+            metadata.warnings.len() <= 8
+                && metadata
+                    .warnings
+                    .iter()
+                    .all(|warning| warning.chars().count() <= 512),
+            "Invalid document rendering diagnostics"
+        );
+        Ok((renderer, metadata))
     }
 
     fn request(&mut self, request: Request) -> Result<()> {
@@ -377,7 +392,7 @@ struct Hayro {
 }
 
 enum Backend {
-    Pdf(Box<Hayro>),
+    Pdf(Box<Hayro>, Vec<String>),
     Pptx(Box<super::pptx::Presentation>),
 }
 impl Backend {
@@ -385,7 +400,12 @@ impl Backend {
         let bytes = std::fs::read(path)?;
         Ok(match format {
             Format::Pptx => Self::Pptx(Box::new(super::pptx::Presentation::open(&bytes)?)),
-            Format::Pdf => {
+            Format::Pdf | Format::Docx => {
+                let (bytes, warnings) = if format == Format::Docx {
+                    super::docx::paginate(&bytes)?
+                } else {
+                    (bytes, Vec::new())
+                };
                 let document = hayro::hayro_syntax::Pdf::new(bytes).map_err(|error| {
                     if matches!(error, hayro::hayro_syntax::LoadPdfError::Decryption(_)) {
                         anyhow::anyhow!(
@@ -395,13 +415,13 @@ impl Backend {
                         anyhow::anyhow!("Cannot open this PDF: invalid or unsupported document.")
                     }
                 })?;
-                Self::Pdf(Box::new(Hayro { document }))
+                Self::Pdf(Box::new(Hayro { document }), warnings)
             }
         })
     }
     fn sizes(&self) -> Vec<[f32; 2]> {
         match self {
-            Self::Pdf(pdf) => pdf
+            Self::Pdf(pdf, _) => pdf
                 .document
                 .pages()
                 .iter()
@@ -420,14 +440,20 @@ impl Backend {
         cache: &mut hayro::RenderCache<'a>,
     ) -> Result<Raster> {
         match self {
-            Self::Pdf(pdf) => pdf.render(page, side, cache),
+            Self::Pdf(pdf, _) => pdf.render(page, side, cache),
             Self::Pptx(deck) => deck.render(page, side),
         }
     }
     fn text(&self) -> Result<String> {
         match self {
-            Self::Pdf(pdf) => super::text::extract(&pdf.document),
+            Self::Pdf(pdf, _) => super::text::extract(&pdf.document),
             Self::Pptx(_) => bail!("PPTX text extraction is not available in this preview."),
+        }
+    }
+    fn warnings(&self) -> Vec<String> {
+        match self {
+            Self::Pdf(_, warnings) => warnings.clone(),
+            Self::Pptx(_) => Vec::new(),
         }
     }
 }
@@ -482,7 +508,13 @@ fn serve_document(path: &Path, format: Format, mut output: &mut impl Write) -> R
     let sizes = document.sizes();
     validate_sizes(&sizes)?;
     let pages = sizes.len();
-    header(&mut output, &Header::Document { sizes })?;
+    header(
+        &mut output,
+        &Header::Document(Metadata {
+            sizes,
+            warnings: document.warnings(),
+        }),
+    )?;
     let mut input = BufReader::new(std::io::stdin().lock());
     // Hayro's cache borrows its parsed document. Keep both local to this
     // lifetime instead of making the retained backend self-referential.
