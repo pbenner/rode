@@ -94,12 +94,28 @@ impl EditorApp {
         let file = top(ui, "File", |ui| self.file_menu(ui, ctx));
         self.navigation_menu(&file);
         top(ui, "View", |ui| self.view_menu(ui, ctx));
-        top(ui, "Code", |ui| self.code_menu(ui, ctx));
-        top(ui, "Debug", |ui| self.debug_menu(ui, ctx));
+        if [
+            Command::Format,
+            Command::Check,
+            Command::Fix,
+            Command::Run,
+            Command::Build,
+        ]
+        .into_iter()
+        .any(|command| self.command_visible(command))
+        {
+            top(ui, "Code", |ui| self.code_menu(ui, ctx));
+        }
+        if self.command_visible(Command::Panel(Panel::Debug)) {
+            top(ui, "Debug", |ui| self.debug_menu(ui, ctx));
+        }
     }
 
     fn menu_commands(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, commands: &[Command]) {
         for &command in commands {
+            if !self.command_visible(command) {
+                continue;
+            }
             let definition = command.definition();
             if item(
                 ui,
@@ -186,9 +202,11 @@ impl EditorApp {
             self.execute_command(Command::Explorer, ctx);
         }
         self.menu_commands(ui, ctx, &[Command::Sidebar, Command::Terminal]);
-        submenu(ui, Icon::Files, "Previews", |ui| {
-            self.menu_commands(ui, ctx, &[Command::Markdown, Command::MarpSlides])
-        });
+        if self.command_visible(Command::Markdown) || self.command_visible(Command::MarpSlides) {
+            submenu(ui, Icon::Files, "Previews", |ui| {
+                self.menu_commands(ui, ctx, &[Command::Markdown, Command::MarpSlides])
+            });
+        }
         if check(ui, "Show hidden files", "", self.show_hidden) {
             self.show_hidden = !self.show_hidden;
             self.explorer_state.tree_dirty = true;
@@ -199,10 +217,22 @@ impl EditorApp {
     }
 
     fn code_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        section(ui, "DOCUMENT", true);
-        self.menu_commands(ui, ctx, &[Command::Format, Command::Check, Command::Fix]);
-        section(ui, "EXECUTION", false);
-        self.menu_commands(ui, ctx, &[Command::Run, Command::Build]);
+        let tools = [Command::Format, Command::Check, Command::Fix];
+        let execution = [Command::Run, Command::Build];
+        let show_tools = tools
+            .into_iter()
+            .any(|command| self.command_visible(command));
+        if show_tools {
+            section(ui, "DOCUMENT", true);
+            self.menu_commands(ui, ctx, &tools);
+        }
+        if execution
+            .into_iter()
+            .any(|command| self.command_visible(command))
+        {
+            section(ui, "EXECUTION", !show_tools);
+            self.menu_commands(ui, ctx, &execution);
+        }
     }
 
     fn debug_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {

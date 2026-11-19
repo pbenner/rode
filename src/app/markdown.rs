@@ -653,7 +653,7 @@ impl EditorApp {
             preview.showing = false;
         }
         let was_slides = doc.marp.as_ref().is_some_and(|view| view.showing);
-        let mut slides = was_slides;
+        let mut slides = was_slides && marp_enabled;
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
             if crate::keyboard::selectable_label(ui, !preview.showing && !slides, "Edit").clicked()
@@ -661,13 +661,14 @@ impl EditorApp {
                 preview.showing = false;
                 slides = false;
             }
-            if ui
-                .add_enabled(
-                    markdown_enabled,
-                    crate::keyboard::Button::selectable(preview.showing && !slides, "Preview"),
-                )
-                .on_hover_text("Toggle Markdown preview · Ctrl+Shift+R")
-                .clicked()
+            if markdown_enabled
+                && ui
+                    .add(crate::keyboard::Button::selectable(
+                        preview.showing && !slides,
+                        "Preview",
+                    ))
+                    .on_hover_text("Toggle Markdown preview · Ctrl+Shift+R")
+                    .clicked()
             {
                 preview.showing = true;
                 slides = false;
@@ -680,13 +681,11 @@ impl EditorApp {
                     "MARKDOWN"
                 }));
             }
-            if ui
-                .add_enabled(
-                    marp_enabled,
-                    crate::keyboard::Button::selectable(slides, "Slides"),
-                )
-                .on_hover_text("Preview the current buffer with Marp on the project host")
-                .clicked()
+            if marp_enabled
+                && ui
+                    .add(crate::keyboard::Button::selectable(slides, "Slides"))
+                    .on_hover_text("Preview the current buffer with Marp on the project host")
+                    .clicked()
             {
                 preview.showing = false;
                 slides = true;
@@ -841,6 +840,69 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_controls_follow_their_independent_extensions_and_keep_source_text() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.new_file();
+        app.documents.active_mut().unwrap().fixture_content().path =
+            Some("/tmp/visibility.md".into());
+        let draft = "# Unsaved draft\n\nKeep this source when previews are disabled.\n";
+        app.documents.active_mut().unwrap().set_source(draft.into());
+        let mut preview = Preview::new(app.markdown_images.clone());
+        preview.showing = true;
+        app.documents.active_mut().unwrap().markdown = Some(preview);
+        app.set_extension(crate::extensions::Feature::Markdown.id(), false);
+        assert!(
+            !app.documents
+                .active()
+                .unwrap()
+                .markdown
+                .as_ref()
+                .unwrap()
+                .showing
+        );
+        let mut slides = marp_view::View::default();
+        slides.showing = true;
+        app.documents.active_mut().unwrap().marp = Some(slides);
+        app.set_extension(crate::extensions::Feature::Marp.id(), false);
+        assert!(
+            !app.documents
+                .active()
+                .unwrap()
+                .marp
+                .as_ref()
+                .unwrap()
+                .showing
+        );
+        for (markdown, marp) in [(false, true), (true, false), (false, false), (true, true)] {
+            app.set_extension(crate::extensions::Feature::Markdown.id(), markdown);
+            app.set_extension(crate::extensions::Feature::Marp.id(), marp);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        assert!(!app.markdown_ui(ui, ctx));
+                    });
+                },
+            );
+            let has = |label: &str| {
+                output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text==label))
+            };
+            assert_eq!(has("Preview"), markdown);
+            assert_eq!(has("Slides"), marp);
+            assert_eq!(app.documents.active().unwrap().text, draft);
+            assert!(app.documents.active().unwrap().dirty());
+        }
+    }
 
     #[test]
     fn untrusted_wikilinks_stay_literal_without_asset_requests() {

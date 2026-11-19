@@ -5,6 +5,7 @@
 use super::*;
 
 mod action;
+mod visibility;
 pub(super) use action::Command;
 
 enum PaletteAction {
@@ -44,6 +45,7 @@ impl EditorApp {
         let mut commands: Vec<_> = Command::PALETTE
             .iter()
             .copied()
+            .filter(|command| self.command_visible(*command))
             .map(|command| {
                 (
                     PaletteAction::Command(command),

@@ -28,22 +28,30 @@ impl EditorApp {
             "Current buffer diagnostics · stale results are discarded",
             palette,
         );
-        layout::section(ui, "Code checks", palette, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if crate::keyboard::button(ui, "Check file").clicked() {
-                    self.format_active(false, false, ctx);
-                }
-                if crate::keyboard::button(ui, "Format").clicked() {
-                    self.format_active(true, false, ctx);
-                }
-                if crate::keyboard::button(ui, "Ruff safe fixes").clicked() {
-                    self.format_active(true, true, ctx);
+        let actions = [
+            (Command::Check, "Check file"),
+            (Command::Format, "Format"),
+            (Command::Fix, "Ruff safe fixes"),
+        ];
+        if actions
+            .iter()
+            .any(|(command, _)| self.command_visible(*command))
+        {
+            layout::section(ui, "Code checks", palette, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (command, label) in actions {
+                        if self.command_visible(command)
+                            && crate::keyboard::button(ui, label).clicked()
+                        {
+                            self.execute_command(command, ctx);
+                        }
+                    }
+                });
+                if !self.workbench.code_tools.tool_error.is_empty() {
+                    ui.colored_label(palette.error, &self.workbench.code_tools.tool_error);
                 }
             });
-            if !self.workbench.code_tools.tool_error.is_empty() {
-                ui.colored_label(palette.error, &self.workbench.code_tools.tool_error);
-            }
-        });
+        }
         let mut count = 0;
         let mut jump = None;
         for doc in &self.documents {

@@ -1,5 +1,92 @@
 use super::*;
 
+#[test]
+fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenabling_restores_them()
+{
+    use crate::extensions::Feature;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("visibility.json");
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut app = EditorApp::new(&cc, Startup::default());
+    ui_probe::install_at(&ctx, path.clone());
+    app.dialog_input = "Stocks: Market charts and watchlist".into();
+    for enabled in [false, true] {
+        for feature in [
+            Feature::Stocks,
+            Feature::Git,
+            Feature::Monitor,
+            Feature::Agents,
+            Feature::Debugger,
+            Feature::Languages,
+            Feature::Notebooks,
+            Feature::Marp,
+            Feature::Binary,
+        ] {
+            app.set_extension(feature.id(), enabled);
+        }
+        for _ in 0..3 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1380., 1600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.titlebar(ctx);
+                    app.activity(ctx);
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        app.menu_commands(ui, ctx, Command::PANELS);
+                        app.menu_commands(
+                            ui,
+                            ctx,
+                            &[Command::NewNotebook, Command::MarpNew, Command::Hex],
+                        );
+                        app.command_dialog(ui, ctx);
+                    });
+                },
+            );
+        }
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let names: HashSet<_> = snapshot["buttons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["name"].as_str().unwrap())
+            .collect();
+        for name in [
+            "activity:Stocks",
+            "activity:Source control",
+            "activity:Agent chat",
+            "activity:Debugger",
+            "menu-item:Stocks",
+            "menu-item:New Jupyter notebook",
+            "menu-item:New Marp presentation",
+            "command-match:Stocks: Market charts and watchlist",
+            "menu-debug",
+            "menu-code",
+        ] {
+            assert_eq!(
+                names.contains(name),
+                enabled,
+                "{name}, enabled={enabled}: {snapshot}"
+            );
+        }
+        for name in [
+            "activity:Explorer",
+            "activity:Extensions…",
+            "menu-file",
+            "menu-view",
+            "menu-item:Problems",
+        ] {
+            assert!(names.contains(name), "{name}: {snapshot}");
+        }
+    }
+}
+
 fn frame(
     app: &mut EditorApp,
     ctx: &egui::Context,

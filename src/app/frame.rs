@@ -265,7 +265,7 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.spacing_mut().button_padding = egui::vec2(0., 2.);
-                let commands = [
+                let commands: Vec<_> = [
                     Command::Explorer,
                     Command::Open,
                     Command::Connect,
@@ -280,7 +280,10 @@ impl EditorApp {
                     Command::Extensions,
                     Command::Panel(Panel::Debug),
                     Command::Panel(Panel::Stocks),
-                ];
+                ]
+                .into_iter()
+                .filter(|command| self.command_visible(*command))
+                .collect();
                 let button_height =
                     ((ui.available_height() - 68.) / commands.len() as f32 - 6.).clamp(22., 40.);
                 for command in commands {
@@ -309,6 +312,9 @@ impl EditorApp {
         button_height: f32,
         ctx: &egui::Context,
     ) {
+        if !self.command_visible(command) {
+            return;
+        }
         let palette = self.themes.active().palette;
         let definition = command.definition();
         let shortcut = self.command_hint(command);

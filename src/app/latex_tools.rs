@@ -262,16 +262,19 @@ impl EditorApp {
                     {
                         self.build_latex(false, ctx);
                     }
-                    if ui
-                        .add_enabled(
-                            !self.latex.busy,
-                            crate::keyboard::Button::new("Build & preview"),
-                        )
-                        .clicked()
+                    if self.command_visible(Command::LatexPreview)
+                        && ui
+                            .add_enabled(
+                                !self.latex.busy,
+                                crate::keyboard::Button::new("Build & preview"),
+                            )
+                            .clicked()
                     {
                         self.build_latex(true, ctx);
                     }
-                    if crate::keyboard::button(ui, "Open PDF").clicked() {
+                    if self.command_visible(Command::LatexPdf)
+                        && crate::keyboard::button(ui, "Open PDF").clicked()
+                    {
                         self.open_latex_pdf(ctx);
                     }
                     if crate::keyboard::button(ui, "Output").clicked() {
@@ -291,6 +294,9 @@ impl EditorApp {
     }
     /// Render cached compiler output and defer selected diagnostic navigation to the owning document.
     pub(super) fn latex_window(&mut self, ctx: &egui::Context) {
+        if !self.feature(crate::extensions::Feature::Latex) {
+            return;
+        }
         if let Some((path, row, column)) = self.latex.pending_jump.clone() {
             if let Some(doc) = self
                 .documents
@@ -336,11 +342,15 @@ impl EditorApp {
                             self.stop_latex();
                         }
                     }
-                    if !self.latex.busy && crate::keyboard::button(ui, "Build & preview").clicked()
+                    if self.command_visible(Command::LatexPreview)
+                        && !self.latex.busy
+                        && crate::keyboard::button(ui, "Build & preview").clicked()
                     {
                         self.build_latex(true, ctx);
                     }
-                    if crate::keyboard::button(ui, "Open PDF").clicked() {
+                    if self.command_visible(Command::LatexPdf)
+                        && crate::keyboard::button(ui, "Open PDF").clicked()
+                    {
                         self.open_latex_pdf(ctx);
                     }
                     if crate::keyboard::button(ui, "Close output").clicked() {

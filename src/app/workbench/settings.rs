@@ -4,6 +4,66 @@
 //! category touches only its own fields; sandbox changes retain validation/probing.
 use super::*;
 
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use crate::extensions::Feature;
+
+    #[test]
+    fn hidden_categories_fall_back_to_sandbox_without_discarding_drafts() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.workbench.settings_section = SettingsSection::Latex;
+        app.workbench.draft.latex.program = "keep-this-draft".into();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        ui_probe::install_at(&ctx, path.clone());
+        for enabled in [false, true] {
+            for feature in [
+                Feature::Languages,
+                Feature::Monitor,
+                Feature::Latex,
+                Feature::Marp,
+            ] {
+                app.set_extension(feature.id(), enabled);
+            }
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1380., 1000.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| app.settings_ui(ui, ctx));
+                    },
+                );
+            }
+            let snapshot: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let buttons = snapshot["buttons"].as_array().unwrap();
+            for category in ["Code tools", "Monitoring", "LaTeX", "Presentations"] {
+                assert_eq!(
+                    buttons
+                        .iter()
+                        .any(|button| button["name"] == format!("settings-category-{category}")),
+                    enabled
+                );
+            }
+            assert!(
+                buttons
+                    .iter()
+                    .any(|button| button["name"] == "settings-category-Sandbox")
+            );
+            assert_eq!(app.workbench.settings_section, SettingsSection::Sandbox);
+            assert_eq!(app.workbench.draft.latex.program, "keep-this-draft");
+        }
+    }
+}
+
 /// Transient navigation within the project settings tab, independent of saved preferences.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(in crate::app) enum SettingsSection {
@@ -26,6 +86,17 @@ impl SettingsSection {
         Self::Latex,
         Self::Presentations,
     ];
+
+    fn visible(self, app: &EditorApp) -> bool {
+        use crate::extensions::Feature;
+        match self {
+            Self::CodeTools => app.code_tools_enabled(),
+            Self::Sandbox => true,
+            Self::Monitoring => app.feature(Feature::Monitor),
+            Self::Latex => app.feature(Feature::Latex),
+            Self::Presentations => app.feature(Feature::Marp),
+        }
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -112,6 +183,10 @@ impl EditorApp {
 
     /// Keep navigation and explicit draft actions visible while the selected form scrolls.
     pub(in crate::app) fn settings_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // Preserve every draft, but move off a category whose owner was disabled.
+        if !self.workbench.settings_section.visible(self) {
+            self.workbench.settings_section = SettingsSection::Sandbox;
+        }
         let palette = self.themes.active().palette;
         ui.label(
             RichText::new("Project settings")
@@ -125,6 +200,9 @@ impl EditorApp {
         ui.add_space(8.);
         ui.horizontal_wrapped(|ui| {
             for section in SettingsSection::ALL {
+                if !section.visible(self) {
+                    continue;
+                }
                 let label = if section.changed(&self.workbench.prefs, &self.workbench.draft) {
                     format!("{} •", section.label())
                 } else {

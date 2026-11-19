@@ -14,6 +14,13 @@ Project bookmarks, Stocks, Git, the system/GPU monitor, Python environments, lan
 
 Disabling a feature preserves open documents and unsaved edits. Binary edits can still be saved while their view is disabled. Monitoring polls only while visible. Python environment discovery starts when a Python file or environment panel is used, rather than probing every opened project. New terminals still honor configured environments; disabling the Python module leaves existing terminals alone and omits its environment activation from new ones. Chat still starts a process only on Send; disabling it stops its process. Debug adapters start only on explicit launch/attach; disabling the debugger stops its session.
 
+Disabled extensions hide their activity buttons, tool tabs, menu and command-palette
+actions, dedicated toolbar controls and settings categories. Re-enabling an
+extension restores these controls and its saved preferences. Shared core controls,
+including file/save actions, terminals, project settings and the extension manager,
+remain available. Enabled tool adapters can still expose formatting/checking
+actions independently of the bundled Language tools extension.
+
 Changing extensions/settings or the workspace cancels executable adapter jobs and rejects stale edits/diagnostics. Source saves already submitted by a user can complete with their original buffer if formatting was cancelled. Disabling a bundled module stops future activation; short built-in tool requests already running may finish, but their disabled/stale results are not applied. Runtime disabling does not remove compiled dependencies or promise a smaller executable.
 
 ## Project bookmarks

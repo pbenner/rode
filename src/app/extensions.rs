@@ -66,7 +66,7 @@ impl EditorApp {
             Panel::Stocks => Some(Feature::Stocks),
             Panel::Agent => Some(Feature::Agents),
             Panel::Debug => Some(Feature::Debugger),
-            _ => None,
+            Panel::Problems | Panel::Environment | Panel::Tasks | Panel::Settings => None,
         }
     }
     /// Allow core panels and only enabled optional feature panels.
@@ -109,6 +109,7 @@ impl EditorApp {
                 for doc in &mut self.documents {
                     if let Some(view) = &mut doc.marp {
                         view.invalidate();
+                        view.showing = false;
                     }
                 }
             }
@@ -143,6 +144,9 @@ impl EditorApp {
                     && let Some(preview) = &mut doc.markdown
                 {
                     preview.invalidate();
+                    if id == Feature::Markdown.id() {
+                        preview.showing = false;
+                    }
                 }
             }
         }

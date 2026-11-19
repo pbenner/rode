@@ -396,76 +396,69 @@ impl EditorApp {
             palette,
         );
         self.mise_ui(ui, ctx, true);
-        layout::section(ui, "Run and build", palette, |ui| {
-            let language = self
-                .documents
-                .active()
-                .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
-            let language_tools = self.feature(crate::extensions::Feature::Languages);
-            if !language_tools {
-                ui.label(
-                    "Enable Language tools in Extensions to run, build or test source projects.",
-                );
-            }
-            ui.horizontal_wrapped(|ui| {
-                let run = ui.add_enabled(
-                    language_tools && language.is_some_and(|l| l.run.is_some()),
-                    crate::keyboard::Button::new("Run current file / project"),
-                );
-                ui_probe::button(ui, "task-run-current", &run);
-                if run.clicked() {
-                    self.run_active(false, ctx);
-                }
-                if ui
-                    .add_enabled(
-                        language_tools && language.is_some_and(|l| l.build.is_some()),
-                        crate::keyboard::Button::new("Build project"),
-                    )
-                    .clicked()
-                {
-                    self.run_active(true, ctx);
-                }
-            });
-            if let Some(language) = language {
-                ui.label(format!("Active language: {}", language.id));
-                let test = match language.id.as_str() {
-                    "rust" => Some(("cargo", vec!["test"])),
-                    "go" => Some(("go", vec!["test", "./..."])),
-                    "javascript" | "typescript" | "jsx" | "tsx" => Some(("npm", vec!["test"])),
-                    _ => None,
-                };
-                if let Some((program, arguments)) = test
-                    && ui
+        if self.feature(crate::extensions::Feature::Languages) {
+            layout::section(ui, "Run and build", palette, |ui| {
+                let language = self
+                    .documents
+                    .active()
+                    .and_then(|doc| crate::languages::detect(doc.path.as_deref()));
+                ui.horizontal_wrapped(|ui| {
+                    let run = ui.add_enabled(
+                        language.is_some_and(|l| l.run.is_some()),
+                        crate::keyboard::Button::new("Run current file / project"),
+                    );
+                    ui_probe::button(ui, "task-run-current", &run);
+                    if run.clicked() {
+                        self.run_active(false, ctx);
+                    }
+                    if ui
                         .add_enabled(
-                            language_tools,
-                            crate::keyboard::Button::new("Run project tests"),
+                            language.is_some_and(|l| l.build.is_some()),
+                            crate::keyboard::Button::new("Build project"),
                         )
                         .clicked()
-                {
-                    if self.documents.iter().any(Document::dirty) {
-                        self.notify("Save modified files before running tests.", true);
-                    } else {
-                        let command =
-                            std::iter::once(self.workbench.prefs.environment.program(program))
-                                .chain(arguments.into_iter().map(str::to_owned))
-                                .map(|arg| ssh::quote(&arg))
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                        self.send_project_command(
-                            format!("cd -- {} && {command}", ssh::quote(&self.root())),
-                            ctx,
-                        );
+                    {
+                        self.run_active(true, ctx);
                     }
+                });
+                if let Some(language) = language {
+                    ui.label(format!("Active language: {}", language.id));
+                    let test = match language.id.as_str() {
+                        "rust" => Some(("cargo", vec!["test"])),
+                        "go" => Some(("go", vec!["test", "./..."])),
+                        "javascript" | "typescript" | "jsx" | "tsx" => Some(("npm", vec!["test"])),
+                        _ => None,
+                    };
+                    if let Some((program, arguments)) = test
+                        && ui
+                            .add(crate::keyboard::Button::new("Run project tests"))
+                            .clicked()
+                    {
+                        if self.documents.iter().any(Document::dirty) {
+                            self.notify("Save modified files before running tests.", true);
+                        } else {
+                            let command =
+                                std::iter::once(self.workbench.prefs.environment.program(program))
+                                    .chain(arguments.into_iter().map(str::to_owned))
+                                    .map(|arg| ssh::quote(&arg))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                            self.send_project_command(
+                                format!("cd -- {} && {command}", ssh::quote(&self.root())),
+                                ctx,
+                            );
+                        }
+                    }
+                } else {
+                    layout::empty(
+                        ui,
+                        "Select a source file",
+                        "Open a source file to select its run, build and test commands.",
+                        palette,
+                    );
                 }
-            } else {
-                layout::empty(
-                    ui,
-                    "Select a source file",
-                    "Open a source file to select its run, build and test commands.",
-                    palette,
-                );
-            }
-        });
+            });
+        }
         if self.feature(crate::extensions::Feature::Python) {
             let language = self
                 .documents
