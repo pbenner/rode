@@ -7,6 +7,7 @@ RODE bundles the pure-Rust [Hayro](https://github.com/LaurenzV/hayro) renderer a
 ## Navigation and display
 
 - Choose **Single page** or **Continuous** in the PDF toolbar. Continuous mode scrolls through a vertically arranged document, including mixed portrait and landscape pages; only visible pages and nearby pages are rendered.
+- Choose **Fullscreen**, press **F11** with the PDF editor pane focused, or run **PDF: Toggle fullscreen** from the command palette. The reader fills its native window and hides the surrounding editor panels, while retaining page, zoom, and reading-mode controls. **Escape**, **F11**, or **Exit fullscreen** restores the previous layout. Each editor window has its own fullscreen state; switching away from the PDF or closing/moving its tab also exits fullscreen. No additional application or workspace connection is started.
 - Use the previous/next arrows, or enter a page number and press **Go** / Enter. Navigation remains available during rendering; newer destinations replace pending navigation.
 - With the canvas focused, **Page Up / Page Down** switch pages in single-page mode. In continuous mode they scroll by most of a viewport; **Space** also scrolls forward, and **Up / Down** scroll in smaller steps. **Home / End** reach the document's beginning/end.
 - **Fit page**, **Fit width**, **100%**, **+ / −**, and **Ctrl+Plus / Minus** control zoom. Continuous mode preserves the reading position when zoom or window size changes.

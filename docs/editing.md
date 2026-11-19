@@ -112,6 +112,7 @@ Open File, Open as hex, and Save As share the project-folder browser's directory
 | F5 / Shift+F5 | [Start/continue debugging / stop or detach](debugger.md) |
 | F6 / F9 | Pause debugger / toggle source breakpoint |
 | F10 / F11 / Shift+F11 | Step over / into / out |
+| F11 with the PDF editor pane focused / Escape in fullscreen | Toggle PDF fullscreen / exit fullscreen |
 | Ctrl+~ / Ctrl+` | Toggle tools sidebar, restoring its last selected tab |
 | Ctrl+Shift+T | Toggle / focus terminal |
 | Ctrl+Plus / Minus | Editor/terminal font size, or image zoom when the image canvas has focus |

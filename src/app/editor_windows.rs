@@ -28,6 +28,8 @@ pub(super) struct View {
     pub explorer_width: Option<f32>,
     /// Child-window zoom choice; root pane zoom belongs to the navigation owner.
     pub pane_zoom: Option<navigation::Pane>,
+    /// Temporary PDF presentation owned by this native editor, never a second document/service.
+    pub pdf_fullscreen: Option<pdf_view::Fullscreen>,
 }
 impl Default for View {
     fn default() -> Self {
@@ -45,6 +47,7 @@ impl Default for View {
             show_explorer: true,
             explorer_width: None,
             pane_zoom: None,
+            pdf_fullscreen: None,
         }
     }
 }
@@ -360,10 +363,12 @@ impl EditorApp {
             }
             app.route_input(ctx);
             app.navigation.begin_viewport_layout(viewport);
-            app.editor_explorer_activity(ctx);
-            app.explorer(ctx);
-            app.git_gutter_tick(ctx);
-            app.editor(ctx);
+            if !app.pdf_fullscreen_ui(ctx) {
+                app.editor_explorer_activity(ctx);
+                app.explorer(ctx);
+                app.git_gutter_tick(ctx);
+                app.editor(ctx);
+            }
             app.dialogs(ctx);
             app.workbench_windows(ctx);
             app.notice_ui(ctx);

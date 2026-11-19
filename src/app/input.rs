@@ -180,6 +180,7 @@ impl EditorApp {
         if !egui::Popup::is_any_open(ctx) {
             self.consume_command(Command::Sidebar, ctx);
         }
+        self.pdf_fullscreen_shortcuts(ctx);
         self.consume_command(Command::Terminal, ctx);
         self.debugger_shortcuts(ctx, terminal_focus);
         if let Some(direction) = tab_shortcut(ctx) {

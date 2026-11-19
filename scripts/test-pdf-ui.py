@@ -117,6 +117,37 @@ def run(remote=False):
                     lambda: color(window, label + "-first-page.png", "red"),
                     "First PDF page missing",
                 )
+                # Fullscreen uses the same reader, retains page/mode, and restores
+                # the ordinary editor chrome without changing sidebar preferences.
+                ui.click("pdf-fullscreen-toggle")
+                ui.control("pdf-fullscreen")
+                ui.absent("menu-file")
+                ui.absent("explorer-root")
+                ui.click("image-preview")
+                ui.control("image-preview", focused=True)
+                key("Page_Down")
+                ui.control("pdf-current-page:2")
+                ui.control("pdf-page-ready:2")
+                screenshot(window, label + "-fullscreen.png")
+                # Escape first dismisses an open palette, then exits the reader.
+                key("p", ("Control_L", "Shift_L"))
+                ui.control("command-palette-input", focused=True)
+                key("Escape")
+                ui.absent("command-palette-input")
+                ui.control("pdf-fullscreen")
+                key("Escape")
+                ui.absent("pdf-fullscreen")
+                ui.control("menu-file")
+                ui.control("pdf-current-page:2")
+                key("F11")
+                ui.control("pdf-fullscreen")
+                ui.click("pdf-fullscreen-toggle")
+                ui.absent("pdf-fullscreen")
+                ui.control("menu-file")
+                ui.click("image-preview")
+                key("Home")
+                ui.control("pdf-current-page:1")
+                ui.control("pdf-page-ready:1")
                 # Wheel/trackpad navigation also works when a whole page fits.
                 wheel(False, 4)
                 wait_for(
@@ -170,6 +201,15 @@ def run(remote=False):
                     "Continuous PDF did not show adjacent rendered pages",
                 )
                 screenshot(window, label + "-continuous.png")
+                ui.click("pdf-fullscreen-toggle")
+                ui.control("pdf-fullscreen")
+                ui.click("pdf-document")
+                key("End")
+                ui.control("pdf-current-page:2")
+                ui.control("pdf-page-ready:2")
+                key("F11")
+                ui.absent("pdf-fullscreen")
+                ui.control("pdf-current-page:2")
                 ui.click("image-fit-width")
                 ui.click("pdf-document")
                 key("End")
@@ -215,6 +255,8 @@ def run(remote=False):
                 assert color(window, label + "-failed-reload.png", "green"), (
                     "Failed reload lost previous page"
                 )
+                ui.command("PDF: Toggle fullscreen")
+                ui.control("pdf-fullscreen")
                 # A delayed-input run queues both shortcuts before the GUI
                 # resumes. The palette must belong to the restored notes tab.
                 focus_window(window)
@@ -222,6 +264,7 @@ def run(remote=False):
                     key("w", ("Control_L",))
                     key("p", ("Control_L", "Shift_L"))
                 ui.control("command-palette-input", focused=True)
+                ui.absent("pdf-fullscreen")
                 expected = "Keep this note.\n\n// keep_dirty_text"
                 ui.value("active-document", str(notes), enabled=False)
                 ui.value("source-editor-value", expected, enabled=False)

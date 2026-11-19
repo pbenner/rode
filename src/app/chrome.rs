@@ -344,7 +344,11 @@ impl EditorApp {
         if !self.editors.contains(viewport) {
             return;
         }
-        self.editor_intent_in(viewport);
+        // Fullscreen temporarily replaces this host's layout. Giving its PDF
+        // focus must preserve the pane/surface that will return on exit.
+        if !self.pdf_fullscreen_active(viewport) {
+            self.editor_intent_in(viewport);
+        }
         ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
         self.remember_editor_focus(viewport);
         self.navigation

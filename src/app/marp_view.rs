@@ -267,10 +267,10 @@ impl EditorApp {
             ui_probe::button(ui, "marp-ready", button);
         }
         view.focus = false;
-        let (reload, page) = pdf.ui(ui, id, palette, focus, keyboard, "Slide");
-        if reload {
+        let response = pdf.ui(ui, id, palette, focus, keyboard, pdf_view::Display::Slides);
+        if response.reload {
             view.attempted = None;
-        } else if let Some((page, entry)) = page {
+        } else if let Some((page, entry)) = response.page {
             self.render_pdf_page(id, pdf_view::Target::Presentation, page, entry, ctx);
         }
     }

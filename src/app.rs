@@ -751,7 +751,11 @@ impl eframe::App for EditorApp {
 
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
-        if ctx.input(|i| i.focused) && (self.workbench.detached || !self.tool_surface()) {
+        if ctx.input(|i| i.focused)
+            && (self.editor.pdf_fullscreen.is_some()
+                || self.workbench.detached
+                || !self.tool_surface())
+        {
             self.remember_editor_focus(egui::ViewportId::ROOT);
         }
         self.in_editor(self.focused_editor(), |app| {
@@ -762,13 +766,15 @@ impl eframe::App for EditorApp {
                 ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("terminal-input")));
             }
             app.navigation.begin_layout();
-            app.titlebar(ctx);
-            app.workspace_banner(ctx);
-            app.encrypted_banner(ctx);
-            app.statusbar(ctx);
-            app.activity(ctx);
-            app.explorer(ctx);
-            app.workspace_content(ctx);
+            if !app.in_editor(egui::ViewportId::ROOT, |app| app.pdf_fullscreen_ui(ctx)) {
+                app.titlebar(ctx);
+                app.workspace_banner(ctx);
+                app.encrypted_banner(ctx);
+                app.statusbar(ctx);
+                app.activity(ctx);
+                app.explorer(ctx);
+                app.workspace_content(ctx);
+            }
             app.dialogs(ctx);
             app.workbench_windows(ctx);
             app.extension_windows(ctx);

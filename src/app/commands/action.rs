@@ -57,6 +57,7 @@ pub(in crate::app) enum Command {
     MarpExport(crate::marp::Format),
     Build,
     ReloadPdf,
+    PdfFullscreen,
     PersistentTerminal,
     NewTerminal,
     Sessions,
@@ -144,6 +145,7 @@ impl Command {
         Self::Markdown,
         Self::Build,
         Self::ReloadPdf,
+        Self::PdfFullscreen,
         Self::NewTerminal,
         Self::Slurm,
         Self::PersistentTerminal,
@@ -283,6 +285,7 @@ impl Command {
             Self::Build => Definition::new("Build current file / project", Icon::Play)
                 .palette("Code: Build current file / project"),
             Self::ReloadPdf => Definition::new("PDF: Reload preview", Icon::Refresh),
+            Self::PdfFullscreen => Definition::new("PDF: Toggle fullscreen", Icon::Files),
             Self::NewTerminal => Definition::new("Terminal: New terminal", Icon::Terminal),
             Self::Slurm => Definition::new("Terminal: Allocate Slurm resources", Icon::Terminal),
             Self::PersistentTerminal => {
@@ -359,6 +362,7 @@ impl Command {
             Self::DebugStop => (egui::Modifiers::SHIFT, Key::F5),
             Self::Breakpoint => (egui::Modifiers::NONE, Key::F9),
             Self::Markdown => (egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::R),
+            Self::PdfFullscreen => (egui::Modifiers::NONE, Key::F11),
             Self::Extensions => (egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::X),
             Self::NotebookRun => (egui::Modifiers::SHIFT, Key::Enter),
             Self::DebugPause => (egui::Modifiers::NONE, Key::F6),
@@ -398,9 +402,9 @@ impl Command {
                             }
                         }
                         consumed
-                    } else if self == Self::DebugOver {
-                        // Shift+F10 belongs to contextual menus. egui's relaxed
-                        // modifier matching would otherwise consume it as F10.
+                    } else if matches!(self, Self::DebugOver | Self::PdfFullscreen) {
+                        // Context menus and debugger stepping own modified function
+                        // keys; these commands require exact modifier matching.
                         let mut consumed = false;
                         input.events.retain(|event| {
                             if matches!(event, egui::Event::Key { key, modifiers, pressed: true, .. }
@@ -443,6 +447,7 @@ impl EditorApp {
             Command::Connect => self.dialog == Dialog::Connect,
             Command::Terminal => self.terminal_any_visible(),
             Command::WordWrap => self.word_wrap,
+            Command::PdfFullscreen => self.editor.pdf_fullscreen.is_some(),
             Command::Extensions => self.dialog == Dialog::Extensions,
             _ => false,
         }
@@ -561,6 +566,7 @@ impl EditorApp {
                     self.reload_pdf(doc.id, ctx);
                 }
             }
+            Command::PdfFullscreen => self.toggle_pdf_fullscreen(ctx),
             Command::Panel(panel) => self.toggle_panel(panel, ctx),
             Command::UiScaleStep(step) => self.set_ui_scale(self.ui_scale + step, ctx),
             Command::UiScaleReset => self.set_ui_scale(1., ctx),

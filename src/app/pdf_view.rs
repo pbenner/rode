@@ -6,6 +6,23 @@
 use super::*;
 use crate::pdf;
 
+mod fullscreen;
+pub(super) use fullscreen::Fullscreen;
+
+/// Toolbar capabilities for a standalone reader or an embedded slide preview.
+#[derive(Clone, Copy)]
+pub(super) enum Display {
+    Document { fullscreen: bool },
+    Slides,
+}
+
+/// Reader intents dispatched by the application after releasing the view borrow.
+pub(super) struct Response {
+    pub reload: bool,
+    pub page: Option<(usize, PageEntry)>,
+    pub toggle_fullscreen: bool,
+}
+
 /// The PDF view that owns a page request. Capture this with the document version
 /// so a slide-preview reply cannot replace a standalone PDF page or vice versa.
 #[derive(Clone, Copy)]
@@ -312,11 +329,17 @@ impl PdfView {
         palette: theme::Palette,
         focus: bool,
         keyboard: bool,
-        kind: &str,
-    ) -> (bool, Option<(usize, PageEntry)>) {
+        display: Display,
+    ) -> Response {
         let ctx = ui.ctx().clone();
+        let kind = if matches!(display, Display::Slides) {
+            "Slide"
+        } else {
+            "Page"
+        };
         let limit = ctx.input(|i| i.max_texture_side);
         let mut page = None;
+        let mut toggle_fullscreen = false;
         let mut entry = PageEntry::Start;
         let arrow_size = egui::Vec2::splat(layout::control_height(ui));
         ui.horizontal_wrapped(|ui| {
@@ -376,6 +399,20 @@ impl PdfView {
                 }
             }
             ui.label(palette.tag(if kind == "Slide" { "MARP" } else { "PDF" }));
+            if let Display::Document { fullscreen } = display {
+                let button = ui
+                    .add(
+                        crate::keyboard::Button::new(if fullscreen {
+                            "Exit fullscreen"
+                        } else {
+                            "Fullscreen"
+                        })
+                        .shortcut_text("F11"),
+                    )
+                    .on_hover_text("Toggle PDF fullscreen · F11\nEscape exits fullscreen");
+                ui_probe::button(ui, "pdf-fullscreen-toggle", &button);
+                toggle_fullscreen = button.clicked();
+            }
             if self.image.loading {
                 ui.label(palette.tag(format!("Loading page {}…", self.wanted)));
             }
@@ -445,7 +482,11 @@ impl PdfView {
             self.navigate(page, entry, limit);
             ctx.request_repaint();
         }
-        (reload, self.next_page(limit))
+        Response {
+            reload,
+            page: self.next_page(limit),
+            toggle_fullscreen,
+        }
     }
     fn continuous_ui(
         &mut self,
@@ -722,11 +763,22 @@ impl EditorApp {
             && !self.workbench_modal()
             && !egui::Popup::is_any_open(ctx);
         let palette = self.themes.active().palette;
+        let fullscreen = self.editor.pdf_fullscreen.is_some();
         let view = self.documents.active_mut().unwrap().pdf.as_mut().unwrap();
-        let (reload, page) = view.ui(ui, id, palette, focus, keyboard, "Page");
-        if reload {
+        let response = view.ui(
+            ui,
+            id,
+            palette,
+            focus,
+            keyboard,
+            Display::Document { fullscreen },
+        );
+        if response.toggle_fullscreen {
+            self.toggle_pdf_fullscreen_in(ctx.viewport_id(), ctx);
+        }
+        if response.reload {
             self.reload_pdf(id, ctx);
-        } else if let Some((page, entry)) = page {
+        } else if let Some((page, entry)) = response.page {
             self.render_pdf_page(id, Target::Document, page, entry, ctx);
         }
         true
