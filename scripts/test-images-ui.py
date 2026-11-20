@@ -231,15 +231,39 @@ def run(remote=False):
                     "Image error notification did not close",
                 )
                 click_button(window, process, log_path, state_path, "image-fit")
-                fitted = pixels(
+                # Fit depends on wrapped tabs, banners and scrollbar space.
+                # Check visible pixels, aspect ratio and use of available space
+                # rather than assuming the original image fits at 100%.
+                layout = ui.layout()
+                scale = layout["pixels_per_point"]
+                canvas = next(b["rect"] for b in layout["buttons"] if b["name"] == "image-preview")
+                canvas = [v * scale for v in canvas]
+
+                def fits_canvas(bounds):
+                    width, height = bounds[2] - bounds[0] + 1, bounds[3] - bounds[1] + 1
+                    natural = abs(width - 240 * scale) <= 2 and abs(height - 160 * scale) <= 2
+                    fills = (
+                        min(canvas[2] - canvas[0] - width, canvas[3] - canvas[1] - height)
+                        <= 20 * scale
+                    )
+                    return (
+                        width <= 240 * scale + 2
+                        and height <= 160 * scale + 2
+                        and abs(width - height * 1.5) <= 2 * scale
+                        and bounds[0] >= canvas[0] - 2
+                        and bounds[1] >= canvas[1] - 2
+                        and bounds[2] <= canvas[2] + 2
+                        and bounds[3] <= canvas[3] + 2
+                        and (natural or fills)
+                    )
+
+                pixels(
                     window,
                     label + "-compact-fit.png",
                     (240, 160, 24),
                     size=(850, 560),
-                    check=lambda b: 238 <= b[2] - b[0] <= 241 and 158 <= b[3] - b[1] <= 161,
+                    check=fits_canvas,
                 )
-                assert 238 <= fitted[2] - fitted[0] <= 241, fitted
-                assert 158 <= fitted[3] - fitted[1] <= 161, fitted
                 before = Path(f"/proc/{process.pid}/stat").read_text().split()
                 time.sleep(1)
                 after = Path(f"/proc/{process.pid}/stat").read_text().split()

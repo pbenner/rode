@@ -133,16 +133,9 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
 
             def disabled_tab(name):
                 focus(window)
-                opened = not any(
-                    b["name"] == "workspace-tab:" + name for b in driver().layout()["buttons"]
-                )
-                if opened:
-                    activate("workspace-tools")
                 point = control("workspace-tab:" + name, enabled=False)
                 before = json.loads(state_path.read_text())["pass"]
                 click(*point)
-                if opened:
-                    key("Escape")
                 control("workspace-code-selected", after_pass=before)
 
             def composer(target):

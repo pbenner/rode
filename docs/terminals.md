@@ -23,7 +23,7 @@ RODE owns terminal sessions through a small native Rust service on the computer 
 
 Several windows may attach to the same session: their keystrokes go to the same shell, and output appears in every attached view. The terminal uses the smallest attached view's dimensions so text wraps consistently. Detaching one view leaves the others connected. Separate terminals have independent shells, working directories, and environments.
 
-New terminals receive the selected Python environment plus applied runtime paths and project variables from **Environment**. Reattachment preserves the original running environment; RODE does not send activation commands into an existing program. **Activate in current terminal** remains an explicit action.
+New terminals receive the selected Python environment plus applied runtime paths and project variables from **Settings → Environment**. Reattachment preserves the original running environment; RODE does not send activation commands into an existing program. **Activate in current terminal** remains an explicit action.
 
 SSH terminals support [X11 applications](remote.md#x11-applications) when the
 desktop and remote server provide X11 forwarding. The connection's native

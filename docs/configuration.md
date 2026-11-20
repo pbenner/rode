@@ -71,9 +71,8 @@ Interface color selection (`color_theme`) and syntax selection (`syntax_theme`) 
 
 Terminal color overrides use independent `terminal_color.<theme-id>.foreground`, `.background`, `.ansi.0`–`.ansi.15` and `.minimum_contrast` scalar keys in the same preferences file. Colors are opaque `#RRGGBB`; contrast is 1–21. The `theme` sentinel restores the corresponding theme default. Only explicit edits are submitted; resetting a theme explicitly restores its 19 fields, while idle/closing windows leave newer edits alone. Overrides load at startup and stay local to the desktop; theme switches select the matching overrides without restarting or modifying a local/SSH shell. See [terminal colors](themes.md).
 
-The application toolbar pins and host monitor preferences are desktop-wide:
-`project_toolbar_pins`, `host_monitor_interval` and `host_monitor_chart`. Each
-writes independently so unrelated edits in other windows are preserved. The
+The host monitor preferences are desktop-wide: `host_monitor_interval` and
+`host_monitor_chart`. Each writes independently so unrelated edits in other windows are preserved. The
 monitor imports legacy project settings once when first configured. Selected
 application areas, host connections and Start/Stop intent are transient; they
 are not restored as running work on startup.

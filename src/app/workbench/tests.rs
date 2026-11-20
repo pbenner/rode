@@ -170,7 +170,6 @@ fn tool_pages_fit_compact_and_detached_widths() {
                 Panel::Git,
                 Panel::Monitor,
                 Panel::Problems,
-                Panel::Environment,
                 Panel::Tasks,
                 Panel::Settings,
                 Panel::Debug,

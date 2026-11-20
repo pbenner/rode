@@ -1,6 +1,6 @@
 # mise toolchains, environments and tasks
 
-RODE includes an optional **mise** bundled extension (`rode.mise`), disabled by default. Enable it in **View → Extensions**, then open **Environment**. Install [mise](https://mise.jdx.dev/) on the project host first; an SSH project uses the remote installation. RODE searches that host's PATH and `~/.local/bin/mise`, or uses the executable override you enter.
+RODE includes an optional **mise** bundled extension (`rode.mise`), disabled by default. Enable it in **View → Extensions**, then open **Settings → Environment**. Install [mise](https://mise.jdx.dev/) on the project host first; an SSH project uses the remote installation. RODE searches that host's PATH and `~/.local/bin/mise`, or uses the executable override you enter.
 
 The host also needs Python 3 for the bounded environment launcher and metadata bridge.
 

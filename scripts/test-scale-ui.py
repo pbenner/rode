@@ -36,24 +36,36 @@ def scale_menu(ui, scale):
     ui.click(f"submenu:Interface scale: {round(scale * 100)}%")
 
 
-def header_height(filename, dpi):
-    """Measure the native menu boundary outside text, proving whole-UI scaling."""
-    pixels = subprocess.check_output(
-        [
-            "convert",
-            str(ARTIFACTS / filename),
-            "-crop",
-            f"1x250+{3 * dpi}+0",
-            "-depth",
-            "8",
-            "rgb:-",
-        ]
+def header_height(ui, filename, dpi, expected=None):
+    """Observe presented menu pixels; a layout probe can precede the first swap.
+
+    Only capture is repeated. Scale changes are sent once, and the expected
+    boundary still has to appear within a bounded deadline.
+    """
+
+    def painted():
+        screenshot(ui.window, filename, timeout=3)
+        pixels = subprocess.check_output(
+            [
+                "convert",
+                str(ARTIFACTS / filename),
+                "-crop",
+                f"1x250+{3 * dpi}+0",
+                "-depth",
+                "8",
+                "rgb:-",
+            ],
+            timeout=3,
+        )
+        first = pixels[:3]
+        for row in range(3 * dpi, len(pixels) // 3):
+            if pixels[3 * row : 3 * row + 3] != first:
+                return row if expected is None or abs(row - expected) <= 2 else None
+        return None
+
+    return ui.wait(
+        painted, f"Menu boundary was not painted at the expected scale: {filename}", timeout=10
     )
-    first = pixels[:3]
-    for row in range(3 * dpi, len(pixels) // 3):
-        if pixels[3 * row : 3 * row + 3] != first:
-            return row
-    raise AssertionError("Menu boundary not found")
 
 
 with fixture_directory(prefix="rode-scale-ui-") as directory:
@@ -82,15 +94,13 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             key("End", ("Control_L",))
             text("Unsaved text survives scaling\n")
             ui.source("Original text\nUnsaved text survives scaling\n")
-            screenshot(ui.window, f"dpi-{dpi}-original.png")
-            original = header_height(f"dpi-{dpi}-original.png", dpi)
+            original = header_height(ui, f"dpi-{dpi}-original.png", dpi)
             key("equal", ("Control_L",))
             ui.wait(
                 lambda: preferences(saved).get("font_size") == "16",
                 "Editor font did not change",
             )
-            screenshot(ui.window, f"dpi-{dpi}-font.png")
-            assert header_height(f"dpi-{dpi}-font.png", dpi) == original
+            assert header_height(ui, f"dpi-{dpi}-font.png", dpi, original) == original
             scale_menu(ui, 1)
             screenshot(ui.window, f"dpi-{dpi}-scale-presets.png")
             # A held pointer must not resize the GUI. Apply the preset only
@@ -135,8 +145,10 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
             ui.navigate("f")
             assert_pane_outline(ui, "Explorer", f"dpi-{dpi}-explorer-focus-75.png")
             ui.navigate("e")
-            screenshot(ui.window, f"dpi-{dpi}-75.png")
-            assert abs(header_height(f"dpi-{dpi}-75.png", dpi) - original * 0.75) <= 2
+            assert (
+                abs(header_height(ui, f"dpi-{dpi}-75.png", dpi, original * 0.75) - original * 0.75)
+                <= 2
+            )
             ui.click("menu-view")
             screenshot(ui.window, f"dpi-{dpi}-view-menu.png")
             key("Escape")
@@ -145,8 +157,7 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
                 lambda: preferences(saved).get("ui_scale") == "1",
                 "Ctrl+0 did not reset interface scale",
             )
-            screenshot(ui.window, f"dpi-{dpi}-reset.png")
-            assert header_height(f"dpi-{dpi}-reset.png", dpi) == original
+            assert header_height(ui, f"dpi-{dpi}-reset.png", dpi, original) == original
             ui.click("source-editor")
             key("s", ("Control_L",))
             ui.wait(
@@ -164,8 +175,13 @@ with fixture_directory(prefix="rode-scale-ui-") as directory:
                 lambda state: abs(state["pixels_per_point"] - dpi * 0.75) < 0.01,
                 "Saved scale was not rendered",
             )
-            screenshot(ui.window, f"dpi-{dpi}-restart.png")
-            assert abs(header_height(f"dpi-{dpi}-restart.png", dpi) - original * 0.75) <= 2
+            assert (
+                abs(
+                    header_height(ui, f"dpi-{dpi}-restart.png", dpi, original * 0.75)
+                    - original * 0.75
+                )
+                <= 2
+            )
             assert preferences(saved)["font_size"] == "16"
         print(
             f"Native {dpi}x DPI: font size, interface scale, reset, dirty buffer and restart passed."

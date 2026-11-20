@@ -298,14 +298,20 @@ def wait_for_button(
                         # New snapshots acknowledge the actual native motion,
                         # rather than an unrelated repaint after the XTest request.
                         # Older supplied binaries retain the pass/hover guard.
+                        pointer_matches = True
                         if "pointer" in state:
                             native = state["pointer"]
-                            if native is None or any(
+                            pointer_matches = native is not None and not any(
                                 abs(actual - (origin + logical * scale)) > 1
                                 for actual, origin, logical in zip(point, (x, y), native)
-                            ):
+                            )
+                            if not pointer_matches and state["pass"] <= pointer_pass + 1:
                                 break
-                        if not button.get("hovered", False):
+                        # A queued window-enter event can replace the first
+                        # motion after raising a child/parent. Probe another
+                        # interior point after a full frame of stale position;
+                        # still require native position and hover before clicking.
+                        if not pointer_matches or not button.get("hovered", False):
                             if candidate + 1 < len(points):
                                 candidate += 1
                                 pointer = points[candidate]
@@ -385,19 +391,13 @@ class NativeUI:
             self.window, self.process, self.log_path, self.state_path, name, **guards
         )
 
+    def child_window(self, title):
+        """Resolve one named child of this root driver, never a different process."""
+        window = wait_for_window(self.process, self.log_path, title=title)
+        state = viewport_state_path(self.process, self.log_path, self.state_path, title)
+        return NativeUI(window, self.process, self.log_path, state, self.project_root)
+
     def click(self, name, *, mouse_button=1):
-        # Project toolbar overflow is an explicit, single navigation step.
-        visible = {button["name"] for button in self.layout()["buttons"]}
-        if name not in visible and name.startswith("workspace-tab:"):
-            click_button(
-                self.window, self.process, self.log_path, self.state_path, "workspace-tools"
-            )
-        elif name not in visible and (
-            name.startswith("workspace-detach") or name == "workspace-dock"
-        ):
-            click_button(
-                self.window, self.process, self.log_path, self.state_path, "workspace-project-menu"
-            )
         click_button(
             self.window,
             self.process,
@@ -816,7 +816,7 @@ def assert_running(process, log_path):
     )
 
 
-def wait_for_window(process, log_path, timeout=20):
+def wait_for_window(process, log_path, timeout=20, *, title=None):
     """Wait for a viewable RODE window, not merely its creation in the X tree."""
     deadline = time.monotonic() + timeout
     environment = dict(os.environ, LC_ALL="C.UTF-8")
@@ -827,7 +827,8 @@ def wait_for_window(process, log_path, timeout=20):
             ["xwininfo", "-root", "-tree"], text=True, env=environment, timeout=3
         )
         states = {}
-        for window in re.findall(r'(0x[0-9a-f]+) "RODE', tree):
+        pattern = r'(0x[0-9a-f]+) "' + (re.escape(title) + '"' if title else "RODE")
+        for window in re.findall(pattern, tree):
             owner = window_pid(int(window, 16))
             if owner != process.pid:
                 states[window] = f"different process: {owner}"
@@ -849,7 +850,8 @@ def wait_for_window(process, log_path, timeout=20):
                 return int(window, 16)
         time.sleep(0.05)
     raise AssertionError(
-        f"No viewable RODE window within {timeout}s. Map states: {states}. Startup log: {log_path}"
+        f"No viewable {title or 'RODE'} window within {timeout}s. "
+        f"Map states: {states}. Startup log: {log_path}"
     )
 
 

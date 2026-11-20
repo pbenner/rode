@@ -168,59 +168,6 @@ impl EditorApp {
         self.tunnel_footer(ui, ctx, page, palette);
     }
 
-    fn saved_tunnels_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
-        if let Some(error) = &self.tunnels.saved.error {
-            ui.colored_label(palette.error, error);
-            return;
-        }
-        if self.tunnels.saved.entries.is_empty() {
-            layout::empty(
-                ui,
-                "No saved tunnel configurations",
-                "Save a setup from New tunnel or from a running tunnel to reuse it after a restart.",
-                palette,
-            );
-            return;
-        }
-        layout::subtitle(
-            ui,
-            "Saved on this computer. Load a setup for the selected host, review it, then start the tunnel.",
-            palette,
-        );
-        ui.add_space(8.);
-        let host = self.tunnel_saved_host();
-        let mut entries: Vec<_> = self.tunnels.saved.entries.clone().into_iter().collect();
-        entries.sort_by(|(_, a), (_, b)| {
-            (a.host != host, &a.spec.name).cmp(&(b.host != host, &b.spec.name))
-        });
-        for (id, saved) in entries {
-            ui.push_id(("saved-tunnel", &id), |ui| {
-                layout::card(ui, palette, |ui| {
-                    ui.add(egui::Label::new(RichText::new(&saved.spec.name).strong()).wrap());
-                    ui.add(egui::Label::new(saved.host.label()).wrap());
-                    layout::subtitle(ui, &format!("Relay {} · listener {} · {}", endpoint(&saved.spec.relay_host, saved.spec.relay_port), saved.spec.listener(), saved.spec.listen_on.label()), palette);
-                    ui.horizontal_wrapped(|ui| {
-                        let load = ui.add_enabled(saved.host == host, crate::keyboard::Button::new("Load setup"))
-                            .on_disabled_hover_text(format!("Open {} before loading this setup.", saved.host.label()));
-                        ui_probe::button(ui, &format!("tunnel-saved-load:{id}"), &load);
-                        if load.clicked() { self.load_tunnel_configuration(&id); }
-                        if crate::keyboard::button(ui, "Delete…").clicked() { self.tunnels.delete_saved = Some(id.clone()); }
-                    });
-                    if self.tunnels.delete_saved.as_deref() == Some(&id) {
-                        ui.label("Delete this saved configuration? Running tunnels keep their current settings.");
-                        ui.horizontal_wrapped(|ui| {
-                            if crate::keyboard::button(ui, RichText::new("Delete configuration").color(palette.error)).clicked() {
-                                self.delete_tunnel_configuration(&id);
-                            }
-                            if crate::keyboard::button(ui, "Cancel").clicked() { self.tunnels.delete_saved = None; }
-                        });
-                    }
-                });
-            });
-            ui.add_space(10.);
-        }
-    }
-
     fn tunnel_list_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: Palette) {
         if self.tunnels.available.is_empty() {
             layout::empty(
@@ -616,7 +563,7 @@ fn tunnel_error(ui: &mut egui::Ui, ctx: &egui::Context, error: &str, color: egui
     );
 }
 
-fn endpoint(host: &str, port: u16) -> String {
+pub(super) fn endpoint(host: &str, port: u16) -> String {
     if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")
     } else {

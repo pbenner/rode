@@ -300,6 +300,9 @@ mod tests {
                     let rect = Rect::from_min_size(pos2(20., 20.), vec2(size, size));
                     for icon in [
                         Icon::Files,
+                        Icon::Workspace,
+                        Icon::List,
+                        Icon::Grid,
                         Icon::Bookmark,
                         Icon::Search,
                         Icon::Remote,

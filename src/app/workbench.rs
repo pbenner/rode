@@ -30,7 +30,6 @@ pub(super) enum Panel {
     Monitor,
     Stocks,
     Problems,
-    Environment,
     Tasks,
     Settings,
     Agent,
@@ -51,7 +50,6 @@ impl Panel {
             Self::Monitor => "SYSTEM MONITOR",
             Self::Stocks => "STOCKS",
             Self::Problems => "PROBLEMS",
-            Self::Environment => "ENVIRONMENT",
             Self::Tasks => "TASKS",
             Self::Settings => "PROJECT SETTINGS",
             Self::Agent => "AGENT CHAT",
@@ -497,7 +495,6 @@ impl EditorApp {
                         Panel::Git => self.git_ui(ui, ctx),
                         Panel::Monitor => self.monitor_ui(ui),
                         Panel::Problems => self.problems_ui(ui, ctx),
-                        Panel::Environment => self.environment_ui(ui, ctx),
                         Panel::Tasks => self.tasks_ui(ui, ctx),
                         Panel::Settings
                         | Panel::Agent
@@ -568,7 +565,11 @@ impl EditorApp {
         if panel == Panel::Git && self.workbench.panel.is_some() {
             self.refresh_git(ctx);
         }
-        if matches!(panel, Panel::Environment | Panel::Tasks) && self.workbench.panel.is_some() {
+        if self.workbench.panel.is_some()
+            && (panel == Panel::Tasks
+                || panel == Panel::Settings
+                    && self.workbench.settings_section == SettingsSection::Environment)
+        {
             self.refresh_environment(false, ctx);
             self.refresh_runtimes(ctx);
         }

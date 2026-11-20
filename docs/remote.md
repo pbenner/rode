@@ -18,8 +18,14 @@ Click **Connect SSH**. Every connection can configure:
 - An optional **Connection name**, such as `Work cluster` or `Home server`, shown
   in the Explorer and connection picker instead of the SSH address
 
-Saved profiles appear under **Connections** in the Explorer when no folder is
-open. Click a connection to connect, or right-click it to **Edit connection…**,
+The left-rail **Connections** page shows saved SSH profiles and tunnel setups
+alongside the current host. Profile cards show the address and project folder,
+with **Connect** and **Edit…** actions. The two catalogues sit beside each other
+in wide windows and stack in smaller windows, including detached Connections windows.
+
+Saved profiles also appear under **Connections** in the Explorer when no folder is
+open, with **Saved tunnels** directly below them. Click a connection to connect,
+or right-click it (or a profile card's title) to **Edit connection…**,
 **Rename…**, **Remove saved connection**, **Move up** or **Move down**. Rename opens
 the connection form with the name selected; type a name and click **Save profile**.
 The name is the first field and does not change the SSH address. You can also drag a row
@@ -74,8 +80,18 @@ command palette. Select the connected SSH host using **Host**. The remote Explor
 offers **Download…** and **Upload here…**. The optional **File transfers** extension
 must be enabled; disabling it hides these controls and cancels its work.
 
+Right-click **File transfers** in the left rail and choose **Open in separate
+window** to keep the browsers beside your project. Return using **Reattach** in
+that window, **Reattach to main window** in the icon's context menu, or the native
+window close button. Browsed folders, checked files and queued/running copies stay
+with the same controller while the view moves.
+
 The view has independent, resizable **Local files** and **Remote files** panes,
 with vector file icons, a folder address bar, filtering and a compact activity tray.
+Use **List view** or **Icon view** beside each filter to choose compact rows or
+larger file tiles independently for the two panes. Switching views keeps checked
+files, the navigation cursor and the current folder. Tiles wrap into fewer columns
+as the window narrows; long names use two lines and expose their full path on hover.
 Type a path and press **Enter** or the arrow beside it; use **Parent folder** to
 move up, or double-click a folder. The **···** menu contains Home, Refresh, hidden
 files, selection actions and New folder. **Select this folder** copies the current
@@ -97,7 +113,11 @@ Every drop uses the same queue, filesystem policy and collision choices as the
 buttons; it always copies and leaves the source intact.
 
 Click rows to check several files/folders, or focus the list and use arrows,
-**Space** to check entries, and **Enter/Right** to enter a directory.
+**Space** to check entries, and **Enter** to enter a directory. **Right** also opens
+directories in List view; in Icon view, all four arrows move between tiles and
+**Backspace** opens the parent folder. Checked files have a prominent filled
+checkmark, an accent border and a tinted background in both views;
+the keyboard cursor has a separate outline, so clearing selection removes the fill.
 **Upload** copies selected local entries into the displayed remote directory;
 **Download** copies the other way. Entire directory trees and empty directories
 are included. Symbolic links and special files are rejected rather than followed.
@@ -277,10 +297,15 @@ is unavailable. Status is checked every 15 seconds outside the list and every
 never start a tunnel service or reconnect SSH.
 
 Choose **Save configuration** in setup or on a running tunnel's card to keep it
-across editor and service restarts. **Saved** lists the reusable setups. Choose
+across editor and service restarts. The **Connections** page and the manager's
+**Saved** tab share the same reusable setups and deletion confirmation. Choose
 **Load setup** to fill the form, review it, then choose **Start tunnel**. Loading
 does not connect or start a service. **Update configuration** saves changes,
 including a renamed setup. **Delete…** removes only the saved setup.
+
+On the welcome screen, saved tunnels appear below saved SSH connections in the
+Explorer. A shortcut opens its setup for the current host; a setup belonging to a
+different host opens the saved library so you can see which SSH host is required.
 
 Saved setups belong to their tunnel host: local setups include this computer's
 hostname; remote setups use the original SSH host/alias, login, port override and

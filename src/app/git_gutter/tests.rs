@@ -159,6 +159,79 @@ fn open_previews_survive_identical_refreshes_and_close_when_the_comparison_chang
     assert_eq!(state.peek, None);
 }
 
+#[test]
+fn change_inspector_keeps_its_patch_visible_below_wrapped_controls() {
+    for theme in crate::theme::Theme::builtins() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, theme.palette);
+        let mut documents = documents::Documents::default();
+        documents.new_file();
+        let doc = documents.active_mut().unwrap();
+        doc.fixture_content().path = Some("/project/source.rs".into());
+        let mut state = State::default();
+        state.select(
+            Key {
+                id: doc.id,
+                path: doc.path.clone().unwrap(),
+            },
+            doc.version(),
+            Instant::now(),
+        );
+        let changes = diff::compare("old\n", "current\n").unwrap();
+        let patch = changes.hunks[0].patch.clone();
+        state.rendered = Some((doc.version(), changes));
+        state.toggle_peek(doc, 0);
+        let mut output = None;
+        for _ in 0..3 {
+            output = Some(ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(524., 261.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            let height = state.peek_height(doc, ui.available_height());
+                            ui.allocate_space(egui::vec2(
+                                ui.available_width(),
+                                ui.available_height() - height,
+                            ));
+                            state.peek_ui(ui, doc, theme.palette, height);
+                        });
+                },
+            ));
+        }
+        let output = output.unwrap();
+        let (clip, bounds) = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == patch => {
+                    let ink = text
+                        .galley
+                        .rows
+                        .iter()
+                        .filter(|row| !row.glyphs.is_empty())
+                        .map(|row| row.rect())
+                        .reduce(|a, b| a.union(b))
+                        .unwrap();
+                    Some((shape.clip_rect, ink.translate(text.pos.to_vec2())))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{}: compact inspector hid the patch", theme.id));
+        assert!(
+            clip.contains_rect(bounds),
+            "{}: patch {bounds:?} clipped by {clip:?}",
+            theme.id
+        );
+    }
+}
+
 pub(super) struct Repo {
     directory: tempfile::TempDir,
 }

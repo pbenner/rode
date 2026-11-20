@@ -318,11 +318,19 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         let definition = command.definition();
         let shortcut = self.command_hint(command);
-        let hint = if shortcut.is_empty() {
+        let mut hint = if shortcut.is_empty() {
             definition.label.to_owned()
         } else {
             format!("{} · {shortcut}", definition.label)
         };
+        let area = areas::Area::for_command(command).filter(|area| area.tab().is_some());
+        if let Some(area) = area {
+            hint.push_str(if self.area_detached(area) {
+                "\nRight-click to reattach to the main window"
+            } else {
+                "\nRight-click to open in a separate window"
+            });
+        }
         let selected = self.command_selected(command, ctx);
         let response = ui.add_sized(
             [36.0, button_height],
@@ -343,16 +351,8 @@ impl EditorApp {
                 ),
             );
         }
-        if let Command::Panel(panel) = command
-            && panel.scope() != areas::Scope::Project
-        {
-            crate::keyboard::context_menu(&response, |ui| {
-                if crate::keyboard::button(ui, "Open in separate window").clicked() {
-                    self.initialize_host_tool(panel, ctx);
-                    self.detach_tab(workbench::ToolTab::Panel(panel), ctx);
-                    ui.close();
-                }
-            });
+        if let Some(area) = area {
+            crate::keyboard::context_menu(&response, |ui| self.area_window_menu(ui, area, ctx));
         }
         if response.clicked() {
             self.execute_command(command, ctx);

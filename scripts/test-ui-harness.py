@@ -264,6 +264,19 @@ class WindowReadinessTests(unittest.TestCase):
         self.assertEqual(wait_for_window(self.process, "startup.log"), 0x456)
         self.assertEqual(self.query_attributes.call_count, 1)
 
+    def test_named_child_requires_the_exact_title_and_owned_process(self):
+        self.query_tree.return_value = (
+            '0x111 "RODE · project"\n0x123 "RODE · Transfers"\n'
+            '0x456 "RODE · Transfers"\n0x789 "RODE · Transfers old"'
+        )
+        self.owner.side_effect = [41, 42]
+        self.query_attributes.return_value = self.state("IsViewable")
+        self.assertEqual(
+            wait_for_window(self.process, "startup.log", title="RODE · Transfers"), 0x456
+        )
+        self.assertEqual(self.owner.call_args_list, [call(0x123), call(0x456)])
+        self.assertEqual(self.query_attributes.call_count, 1)
+
     def test_retries_a_window_that_disappeared_during_discovery(self):
         self.query_attributes.side_effect = [self.state("", 1), self.state("IsViewable")]
         self.assertEqual(wait_for_window(self.process, "startup.log"), 0x123)
@@ -510,6 +523,19 @@ class ButtonReadinessTests(unittest.TestCase):
             click_button(0x123, self.process, "log", "state", "Install Codex")
             self.move.assert_called_once_with(190, 245)
             click.assert_called_once_with(190, 245, button=1)
+
+    def test_window_enter_cannot_leave_a_stale_pointer_blocking_native_hover_forever(self):
+        stale = {**self.state, "pointer": [0, 0]}
+        self.read.side_effect = [
+            json.dumps(stale),
+            json.dumps({**stale, "pass": 11}),
+            json.dumps({**stale, "pass": 12}),
+            json.dumps({**self.state, "pass": 13, "pointer": [35, 30]}),
+        ]
+        with patch("ui_harness.focus_window"), patch("ui_harness.click") as click:
+            click_button(0x123, self.process, "log", "state", "Install Codex")
+            self.assertEqual(self.move.call_args_list, [call(190, 245), call(152, 245)])
+            click.assert_called_once_with(152, 245, button=1)
 
     def test_fully_covered_control_exhausts_bounded_probes_without_clicking_through(self):
         self.read.return_value = json.dumps(

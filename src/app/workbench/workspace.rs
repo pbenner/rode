@@ -16,31 +16,34 @@ pub(in crate::app) enum Surface {
 pub(in crate::app) enum ToolTab {
     Terminal,
     Panel(Panel),
+    /// Non-project pages share the same native-window lifetime as tool panels.
+    Area(areas::Area),
 }
 
 impl ToolTab {
-    pub(in crate::app) const ALL: [Self; 11] = [
+    pub(in crate::app) const ALL: [Self; 12] = [
         Self::Panel(Panel::Agent),
         Self::Terminal,
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
         Self::Panel(Panel::Problems),
-        Self::Panel(Panel::Environment),
         Self::Panel(Panel::Tasks),
         Self::Panel(Panel::Settings),
         Self::Panel(Panel::Debug),
         Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Transfers),
+        Self::Area(areas::Area::Connections),
+        Self::Area(areas::Area::Settings),
     ];
 
     pub(in crate::app) fn label(self) -> &'static str {
         match self {
+            Self::Area(area) => area.command().definition().label,
             Self::Terminal => "Terminal",
             Self::Panel(Panel::Agent) => "Chat",
             Self::Panel(Panel::Git) => "Git",
             Self::Panel(Panel::Monitor) => "Monitor",
             Self::Panel(Panel::Problems) => "Problems",
-            Self::Panel(Panel::Environment) => "Environment",
             Self::Panel(Panel::Tasks) => "Tasks",
             Self::Panel(Panel::Settings) => "Settings",
             Self::Panel(Panel::Debug) => "Debugger",
@@ -53,21 +56,14 @@ impl ToolTab {
         match self {
             Self::Terminal => areas::Scope::Project,
             Self::Panel(panel) => panel.scope(),
+            Self::Area(_) => areas::Scope::Application,
         }
     }
-    pub(in crate::app) fn project_extra(self) -> bool {
-        self.scope() == areas::Scope::Project
-            && !matches!(
-                self,
-                Self::Terminal | Self::Panel(Panel::Agent | Panel::Git | Panel::Settings)
-            )
-    }
-
     /// Map a tool tab to the pane that owns its keyboard focus.
     pub(in crate::app) fn pane(self) -> navigation::Pane {
         match self {
             Self::Terminal => navigation::Pane::Terminal,
-            Self::Panel(_) => navigation::Pane::Tools,
+            Self::Panel(_) | Self::Area(_) => navigation::Pane::Tools,
         }
     }
 
@@ -171,7 +167,11 @@ impl EditorApp {
                 }
             }
             ToolTab::Panel(Panel::Git) => self.refresh_git(ctx),
-            ToolTab::Panel(Panel::Environment | Panel::Tasks) => {
+            ToolTab::Panel(panel)
+                if panel == Panel::Tasks
+                    || panel == Panel::Settings
+                        && self.workbench.settings_section == SettingsSection::Environment =>
+            {
                 self.refresh_environment(false, ctx);
                 self.refresh_runtimes(ctx);
             }
@@ -209,16 +209,21 @@ impl EditorApp {
         if self.dialog_viewport == tab.viewport() {
             self.dialog_viewport = self.tool_viewport(tab);
         }
-        if let ToolTab::Panel(panel) = tab
-            && let Some(area) = areas::Area::for_panel(panel)
-        {
+        let area = match tab {
+            ToolTab::Area(area) => Some(area),
+            ToolTab::Panel(panel) => areas::Area::for_panel(panel),
+            ToolTab::Terminal => None,
+        };
+        if let Some(area) = area {
             self.open_area(area, ctx);
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
             return;
         }
         self.workbench.surface = Surface::Editor;
         match tab {
             ToolTab::Terminal => self.focus_pane(navigation::Pane::Terminal, ctx),
             ToolTab::Panel(panel) => self.toggle_panel(panel, ctx),
+            ToolTab::Area(_) => unreachable!("Application areas reattach to the root above"),
         }
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
@@ -391,13 +396,7 @@ impl EditorApp {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 
-    fn project_tab_button(
-        &mut self,
-        tab: ToolTab,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        in_menu: bool,
-    ) {
+    fn project_tab_button(&mut self, tab: ToolTab, ui: &mut egui::Ui, ctx: &egui::Context) {
         let selected = self.selected_tool_tab() == Some(tab);
         let response = ui.add_enabled(
             !self.tab_detached(tab),
@@ -405,23 +404,6 @@ impl EditorApp {
         );
         ui_probe::button(ui, &format!("workspace-tab:{}", tab.label()), &response);
         crate::keyboard::context_menu(&response, |ui| {
-            if tab.project_extra() {
-                let pinned = self.areas.prefs.pinned.iter().any(|id| id == tab.label());
-                if ui
-                    .add_enabled(
-                        pinned || self.areas.prefs.pinned.len() < 2,
-                        crate::keyboard::Button::new(if pinned {
-                            "Unpin from toolbar"
-                        } else {
-                            "Pin to toolbar"
-                        }),
-                    )
-                    .clicked()
-                {
-                    self.areas.pin(tab, !pinned);
-                    ui.close();
-                }
-            }
             if crate::keyboard::button(ui, "Open in separate window").clicked() {
                 self.detach_tab(tab, ctx);
                 ui.close();
@@ -431,18 +413,13 @@ impl EditorApp {
             match tab {
                 ToolTab::Terminal => self.focus_pane(navigation::Pane::Terminal, ctx),
                 ToolTab::Panel(panel) => self.reveal_panel(panel, ctx),
-            }
-            if in_menu {
-                ui.close();
+                ToolTab::Area(area) => self.open_area(area, ctx),
             }
         }
     }
 
-    fn workspace_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, child: bool) {
-        if self.foreign_modal(ctx) {
-            ui.disable();
-        }
-        ui.horizontal(|ui| {
+    fn project_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, child: bool) {
+        ui.horizontal_wrapped(|ui| {
             keyboard::group(ui, "workspace-tabs", |ui| {
                 let explorer = ui.add(IconButton::toolbar(Icon::Files, "Toggle Explorer"));
                 ui_probe::button(ui, "workspace-explorer", &explorer);
@@ -459,114 +436,166 @@ impl EditorApp {
                     self.focus_editor(ctx);
                     self.editor_intent();
                 }
-                let width = ui.available_width();
-                for tab in [
-                    ToolTab::Panel(Panel::Agent),
-                    ToolTab::Terminal,
-                    ToolTab::Panel(Panel::Git),
-                ] {
-                    if matches!(tab, ToolTab::Panel(panel) if !self.panel_enabled(panel))
-                        || width < 250.
-                        || (width < 450. && tab != ToolTab::Panel(Panel::Agent))
-                    {
+                for tab in ToolTab::ALL
+                    .into_iter()
+                    .filter(|tab| tab.scope() == areas::Scope::Project)
+                {
+                    if matches!(tab, ToolTab::Panel(panel) if !self.panel_enabled(panel)) {
                         continue;
                     }
-                    self.project_tab_button(tab, ui, ctx, false);
+                    self.project_tab_button(tab, ui, ctx);
                 }
-                let room_for_pins = ui.available_width() > 350.;
-                if room_for_pins {
-                    for tab in ToolTab::ALL.into_iter().filter(|tab| tab.project_extra()) {
-                        let pinned = self.areas.prefs.pinned.iter().any(|id| id == tab.label());
-                        let active_debug =
-                            tab == ToolTab::Panel(Panel::Debug) && self.debugger_active();
-                        if (pinned || active_debug)
-                            && ui.available_width() > 300.
-                            && matches!(tab, ToolTab::Panel(panel) if self.panel_enabled(panel))
-                        {
-                            self.project_tab_button(tab, ui, ctx, false);
-                        }
-                    }
-                }
-                let tools = crate::keyboard::menu_button(ui, "Tools", |ui| {
-                    for tab in ToolTab::ALL.into_iter().filter(|tab| {
-                        tab.project_extra()
-                            || width < 250.
-                                && matches!(
-                                    tab,
-                                    ToolTab::Terminal | ToolTab::Panel(Panel::Agent | Panel::Git)
-                                )
-                            || width < 450.
-                                && matches!(tab, ToolTab::Terminal | ToolTab::Panel(Panel::Git))
-                    }) {
-                        if tab == ToolTab::Terminal
-                            || matches!(tab, ToolTab::Panel(panel) if self.panel_enabled(panel))
-                        {
-                            self.project_tab_button(tab, ui, ctx, true);
-                        }
-                    }
-                });
-                ui_probe::button(ui, "workspace-tools", &tools.response);
-                if width >= 250. {
-                    let project = ui.add(IconButton::toolbar(Icon::Settings, "Project settings"));
-                    ui_probe::button(ui, "workspace-project-settings", &project);
-                    if project.clicked() {
-                        self.reveal_panel(Panel::Settings, ctx);
-                    }
-                }
-                let icon_id = ui.next_auto_id().with("project-menu-icon");
-                let menu_button =
-                    egui::Button::new(egui::Atom::custom(icon_id, egui::Vec2::splat(16.)))
-                        .min_size(egui::Vec2::splat(24.));
-                let (options, _) = crate::keyboard::MenuButton::from_button(menu_button, "Project")
-                    .ui(ui, |ui| {
-                        if crate::keyboard::button(ui, "Project settings").clicked() {
-                            self.reveal_panel(Panel::Settings, ctx);
-                            ui.close();
-                        }
-                        if crate::keyboard::button(ui, "Open project folder…").clicked() {
-                            self.set_dialog(Dialog::Folder);
-                            ui.close();
-                        }
-                        self.project_bookmarks_ui(ui, ctx);
-                        ui.separator();
-                        if self.workbench.detached {
-                            let dock = crate::keyboard::button(ui, "Dock back");
-                            ui_probe::button(ui, "workspace-dock", &dock);
-                            if dock.clicked() {
-                                self.dock_tools(ctx);
-                                ui.close();
-                            }
-                        } else if self.tool_surface() {
-                            let detach = crate::keyboard::button(ui, "Detach");
-                            ui_probe::button(ui, "workspace-detach", &detach);
-                            if detach.clicked() {
-                                self.workbench.detached = true;
-                                self.navigation.zoom = None;
-                                ui.close();
-                            }
-                        }
-                        if let Some(tab) = self.selected_tool_tab() {
-                            let detach =
-                                crate::keyboard::button(ui, "Open tool in separate window");
-                            ui_probe::button(
-                                ui,
-                                &format!("workspace-detach-tab:{}", tab.label()),
-                                &detach,
-                            );
-                            if detach.clicked() {
-                                self.detach_tab(tab, ctx);
-                                ui.close();
-                            }
-                        }
-                    });
-                Icon::More.paint(
-                    ui.painter(),
-                    egui::Rect::from_center_size(options.rect.center(), egui::Vec2::splat(16.)),
-                    ui.visuals().weak_text_color(),
-                );
-                ui_probe::button(ui, "workspace-project-menu", &options);
             });
         });
+    }
+
+    /// Measure the actual themed button font and padding, including interface scale.
+    fn workspace_button_width(ui: &egui::Ui, label: &str) -> f32 {
+        egui::WidgetText::from(label)
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            )
+            .size()
+            .x
+            .ceil()
+            + 2. * ui.spacing().button_padding.x
+    }
+
+    fn workspace_window_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        dock: Option<&str>,
+        tab: Option<ToolTab>,
+    ) {
+        if let Some(tab) = tab {
+            let response = crate::keyboard::button(ui, "Detach tab")
+                .on_hover_text(format!("Open {} in its own window", tab.label()));
+            ui_probe::button(
+                ui,
+                &format!("workspace-detach-tab:{}", tab.label()),
+                &response,
+            );
+            if response.clicked() {
+                self.detach_tab(tab, ctx);
+            }
+        }
+        if let Some(label) = dock {
+            let response =
+                crate::keyboard::button(ui, label).on_hover_text(if self.workbench.detached {
+                    "Return project tools to the main window"
+                } else {
+                    "Move project tools into a separate window"
+                });
+            ui_probe::button(
+                ui,
+                if self.workbench.detached {
+                    "workspace-dock"
+                } else {
+                    "workspace-detach"
+                },
+                &response,
+            );
+            if response.clicked() {
+                if self.workbench.detached {
+                    self.dock_tools(ctx);
+                } else {
+                    self.workbench.detached = true;
+                    self.navigation.zoom = None;
+                    ctx.request_repaint();
+                }
+            }
+        }
+        // Keep placement actions visually separate from the selectable project tabs.
+        let (rule, separator) = ui.allocate_exact_size(
+            egui::vec2(ui.spacing().item_spacing.x, layout::control_height(ui)),
+            egui::Sense::hover(),
+        );
+        ui.painter().vline(
+            rule.center().x,
+            rule.y_range().shrink(3.),
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+        ui_probe::button(ui, "workspace-window-separator", &separator);
+    }
+
+    /// Reserve the right edge for window controls; tabs wrap inside the remaining
+    /// space. Very narrow hosts give the controls their own right-aligned row.
+    fn workspace_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, child: bool) {
+        if self.foreign_modal(ctx) {
+            ui.disable();
+        }
+        let dock = if self.workbench.detached {
+            Some("Dock back")
+        } else if self.tool_surface() {
+            Some("Detach")
+        } else {
+            None
+        };
+        let tab = self.selected_tool_tab();
+        let labels: Vec<_> = dock.into_iter().chain(tab.map(|_| "Detach tab")).collect();
+        let spacing = ui.spacing().item_spacing.x;
+        let actions_width = if labels.is_empty() {
+            0.
+        } else {
+            labels
+                .iter()
+                .map(|label| Self::workspace_button_width(ui, label))
+                .sum::<f32>()
+                + spacing * (labels.len() + 1) as f32
+        };
+        let widest_tab = ToolTab::ALL
+            .into_iter()
+            .filter(|tab| tab.scope() == areas::Scope::Project)
+            .map(|tab| Self::workspace_button_width(ui, tab.label()))
+            .fold(0., f32::max);
+        let inline = ui.available_width() >= actions_width + spacing + widest_tab;
+        let tabs_width = (ui.available_width()
+            - if inline && actions_width > 0. {
+                actions_width + spacing
+            } else {
+                0.
+            })
+        .max(0.);
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(tabs_width, ui.spacing().interact_size.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(tabs_width);
+                    self.project_tabs(ui, ctx, child);
+                },
+            );
+            if inline && actions_width > 0. {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(
+                        actions_width.min(ui.available_width()),
+                        ui.spacing().interact_size.y,
+                    ),
+                    egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+                    |ui| self.workspace_window_buttons(ui, ctx, dock, tab),
+                );
+            }
+        });
+        if !inline && actions_width > 0. {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(
+                            actions_width.min(ui.available_width()),
+                            ui.spacing().interact_size.y,
+                        ),
+                        egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+                        |ui| self.workspace_window_buttons(ui, ctx, dock, tab),
+                    );
+                },
+            );
+        }
     }
 
     fn surface_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -773,6 +802,7 @@ impl EditorApp {
         match tab {
             ToolTab::Terminal => self.terminal_content(ui, ctx),
             ToolTab::Panel(panel) => self.panel_content(panel, ui, ctx),
+            ToolTab::Area(area) => self.area_content(area, ui, ctx),
         }
     }
 }

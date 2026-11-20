@@ -41,6 +41,8 @@ struct Pane {
     query: String,
     selected: HashSet<String>,
     list: navigation::List,
+    /// Presentation stays with this pane across browsing and connection changes.
+    view: file_browser::View,
     hidden: bool,
     reveal: Option<String>,
     new_folder: String,
@@ -177,7 +179,10 @@ impl State {
             pane.browser.loading = false;
             pane.selected.clear();
         }
-        self.panes[1] = Pane::default();
+        self.panes[1] = Pane {
+            view: self.panes[1].view,
+            ..Default::default()
+        };
     }
 }
 

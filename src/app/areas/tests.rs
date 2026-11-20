@@ -50,8 +50,12 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
 }
 
 #[test]
-fn scope_registry_keeps_host_and_application_tools_out_of_project_extras() {
+fn scope_registry_keeps_host_and_application_tools_out_of_project_tabs() {
     for tab in ToolTab::ALL {
+        if let ToolTab::Area(area) = tab {
+            assert_eq!(area.tab(), Some(tab));
+            assert_eq!(tab.scope(), Scope::Application);
+        }
         if let ToolTab::Panel(panel) = tab {
             assert_eq!(
                 Area::for_panel(panel).is_some(),
@@ -60,48 +64,117 @@ fn scope_registry_keeps_host_and_application_tools_out_of_project_extras() {
             if let Some(area) = Area::for_panel(panel) {
                 assert!(Area::RAIL.contains(&area));
                 assert_eq!(area.panel(), Some(panel));
-                assert!(!tab.project_extra());
             }
         }
     }
     assert_eq!(
         ToolTab::ALL
             .into_iter()
-            .filter(|t| t.project_extra())
+            .filter(|t| t.scope() == Scope::Project)
             .count(),
-        4
+        7
     );
 }
 
 #[test]
-fn pins_are_bounded_validated_and_unrelated_window_edits_are_merged() {
-    let mut storage = Storage::default();
-    storage.0.insert(
-        "project_toolbar_pins".into(),
-        r#"["Monitor","Tasks","Tasks","Debugger","Problems"]"#.into(),
+fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view() {
+    for detached_tools in [false, true] {
+        for area in [
+            Area::Connections,
+            Area::Settings,
+            Area::Monitor,
+            Area::Transfers,
+            Area::Stocks,
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = EditorApp::new(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                Startup::default(),
+            );
+            app.new_file();
+            let document = app.documents[0].id;
+            app.documents[0].fixture_content().text = "unsaved source".into();
+            app.agents.chat.notice("retained conversation");
+            app.toggle_panel(Panel::Agent, &ctx);
+            app.workbench.detached = detached_tools;
+            app.open_area(area, &ctx);
+            app.detach_area(area, &ctx);
+            let tab = area.tab().unwrap();
+            let owner = app.tool_viewport(tab);
+            assert_ne!(owner, egui::ViewportId::ROOT);
+            assert_ne!(owner, EditorApp::tools_viewport());
+            assert_eq!(app.floating_tab(owner), Some(tab));
+            assert_eq!(app.areas.active, Area::Projects);
+
+            // Repeated requests reuse the sole window and leave the root view alone.
+            app.detach_area(area, &ctx);
+            app.open_area(area, &ctx);
+            assert_eq!(app.tool_viewport(tab), owner);
+            assert_eq!(app.areas.active, Area::Projects);
+            assert_eq!(app.workbench.surface, Surface::Tools);
+            assert_eq!(app.workbench.panel, Some(Panel::Agent));
+            app.reattach_tool_tab(tab, &ctx);
+            assert!(!app.area_detached(area));
+            assert_eq!(app.tool_viewport(tab), egui::ViewportId::ROOT);
+            assert_eq!(app.areas.active, area);
+            assert_eq!(app.workbench.panel, Some(Panel::Agent));
+            assert_eq!(app.workbench.detached, detached_tools);
+            assert_eq!(app.documents.owner(document), Some(egui::ViewportId::ROOT));
+            assert_eq!(
+                app.documents.by_id(document).unwrap().text,
+                "unsaved source"
+            );
+            assert!(app.documents.by_id(document).unwrap().dirty());
+            assert_eq!(
+                app.agents.chat.messages.back().unwrap().text,
+                "retained conversation"
+            );
+        }
+    }
+}
+
+#[test]
+fn application_dialogs_return_with_their_area_and_other_windows_keep_their_owner() {
+    let ctx = egui::Context::default();
+    let mut app = EditorApp::new(
+        &eframe::CreationContext::_new_kittest(ctx.clone()),
+        Startup::default(),
     );
-    let mut pins = State::load(Some(&storage));
-    assert_eq!(pins.prefs.pinned, ["Tasks", "Debugger"]);
-    pins.pin(ToolTab::Panel(Panel::Problems), true);
-    assert_eq!(pins.prefs.pinned, ["Tasks", "Debugger"]);
+    app.open_area(Area::Settings, &ctx);
+    app.set_dialog(Dialog::Shortcuts);
+    app.detach_area(Area::Settings, &ctx);
+    let settings = Area::Settings.tab().unwrap();
+    let owner = app.tool_viewport(settings);
+    assert_eq!(app.dialog_viewport, owner);
+    app.detach_area(Area::Connections, &ctx);
+    let connections = Area::Connections.tab().unwrap();
+    assert_ne!(app.tool_viewport(connections), owner);
+    assert_eq!(app.dialog_viewport, owner);
+    app.reattach_tool_tab(connections, &ctx);
+    assert_eq!(app.dialog_viewport, owner);
+    assert!(app.foreign_modal(&ctx));
+    app.reattach_tool_tab(settings, &ctx);
+    assert_eq!(app.dialog_viewport, egui::ViewportId::ROOT);
+    assert!(!app.foreign_modal(&ctx));
+    assert!(app.dialog == Dialog::Shortcuts);
+}
+
+#[test]
+fn monitor_updates_leave_obsolete_toolbar_preferences_untouched() {
+    let mut storage = Storage::default();
+    let legacy = r#"["Tasks","Debugger"]"#;
+    storage
+        .0
+        .insert("project_toolbar_pins".into(), legacy.into());
     let mut monitor = State::load(Some(&storage));
     monitor.monitor_configured = true;
     monitor.prefs.monitor_interval = 7;
     monitor.pending = true;
     monitor.store(&mut storage);
-    pins.pin(ToolTab::Panel(Panel::Tasks), false);
-    pins.pin(ToolTab::Panel(Panel::Problems), true);
-    pins.store(&mut storage);
-    let loaded = State::load(Some(&storage));
-    assert_eq!(loaded.prefs.monitor_interval, 7);
-    assert_eq!(loaded.prefs.pinned, ["Debugger", "Problems"]);
-    // An interval-only edit in another window must not restore an obsolete pin list.
-    monitor.prefs.monitor_interval = 9;
-    monitor.pending = true;
-    monitor.store(&mut storage);
+    assert_eq!(State::load(Some(&storage)).prefs.monitor_interval, 7);
     assert_eq!(
-        State::load(Some(&storage)).prefs.pinned,
-        ["Debugger", "Problems"]
+        storage.0.get("project_toolbar_pins").map(String::as_str),
+        Some(legacy)
     );
 }
 
@@ -194,20 +267,117 @@ fn invoking_a_remembered_project_tool_from_a_global_area_reveals_it() {
 }
 
 #[test]
-fn settings_hide_disabled_tool_pins_without_forgetting_the_saved_choice() {
-    let ctx = egui::Context::default();
-    let mut app = EditorApp::new(
-        &eframe::CreationContext::_new_kittest(ctx.clone()),
-        Startup::default(),
-    );
-    app.areas.pin(ToolTab::Panel(Panel::Debug), true);
-    app.open_area(Area::Settings, &ctx);
-    for enabled in [false, true] {
-        app.set_extension(crate::extensions::Feature::Debugger.id(), enabled);
-        let output = ctx.run(Default::default(), |ctx| app.global_content(ctx));
-        let visible = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Debugger"));
-        assert_eq!(visible, enabled);
-        assert_eq!(app.areas.prefs.pinned, ["Debugger"]);
+fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
+    for (width, font_scale) in [
+        (1250., 1.),
+        (850., 1.),
+        (480., 1.),
+        (850., 1.5),
+        (480., 1.5),
+    ] {
+        for debug in [false, true] {
+            for mode in 0..3 {
+                let ctx = egui::Context::default();
+                let mut app = EditorApp::new(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    Startup::default(),
+                );
+                ctx.style_mut(|style| {
+                    style
+                        .text_styles
+                        .get_mut(&egui::TextStyle::Button)
+                        .unwrap()
+                        .size *= font_scale;
+                    style.spacing.button_padding *= font_scale;
+                    style.spacing.interact_size.y *= font_scale;
+                });
+                app.new_file();
+                if mode > 0 {
+                    app.reveal_panel(Panel::Problems, &ctx);
+                    app.workbench.detached = mode == 2;
+                }
+                app.set_extension(crate::extensions::Feature::Debugger.id(), debug);
+                let temp = tempfile::tempdir().unwrap();
+                let path = temp.path().join("tabs.json");
+                ui_probe::install_at(&ctx, path.clone());
+                for _ in 0..3 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 700.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::SidePanel::left("fixture-explorer")
+                                .exact_width(220.)
+                                .show(ctx, |_| {});
+                            app.workspace_content(ctx);
+                        },
+                    );
+                }
+                let state: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                let buttons = state["buttons"].as_array().unwrap();
+                let has = |name: &str| buttons.iter().any(|b| b["name"] == name);
+                for name in ["Chat", "Terminal", "Git", "Problems", "Tasks", "Settings"] {
+                    assert!(
+                        has(&format!("workspace-tab:{name}")),
+                        "Missing {name} at {width}"
+                    );
+                }
+                assert_eq!(has("workspace-tab:Debugger"), debug);
+                assert!(!has("workspace-tools"));
+                assert!(!has("workspace-project-menu"));
+                assert_eq!(has("workspace-detach"), mode == 1);
+                assert_eq!(has("workspace-dock"), mode == 2);
+                assert_eq!(has("workspace-detach-tab:Problems"), mode > 0);
+                assert_eq!(
+                    has("workspace-window-separator"),
+                    mode > 0,
+                    "{width}/{font_scale}/{mode}: {state}"
+                );
+                assert!(!has("workspace-tab:Environment"));
+                let rects: Vec<egui::Rect> = buttons
+                    .iter()
+                    .filter(|b| {
+                        b["name"].as_str().is_some_and(|name| {
+                            name.starts_with("workspace-tab:")
+                                || name.starts_with("workspace-detach")
+                                || matches!(
+                                    name,
+                                    "workspace-code"
+                                        | "workspace-explorer"
+                                        | "workspace-dock"
+                                        | "workspace-window-separator"
+                                )
+                        })
+                    })
+                    .map(|b| {
+                        let r: [f32; 4] = serde_json::from_value(b["rect"].clone()).unwrap();
+                        egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
+                    })
+                    .collect();
+                if mode > 0 {
+                    let right = rects.iter().map(|rect| rect.right()).fold(0., f32::max);
+                    assert!(
+                        (right - (width - theme::PANEL_MARGIN.right as f32)).abs() < 2.,
+                        "Window controls are not right-aligned: {state}"
+                    );
+                }
+                for (i, rect) in rects.iter().enumerate() {
+                    assert!(
+                        rect.left() >= 220. && rect.right() <= width,
+                        "Tab outside available width: {state}"
+                    );
+                    assert!(
+                        rects[i + 1..].iter().all(|other| !rect.intersects(*other)),
+                        "Overlapping tabs: {state}"
+                    );
+                }
+            }
+        }
     }
 }
 

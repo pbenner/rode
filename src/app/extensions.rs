@@ -67,7 +67,7 @@ impl EditorApp {
             Panel::Stocks => Some(Feature::Stocks),
             Panel::Agent => Some(Feature::Agents),
             Panel::Debug => Some(Feature::Debugger),
-            Panel::Problems | Panel::Environment | Panel::Tasks | Panel::Settings => None,
+            Panel::Problems | Panel::Tasks | Panel::Settings => None,
         }
     }
     /// Allow core panels and only enabled optional feature panels.

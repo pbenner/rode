@@ -15,6 +15,9 @@ mod ink;
 /// Repository-native vector icon identity; glyphs render consistently without icon-font dependencies.
 pub(super) enum Icon {
     Files,
+    Workspace,
+    List,
+    Grid,
     Bookmark,
     Search,
     Remote,
@@ -78,6 +81,27 @@ impl Icon {
         };
         let c = &canvas;
         match self {
+            Self::Workspace => {
+                // A working editor with a sidebar and code, distinct from opening a folder.
+                c.rect([2.5, 3.5, 21.5, 20.5], 2.);
+                c.path(&[[3., 7.5], [21., 7.5]]);
+                c.path(&[[8., 8.], [8., 20.]]);
+                c.path(&[[12.5, 11.], [10.5, 13.5], [12.5, 16.]]);
+                c.path(&[[17., 11.], [19., 13.5], [17., 16.]]);
+            }
+            Self::List => {
+                for y in [6., 12., 18.] {
+                    c.dot([4., y]);
+                    c.path(&[[9., y], [21., y]]);
+                }
+            }
+            Self::Grid => {
+                for x in [3., 14.] {
+                    for y in [3., 14.] {
+                        c.rect([x, y, x + 7., y + 7.], 1.);
+                    }
+                }
+            }
             Self::Files if brush => {
                 // A folded folio: retain the familiar document silhouette.
                 c.path(&[[6., 5.], [6., 2.5], [20., 2.5], [20., 18.]]);

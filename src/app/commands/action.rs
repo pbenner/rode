@@ -40,6 +40,7 @@ pub(in crate::app) enum Command {
     UiScaleReset,
     TerminalColors,
     Python,
+    Environment,
     Format,
     Check,
     Fix,
@@ -140,7 +141,7 @@ impl Command {
         Self::Panel(Panel::Transfers),
         Self::Panel(Panel::Problems),
         Self::Python,
-        Self::Panel(Panel::Environment),
+        Self::Environment,
         Self::Panel(Panel::Tasks),
         Self::Panel(Panel::Settings),
         Self::Format,
@@ -198,7 +199,7 @@ impl Command {
         Self::Panel(Panel::Monitor),
         Self::Panel(Panel::Stocks),
         Self::Panel(Panel::Problems),
-        Self::Panel(Panel::Environment),
+        Self::Environment,
         Self::Panel(Panel::Tasks),
         Self::Panel(Panel::Settings),
         Self::Panel(Panel::Agent),
@@ -208,7 +209,7 @@ impl Command {
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
             Self::Projects => {
-                Definition::new("Projects", Icon::Folder).palette("Application: Projects")
+                Definition::new("Projects", Icon::Workspace).palette("Application: Projects")
             }
             Self::Connections => {
                 Definition::new("Connections", Icon::Remote).palette("Connections: Manage hosts")
@@ -278,7 +279,7 @@ impl Command {
                 Definition::new("Problems", Icon::Problems).palette("Code: Problems")
             }
             Self::Python => Definition::new("Python: Select environment", Icon::Environment),
-            Self::Panel(Panel::Environment) => Definition::new("Environment", Icon::Environment)
+            Self::Environment => Definition::new("Environment", Icon::Environment)
                 .palette("Environment: Runtimes and project variables"),
             Self::Panel(Panel::Tasks) => {
                 Definition::new("Tasks", Icon::Play).palette("Tasks: Run, build and test")
@@ -476,8 +477,15 @@ impl EditorApp {
     pub(in crate::app) fn command_selected(&self, command: Command, ctx: &egui::Context) -> bool {
         match command {
             Command::Projects => self.areas.active == areas::Area::Projects,
-            Command::Connections => self.areas.active == areas::Area::Connections,
-            Command::AppSettings => self.areas.active == areas::Area::Settings,
+            Command::Connections => {
+                self.areas.active == areas::Area::Connections
+                    || self.area_detached(areas::Area::Connections)
+            }
+            Command::AppSettings => {
+                self.areas.active == areas::Area::Settings
+                    || self.area_detached(areas::Area::Settings)
+            }
+            Command::Environment => self.environment_visible(),
             Command::Panel(panel) => self.panel_visible(panel),
             Command::Explorer => {
                 self.explorer_visible(ctx.viewport_id())
@@ -564,6 +572,9 @@ impl EditorApp {
             }
             Command::Shortcuts => self.set_dialog(Dialog::Shortcuts),
             Command::Python => self.open_python_environment(ctx),
+            Command::Environment => {
+                self.reveal_settings(workbench::SettingsSection::Environment, ctx)
+            }
             Command::Format => self.format_active(true, false, ctx),
             Command::Check => self.format_active(false, false, ctx),
             Command::Fix => self.format_active(true, true, ctx),

@@ -170,7 +170,8 @@ def run(remote=False, scenario="all"):
                     ui.control("source-editor-saved")
                     assert source.read_text() == fixed
                     command("Python: Select environment")
-                    ui.control("workbench-panel:ENVIRONMENT")
+                    ui.control("settings-category-Environment")
+                    ui.control("environment-variables")
                     screenshot(window, label + "-python.png")
                     # A command uses the actual selected virtual environment in the terminal.
                     command("Code: Run current file / project")
@@ -248,6 +249,7 @@ def run(remote=False, scenario="all"):
                     )
                 if scenario in ("all", "settings"):
                     command("Project: Settings and sandbox access")
+                    ui.click("settings-category-Code tools")
                     screenshot(window, label + "-settings.png")
 
                     def settings_click(name):

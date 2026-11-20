@@ -145,13 +145,41 @@ impl EditorApp {
                     browse = Some(pane.browser.location.clone());
                 }
             });
-            let query = ui.add(crate::keyboard::named(
-                "Filter files",
-                egui::TextEdit::singleline(&mut pane.query)
-                    .hint_text("Filter files…")
-                    .desired_width(f32::INFINITY),
-            ));
+            let query = ui
+                .horizontal(|ui| {
+                    let controls = 2. * 24. + 2. * ui.spacing().item_spacing.x;
+                    let query = ui.add_sized(
+                        [
+                            (ui.available_width() - controls).max(20.),
+                            layout::control_height(ui),
+                        ],
+                        crate::keyboard::named(
+                            "Filter files",
+                            egui::TextEdit::singleline(&mut pane.query)
+                                .hint_text("Filter files…")
+                                .desired_width(f32::INFINITY),
+                        ),
+                    );
+                    for (view, icon, label, name) in [
+                        (file_browser::View::List, Icon::List, "List view", "list"),
+                        (file_browser::View::Icons, Icon::Grid, "Icon view", "icons"),
+                    ] {
+                        let button =
+                            ui.add(IconButton::toolbar(icon, label).selected(pane.view == view));
+                        ui_probe::button(ui, &format!("transfer-view-{name}:{side}"), &button);
+                        if button.clicked() {
+                            pane.view = view;
+                        }
+                    }
+                    query
+                })
+                .inner;
             ui_probe::button(ui, &format!("transfer-filter:{side}"), &query);
+            ui_probe::button(
+                ui,
+                &format!("transfer-view:{side}:{}", pane.view.id()),
+                &query,
+            );
             ui_probe::value(
                 ui,
                 &format!("transfer-filter:{side}-value"),
@@ -266,6 +294,7 @@ impl EditorApp {
                     height: Some(list_rect.height().max(1.)),
                     checked: Some(&pane.selected),
                     icons: true,
+                    view: pane.view,
                     on_row: Some(&mut on_row),
                 },
             );

@@ -102,8 +102,37 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
 
         browse(0, local)
         ui.value("transfer-directory:1", str(remote))
+        selected = "file-picker-checked:" + hashlib.sha256(str(source).encode()).hexdigest()
+        select(source)
+        ui.control(selected)
+        screenshot(ui.window, "selection-list.png")
+        key("space")
+        ui.absent(selected)
+        for side in (0, 1):
+            ui.click(f"transfer-view-icons:{side}")
+            ui.control(f"transfer-view:{side}:icons")
+        select(source)
+        ui.control(selected)
+        screenshot(ui.window, "selection-icons.png")
+        # Move the live browser to its sole native host, then return via its header.
+        root_ui = ui
+        ui.click("activity:File transfers", mouse_button=3)
+        ui.click("area-detach")
+        ui = root_ui.child_window("RODE · Transfers")
+        ui.control(selected)
+        ui.control("transfer-view:0:icons")
+        ui.value("transfer-directory:0", str(local))
+        ui.value("transfer-directory:1", str(remote))
+        screenshot(ui.window, "detached-transfers.png")
+        select(source)
+        ui.absent(selected)
+        screenshot(ui.window, "icon-views.png")
         drag(source, 1)
         copied(remote / source.name, expected)
+        ui.click("workspace-reattach:Transfers")
+        ui = root_ui
+        ui.control("transfer-view:0:icons")
+        ui.value("transfer-directory:0", str(local))
         ui.click("activity:Projects")
         ui.control(f"explorer-row:{remote / source.name}")
         ui.click("activity:File transfers")
@@ -116,6 +145,10 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
         drag(remote / source.name, 0)
         copied(downloads / source.name, expected)
         unchanged_project()
+
+        for side in (0, 1):
+            ui.click(f"transfer-view-list:{side}")
+            ui.control(f"transfer-view:{side}:list")
 
         # Folder copies preserve nesting and empty directories.
         browse(0, local)

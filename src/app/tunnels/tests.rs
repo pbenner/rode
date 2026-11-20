@@ -766,6 +766,189 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
 }
 
 #[test]
+fn connections_catalogues_and_welcome_shortcuts_share_host_bound_setup_without_starting_work() {
+    use crate::ssh::tunnels::{Host as SavedHost, Saved};
+    for (width, remote) in [(1100., false), (620., false), (900., true)] {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::new(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            Startup::default(),
+        );
+        if remote {
+            app.workspace
+                .set_fixture(Some(crate::app::tests::remote_workspace()));
+        }
+        app.new_file();
+        app.documents[0].fixture_content().text = "unsaved source".into();
+        app.connection_profiles.profiles = vec![Profile {
+            name: "Research cluster".into(),
+            host: "research.example.invalid".into(),
+            root: "/work/research".into(),
+            ..Default::default()
+        }];
+        for (id, host) in [
+            ("current", app.tunnel_saved_host()),
+            (
+                "foreign",
+                SavedHost::Ssh {
+                    host: "other.invalid".into(),
+                    user: "other".into(),
+                    port: "".into(),
+                    config: "".into(),
+                },
+            ),
+        ] {
+            app.tunnels.saved.entries.insert(
+                id.into(),
+                Saved {
+                    host,
+                    spec: saved_spec(),
+                    relay_jump: "relay-alias".into(),
+                },
+            );
+        }
+        app.areas.active = areas::Area::Connections;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("library.json");
+        ui_probe::install_at(&ctx, path.clone());
+        let frame = |app: &mut EditorApp, events, sidebar| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 900.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    if sidebar {
+                        app.explorer(ctx);
+                    } else {
+                        app.global_content(ctx);
+                    }
+                },
+            )
+        };
+        for _ in 0..3 {
+            frame(&mut app, vec![], false);
+        }
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let buttons = state["buttons"].as_array().unwrap();
+        let button = |name: &str| {
+            buttons
+                .iter()
+                .find(|button| button["name"] == name)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(button("tunnel-saved-load:current")["enabled"], true);
+        assert_eq!(button("tunnel-saved-load:foreign")["enabled"], false);
+        let connection = button("saved-connection-0");
+        let load = button("tunnel-saved-load:current");
+        if width >= 900. {
+            assert!(
+                connection["rect"][2].as_f64().unwrap() < load["rect"][0].as_f64().unwrap(),
+                "{state}"
+            );
+        } else {
+            assert!(
+                connection["rect"][3].as_f64().unwrap() < load["rect"][1].as_f64().unwrap(),
+                "{state}"
+            );
+        }
+        for button in buttons {
+            assert!(
+                button["rect"][0].as_f64().unwrap() >= 0.
+                    && button["rect"][2].as_f64().unwrap() <= width as f64,
+                "{state}"
+            );
+        }
+        let cards: Vec<_> = buttons
+            .iter()
+            .filter(|button| {
+                button["name"].as_str().is_some_and(|name| {
+                    name.starts_with("saved-connection-card:")
+                        || name.starts_with("tunnel-saved-card:")
+                })
+            })
+            .collect();
+        let left = cards
+            .iter()
+            .map(|card| card["rect"][0].as_f64().unwrap())
+            .fold(f64::INFINITY, f64::min);
+        assert_eq!(cards.len(), 3, "{state}");
+        let right = cards
+            .iter()
+            .map(|card| card["rect"][2].as_f64().unwrap())
+            .fold(0., f64::max);
+        assert!(
+            right - left <= layout::PAGE_WIDTH as f64 - 24. + 1.,
+            "Catalogue cards overflow the reading width: {state}"
+        );
+        let activate = |app: &mut EditorApp, button: &serde_json::Value, sidebar| {
+            let rect: [f32; 4] = serde_json::from_value(button["rect"].clone()).unwrap();
+            let point = egui::pos2((rect[0] + rect[2]) / 2., (rect[1] + rect[3]) / 2.);
+            for pressed in [true, false] {
+                frame(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    sidebar,
+                );
+            }
+        };
+        activate(&mut app, &load, false);
+        assert!(app.dialog == Dialog::Tunnels);
+        assert_eq!(app.tunnels.page, Page::New);
+        assert_eq!(app.tunnels.spec, saved_spec());
+        assert!(app.tunnels.pending.is_none() && app.tunnels.available.is_empty());
+        assert!(app.ssh_master.is_none());
+        assert_eq!(app.documents[0].text, "unsaved source");
+        assert!(app.documents[0].dirty());
+        if !remote {
+            app.dialog = Dialog::None;
+            app.areas.active = areas::Area::Projects;
+            for _ in 0..3 {
+                frame(&mut app, vec![], true);
+            }
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let buttons = state["buttons"].as_array().unwrap();
+            assert!(
+                buttons
+                    .iter()
+                    .any(|button| button["name"] == "saved-connection-0")
+            );
+            let foreign = buttons
+                .iter()
+                .find(|button| button["name"] == "saved-tunnel-shortcut:foreign")
+                .unwrap();
+            activate(&mut app, foreign, true);
+            assert!(app.dialog == Dialog::Tunnels);
+            assert_eq!(app.tunnels.page, Page::Saved);
+            assert_eq!(app.tunnels.spec, saved_spec());
+            assert!(app.tunnels.pending.is_none() && app.ssh_master.is_none());
+        }
+        if let Some(remote) = app
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.remote.as_ref())
+        {
+            remote.cleanup();
+        }
+    }
+}
+
+#[test]
 fn saving_a_running_tunnel_keeps_only_its_settings_and_never_trusts_an_observed_key() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());

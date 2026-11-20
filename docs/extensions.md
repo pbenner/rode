@@ -1,6 +1,6 @@
 # Extensions
 
-The optional [mise extension](mise.md) (`rode.mise`) adds project toolchain/environment integration and task discovery. It is bundled and disabled by default; enable it in this manager and opt in per project from Environment.
+The optional [mise extension](mise.md) (`rode.mise`) adds project toolchain/environment integration and task discovery. It is bundled and disabled by default; enable it in this manager and opt in per project from **Settings → Environment**.
 
 Click the **Extensions** icon (four blocks) in the left activity bar, press **Ctrl+Shift+X**, or choose **View → Extensions** to open the extension manager. It is also available as **Extensions: Manage installed extensions** in the command palette, and works without an open project.
 

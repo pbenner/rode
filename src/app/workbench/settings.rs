@@ -69,17 +69,19 @@ mod visibility_tests {
 pub(in crate::app) enum SettingsSection {
     #[default]
     CodeTools,
+    Environment,
     Sandbox,
     Latex,
     Presentations,
 }
 
 /// Draft and navigation retained only when reapplying policy to the same project and host.
-pub(in crate::app) struct SettingsDraft(Preferences, SettingsSection);
+pub(in crate::app) struct SettingsDraft(Preferences, SettingsSection, Option<environment::Draft>);
 
 impl SettingsSection {
-    pub(super) const ALL: [Self; 4] = [
+    pub(super) const ALL: [Self; 5] = [
         Self::CodeTools,
+        Self::Environment,
         Self::Sandbox,
         Self::Latex,
         Self::Presentations,
@@ -89,7 +91,7 @@ impl SettingsSection {
         use crate::extensions::Feature;
         match self {
             Self::CodeTools => app.code_tools_enabled(),
-            Self::Sandbox => true,
+            Self::Sandbox | Self::Environment => true,
             Self::Latex => app.feature(Feature::Latex),
             Self::Presentations => app.feature(Feature::Marp),
         }
@@ -98,6 +100,7 @@ impl SettingsSection {
     fn label(self) -> &'static str {
         match self {
             Self::CodeTools => "Code tools",
+            Self::Environment => "Environment",
             Self::Sandbox => "Sandbox",
             Self::Latex => "LaTeX",
             Self::Presentations => "Presentations",
@@ -107,6 +110,9 @@ impl SettingsSection {
     fn description(self) -> &'static str {
         match self {
             Self::CodeTools => "Automatic checks, formatting and the Ruff executable.",
+            Self::Environment => {
+                "Runtime paths, project variables and Python environments for new processes."
+            }
             Self::Sandbox => "Project isolation, network access and shared paths.",
             Self::Latex => "PDF build commands, source paths and LaTeX tools.",
             Self::Presentations => "Marp rendering, browser selection and slide assets.",
@@ -121,6 +127,7 @@ impl SettingsSection {
                     || saved.check_on_save != draft.check_on_save
                     || saved.live_checks != draft.live_checks
             }
+            Self::Environment => saved.environment != draft.environment,
             Self::Sandbox => saved.sandbox != draft.sandbox,
             Self::Latex => saved.latex != draft.latex,
             Self::Presentations => saved.marp != draft.marp,
@@ -136,6 +143,7 @@ impl SettingsSection {
                 target.check_on_save = source.check_on_save;
                 target.live_checks = source.live_checks;
             }
+            Self::Environment => target.environment = source.environment.clone(),
             Self::Sandbox => target.sandbox = source.sandbox.clone(),
             Self::Latex => target.latex = source.latex.clone(),
             Self::Presentations => target.marp = source.marp.clone(),
@@ -154,6 +162,7 @@ impl EditorApp {
             SettingsDraft(
                 self.workbench.draft.clone(),
                 self.workbench.settings_section,
+                self.workbench.environment.draft_for(&self.workbench.key),
             )
         })
     }
@@ -162,6 +171,9 @@ impl EditorApp {
     pub(in crate::app) fn restore_settings_draft(&mut self, draft: SettingsDraft) {
         self.workbench.draft = draft.0;
         self.workbench.settings_section = draft.1;
+        if let Some(environment) = draft.2 {
+            self.workbench.environment.restore_draft(environment);
+        }
     }
 
     /// Open a specific category without toggling an already visible settings tab closed.
@@ -170,8 +182,16 @@ impl EditorApp {
         section: SettingsSection,
         ctx: &egui::Context,
     ) {
-        self.workbench.settings_section = section;
+        self.select_settings_section(section, ctx);
         self.reveal_panel(Panel::Settings, ctx);
+    }
+
+    fn select_settings_section(&mut self, section: SettingsSection, ctx: &egui::Context) {
+        self.workbench.settings_section = section;
+        if section == SettingsSection::Environment {
+            self.refresh_runtimes(ctx);
+            self.refresh_environment(false, ctx);
+        }
     }
 
     /// Keep navigation and explicit draft actions visible while the selected form scrolls.
@@ -180,6 +200,7 @@ impl EditorApp {
         if !self.workbench.settings_section.visible(self) {
             self.workbench.settings_section = SettingsSection::Sandbox;
         }
+        self.prepare_environment_draft();
         let palette = self.themes.active().palette;
         ui.label(
             RichText::new("Project settings")
@@ -196,7 +217,12 @@ impl EditorApp {
                 if !section.visible(self) {
                     continue;
                 }
-                let label = if section.changed(&self.workbench.prefs, &self.workbench.draft) {
+                let changed = if section == SettingsSection::Environment {
+                    self.environment_unapplied()
+                } else {
+                    section.changed(&self.workbench.prefs, &self.workbench.draft)
+                };
+                let label = if changed {
                     format!("{} •", section.label())
                 } else {
                     section.label().into()
@@ -209,47 +235,52 @@ impl EditorApp {
                 .on_hover_text(section.description());
                 ui_probe::button(ui, &format!("settings-category-{}", section.label()), &tab);
                 if tab.clicked() {
-                    self.workbench.settings_section = section;
+                    self.select_settings_section(section, ctx);
                 }
             }
         });
         ui.add_space(8.);
         let section = self.workbench.settings_section;
         let changed = section.changed(&self.workbench.prefs, &self.workbench.draft);
-        ui.horizontal_wrapped(|ui| {
-            let sandbox = section == SettingsSection::Sandbox;
-            let enabled = if sandbox {
-                !self.workspace.preparing() && !self.explorer_state.busy
-            } else {
-                changed
-            };
-            let save = ui.add_enabled(
-                enabled,
-                crate::keyboard::Button::new(if sandbox {
-                    "Apply sandbox settings"
+        if section == SettingsSection::Environment {
+            self.environment_actions_ui(ui, ctx);
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                let sandbox = section == SettingsSection::Sandbox;
+                let enabled = if sandbox {
+                    !self.workspace.preparing() && !self.explorer_state.busy
                 } else {
-                    "Save changes"
-                }),
-            );
-            ui_probe::button(ui, "settings-save", &save);
-            if save.clicked() {
-                self.save_settings_section(section, ctx);
-            }
-            let discard = ui.add_enabled(changed, crate::keyboard::Button::new("Discard changes"));
-            ui_probe::button(ui, "settings-discard", &discard);
-            if discard.clicked() {
-                section.copy(&self.workbench.prefs, &mut self.workbench.draft);
-            }
-            layout::subtitle(
-                ui,
-                if changed {
-                    "Unsaved changes •"
-                } else {
-                    "No unsaved changes"
-                },
-                palette,
-            );
-        });
+                    changed
+                };
+                let save = ui.add_enabled(
+                    enabled,
+                    crate::keyboard::Button::new(if sandbox {
+                        "Apply sandbox settings"
+                    } else {
+                        "Save changes"
+                    }),
+                );
+                ui_probe::button(ui, "settings-save", &save);
+                if save.clicked() {
+                    self.save_settings_section(section, ctx);
+                }
+                let discard =
+                    ui.add_enabled(changed, crate::keyboard::Button::new("Discard changes"));
+                ui_probe::button(ui, "settings-discard", &discard);
+                if discard.clicked() {
+                    section.copy(&self.workbench.prefs, &mut self.workbench.draft);
+                }
+                layout::subtitle(
+                    ui,
+                    if changed {
+                        "Unsaved changes •"
+                    } else {
+                        "No unsaved changes"
+                    },
+                    palette,
+                );
+            });
+        }
         ui.separator();
         // ScrollArea IDs scope scrolling, not the child widgets' edit/undo state.
         ui.push_id(section, |ui| {
@@ -263,6 +294,7 @@ impl EditorApp {
                     }
                     match section {
                         SettingsSection::CodeTools => self.code_settings_ui(ui),
+                        SettingsSection::Environment => self.environment_ui(ui, ctx),
                         SettingsSection::Sandbox => self.sandbox_settings_ui(ui),
                         SettingsSection::Latex => self.latex_settings_ui(ui),
                         SettingsSection::Presentations => self.marp_settings_ui(ui),
@@ -273,6 +305,10 @@ impl EditorApp {
 
     /// Validate before applying only this category, retaining its existing lifecycle boundaries.
     fn save_settings_section(&mut self, section: SettingsSection, ctx: &egui::Context) {
+        if section == SettingsSection::Environment {
+            self.apply_environment(ctx);
+            return;
+        }
         let validation = match section {
             SettingsSection::Latex => self.workbench.draft.latex.validate(),
             SettingsSection::Presentations => self.workbench.draft.marp.validate(),
@@ -290,6 +326,7 @@ impl EditorApp {
         section.copy(&self.workbench.draft, &mut self.workbench.prefs);
         self.workbench.save_preferences();
         match section {
+            SettingsSection::Environment => unreachable!("Environment uses its independent draft"),
             SettingsSection::CodeTools => {
                 self.workbench.invalidate_tools();
                 self.workbench.code_tools.tool_error.clear();
@@ -559,10 +596,10 @@ impl EditorApp {
         self.workbench.draft = prefs;
         self.workbench.save_preferences();
         self.sync_project_environment();
-        if self.panel_visible(Panel::Environment) {
+        if self.environment_visible() {
             self.refresh_runtimes(ctx);
         }
-        if self.panel_visible(Panel::Environment)
+        if self.environment_visible()
             || self.documents.iter().any(|d| {
                 crate::languages::detect(d.path.as_deref()).is_some_and(|l| l.id == "python")
             })

@@ -10,6 +10,7 @@ use rode_session::{
     tunnels::{Info, ListenOn, Spec, Status},
 };
 
+mod library;
 mod saved;
 mod ui;
 

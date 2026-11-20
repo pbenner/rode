@@ -68,7 +68,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers, change peeks and editor-only hunk reverts; document/version/baseline admission rejects stale changes |
 | `src/app/diff_view.rs` | Shared bounded, selectable, read-only unified diff renderer for the Git panel and source change peeks |
 | `src/app/frame.rs` | Application menus, connection banners, global navigation rail and pane entry views; routes through the existing lifecycle guards |
-| `src/app/areas.rs`, `src/app/host_tools.rs` | Application/project presentation scopes, independent toolbar/monitor preferences, captured host selection and project-independent telemetry/access-preparation completions |
+| `src/app/areas.rs`, `src/app/host_tools.rs` | Application/project presentation scopes, independent monitor preferences, captured host selection and project-independent telemetry/access-preparation completions |
 | `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
 | `src/app/execution.rs` | Shared captured host/project target, generation-bound reply endpoint and mount-work guard for file, tool and session workers; separate explicit host-mode Git preparation |
 | `src/app/agents/controller.rs`, `src/app/agents/view.rs` | Agent-owned lifecycle, queue and history admission; chat rendering receives immutable application facts and returns explicit cross-domain actions |
@@ -208,8 +208,8 @@ Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, follow
 The Rust/egui application keeps the editor independent of an embedded browser application runtime. Cached layouts, virtualized rows and explicit worker jobs keep slow I/O and tool execution out of ordinary input/rendering. On-demand activation limits idle work, at the cost of waiting for a tool or preview's first result. This choice does not by itself establish a performance claim: measure relevant release workloads when changing those boundaries. Rationale lives in `src/lib.rs` and `src/app.rs`.
 
 `areas::Area` selects the main window's application surface without changing the
-project's selected `workbench::Surface` or controllers. The project toolbar and
-its Tools overflow use the same `ToolTab` registry and scope classification;
+project's selected `workbench::Surface` or controllers. The wrapping project tab bar uses the `ToolTab` registry and scope classification;
+Environment is a category of Project settings, with its own retained draft;
 secondary editor/tool windows keep their existing owners. Application navigation
 is presentation state, not execution authority.
 
@@ -518,6 +518,14 @@ before returning. This context is confined to UI layout and native input;
 operation handlers address documents and presentation state by stable document
 and viewport IDs. Tool windows never render an additional editor.
 
+Application areas use the same native tool-window registry. `Area::tab` maps host
+panels to their existing `ToolTab::Panel` identity and Connections/App settings to
+`ToolTab::Area`; no second controller is allocated. The rail shares detach,
+raise and reattach actions with the native headers. Raising a floating area leaves
+the root selection intact; reattaching (including native close) selects its root
+page and migrates dialogs back to that owner. Projects keeps its existing editor
+and tool hosts rather than creating another workspace owner.
+
 Secondary editors render the same Explorer sidebar and activity button as the
 main window. Directory listings, expansion and file operations share the project
 controller; visibility, panel sizing, scroll position, pane focus IDs and zoom
@@ -723,6 +731,14 @@ service admits at most 32 pending control handshakes before allocating blocking
 workers; established attachments release those slots and retain their own limits.
 
 ### Daemon-owned reverse SSH tunnels
+
+`app/connections/view.rs` presents the current host, saved SSH profiles and saved
+tunnels as responsive catalogues. SSH card and compact sidebar actions share
+`app/saved_connections.rs` intents and its existing guarded connection/storage
+paths. `app/tunnels/library.rs` renders the same saved tunnel library on that page,
+in the manager and in compact welcome shortcuts; loading retains the host identity
+check and only fills the existing draft. Presentation does not start a service or
+create another connection/controller when the Connections area moves to a window.
 
 `crates/rode-session/src/tunnels.rs` owns bounded native SSH reverse forwards;
 `src/app/tunnels.rs` manages them over the existing authenticated host-admin path.

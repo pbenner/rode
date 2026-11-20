@@ -18,7 +18,32 @@ pub(super) struct State {
     pub(super) mise_error: String,
 }
 
+/// Editable fields retained during a same-project policy refresh. Probe results
+/// and in-flight flags belong to the old execution context and are never copied.
+pub(super) struct Draft {
+    key: String,
+    settings: Settings,
+    variables: String,
+    open_python: bool,
+}
+
 impl State {
+    pub(super) fn draft_for(&self, key: &str) -> Option<Draft> {
+        (self.key.as_deref() == Some(key)).then(|| Draft {
+            key: key.into(),
+            settings: self.draft.clone(),
+            variables: self.variables.clone(),
+            open_python: self.open_python,
+        })
+    }
+
+    pub(super) fn restore_draft(&mut self, draft: Draft) {
+        self.key = Some(draft.key);
+        self.draft = draft.settings;
+        self.variables = draft.variables;
+        self.open_python = draft.open_python;
+    }
+
     /// Parse the editable form without publishing it. Blank runtime fields are
     /// placeholders; comments/order in the variable editor do not change values.
     fn settings(&self) -> anyhow::Result<Settings> {
@@ -156,7 +181,7 @@ impl EditorApp {
     /// Reveal the interpreter section in Environment, refreshing discovery when it is already open.
     pub(in crate::app) fn open_python_environment(&mut self, ctx: &egui::Context) {
         self.workbench.environment.open_python = true;
-        self.reveal_panel(Panel::Environment, ctx);
+        self.reveal_settings(SettingsSection::Environment, ctx);
         self.refresh_environment(false, ctx);
     }
 
@@ -177,10 +202,14 @@ impl EditorApp {
         );
     }
 
-    /// Edit literal project variables/runtime overrides and apply them after validation;
-    /// existing terminal processes retain their original environment.
-    pub(in crate::app) fn environment_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.themes.active().palette;
+    /// Environment is presented only within the Settings host, including its detached window.
+    pub(in crate::app) fn environment_visible(&self) -> bool {
+        self.workbench.settings_section == SettingsSection::Environment
+            && self.panel_visible(Panel::Settings)
+    }
+
+    /// Keep unsaved environment fields separate from other settings categories.
+    pub(in crate::app) fn prepare_environment_draft(&mut self) {
         let key = self.workbench.key.clone();
         let state = &mut self.workbench.environment;
         if state.key.as_ref() != Some(&key) {
@@ -194,12 +223,76 @@ impl EditorApp {
                 .collect::<Vec<_>>()
                 .join("\n");
         }
-        layout::heading(
-            ui,
-            "Project environment",
-            "Runtime paths and variables for new terminals and tasks on this host",
-            palette,
-        );
+    }
+
+    /// Compare the editable environment with its applied snapshot, including validation errors.
+    pub(in crate::app) fn environment_unapplied(&self) -> bool {
+        self.workbench
+            .environment
+            .unapplied(&self.workbench.prefs.environment)
+    }
+
+    /// Apply/Discard stays above the scrolling form and preserves unrelated category drafts.
+    pub(in crate::app) fn environment_actions_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) {
+        let palette = self.themes.active().palette;
+        let unapplied = self.environment_unapplied();
+        let mut apply = false;
+        let mut discard = false;
+        ui.horizontal_wrapped(|ui| {
+            let button = crate::keyboard::button(ui, "Apply environment");
+            ui_probe::button(ui, "environment-apply", &button);
+            ui_probe::button(ui, "settings-save", &button);
+            apply = button.clicked();
+            let button = ui.add_enabled(unapplied, crate::keyboard::Button::new("Discard changes"));
+            ui_probe::button(ui, "settings-discard", &button);
+            discard = button.clicked();
+            let status = ui.label(RichText::new(if unapplied { "Unapplied environment changes" } else { "Environment applied" })
+                .small().color(if unapplied { palette.accent } else { palette.muted }))
+                .on_hover_text("Runtime versions describe the applied environment. New terminals and tasks receive applied settings; existing sessions keep their captured environment.");
+            ui_probe::button(ui, if unapplied { "environment-unapplied" } else { "environment-applied" }, &status);
+        });
+        if apply {
+            self.apply_environment(ctx);
+        } else if discard {
+            self.workbench.environment.key = None;
+            self.prepare_environment_draft();
+            self.workbench.environment.error.clear();
+        }
+        if !self.workbench.environment.error.is_empty() {
+            ui.colored_label(
+                self.themes.active().palette.error,
+                &self.workbench.environment.error,
+            );
+        }
+    }
+
+    /// Publish only a validated environment snapshot; running processes keep their capture.
+    pub(in crate::app) fn apply_environment(&mut self, ctx: &egui::Context) {
+        match self.workbench.environment.settings() {
+            Ok(settings) => {
+                self.workbench.prefs.environment = settings.clone();
+                self.workbench.draft.environment = settings;
+                self.workbench.save_preferences();
+                self.workbench.environment.error.clear();
+                self.status =
+                    "Project environment saved · applies to new terminals and tasks".into();
+                self.sync_project_environment();
+                self.refresh_runtimes(ctx);
+            }
+            Err(error) => self.workbench.environment.error = error.to_string(),
+        }
+    }
+
+    /// Edit literal project variables/runtime overrides and apply them after validation;
+    /// existing terminal processes retain their original environment.
+    pub(in crate::app) fn environment_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let palette = self.themes.active().palette;
+        self.prepare_environment_draft();
+        let state = &mut self.workbench.environment;
         let refresh = layout::section(ui, "Runtimes and toolchains", palette, |ui| {
             ui.small("Leave an override blank to use the host's PATH and existing project toolchain configuration.");
             let compact = ui.available_width() < 520.;
@@ -307,7 +400,6 @@ impl EditorApp {
             refresh
         });
         self.mise_ui(ui, ctx, false);
-        let mut refresh = refresh;
         layout::section(ui, "Project variables", palette, |ui| {
             let state = &mut self.workbench.environment;
             ui.small(
@@ -322,40 +414,7 @@ impl EditorApp {
                     .hint_text("APP_MODE=development\nDATA_DIR=/scratch/data"),
             ));
             ui_probe::button(ui, "environment-variables", &variables);
-            let unapplied = state.unapplied(&self.workbench.prefs.environment);
-            let apply = ui.horizontal_wrapped(|ui| {
-                let apply = crate::keyboard::button(ui, "Apply environment");
-                ui_probe::button(ui, "environment-apply", &apply);
-                let status = ui.label(RichText::new(if unapplied {
-                    "Unapplied environment changes"
-                } else {
-                    "Environment applied"
-                }).small().color(if unapplied { palette.accent } else { palette.muted }))
-                    .on_hover_text("Runtime versions describe the applied environment. New terminals and tasks receive applied settings; existing sessions keep their captured environment.");
-                ui_probe::button(ui, if unapplied { "environment-unapplied" } else { "environment-applied" }, &status);
-                apply.clicked()
-            }).inner;
-            if apply {
-                match state.settings() {
-                    Ok(settings) => {
-                        self.workbench.prefs.environment = settings.clone();
-                        self.workbench.draft.environment = settings;
-                        self.workbench.save_preferences();
-                        self.workbench.environment.error.clear();
-                        self.status =
-                            "Project environment saved · applies to new terminals and tasks".into();
-                        refresh = true;
-                    }
-                    Err(error) => self.workbench.environment.error = error.to_string(),
-                }
-            }
         });
-        if !self.workbench.environment.error.is_empty() {
-            ui.colored_label(
-                self.themes.active().palette.error,
-                &self.workbench.environment.error,
-            );
-        }
         if refresh {
             self.sync_project_environment();
             self.refresh_runtimes(ctx);
@@ -484,6 +543,148 @@ mod tests {
     use crate::app::layout::tests::{button_frame, text_bounds};
 
     #[test]
+    fn applying_project_policy_retains_unfinished_environment_fields_without_applying_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_str().unwrap().to_owned();
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::new(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            Startup::default(),
+        );
+        app.workspace.set_fixture(Some(Workspace {
+            root: root.clone(),
+            remote: None,
+            connected: true,
+            ready: true,
+            plan: sandbox::Plan {
+                root: root.clone(),
+                ..Default::default()
+            },
+            sandbox_options: Default::default(),
+        }));
+        app.load_project_tools(&ctx);
+        app.prepare_environment_draft();
+        app.workbench.environment.variables =
+            "# keep the comment\nMODE=unfinished\ninvalid assignment".into();
+        app.workbench
+            .environment
+            .draft
+            .runtimes
+            .insert("node".into(), "/unfinished/node".into());
+        app.workbench.environment.open_python = true;
+        app.workbench.environment.busy = true;
+        app.workbench.environment.mise_busy = true;
+        app.workbench.settings_section = SettingsSection::Sandbox;
+        app.workbench.draft.latex.program = "unfinished-latex".into();
+        let applied = app.workbench.prefs.environment.clone();
+        app.new_file();
+        app.documents[0].fixture_content().text = "unsaved source".into();
+        app.commit_project(
+            files::Response {
+                path: root.clone(),
+                project: Some(sandbox::Plan {
+                    root,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            false,
+            Default::default(),
+            true,
+            None,
+            &ctx,
+        );
+        app.prepare_environment_draft();
+        assert_eq!(
+            app.workbench.environment.variables,
+            "# keep the comment\nMODE=unfinished\ninvalid assignment"
+        );
+        assert_eq!(
+            app.workbench.environment.draft.runtimes["node"],
+            "/unfinished/node"
+        );
+        assert!(app.workbench.environment.open_python);
+        assert!(!app.workbench.environment.busy && !app.workbench.environment.mise_busy);
+        assert!(app.environment_unapplied());
+        assert_eq!(app.workbench.prefs.environment, applied);
+        assert_eq!(app.workbench.draft.latex.program, "unfinished-latex");
+        assert_eq!(app.workbench.settings_section, SettingsSection::Sandbox);
+        assert_eq!(app.documents[0].text, "unsaved source");
+        assert!(app.documents[0].dirty());
+    }
+
+    #[test]
+    fn environment_settings_keep_drafts_across_categories_and_detachment() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = EditorApp::new(&cc, Startup::default());
+        app.workbench.key = "fixture-project".into();
+        app.workbench.draft.ruff = "unsaved-ruff-path".into();
+        app.agents.chat.notice("Keep this conversation");
+        app.prepare_environment_draft();
+        app.workbench.environment.variables = "MODE=unsaved".into();
+        app.execute_command(Command::Environment, &ctx);
+        assert_eq!(app.workbench.panel, Some(Panel::Settings));
+        assert_eq!(app.workbench.settings_section, SettingsSection::Environment);
+        app.reveal_settings(SettingsSection::CodeTools, &ctx);
+        app.reveal_settings(SettingsSection::Environment, &ctx);
+        assert_eq!(app.workbench.environment.variables, "MODE=unsaved");
+        app.detach_tab(ToolTab::Panel(Panel::Settings), &ctx);
+        assert_eq!(
+            app.workbench.floating_tabs,
+            [ToolTab::Panel(Panel::Settings)]
+        );
+        assert!(app.environment_visible());
+        app.apply_environment(&ctx);
+        assert_eq!(app.workbench.prefs.environment.variables["MODE"], "unsaved");
+        assert_eq!(app.workbench.draft.ruff, "unsaved-ruff-path");
+        assert!(app.workbench.prefs.ruff.is_empty());
+        app.workbench.environment.variables = "not a valid assignment".into();
+        app.apply_environment(&ctx);
+        assert!(!app.workbench.environment.error.is_empty());
+        assert_eq!(app.workbench.prefs.environment.variables["MODE"], "unsaved");
+        let frame = |app: &mut EditorApp, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900., 800.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.settings_ui(ui, ctx));
+                },
+            )
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        let point = button_frame(&output, "Discard changes").0.center();
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(app.workbench.environment.variables, "MODE=unsaved");
+        assert!(app.workbench.environment.error.is_empty());
+        assert_eq!(app.workbench.draft.ruff, "unsaved-ruff-path");
+        assert_eq!(
+            app.agents.chat.messages.back().unwrap().text,
+            "Keep this conversation"
+        );
+    }
+
+    #[test]
     fn environment_runtime_names_and_versions_align_with_their_override_fields() {
         use crate::app::{EditorApp, Startup};
         for theme in crate::theme::Theme::builtins() {
@@ -572,7 +773,7 @@ mod tests {
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
         app.set_extension(crate::extensions::Feature::Python.id(), false);
-        assert!(app.panel_enabled(Panel::Environment));
+        assert!(app.panel_enabled(Panel::Settings));
         assert!(app.panel_enabled(Panel::Tasks));
         let mut prefs: Preferences = serde_json::from_str(r#"{"python":".venv"}"#).unwrap();
         assert_eq!(prefs.python, ".venv");

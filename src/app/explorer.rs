@@ -586,15 +586,25 @@ impl EditorApp {
                 ui.add_space(28.0);
                 ui.separator();
                 ui.add_space(12.0);
-                ui.label(palette.tag("CONNECTIONS"));
-                self.saved_connections_ui(ui, ctx);
-                if self.connection_profiles.profiles.is_empty() {
-                    ui.label(
-                        RichText::new("Saved SSH profiles appear here.")
-                            .small()
-                            .color(palette.muted),
-                    );
-                }
+                // Saved hosts and tunnel setups share the remaining sidebar
+                // space, so a large host list cannot hide the tunnel shortcuts.
+                egui::ScrollArea::vertical()
+                    .id_salt(("welcome-connections", viewport))
+                    .max_height(ui.available_height())
+                    .min_scrolled_height(0.)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.label(palette.tag("CONNECTIONS"));
+                        self.saved_connections_ui(ui, ctx, saved_connections::View::Compact);
+                        if self.connection_profiles.profiles.is_empty() {
+                            ui.label(
+                                RichText::new("Saved SSH profiles appear here.")
+                                    .small()
+                                    .color(palette.muted),
+                            );
+                        }
+                        self.saved_tunnel_shortcuts_ui(ui);
+                    });
             }
             palette.paint_explorer_artwork(ui);
         });

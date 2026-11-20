@@ -29,7 +29,11 @@ impl State {
         {
             return 0.;
         }
-        (available * 0.45).min(260.).min((available - 80.).max(0.))
+        // A percentage alone can leave room only for wrapped controls, hiding
+        // the patch in compact windows with host banners and multiple tab rows.
+        (available * 0.45)
+            .clamp(220., 260.)
+            .min((available - 64.).max(0.))
     }
 
     /// Render the selected current hunk and return navigation/revert/close intent. Missing or
@@ -49,6 +53,7 @@ impl State {
             self.peek = None;
             return None;
         };
+        let height = height.min(ui.available_height());
         if height <= 0. {
             return None;
         }
@@ -70,45 +75,57 @@ impl State {
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong("Changes since last commit");
-                    ui.label(format!("{} / {}", index + 1, changes.hunks.len()));
-                    let previous =
-                        ui.add_enabled(changes.hunks.len() > 1, crate::keyboard::Button::new("Previous"));
-                    ui_probe::button(ui, "git-peek-previous", &previous);
-                    if previous.clicked() {
-                        next = (index + changes.hunks.len() - 1) % changes.hunks.len();
-                    }
-                    let following =
-                        ui.add_enabled(changes.hunks.len() > 1, crate::keyboard::Button::new("Next"));
-                    ui_probe::button(ui, "git-peek-next", &following);
-                    if following.clicked() {
-                        next = (index + 1) % changes.hunks.len();
-                    }
-                    let restore = ui
-                        .add_enabled(self.baseline.is_some(), crate::keyboard::Button::new("Revert change"))
-                        .on_hover_text("Restore this block from the last commit in the editor. Save to update the file. Undo restores your change.");
-                    ui_probe::button(ui, "git-peek-revert", &restore);
-                    revert = restore.clicked();
-                    let dismiss = crate::keyboard::button(ui, "Close");
-                    ui_probe::button(ui, "git-peek-close", &dismiss);
-                    close = dismiss.clicked();
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(palette.error, "− Removed");
-                    ui.colored_label(palette.success, "+ Added");
-                    if doc.dirty() {
-                        ui.label("Includes unsaved edits");
-                    }
-                });
-                let body_height = ui.available_height().min(height).max(1.);
-                let response = ui
-                    .push_id(("git-peek", doc.id, doc.version(), index), |ui| {
-                        diff_view::show(ui, &hunk.patch, palette, body_height)
-                    })
-                    .inner;
-                ui_probe::button(ui, "git-peek-diff", &response);
-                ui_probe::value(ui, "git-peek-patch", &response, &hunk.patch);
+                // Keep the entire inspector within its reserved height. Very
+                // small panes can scroll controls as well as the patch instead
+                // of painting them below the editor or hiding them permanently.
+                let inner_height = (height - 16.).max(1.);
+                egui::ScrollArea::vertical()
+                    .id_salt(("git-peek-controls", doc.id))
+                    .auto_shrink([false, true])
+                    .max_height(inner_height)
+                    .show(ui, |ui| {
+                        let top = ui.cursor().top();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong("Changes since last commit");
+                            ui.label(format!("{} / {}", index + 1, changes.hunks.len()));
+                            let previous =
+                                ui.add_enabled(changes.hunks.len() > 1, crate::keyboard::Button::new("Previous"));
+                            ui_probe::button(ui, "git-peek-previous", &previous);
+                            if previous.clicked() {
+                                next = (index + changes.hunks.len() - 1) % changes.hunks.len();
+                            }
+                            let following =
+                                ui.add_enabled(changes.hunks.len() > 1, crate::keyboard::Button::new("Next"));
+                            ui_probe::button(ui, "git-peek-next", &following);
+                            if following.clicked() {
+                                next = (index + 1) % changes.hunks.len();
+                            }
+                            let restore = ui
+                                .add_enabled(self.baseline.is_some(), crate::keyboard::Button::new("Revert change"))
+                                .on_hover_text("Restore this block from the last commit in the editor. Save to update the file. Undo restores your change.");
+                            ui_probe::button(ui, "git-peek-revert", &restore);
+                            revert = restore.clicked();
+                            let dismiss = crate::keyboard::button(ui, "Close");
+                            ui_probe::button(ui, "git-peek-close", &dismiss);
+                            close = dismiss.clicked();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.colored_label(palette.error, "− Removed");
+                            ui.colored_label(palette.success, "+ Added");
+                            if doc.dirty() {
+                                ui.label("Includes unsaved edits");
+                            }
+                        });
+                        let used = ui.cursor().top() - top;
+                        let body_height = (inner_height - used).max(48.);
+                        let response = ui
+                            .push_id(("git-peek", doc.id, doc.version(), index), |ui| {
+                                diff_view::show(ui, &hunk.patch, palette, body_height)
+                            })
+                            .inner;
+                        ui_probe::button(ui, "git-peek-diff", &response);
+                        ui_probe::value(ui, "git-peek-patch", &response, &hunk.patch);
+                    });
             });
         if close {
             self.peek = None;

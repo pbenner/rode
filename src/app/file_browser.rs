@@ -5,6 +5,8 @@
 //! uses the selected host; file/hex/Save As operations keep the active sandbox. Directory
 //! results never replace a filename being typed, and the list focus host survives loading.
 use super::*;
+mod items;
+pub(super) use items::View;
 
 #[derive(Default)]
 /// One modal browser lifetime. `directory` is the last successful listing; `location` is
@@ -149,6 +151,8 @@ pub(super) struct RowOptions<'a> {
     pub checked: Option<&'a HashSet<String>>,
     /// Quiet vector-icon rows for an embedded file browser; ordinary pickers keep their styling.
     pub icons: bool,
+    /// List rows or larger icon tiles, sharing selection and input ownership.
+    pub view: View,
     /// Called for visible rows only. The caller owns drag payloads and destination policy.
     pub on_row: Option<&'a mut RowHook<'a>>,
 }
@@ -174,6 +178,10 @@ pub(super) fn rows_with_options(
     let host = ui.make_persistent_id((id, "focus"));
     let ctx = ui.ctx().clone();
     let enabled = ui.is_enabled() && ready;
+    let columns = options
+        .view
+        .columns((ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.));
+    let tiles = options.view == View::Icons;
     let mut delta = if enabled { path_keys.0 } else { 0 };
     let mut activate = false;
     let mut parent = false;
@@ -192,7 +200,7 @@ pub(super) fn rows_with_options(
             )
         });
         let keys = navigation::List::keys(&ctx);
-        delta += keys.0;
+        delta += keys.0 * columns as isize;
         activate |= keys.1;
         ctx.input_mut(|i| {
             if i.consume_key(egui::Modifiers::NONE, Key::Home) {
@@ -202,14 +210,20 @@ pub(super) fn rows_with_options(
                 edge = Some(visible.len().saturating_sub(1));
             }
             if i.consume_key(egui::Modifiers::NONE, Key::PageDown) {
-                delta += 10;
+                delta += 10 * columns as isize;
             }
             if i.consume_key(egui::Modifiers::NONE, Key::PageUp) {
-                delta -= 10;
+                delta -= 10 * columns as isize;
             }
-            parent = i.consume_key(egui::Modifiers::NONE, Key::Backspace)
-                || i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft);
-            activate |= i.consume_key(egui::Modifiers::NONE, Key::ArrowRight);
+            parent = i.consume_key(egui::Modifiers::NONE, Key::Backspace);
+            let left = i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft);
+            let right = i.consume_key(egui::Modifiers::NONE, Key::ArrowRight);
+            if tiles {
+                delta += isize::from(right) - isize::from(left);
+            } else {
+                parent |= left;
+                activate |= right;
+            }
             if options.checked.is_some() {
                 toggle = i.consume_key(egui::Modifiers::NONE, Key::Space);
             }
@@ -258,14 +272,27 @@ pub(super) fn rows_with_options(
         None
     };
     let scroll_id = ui.make_persistent_id(id);
-    let row_height = layout::control_height(ui).max(if options.icons { 34. } else { 25. });
-    let row_pitch = row_height + 2.;
+    let row_height = if options.icons || tiles {
+        options.view.height(ui)
+    } else {
+        layout::control_height(ui).max(25.)
+    };
+    let gap = if tiles { 8. } else { 2. };
+    let row_pitch = row_height + gap;
+    let geometry = (columns, row_pitch);
+    let previous = ctx.data_mut(|data| {
+        let old = data.get_temp::<(usize, f32)>(scroll_id.with("geometry"));
+        data.insert_temp(scroll_id.with("geometry"), geometry);
+        old
+    });
+    // Resizing or changing view must reveal the same cursor in the new grid.
+    reveal |= previous != Some(geometry) && list.navigated;
     let mut scroll = egui::ScrollArea::vertical()
         .id_salt(id)
         .max_height(height)
         .auto_shrink([false, false]);
     if reveal {
-        let top = list.index as f32 * row_pitch;
+        let top = (list.index / columns) as f32 * row_pitch;
         let offset =
             egui::scroll_area::State::load(&ctx, scroll_id).map_or(0., |state| state.offset.y);
         if top < offset {
@@ -276,105 +303,112 @@ pub(super) fn rows_with_options(
     }
     let spacing = ui.spacing().item_spacing.y;
     let clip = ui.clip_rect();
-    if options.icons {
+    if options.icons || tiles {
         // Embedded browser lists end above a fixed action footer. ScrollArea
         // may otherwise paint a partial final row into that reserved space.
         ui.set_clip_rect(clip.intersect(response.rect));
     }
-    ui.spacing_mut().item_spacing.y = 2.;
-    scroll.show_rows(ui, row_height, visible.len(), |ui, range| {
-        // Disable stale entries while navigating, but retain the list's focus
-        // host above so keyboard browsing survives asynchronous directory reads.
-        if !ready {
-            ui.disable();
-        }
-        ui.spacing_mut().item_spacing.y = 2.;
-        for index in range {
-            let entry = visible[index];
-            let mut label = if entry.dir {
-                format!("›  {}", entry.name)
-            } else {
-                entry.name.clone()
-            };
-            let marked = options
-                .checked
-                .is_some_and(|paths| paths.contains(&entry.path));
-            if options.checked.is_some() && !options.icons {
-                label = format!("{}  {label}", if marked { "☑" } else { "☐" });
+    ui.spacing_mut().item_spacing.y = gap;
+    scroll.show_rows(
+        ui,
+        row_height,
+        visible.len().div_ceil(columns),
+        |ui, range| {
+            // Retain one list focus host while asynchronous listings are disabled.
+            if !ready {
+                ui.disable();
             }
-            let response = ui
-                .push_id(&entry.path, |ui| {
-                    let sense = if options.on_row.is_some() {
-                        Sense::click_and_drag()
-                    } else {
-                        Sense::click()
-                    }
-                    .difference(Sense::focusable_noninteractive());
-                    if options.icons {
-                        let icon_id = ui.next_auto_id().with("file-icon");
-                        let output = egui::Button::selectable(
-                            marked || list.navigated && index == list.index,
-                            (
-                                egui::Atom::custom(icon_id, egui::Vec2::splat(18.)),
-                                entry.name.as_str(),
-                                egui::Atom::grow(),
-                            ),
-                        )
-                        .frame(false)
-                        .truncate()
-                        .sense(sense)
-                        .min_size(egui::vec2(ui.available_width(), row_height))
-                        .atom_ui(ui);
-                        if let Some(rect) = output.rect(icon_id) {
-                            let color = ui.visuals().weak_text_color();
-                            (if entry.dir { Icon::Folder } else { Icon::Files }).paint(
-                                ui.painter(),
-                                rect,
-                                color,
+            ui.spacing_mut().item_spacing.y = gap;
+            let mut item = |ui: &mut egui::Ui, index: usize, width: f32| {
+                let entry = visible[index];
+                let marked = options
+                    .checked
+                    .is_some_and(|paths| paths.contains(&entry.path));
+                let cursor = list.navigated && index == list.index;
+                // A multi-selection's fill comes only from its checked paths.
+                // Its cursor remains visible as an outline while this list has focus.
+                let selected = marked || options.checked.is_none() && cursor;
+                let focused = cursor && enabled && ctx.memory(|m| m.has_focus(host));
+                let response = ui
+                    .push_id(&entry.path, |ui| {
+                        let sense = if options.on_row.is_some() {
+                            Sense::click_and_drag()
+                        } else {
+                            Sense::click()
+                        }
+                        .difference(Sense::focusable_noninteractive());
+                        if options.icons || tiles {
+                            return items::show(
+                                ui,
+                                entry,
+                                selected,
+                                focused && options.checked.is_some(),
+                                egui::vec2(width, row_height),
+                                sense,
+                                options.view,
                             );
                         }
-                        return output.response;
-                    }
-                    ui.add_sized(
-                        [ui.available_width(), row_height],
-                        egui::Button::selectable(
-                            marked || list.navigated && index == list.index,
-                            (label, egui::Atom::grow()),
+                        let mut label = if entry.dir {
+                            format!("›  {}", entry.name)
+                        } else {
+                            entry.name.clone()
+                        };
+                        if options.checked.is_some() {
+                            label = format!("{}  {label}", if marked { "☑" } else { "☐" });
+                        }
+                        ui.add_sized(
+                            [width, row_height],
+                            egui::Button::selectable(selected, (label, egui::Atom::grow()))
+                                .truncate()
+                                .sense(sense),
                         )
-                        .truncate()
-                        .sense(sense),
-                    )
-                })
-                .inner
-                .on_hover_text(&entry.path);
-            ui_probe::value(ui, "file-picker-row", &response, &entry.path);
-            if let Some(on_row) = &mut options.on_row {
-                on_row(ui, entry, &response);
-            }
-            if list.navigated && index == list.index {
-                ui_probe::value(ui, "file-picker-selected", &response, &entry.path);
-            }
-            if response.clicked() {
-                list.index = index;
-                list.navigated = true;
-                ctx.memory_mut(|m| m.request_focus(host));
-                // egui's pointer double-click state is global. A quick click
-                // in another browser/row must still select this entry rather
-                // than unexpectedly entering a newly positioned folder.
-                let same_row = ctx.data_mut(|data| {
-                    let key = egui::Id::new("file-picker-last-click");
-                    let previous = data.get_temp::<egui::Id>(key);
-                    data.insert_temp(key, response.id);
-                    previous == Some(response.id)
-                });
-                action = Some(if response.double_clicked() && same_row {
-                    Choice::Open(entry.clone())
+                    })
+                    .inner
+                    .on_hover_text(&entry.path);
+                ui_probe::value(ui, "file-picker-row", &response, &entry.path);
+                if marked {
+                    ui_probe::value(ui, "file-picker-checked", &response, &entry.path);
+                }
+                if let Some(on_row) = &mut options.on_row {
+                    on_row(ui, entry, &response);
+                }
+                if cursor {
+                    ui_probe::value(ui, "file-picker-selected", &response, &entry.path);
+                }
+                if response.clicked() {
+                    list.index = index;
+                    list.navigated = true;
+                    ctx.memory_mut(|m| m.request_focus(host));
+                    // Double-click state is global, but opening belongs to this item.
+                    let same_row = ctx.data_mut(|data| {
+                        let key = egui::Id::new("file-picker-last-click");
+                        let previous = data.get_temp::<egui::Id>(key);
+                        data.insert_temp(key, response.id);
+                        previous == Some(response.id)
+                    });
+                    action = Some(if response.double_clicked() && same_row {
+                        Choice::Open(entry.clone())
+                    } else {
+                        Choice::Select(entry.clone())
+                    });
+                }
+            };
+            let width = ui.available_width();
+            let tile_width = ((width - (columns - 1) as f32 * gap) / columns as f32).max(1.);
+            for row in range {
+                if tiles {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for index in row * columns..((row + 1) * columns).min(visible.len()) {
+                            item(ui, index, tile_width);
+                        }
+                    });
                 } else {
-                    Choice::Select(entry.clone())
-                });
+                    item(ui, row, width);
+                }
             }
-        }
-    });
+        },
+    );
     ui.set_clip_rect(clip);
     ui.spacing_mut().item_spacing.y = spacing;
     action

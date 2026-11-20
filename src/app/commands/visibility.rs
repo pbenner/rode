@@ -90,6 +90,7 @@ impl EditorApp {
             | Command::Projects
             | Command::Connections
             | Command::AppSettings
+            | Command::Environment
             | Command::FindControl
             | Command::New
             | Command::NewEditorWindow
@@ -220,7 +221,7 @@ mod tests {
                 Command::Terminal,
                 Command::Extensions,
                 Command::Panel(Panel::Problems),
-                Command::Panel(Panel::Environment),
+                Command::Environment,
                 Command::Panel(Panel::Tasks),
                 Command::Panel(Panel::Settings),
             ] {

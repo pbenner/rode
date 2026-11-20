@@ -11,7 +11,7 @@ pub(super) enum Scope {
     Project,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) enum Area {
     #[default]
     Projects,
@@ -55,19 +55,37 @@ impl Area {
             _ => None,
         }
     }
+
+    /// One existing window owner for each detachable application area. Projects
+    /// keeps its editor/tool hosts instead of duplicating the entire workspace.
+    pub fn tab(self) -> Option<workbench::ToolTab> {
+        match self {
+            Self::Projects => None,
+            Self::Connections | Self::Settings => Some(workbench::ToolTab::Area(self)),
+            _ => self.panel().map(workbench::ToolTab::Panel),
+        }
+    }
+
+    pub fn for_command(command: Command) -> Option<Self> {
+        match command {
+            Command::Projects => Some(Self::Projects),
+            Command::Connections => Some(Self::Connections),
+            Command::AppSettings => Some(Self::Settings),
+            Command::Panel(panel) => Self::for_panel(panel),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct Preferences {
-    pub pinned: Vec<String>,
     pub monitor_interval: u64,
     pub monitor_chart: workbench::monitoring::ChartView,
 }
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            pinned: Vec::new(),
             monitor_interval: 2,
             monitor_chart: Default::default(),
         }
@@ -88,11 +106,7 @@ impl State {
         let interval = read("host_monitor_interval");
         let chart = read("host_monitor_chart");
         let configured = interval.is_some() || chart.is_some();
-        let mut prefs = Preferences {
-            pinned: read("project_toolbar_pins")
-                .filter(|v| v.len() <= 1024)
-                .and_then(|v| serde_json::from_str(&v).ok())
-                .unwrap_or_default(),
+        let prefs = Preferences {
             monitor_interval: interval
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(2)
@@ -102,14 +116,6 @@ impl State {
                 .and_then(|v| serde_json::from_str(&v).ok())
                 .unwrap_or_default(),
         };
-        let mut seen = HashSet::new();
-        prefs.pinned.retain(|id| {
-            workbench::ToolTab::ALL
-                .iter()
-                .any(|tab| tab.project_extra() && tab.label() == id)
-                && seen.insert(id.clone())
-        });
-        prefs.pinned.truncate(2);
         Self {
             saved: prefs.clone(),
             prefs,
@@ -118,17 +124,11 @@ impl State {
             ..Default::default()
         }
     }
-    /// Each explicit setting updates its own preference field, so another window's
-    /// unrelated pin or monitor edit is not overwritten by an old snapshot.
+    /// Each explicit setting updates its own field, preserving unrelated monitor
+    /// edits made by another window.
     pub fn store(&mut self, storage: &mut dyn eframe::Storage) {
         if !self.pending {
             return;
-        }
-        if self.prefs.pinned != self.saved.pinned {
-            storage.set_string(
-                "project_toolbar_pins",
-                serde_json::to_string(&self.prefs.pinned).unwrap(),
-            );
         }
         if self.monitor_configured {
             if !self.saved_monitor || self.prefs.monitor_interval != self.saved.monitor_interval {
@@ -148,31 +148,72 @@ impl State {
         self.saved_monitor = self.monitor_configured;
         self.pending = false;
     }
-    pub fn pin(&mut self, tab: workbench::ToolTab, pinned: bool) {
-        self.prefs.pinned.retain(|id| id != tab.label());
-        if pinned && self.prefs.pinned.len() < 2 && tab.project_extra() {
-            self.prefs.pinned.push(tab.label().into());
-        }
-        self.pending = true;
-    }
 }
 
 impl EditorApp {
+    pub(super) fn area_detached(&self, area: Area) -> bool {
+        area.tab().is_some_and(|tab| self.tab_detached(tab))
+    }
+
+    /// Move presentation into the shared viewport registry. Host bindings and
+    /// controllers remain in place, and the main window returns to its project.
+    pub(super) fn detach_area(&mut self, area: Area, ctx: &egui::Context) {
+        let Some(tab) = area.tab().filter(|_| self.command_visible(area.command())) else {
+            return;
+        };
+        if let Some(panel) = area.panel() {
+            self.initialize_host_tool(panel, ctx);
+        }
+        self.detach_tab(tab, ctx);
+        if self.areas.active == area {
+            self.areas.active = Area::Projects;
+            self.navigation.zoom = None;
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        }
+    }
+
+    /// Shared rail actions work with the keyboard context-menu shortcut too.
+    pub(super) fn area_window_menu(&mut self, ui: &mut egui::Ui, area: Area, ctx: &egui::Context) {
+        let Some(tab) = area.tab() else {
+            return;
+        };
+        if self.tab_detached(tab) {
+            let show = crate::keyboard::button(ui, "Show window");
+            ui_probe::button(ui, "area-show-window", &show);
+            if show.clicked() {
+                self.focus_tool_tab(tab, ctx);
+                ui.close();
+            }
+            let reattach = crate::keyboard::button(ui, "Reattach to main window");
+            ui_probe::button(ui, "area-reattach", &reattach);
+            if reattach.clicked() {
+                self.reattach_tool_tab(tab, ctx);
+                ui.close();
+            }
+        } else {
+            let detach = crate::keyboard::button(ui, "Open in separate window");
+            ui_probe::button(ui, "area-detach", &detach);
+            if detach.clicked() {
+                self.detach_area(area, ctx);
+                ui.close();
+            }
+        }
+    }
+
     /// Do not mutate the selected project surface while visiting a global area.
     pub(super) fn open_area(&mut self, area: Area, ctx: &egui::Context) {
         if !self.command_visible(area.command()) {
             return;
         }
+        if let Some(tab) = area.tab().filter(|tab| self.tab_detached(*tab)) {
+            // Raising a floating area must not replace the root's current view.
+            self.focus_tool_tab(tab, ctx);
+            return;
+        }
         self.areas.active = area;
         self.navigation.zoom = None;
         if let Some(panel) = area.panel() {
-            if self.tab_detached(workbench::ToolTab::Panel(panel)) {
-                self.focus_tool_tab(workbench::ToolTab::Panel(panel), ctx);
-                return;
-            }
-            if matches!(panel, Panel::Monitor | Panel::Transfers) {
-                self.initialize_host_tool(panel, ctx);
-            }
+            self.initialize_host_tool(panel, ctx);
         }
         if area == Area::Projects {
             let pane = match self.workbench.surface {
@@ -198,65 +239,40 @@ impl EditorApp {
         egui::CentralPanel::default()
             .frame(layout::pane_frame(palette.panel))
             .show(ctx, |ui| {
-                if let Some(panel) = area.panel() {
-                    if self.tab_detached(workbench::ToolTab::Panel(panel)) {
-                        let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
-                        ui.label(format!(
-                            "{} is open in its own window.",
-                            area.command().definition().label
-                        ));
-                        if crate::keyboard::button(&mut ui, "Show window").clicked() {
-                            self.focus_tool_tab(workbench::ToolTab::Panel(panel), ctx);
-                        }
-                    } else {
-                        self.panel_content(panel, ui, ctx);
-                    }
-                    return;
+                if self.area_detached(area) {
+                    let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
+                    ui.label(format!(
+                        "{} is open in its own window.",
+                        area.command().definition().label
+                    ));
+                    self.area_window_menu(&mut ui, area, ctx);
+                } else {
+                    self.area_content(area, ui, ctx);
                 }
-                let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
-                layout::page(&mut ui, layout::PAGE_WIDTH, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt(("application-area", area.command().definition().label))
-                        .show(ui, |ui| match area {
-                            Area::Connections => {
-                                layout::heading(
-                                    ui,
-                                    "Connections",
-                                    "Saved SSH connections and host administration",
-                                    palette,
-                                );
-                                ui.horizontal_wrapped(|ui| {
-                                    if ui
-                                        .add(IconButton::new(Icon::Remote, "New connection…"))
-                                        .clicked()
-                                    {
-                                        self.set_dialog(Dialog::Connect);
-                                    }
-                                    if crate::keyboard::button(ui, "SSH tunnels…").clicked() {
-                                        self.set_dialog(Dialog::Tunnels);
-                                    }
-                                    if self.workspace.as_ref().is_some_and(|w| w.remote.is_some()) {
-                                        if crate::keyboard::button(ui, "Reconnect").clicked() {
-                                            self.reconnect_ssh(ctx);
-                                        }
-                                        if crate::keyboard::button(ui, "Disconnect").clicked() {
-                                            self.disconnect_ssh(ctx);
-                                        }
-                                    }
-                                });
-                                ui.separator();
-                                self.saved_connections_ui(ui, ctx);
-                                if self.connection_profiles.profiles.is_empty() {
-                                    ui.weak(
-                                        "No saved connections. Add a connection to get started.",
-                                    );
-                                }
-                            }
-                            Area::Settings => self.application_settings_ui(ui, ctx),
-                            _ => {}
-                        });
-                });
             });
+    }
+
+    /// Render an area in its sole current host, using the same application state.
+    pub(in crate::app) fn area_content(
+        &mut self,
+        area: Area,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) {
+        if let Some(panel) = area.panel() {
+            self.panel_content(panel, ui, ctx);
+            return;
+        }
+        let mut ui = self.pane_ui(ui, navigation::Pane::Tools);
+        layout::page(&mut ui, layout::PAGE_WIDTH, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt(("application-area", area.command().definition().label))
+                .show(ui, |ui| match area {
+                    Area::Connections => self.connections_ui(ui, ctx),
+                    Area::Settings => self.application_settings_ui(ui, ctx),
+                    _ => {}
+                });
+        });
     }
     fn application_settings_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.migrate_monitor_preferences();
@@ -297,30 +313,6 @@ impl EditorApp {
             ui.weak(
                 "Monitoring starts only when you press Start. Its host is selected in Monitor.",
             );
-        }
-        ui.separator();
-        ui.strong("Project toolbar");
-        ui.weak("Pin up to two additional tools. Other tools remain in the Tools menu.");
-        for tab in workbench::ToolTab::ALL
-            .into_iter()
-            .filter(|tab| tab.project_extra())
-        {
-            if let workbench::ToolTab::Panel(panel) = tab
-                && !self.panel_enabled(panel)
-            {
-                continue;
-            }
-            let mut pinned = self.areas.prefs.pinned.iter().any(|id| id == tab.label());
-            let enabled = pinned || self.areas.prefs.pinned.len() < 2;
-            if ui
-                .add_enabled_ui(enabled, |ui| {
-                    crate::keyboard::checkbox(ui, &mut pinned, tab.label())
-                })
-                .inner
-                .changed()
-            {
-                self.areas.pin(tab, pinned);
-            }
         }
     }
 }

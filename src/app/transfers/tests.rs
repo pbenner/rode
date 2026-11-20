@@ -27,7 +27,9 @@ fn extension_visibility_and_stale_listings_preserve_workspace_authority() {
     let root = app.workspace.as_ref().unwrap().root.clone();
     assert!(app.command_visible(Command::Panel(Panel::Transfers)));
     let generation = app.transfers.generation;
+    app.transfers.panes[1].view = file_browser::View::Icons;
     app.set_extension(crate::extensions::Feature::Transfers.id(), false);
+    assert_eq!(app.transfers.panes[1].view, file_browser::View::Icons);
     assert!(!app.command_visible(Command::Panel(Panel::Transfers)));
     app.transfers
         .send
@@ -49,6 +51,48 @@ fn extension_visibility_and_stale_listings_preserve_workspace_authority() {
     assert!(app.command_visible(Command::Panel(Panel::Transfers)));
     app.workspace.set_fixture(None);
     assert!(app.command_visible(Command::Panel(Panel::Transfers)));
+}
+
+#[test]
+fn moving_the_transfer_view_preserves_listings_selection_and_running_copy() {
+    let (mut app, ctx) = app();
+    app.transfers.panes[0].view = file_browser::View::Icons;
+    app.transfers.panes[0].query = "file".into();
+    app.transfers.panes[0]
+        .selected
+        .insert("/local/file.txt".into());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(Mutex::new(Progress::default()));
+    let generation = app.transfers.generation;
+    app.transfers.running = Some(Running {
+        id: 42,
+        generation,
+        job: Job {
+            from: Endpoint::local(),
+            to: Endpoint::local(),
+            paths: vec!["/local/file.txt".into()],
+            directory: "/remote".into(),
+            protected: Arc::default(),
+        },
+        label: "Copy".into(),
+        cancel: cancel.clone(),
+        progress: progress.clone(),
+    });
+    for _ in 0..2 {
+        app.detach_area(areas::Area::Transfers, &ctx);
+        app.reattach_tool_tab(workbench::ToolTab::Panel(Panel::Transfers), &ctx);
+        assert_eq!(app.transfers.generation, generation);
+        assert_eq!(app.transfers.panes[0].browser.directory, "/local");
+        assert_eq!(app.transfers.panes[1].browser.directory, "/remote");
+        assert_eq!(app.transfers.panes[0].view, file_browser::View::Icons);
+        assert_eq!(app.transfers.panes[0].query, "file");
+        assert!(app.transfers.panes[0].selected.contains("/local/file.txt"));
+        let running = app.transfers.running.as_ref().unwrap();
+        assert_eq!(running.id, 42);
+        assert!(Arc::ptr_eq(&running.progress, &progress));
+        assert!(Arc::ptr_eq(&running.cancel, &cancel));
+        assert!(!cancel.load(Ordering::Acquire));
+    }
 }
 
 #[test]
@@ -136,8 +180,18 @@ fn normal_exit_waits_for_transfer_cleanup() {
 
 #[test]
 fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
-    for (width, height, scale) in [(1380., 900., 1.), (850., 560., 1.), (850., 560., 1.5)] {
+    for (width, height, scale, view) in [
+        (1380., 900., 1., file_browser::View::List),
+        (850., 560., 1., file_browser::View::List),
+        (850., 560., 1.5, file_browser::View::List),
+        (1380., 900., 1., file_browser::View::Icons),
+        (850., 560., 1., file_browser::View::Icons),
+        (850., 560., 1.5, file_browser::View::Icons),
+    ] {
         let (mut app, ctx) = app();
+        for pane in &mut app.transfers.panes {
+            pane.view = view;
+        }
         ctx.set_pixels_per_point(scale);
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("layout.json");
@@ -200,6 +254,10 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
             remote,
             rect("transfer-upload"),
             rect("transfer-download"),
+            rect("transfer-view-list:0"),
+            rect("transfer-view-icons:0"),
+            rect("transfer-view-list:1"),
+            rect("transfer-view-icons:1"),
         ] {
             assert!(
                 control[0] >= 0.

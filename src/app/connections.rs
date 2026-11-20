@@ -6,6 +6,8 @@
 //! host/project after preparation; recovery metadata alone never authorizes a save.
 use super::*;
 
+mod view;
+
 impl EditorApp {
     /// Start authenticated SSH preparation for a captured profile after ownership guards;
     /// reconnect preserves only recovery state belonging to the matching connection.
