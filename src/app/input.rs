@@ -410,6 +410,8 @@ impl EditorApp {
     /// have no dialog, guarded modal, workbench modal, vault lock or popup barrier.
     pub(in crate::app) fn editing_allowed(&self, ctx: &egui::Context) -> bool {
         ctx.input(|i| i.focused)
+            && (ctx.viewport_id() != egui::ViewportId::ROOT
+                || self.areas.active == areas::Area::Projects)
             && self.dialog == Dialog::None
             && !self.pending.modal()
             && !self.workbench_modal()

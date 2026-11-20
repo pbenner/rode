@@ -210,7 +210,7 @@ impl EditorApp {
     /// Same-host policy changes may keep bound buffers; disconnect callers must first
     /// replace their paths with non-authorizing recovery metadata.
     pub(super) fn clear_project(&mut self, retention: documents::Retention, reason: LeaveReason) {
-        self.transfers.reset();
+        self.invalidate_project_transfers();
         self.cancel_guarded_action();
         // Forced transport loss can invalidate the jobs whose acknowledgements
         // a waiting quit needs. Losing those jobs is not successful cleanup.

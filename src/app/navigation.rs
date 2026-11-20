@@ -513,6 +513,12 @@ impl EditorApp {
                 }
             }
             Hide => {
+                if self.areas.active != areas::Area::Projects
+                    && ctx.viewport_id() == egui::ViewportId::ROOT
+                {
+                    self.open_area(areas::Area::Projects, ctx);
+                    return;
+                }
                 if let Some(tab) = self.floating_tab(ctx.viewport_id()) {
                     self.reattach_tool_tab(tab, ctx);
                     return;
@@ -575,16 +581,26 @@ impl EditorApp {
             Pane::Explorer => self.explorer_visible(viewport),
             Pane::Editor => true,
             Pane::Terminal => self.terminal_visible(),
-            Pane::Tools => self.tools_visible(),
+            Pane::Tools => self.areas.active != areas::Area::Projects || self.tools_visible(),
             Pane::Menus => true,
         }
     }
     /// Record focus intent and reveal the requested surface before focusing its native widget.
     pub(super) fn focus_pane(&mut self, pane: Pane, ctx: &egui::Context) {
+        if ctx.viewport_id() == egui::ViewportId::ROOT && self.areas.active != areas::Area::Projects
+        {
+            if pane == Pane::Tools {
+                self.navigation.request_focus(pane, egui::ViewportId::ROOT);
+                return;
+            }
+            if matches!(pane, Pane::Editor | Pane::Explorer | Pane::Terminal) {
+                self.areas.active = areas::Area::Projects;
+            }
+        }
         let tab = match pane {
             Pane::Terminal => Some(workbench::ToolTab::Terminal),
             Pane::Tools => Some(workbench::ToolTab::Panel(
-                self.workbench.panel.unwrap_or(Panel::Monitor),
+                self.workbench.panel.unwrap_or(Panel::Problems),
             )),
             _ => None,
         };
@@ -632,7 +648,7 @@ impl EditorApp {
                 self.workbench.tools_hidden = false;
                 self.remember_tool_tab();
                 if self.workbench.panel.is_none() {
-                    self.toggle_panel(Panel::Monitor, ctx);
+                    self.toggle_panel(Panel::Problems, ctx);
                 }
             }
             Pane::Editor => {

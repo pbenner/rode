@@ -49,6 +49,7 @@ def run():
             key("Return")
             ui.document(source)
             ui.navigate("p")
+            ui.control("workbench-panel:PROBLEMS")
             ui.hint("Code")
             key("Right")
             ui.control("workspace-tab:Chat", focused=True)

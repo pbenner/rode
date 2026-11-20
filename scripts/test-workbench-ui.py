@@ -220,6 +220,7 @@ def run(remote=False, scenario="all"):
                     ui.value("monitor-history-count", "0", enabled=False)
                     ui.absent("monitor-sample")
                     ui.control("monitor-start")
+                    ui.click("activity:Projects")
                     ui.click("workspace-code")
                     command("System: Monitor")
                     ui.control("monitor-start")
@@ -257,7 +258,6 @@ def run(remote=False, scenario="all"):
                     for category in (
                         "LaTeX",
                         "Presentations",
-                        "Monitoring",
                         "Sandbox",
                         "Code tools",
                     ):

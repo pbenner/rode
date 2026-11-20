@@ -9,7 +9,7 @@ mod code_tools;
 mod environment;
 mod git;
 mod jobs;
-mod monitoring;
+pub(super) mod monitoring;
 mod python;
 mod sandbox_access;
 mod settings;
@@ -37,6 +37,13 @@ pub(super) enum Panel {
     Debug,
 }
 impl Panel {
+    pub(in crate::app) fn scope(self) -> areas::Scope {
+        match self {
+            Self::Monitor | Self::Transfers => areas::Scope::Host,
+            Self::Stocks => areas::Scope::Application,
+            _ => areas::Scope::Project,
+        }
+    }
     fn title(self) -> &'static str {
         match self {
             Self::Transfers => "FILE TRANSFERS",
@@ -65,9 +72,9 @@ pub(super) struct Preferences {
     format_on_save: bool,
     check_on_save: bool,
     live_checks: bool,
-    /// Requested sampling seconds, clamped to 1–30 when scheduling host telemetry.
+    /// Legacy project values are imported once into application-wide monitoring preferences.
     monitor_interval: u64,
-    /// Presentation only; chart timing never changes host sampling frequency.
+    /// Legacy chart choice retained for migration from project-scoped monitoring.
     monitor_chart: monitoring::ChartView,
     /// Requested grants; only the prepared workspace plan establishes actual isolation.
     sandbox: sandbox::Options,
@@ -328,6 +335,7 @@ impl Workbench {
     }
     /// Discard project runtime caches while retaining saved preferences and workspace-view choices.
     pub(super) fn reset_project(&mut self) {
+        let monitoring = std::mem::take(&mut self.monitoring);
         let preferences = std::mem::take(&mut self.preferences);
         let pending = self.preferences_pending;
         let panel = self.panel;
@@ -337,6 +345,7 @@ impl Workbench {
         let last_tool = self.last_tool;
         let floating_tabs = std::mem::take(&mut self.floating_tabs);
         *self = Self {
+            monitoring,
             preferences,
             preferences_pending: pending,
             panel,
@@ -352,7 +361,16 @@ impl Workbench {
     pub(super) fn stop_monitor(&mut self) {
         self.monitoring.set_active(false);
     }
+    pub(super) fn change_monitor_host(&mut self) {
+        self.monitoring.set_active(false);
+        self.monitoring.reset_history();
+    }
+    pub(super) fn discard_monitor_completion(&mut self) {
+        self.monitoring.monitor_busy = false;
+        self.monitoring.discard_reply();
+    }
     /// Clear host telemetry, start intent and rate baselines when changing execution hosts.
+    #[cfg(test)]
     pub(super) fn reset_monitor(&mut self) {
         self.monitoring = Default::default();
     }
@@ -369,6 +387,17 @@ impl Workbench {
 }
 
 impl EditorApp {
+    /// Import the selected project's old monitor preference once. Subsequent
+    /// project switches cannot replace application-wide monitor configuration.
+    pub(super) fn migrate_monitor_preferences(&mut self) {
+        if !self.areas.monitor_configured {
+            self.areas.prefs.monitor_interval = self.workbench.prefs.monitor_interval.clamp(1, 30);
+            self.areas.prefs.monitor_chart = self.workbench.prefs.monitor_chart;
+            self.areas.monitor_configured = true;
+            self.areas.pending = true;
+        }
+    }
+
     /// Report a source-control confirmation that must participate in global input guards.
     pub(super) fn workbench_modal(&self) -> bool {
         self.workbench.git.confirm.is_some()
@@ -384,7 +413,12 @@ impl EditorApp {
     }
 
     /// Render a specific tool using its existing controller, independent of the dock selection.
-    fn panel_content(&mut self, panel: Panel, ui: &mut egui::Ui, ctx: &egui::Context) {
+    pub(in crate::app) fn panel_content(
+        &mut self,
+        panel: Panel,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+    ) {
         let mut content = self.pane_ui(ui, navigation::Pane::Tools);
         let ui = &mut content;
         if !self.panel_enabled(panel) {
@@ -392,6 +426,9 @@ impl EditorApp {
             return;
         }
         let palette = self.themes.active().palette;
+        if matches!(panel, Panel::Monitor | Panel::Transfers) {
+            self.host_tool_header(panel, ui, ctx);
+        }
         if panel == Panel::Transfers {
             self.transfers_ui(ui, ctx);
             return;
@@ -416,12 +453,15 @@ impl EditorApp {
                 layout::PAGE_WIDTH
             },
             |ui| {
-                let host = self
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| w.remote.as_ref())
-                    .map(|r| format!("SSH · {}", r.profile.endpoint()))
-                    .unwrap_or_else(|| "LOCAL HOST".into());
+                let host = if panel == Panel::Monitor {
+                    self.monitor_host_label()
+                } else {
+                    self.workspace
+                        .as_ref()
+                        .and_then(|w| w.remote.as_ref())
+                        .map(|r| format!("SSH · {}", r.profile.endpoint()))
+                        .unwrap_or_else(|| "LOCAL HOST".into())
+                };
                 let heading = ui
                     .add(egui::Label::new(palette.tag(&host)).truncate())
                     .on_hover_text(&host);
@@ -473,6 +513,11 @@ impl EditorApp {
 
     /// Reveal a tool without toggling it off, including an independently detached tab.
     pub(in crate::app) fn reveal_panel(&mut self, panel: Panel, ctx: &egui::Context) {
+        if let Some(area) = areas::Area::for_panel(panel) {
+            self.open_area(area, ctx);
+            return;
+        }
+        self.areas.active = areas::Area::Projects;
         if self.tab_detached(ToolTab::Panel(panel)) {
             self.focus_tool_tab(ToolTab::Panel(panel), ctx);
         } else if self.workbench.panel == Some(panel) && self.workbench.surface == Surface::Tools {
@@ -492,6 +537,12 @@ impl EditorApp {
             );
             return;
         }
+        if let Some(area) = areas::Area::for_panel(panel) {
+            self.open_area(area, ctx);
+            return;
+        }
+        let from_project = self.areas.active == areas::Area::Projects;
+        self.areas.active = areas::Area::Projects;
         self.workbench.last_tool = Some(workspace::ToolTab::Panel(panel));
         if self.tab_detached(workspace::ToolTab::Panel(panel)) {
             self.focus_tool_tab(workspace::ToolTab::Panel(panel), ctx);
@@ -506,12 +557,14 @@ impl EditorApp {
             ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
             return;
         }
-        self.workbench.panel =
-            if self.workbench.panel == Some(panel) && self.workbench.surface == Surface::Tools {
-                None
-            } else {
-                Some(panel)
-            };
+        self.workbench.panel = if from_project
+            && self.workbench.panel == Some(panel)
+            && self.workbench.surface == Surface::Tools
+        {
+            None
+        } else {
+            Some(panel)
+        };
         if panel == Panel::Git && self.workbench.panel.is_some() {
             self.refresh_git(ctx);
         }

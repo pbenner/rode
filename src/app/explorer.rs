@@ -421,6 +421,10 @@ impl EditorApp {
 
     /// Render cached directory rows and explicit project actions; directory I/O is delegated to workers.
     pub(super) fn explorer(&mut self, ctx: &egui::Context) {
+        if ctx.viewport_id() == egui::ViewportId::ROOT && self.areas.active != areas::Area::Projects
+        {
+            return;
+        }
         let palette = self.themes.active().palette;
         let viewport = ctx.viewport_id();
         if !self.explorer_visible(viewport)

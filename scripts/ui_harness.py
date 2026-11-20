@@ -386,6 +386,18 @@ class NativeUI:
         )
 
     def click(self, name, *, mouse_button=1):
+        # Project toolbar overflow is an explicit, single navigation step.
+        visible = {button["name"] for button in self.layout()["buttons"]}
+        if name not in visible and name.startswith("workspace-tab:"):
+            click_button(
+                self.window, self.process, self.log_path, self.state_path, "workspace-tools"
+            )
+        elif name not in visible and (
+            name.startswith("workspace-detach") or name == "workspace-dock"
+        ):
+            click_button(
+                self.window, self.process, self.log_path, self.state_path, "workspace-project-menu"
+            )
         click_button(
             self.window,
             self.process,

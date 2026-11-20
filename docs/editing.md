@@ -144,11 +144,15 @@ Choose a percentage in **View → Interface scale** to resize the entire GUI, in
 Source text defaults to **15 pt**. Saved text sizes are retained; use the existing
 **Editor font size** control or **Ctrl+Plus / Ctrl+Minus** to adjust them.
 
-The explorer remains at the left. The workspace beside it switches between **Code**, **Chat**, **Terminal**, and project tools such as **Git** and **Debugger**. Opening tools replaces the code view instead of shrinking it. Choose **Code** or open a file in the explorer to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
+The left rail contains application areas: **Projects**, **Connections**, **Monitor**, **Transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Global areas use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
 
-Choose **Detach** in the workspace toolbar to move the selected tools or terminal into a separate native window while the editor stays visible in the main window. The tools tab bar moves with it, leaving the main window's full editor space available. Switch tools using the tabs in the detached window. **Dock back**, or closing the tools window, returns it and its tab bar beside the explorer without stopping its work. Use an activity icon to bring the tools window to the front, or **Ctrl+~** to hide or restore it.
+Within Projects, the single-row toolbar contains the Explorer toggle, **Code**, **Chat**, **Terminal**, **Git**, **Tools**, and project settings. **Tools** contains **Problems**, **Debugger**, **Environment**, and **Tasks**. Narrow windows move less-used buttons into that menu instead of wrapping the bar. Right-click a tool to pin it; **App settings → Project toolbar** manages up to two pins. An active debugger is promoted when space permits. Document tabs stay below this toolbar.
 
-Choose **Detach tab** to open just the selected tab in its own window, or right-click any tool tab and choose **Detach tab**. You can detach several tabs independently, including from an already detached sidebar. Each detached tab stays visible and disabled in the tab bar. Use **Reattach** in its window, or close that window, to return it to the sidebar. Activity icons and tool shortcuts bring detached tabs to the front. Conversations, drafts, running shells and tool state stay intact when moving between windows.
+The explorer remains beside the project content and can be hidden independently. Opening a project tool replaces the code view instead of shrinking it. Choose **Code** or open a file in the explorer to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
+
+Choose **Project menu (···) → Detach** to move the selected project tools or terminal into a separate native window while the editor stays visible in the main window. **Dock back** in that menu, or closing the tools window, returns it without stopping its work. **Ctrl+~** hides or restores that window.
+
+Choose **Project menu (···) → Open tool in separate window**, or right-click a tool and choose **Open in separate window**, to detach just that tool. Global panel icons offer the same context action. Several tools can detach independently; each keeps its existing controller. Use **Reattach** in its window, or close it, to return it. Tool commands raise its existing window. Conversations, drafts, running shells and tool state stay intact when moving between windows.
 
 The terminal fills this workspace rather than occupying a separate bottom panel. **Ctrl+Shift+T** selects the terminal or returns to code. **Ctrl+~** (also **Ctrl+`**) hides or restores the tools sidebar. Its first opening selects **Chat** when enabled; later openings restore the selected tab, whether that is Chat, Terminal, Git or another tool. Hiding it keeps the shell and agent running, and preserves drafts. A detached tools window hides and reopens without docking itself. Resize a detached tools window using its native borders. Paths and status text retain their full hover text, and find/replace adapts to narrow windows. Unsaved files still require a discard decision when closed.
 
@@ -189,7 +193,7 @@ Discovery is local to the focused window and the current modal or popup.
 Existing custom bindings take precedence over newly added defaults; a conflicting
 new binding is left unassigned and can be edited in Keyboard shortcuts.
 
-Editor and tool workspace tab strips each have one Tab stop. Left/Right moves focus among their tabs;
+Editor tab strips and the project toolbar each have one Tab stop. Left/Right moves focus among their tabs;
 Enter/Space selects a tab. Shift+F10 opens a focused item's contextual menu.
 Editor tab menus include Move tab left/right and Move to new editor window.
 Text fields retain their native editing keys.

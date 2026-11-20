@@ -14,7 +14,7 @@ Project bookmarks, Stocks, Git, the system/GPU monitor, Python environments, lan
 
 Disabling a feature preserves open documents and unsaved edits. Binary edits can still be saved while their view is disabled. Monitoring starts only through **Start monitoring** and continues while hidden until stopped. Disabling the monitor stops collection. Python environment discovery starts when a Python file or environment panel is used, rather than probing every opened project. New terminals still honor configured environments; disabling the Python module leaves existing terminals alone and omits its environment activation from new ones. Chat still starts a process only on Send; disabling it stops its process. Debug adapters start only on explicit launch/attach; disabling the debugger stops its session.
 
-Disabled extensions hide their activity buttons, tool tabs, menu and command-palette
+Disabled extensions hide their global-area buttons, project tools, menu and command-palette
 actions, dedicated toolbar controls and settings categories. Re-enabling an
 extension restores these controls and its saved preferences. Shared core controls,
 including file/save actions, terminals, project settings and the extension manager,

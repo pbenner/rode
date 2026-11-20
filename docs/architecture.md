@@ -67,7 +67,8 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
 | `src/app/git_gutter.rs`, `src/app/git_gutter/` | Policy-bound HEAD reads and one bounded comparison for markers, change peeks and editor-only hunk reverts; document/version/baseline admission rejects stale changes |
 | `src/app/diff_view.rs` | Shared bounded, selectable, read-only unified diff renderer for the Git panel and source change peeks |
-| `src/app/frame.rs` | Application menus, connection banners, activity controls and pane entry views; routes through the existing lifecycle guards |
+| `src/app/frame.rs` | Application menus, connection banners, global navigation rail and pane entry views; routes through the existing lifecycle guards |
+| `src/app/areas.rs`, `src/app/host_tools.rs` | Application/project presentation scopes, independent toolbar/monitor preferences, captured host selection and project-independent telemetry/access-preparation completions |
 | `src/app/workers.rs`, `src/app/workers/` | Captured file/decode jobs, typed reply endpoints, private lifecycle envelopes, bounded polling and file-domain admission/completion |
 | `src/app/execution.rs` | Shared captured host/project target, generation-bound reply endpoint and mount-work guard for file, tool and session workers; separate explicit host-mode Git preparation |
 | `src/app/agents/controller.rs`, `src/app/agents/view.rs` | Agent-owned lifecycle, queue and history admission; chat rendering receives immutable application facts and returns explicit cross-domain actions |
@@ -205,6 +206,22 @@ rather than inferring completion from titles or interleaved user replies.
 Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, following the chat-history, running-agent and monitor layouts. Use `page` around a tool's scrolling region, `heading` (or `header` with responsive toolbar actions), and `section` for related controls. Form grids use `field_label` to reserve a readable label column or stack labels above inputs in compact views. Lists use `card` or customize `card_frame` for selection; `empty` explains an unpopulated list. Pages cap forms/lists at 1000 logical points; the monitor keeps a wider responsive grid, while document canvases, source editors and terminals retain their own space requirements. Dialogs share `dialog_frame` and a viewport-bounded scrolling budget. These helpers own presentation only: retain stable scroll/widget IDs and controller state in each domain so docking/resizing never changes task ownership or unsaved drafts.
 
 The Rust/egui application keeps the editor independent of an embedded browser application runtime. Cached layouts, virtualized rows and explicit worker jobs keep slow I/O and tool execution out of ordinary input/rendering. On-demand activation limits idle work, at the cost of waiting for a tool or preview's first result. This choice does not by itself establish a performance claim: measure relevant release workloads when changing those boundaries. Rationale lives in `src/lib.rs` and `src/app.rs`.
+
+`areas::Area` selects the main window's application surface without changing the
+project's selected `workbench::Surface` or controllers. The project toolbar and
+its Tools overflow use the same `ToolTab` registry and scope classification;
+secondary editor/tool windows keep their existing owners. Application navigation
+is presentation state, not execution authority.
+
+`host_tools::State` captures the selected SSH connection separately from the
+workspace. Its reply channel is independent of project-generation invalidation,
+so an in-flight monitor poll cannot lose its busy acknowledgement during a
+project switch. Changing the monitor host discards the old result before another
+poll starts. Transfer bindings retain either the captured project generation or
+an explicitly prepared host-access context. Project authority expires with that
+project; neither a disconnected host nor an expired scope can fall back to local
+access. Explicit SSH disconnect still releases the original transport and leaves
+the tool's selection offline.
 
 One UI-thread owner avoids concurrent mutation of source buffers. Cancellation alone cannot revoke a result already queued, so generation/source checks remain necessary even for cancellable jobs. Stable tab/cell IDs preserve ownership across reordering, while positional indices are presentation state. See [worker results](#worker-results-and-version-checks).
 
@@ -634,7 +651,7 @@ Runtime attachments use explicit preparing, connecting, attached, offline and en
 
 Confirmed runtime terminations use a bounded worker separate from read-only discovery. Requests capture their original host and policy, survive project-view resets and drain even when the browser drops. Normal application exit waits for their results; a failed termination cancels that exit and remains visible across discovery refreshes. This costs a separate queue but prevents a slow listing from silently discarding an approved mutation.
 
-Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Hidden monitors stop scheduling samples; hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
+Use idempotent cleanup and identify owned groups/handles before sending signals. Never clean up unrelated SSH masters, terminal services or processes by executable name. Explicitly started monitoring continues while hidden; stopping collection or losing the selected host prevents further samples. Hidden terminals retain their shell state without forcing repaints. Per-window runtime state is separate from field-merged preferences.
 
 `rode_runtime_core::process::ProcessGroup` owns shared cancellation and signal
 state for the desktop stdio transport, host agent transport, native runtime
@@ -779,7 +796,7 @@ The internal entry points below are included by `--document-private-items`. Thei
 | Submit queued chat | `app/agents/queue.rs`: `Queue`; `app/agents.rs`: `flush_queue`, `poll_agents`; `rode-agent-core::queue`; `rode-session/src/agents.rs` | UI edits transfer once accepted by the bounded transport. The native controller owns scheduling and attachment payloads after detachment. A failed command must remain visible and retryable. |
 | Attach a running job | `app/agents/background.rs`, `app/sessions/runtimes.rs`; the host stores' `find`/`attach` methods | Discovery does not create computation. ID and original policy must match; only one controlling agent/runtime attachment is accepted. Terminal views have their separate shared-PTY contract. |
 | Change interpreter/settings | `workbench/python.rs`: `python_environment_picker`; `workbench/settings.rs`; `Workbench::invalidate_tools` | Applied settings and form drafts are distinct. New jobs capture accepted settings; existing processes retain their environment unless an explicit supported operation changes it. |
-| Refresh telemetry | `Workbench::workbench_tick` → `dispatch_tool` → `monitoring::State::record` → `monitoring/dashboard.rs` | Rendering uses cached successful samples. Rate baselines use successful sample times, not failed-request scheduling times. Missing measurements remain gaps. |
+| Refresh telemetry | `EditorApp::workbench_tick` → `host_tools::dispatch_host_monitor` → `poll_host_tools` → `monitoring::State::record` → `monitoring/dashboard.rs` | Rendering uses cached successful samples. Rate baselines use successful sample times, not failed-request scheduling times. Missing measurements remain gaps. |
 | Navigate debugger source | `app/debugging/navigation.rs`: `Target`, `resolve_debug_source`; `debugging::State::source_version` | A source jump belongs to a stopped inspection epoch and the original host. Resume, changed source or a failed read cannot trigger a stale jump or local fallback. |
 | Change appearance | `app/appearance.rs`: `select_theme`, `select_syntax_theme`, `persist_theme_choice`, `set_ui_scale` | Applying appearance is immediate; saving is a separate queued preference edit. Interface scale, editor font size and syntax selection are independent. |
 | Close or lock | `app/lifecycle.rs`: `handle_close_request`; `app.rs`: `guarded`; `sessions.rs`: `quit_terminals`; `vaults.rs`: `lock_encrypted`, `poll_vaults` | Native close and menu Quit share guards. A queued lifetime mutation or unmount request is not completed cleanup. Failed cleanup keeps the window and truthful mount state available. |

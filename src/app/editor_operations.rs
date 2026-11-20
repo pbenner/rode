@@ -220,7 +220,15 @@ impl EditorApp {
                     self.refresh_environment(false, ctx);
                 }
                 self.status = "File loaded".into();
-                if self.navigation.accepts_editor_focus() {
+                // A late read may populate a buffer without replacing a global
+                // area. Canonical aliases can resolve to an existing root-owned
+                // document even when the read originally targeted another window.
+                if self.navigation.accepts_editor_focus()
+                    && self.documents.owner(id).is_some_and(|owner| {
+                        owner != egui::ViewportId::ROOT
+                            || self.areas.active == areas::Area::Projects
+                    })
+                {
                     self.execute_editor_operation(
                         Operation::Select {
                             document: id,

@@ -21,7 +21,6 @@ from ui_harness import (
     NativeUI,
     assert_running,
     click,
-    click_button,
     close_window,
     display,
     fixture_directory,
@@ -130,13 +129,20 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
 
             def activate(name, target=None):
                 target = window if target is None else target
-                click_button(target, process, log_path, state_for(target), name)
+                driver(target).click(name)
 
             def disabled_tab(name):
                 focus(window)
+                opened = not any(
+                    b["name"] == "workspace-tab:" + name for b in driver().layout()["buttons"]
+                )
+                if opened:
+                    activate("workspace-tools")
                 point = control("workspace-tab:" + name, enabled=False)
                 before = json.loads(state_path.read_text())["pass"]
                 click(*point)
+                if opened:
+                    key("Escape")
                 control("workspace-code-selected", after_pass=before)
 
             def composer(target):
@@ -359,6 +365,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             control("pane-outline-Tools", chat_window)
             driver().absent("pane-outline-Tools", after_pass=root_pass)
             focus(window)
+            activate("activity:Projects")
             activate("workspace-code")
             disabled_tab("Chat")
             activate("source-editor")

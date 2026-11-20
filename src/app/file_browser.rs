@@ -147,7 +147,12 @@ pub(super) fn rows(
 pub(super) struct RowOptions<'a> {
     pub height: Option<f32>,
     pub checked: Option<&'a HashSet<String>>,
+    /// Quiet vector-icon rows for an embedded file browser; ordinary pickers keep their styling.
+    pub icons: bool,
+    /// Called for visible rows only. The caller owns drag payloads and destination policy.
+    pub on_row: Option<&'a mut RowHook<'a>>,
 }
+type RowHook<'a> = dyn FnMut(&mut egui::Ui, &Entry, &egui::Response) + 'a;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn rows_with_options(
@@ -160,7 +165,7 @@ pub(super) fn rows_with_options(
     path_keys: (isize, bool),
     selected: Option<&str>,
     ready: bool,
-    options: RowOptions<'_>,
+    mut options: RowOptions<'_>,
 ) -> Option<Choice> {
     let visible: Vec<_> = entries
         .iter()
@@ -253,7 +258,7 @@ pub(super) fn rows_with_options(
         None
     };
     let scroll_id = ui.make_persistent_id(id);
-    let row_height = layout::control_height(ui).max(25.);
+    let row_height = layout::control_height(ui).max(if options.icons { 34. } else { 25. });
     let row_pitch = row_height + 2.;
     let mut scroll = egui::ScrollArea::vertical()
         .id_salt(id)
@@ -270,6 +275,12 @@ pub(super) fn rows_with_options(
         }
     }
     let spacing = ui.spacing().item_spacing.y;
+    let clip = ui.clip_rect();
+    if options.icons {
+        // Embedded browser lists end above a fixed action footer. ScrollArea
+        // may otherwise paint a partial final row into that reserved space.
+        ui.set_clip_rect(clip.intersect(response.rect));
+    }
     ui.spacing_mut().item_spacing.y = 2.;
     scroll.show_rows(ui, row_height, visible.len(), |ui, range| {
         // Disable stale entries while navigating, but retain the list's focus
@@ -288,11 +299,42 @@ pub(super) fn rows_with_options(
             let marked = options
                 .checked
                 .is_some_and(|paths| paths.contains(&entry.path));
-            if options.checked.is_some() {
+            if options.checked.is_some() && !options.icons {
                 label = format!("{}  {label}", if marked { "☑" } else { "☐" });
             }
             let response = ui
                 .push_id(&entry.path, |ui| {
+                    let sense = if options.on_row.is_some() {
+                        Sense::click_and_drag()
+                    } else {
+                        Sense::click()
+                    }
+                    .difference(Sense::focusable_noninteractive());
+                    if options.icons {
+                        let icon_id = ui.next_auto_id().with("file-icon");
+                        let output = egui::Button::selectable(
+                            marked || list.navigated && index == list.index,
+                            (
+                                egui::Atom::custom(icon_id, egui::Vec2::splat(18.)),
+                                entry.name.as_str(),
+                                egui::Atom::grow(),
+                            ),
+                        )
+                        .frame(false)
+                        .truncate()
+                        .sense(sense)
+                        .min_size(egui::vec2(ui.available_width(), row_height))
+                        .atom_ui(ui);
+                        if let Some(rect) = output.rect(icon_id) {
+                            let color = ui.visuals().weak_text_color();
+                            (if entry.dir { Icon::Folder } else { Icon::Files }).paint(
+                                ui.painter(),
+                                rect,
+                                color,
+                            );
+                        }
+                        return output.response;
+                    }
                     ui.add_sized(
                         [ui.available_width(), row_height],
                         egui::Button::selectable(
@@ -300,12 +342,15 @@ pub(super) fn rows_with_options(
                             (label, egui::Atom::grow()),
                         )
                         .truncate()
-                        .sense(Sense::click().difference(Sense::focusable_noninteractive())),
+                        .sense(sense),
                     )
                 })
                 .inner
                 .on_hover_text(&entry.path);
             ui_probe::value(ui, "file-picker-row", &response, &entry.path);
+            if let Some(on_row) = &mut options.on_row {
+                on_row(ui, entry, &response);
+            }
             if list.navigated && index == list.index {
                 ui_probe::value(ui, "file-picker-selected", &response, &entry.path);
             }
@@ -330,6 +375,7 @@ pub(super) fn rows_with_options(
             }
         }
     });
+    ui.set_clip_rect(clip);
     ui.spacing_mut().item_spacing.y = spacing;
     action
 }

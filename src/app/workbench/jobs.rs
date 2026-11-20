@@ -16,20 +16,10 @@ impl EditorApp {
         job: ToolJob,
         ctx: &egui::Context,
     ) {
-        // Telemetry needs a host, while project commands need a prepared project.
-        let host = matches!(request, project::Request::Monitor { .. });
-        if (host && !self.monitor_ready()) || (!host && !self.project_ready()) {
+        if !self.project_ready() {
             return;
         }
-        // Telemetry describes the selected host, not its private project /proc.
-        let mut work = self.capture_work(
-            if host {
-                execution::Scope::Host
-            } else {
-                execution::Scope::Project
-            },
-            ctx,
-        );
+        let mut work = self.capture_work(execution::Scope::Project, ctx);
         let host_git = !self.workbench.git_sandbox()
             && matches!(job, ToolJob::Git(_))
             && matches!(
@@ -109,11 +99,7 @@ impl EditorApp {
     }
     /// Allow local host sampling without a project; SSH sampling requires its connection.
     pub(super) fn monitor_ready(&self) -> bool {
-        !self.vaults.locking()
-            && self
-                .workspace
-                .as_ref()
-                .is_none_or(|w| w.remote.is_none() || w.connected)
+        self.monitor_host_ready()
     }
     /// Copy the selected project root, or an empty string when no workspace exists.
     pub(in crate::app) fn root(&self) -> String {
@@ -126,31 +112,24 @@ impl EditorApp {
     /// Schedule explicitly started host monitoring, visible Git refreshes and debounced diagnostics.
     /// Use cached timestamps and in-flight flags to avoid launching work every frame.
     pub(in crate::app) fn workbench_tick(&mut self, ctx: &egui::Context) {
+        if self.workbench.monitoring.active {
+            self.initialize_host_tool(Panel::Monitor, ctx);
+        }
         if self.feature(crate::extensions::Feature::Monitor)
             && self.workbench.monitoring.active
             && !self.exit_pending()
             && self.monitor_ready()
         {
-            let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
+            let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
             if !self.workbench.monitoring.monitor_busy
                 && self
                     .workbench
                     .monitoring
                     .monitor_last
-                    .is_none_or(|t| t.elapsed() >= interval)
+                    .is_none_or(|time| time.elapsed() >= interval)
             {
                 self.workbench.monitoring.monitor_busy = true;
-                self.dispatch_tool(
-                    project::Request::Monitor {
-                        root: if self.project_ready() {
-                            self.root()
-                        } else {
-                            "/".into()
-                        },
-                    },
-                    ToolJob::Monitor,
-                    ctx,
-                );
+                self.dispatch_host_monitor(ctx);
             }
             ctx.request_repaint_after(interval);
         }
@@ -306,7 +285,7 @@ impl EditorApp {
                         self.workbench.monitoring.record(
                             sample,
                             Instant::now(),
-                            Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30)),
+                            Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30)),
                         );
                     }
                     Err(error) => self.workbench.monitoring.monitor_error = error,

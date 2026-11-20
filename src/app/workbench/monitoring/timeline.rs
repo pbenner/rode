@@ -6,7 +6,7 @@ pub(super) const MAX_SECONDS: u64 = 600;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::app::workbench) enum Mode {
+pub(in crate::app) enum Mode {
     #[default]
     Scrolling,
     History,
@@ -14,7 +14,7 @@ pub(in crate::app::workbench) enum Mode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(in crate::app::workbench) struct View {
+pub(in crate::app) struct View {
     pub mode: Mode,
     pub seconds: u64,
 }

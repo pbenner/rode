@@ -134,6 +134,7 @@ SUITES = {
         ([sys.executable, "scripts/test-ui.py"], {}, 180),
         ui("workspace"),
         ui("navigation"),
+        ui("navigation-areas"),
         ui("keyboard-controls"),
         ui("explorer"),
         ui("git-identity"),

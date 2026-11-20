@@ -685,7 +685,8 @@ mod tests {
         let mut app = EditorApp::new(&cc, Startup::default());
         assert!(app.workspace.as_ref().is_none());
         app.toggle_panel(Panel::Stocks, &ctx);
-        assert_eq!(app.workbench.panel, Some(Panel::Stocks));
+        assert_eq!(app.areas.active, areas::Area::Stocks);
+        assert_eq!(app.workbench.panel, None);
         let generation = app.stocks.generation;
         app.set_extension(FEATURE.id(), false);
         assert!(!app.panel_enabled(Panel::Stocks));

@@ -85,6 +85,9 @@ impl EditorApp {
 
     /// Display actual host/project preparation and sandbox state independently of requested settings.
     pub(super) fn workspace_banner(&mut self, ctx: &egui::Context) {
+        if self.areas.active != areas::Area::Projects {
+            return;
+        }
         let palette = self.themes.active().palette;
         let Some(workspace) = self.workspace.as_ref() else {
             let file = self.documents.active().and_then(|d| d.path.as_deref());
@@ -208,15 +211,6 @@ impl EditorApp {
                         if crate::keyboard::button(ui, "Open project…").clicked() {
                             self.set_dialog(Dialog::Folder);
                         }
-                        if ctx.content_rect().width() >= 1180.
-                            && self.panel_enabled(Panel::Transfers)
-                        {
-                            let transfers = crate::keyboard::button(ui, "Transfers");
-                            ui_probe::button(ui, "open-transfers", &transfers);
-                            if transfers.clicked() {
-                                self.open_transfers(None, None, ctx);
-                            }
-                        }
                         ui.label(
                             RichText::new(if remote.is_some() && !connected && !connecting {
                                 "SSH OFFLINE"
@@ -274,39 +268,36 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.;
                 ui.spacing_mut().button_padding = egui::vec2(0., 2.);
-                let commands: Vec<_> = [
-                    Command::Explorer,
-                    Command::Open,
-                    Command::Connect,
-                    Command::Terminal,
-                    Command::Panel(Panel::Git),
-                    Command::Panel(Panel::Monitor),
-                    Command::Panel(Panel::Problems),
-                    Command::Panel(Panel::Environment),
-                    Command::Panel(Panel::Tasks),
-                    Command::Panel(Panel::Settings),
-                    Command::Panel(Panel::Agent),
-                    Command::Extensions,
-                    Command::Panel(Panel::Debug),
-                    Command::Panel(Panel::Stocks),
-                ]
-                .into_iter()
-                .filter(|command| self.command_visible(*command))
-                .collect();
-                let button_height =
-                    ((ui.available_height() - 68.) / commands.len() as f32 - 6.).clamp(22., 40.);
-                for command in commands {
-                    self.activity_button(ui, command, button_height, ctx);
-                    ui.add_space(6.0);
-                }
+                let commands: Vec<_> = areas::Area::RAIL
+                    .into_iter()
+                    .map(areas::Area::command)
+                    .filter(|command| self.command_visible(*command))
+                    .collect();
+                // Keep the footer outside the scroll clip. At high zoom a fixed
+                // minimum button size cannot fit every area above those controls.
+                let area_height = (ui.available_height() - 112.).max(0.);
+                let button_height = (area_height / commands.len() as f32 - 6.).clamp(22., 40.);
+                egui::ScrollArea::vertical()
+                    .id_salt("application-areas")
+                    .max_height(area_height)
+                    .min_scrolled_height(0.)
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        for command in commands {
+                            self.activity_button(ui, command, button_height, ctx);
+                            ui.add_space(6.0);
+                        }
+                    });
                 ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
-                    if ui
-                        .add_sized(
-                            [36., 28.],
-                            IconButton::icon(Icon::Help, "Keyboard shortcuts").icon_size(21.),
-                        )
-                        .clicked()
-                    {
+                    self.activity_button(ui, Command::AppSettings, 36., ctx);
+                    self.activity_button(ui, Command::Extensions, 36., ctx);
+                    let help = ui.add_sized(
+                        [36., 28.],
+                        IconButton::icon(Icon::Help, "Keyboard shortcuts").icon_size(21.),
+                    );
+                    ui_probe::button(ui, "activity:Help", &help);
+                    if help.clicked() {
                         self.set_dialog(Dialog::Shortcuts);
                     }
                 });
@@ -340,6 +331,9 @@ impl EditorApp {
                 .selected(selected),
         );
         ui_probe::button(ui, &format!("activity:{}", definition.label), &response);
+        if response.has_focus() {
+            response.scroll_to_me(None);
+        }
         if selected {
             palette.paint_activity(
                 ui.painter(),
@@ -348,6 +342,17 @@ impl EditorApp {
                     egui::vec2(2., response.rect.height() - 12.),
                 ),
             );
+        }
+        if let Command::Panel(panel) = command
+            && panel.scope() != areas::Scope::Project
+        {
+            crate::keyboard::context_menu(&response, |ui| {
+                if crate::keyboard::button(ui, "Open in separate window").clicked() {
+                    self.initialize_host_tool(panel, ctx);
+                    self.detach_tab(workbench::ToolTab::Panel(panel), ctx);
+                    ui.close();
+                }
+            });
         }
         if response.clicked() {
             self.execute_command(command, ctx);

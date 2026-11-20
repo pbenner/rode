@@ -6,6 +6,9 @@ use super::super::*;
 /// presentation, while this enum selects behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) enum Command {
+    Projects,
+    Connections,
+    AppSettings,
     KeyboardHints,
     FindControl,
     New,
@@ -103,6 +106,9 @@ impl Definition {
 
 impl Command {
     pub(in crate::app) const PALETTE: &'static [Self] = &[
+        Self::Projects,
+        Self::Connections,
+        Self::AppSettings,
         Self::New,
         Self::NewEditorWindow,
         Self::BookmarkProject,
@@ -201,6 +207,15 @@ impl Command {
     /// Return shared command presentation metadata without executing or enabling the action.
     pub(in crate::app) fn definition(self) -> Definition {
         match self {
+            Self::Projects => {
+                Definition::new("Projects", Icon::Folder).palette("Application: Projects")
+            }
+            Self::Connections => {
+                Definition::new("Connections", Icon::Remote).palette("Connections: Manage hosts")
+            }
+            Self::AppSettings => {
+                Definition::new("App settings", Icon::Settings).palette("Application: Settings")
+            }
             Self::KeyboardHints => Definition::new("Show keyboard hints", Icon::Search),
             Self::FindControl => Definition::new("Find visible control", Icon::Search),
             Self::NewEditorWindow => Definition::new("New editor window", Icon::Files),
@@ -460,6 +475,9 @@ impl EditorApp {
     /// local to that editor host.
     pub(in crate::app) fn command_selected(&self, command: Command, ctx: &egui::Context) -> bool {
         match command {
+            Command::Projects => self.areas.active == areas::Area::Projects,
+            Command::Connections => self.areas.active == areas::Area::Connections,
+            Command::AppSettings => self.areas.active == areas::Area::Settings,
             Command::Panel(panel) => self.panel_visible(panel),
             Command::Explorer => {
                 self.explorer_visible(ctx.viewport_id())
@@ -495,6 +513,9 @@ impl EditorApp {
     /// window/tab mutations use the shared input-ordered coordinator.
     pub(in crate::app) fn execute_command(&mut self, command: Command, ctx: &egui::Context) {
         match command {
+            Command::Projects => self.open_area(areas::Area::Projects, ctx),
+            Command::Connections => self.open_area(areas::Area::Connections, ctx),
+            Command::AppSettings => self.open_area(areas::Area::Settings, ctx),
             Command::KeyboardHints => self.start_keyboard_controls(false, ctx),
             Command::FindControl => self.start_keyboard_controls(true, ctx),
             Command::New => self.submit_editor_operation(

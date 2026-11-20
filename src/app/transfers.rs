@@ -2,6 +2,9 @@
 //! never changes workspace selection. Every job captures host, policy and vault
 //! work ownership; late listing/results cannot populate a different connection.
 use super::*;
+mod browser;
+mod drag;
+mod queue;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -183,11 +186,7 @@ impl EditorApp {
         if side == 0 {
             return Some(Endpoint::local());
         }
-        let workspace = self.workspace.as_ref().filter(|w| w.ready && w.connected)?;
-        Some(Endpoint {
-            remote: Some(workspace.remote.clone()?),
-            plan: Some(workspace.plan.clone()),
-        })
+        self.transfer_host_endpoint()
     }
     fn transfer_list(
         &mut self,
@@ -264,12 +263,36 @@ impl EditorApp {
         });
     }
     fn queue_transfer(&mut self, side: usize, paths: Vec<String>, ctx: &egui::Context) {
+        let directory = self.transfers.panes[1 - side].browser.directory.clone();
+        self.queue_transfer_to(side, paths, directory, ctx);
+    }
+    /// Buttons and drops enter the same bounded queue, with destination authority
+    /// derived from a ready listing rather than from an arbitrary drag payload.
+    fn queue_transfer_to(
+        &mut self,
+        side: usize,
+        paths: Vec<String>,
+        directory: String,
+        ctx: &egui::Context,
+    ) {
         if paths.is_empty() || !self.panel_enabled(Panel::Transfers) {
             return;
         }
-        if self.transfers.panes.iter().any(|pane| !pane.ready()) {
+        let target = &self.transfers.panes[1 - side];
+        if !target.ready() || (side == 1 && !self.transfers.panes[side].ready()) {
             self.transfers.error =
                 Some("Finish browsing both folders before starting a copy.".into());
+            return;
+        }
+        if target.browser.directory != directory
+            && !target
+                .browser
+                .entries
+                .iter()
+                .any(|entry| entry.dir && entry.path == directory)
+        {
+            self.transfers.error =
+                Some("The destination folder changed. Refresh and try again.".into());
             return;
         }
         let mut paths = paths;
@@ -293,7 +316,6 @@ impl EditorApp {
         }
         let paths = roots;
         let target = 1 - side;
-        let directory = self.transfers.panes[target].browser.directory.clone();
         if directory.is_empty() {
             self.transfers.error = Some("Choose a destination folder first.".into());
             return;
@@ -481,6 +503,9 @@ impl EditorApp {
     ) {
         if !self.panel_enabled(Panel::Transfers) {
             return;
+        }
+        if download.is_some() || upload_to.is_some() {
+            self.bind_project_transfers();
         }
         self.reveal_panel(Panel::Transfers, ctx);
         if let Some(directory) = upload_to {

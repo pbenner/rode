@@ -28,6 +28,7 @@ use crate::{
 };
 mod agents;
 mod appearance;
+mod areas;
 mod binary_view;
 mod chrome;
 mod commands;
@@ -45,6 +46,7 @@ mod extensions;
 mod file_browser;
 mod frame;
 mod git_gutter;
+mod host_tools;
 mod icons;
 mod image_view;
 mod input;
@@ -181,6 +183,8 @@ pub struct EditorApp {
     editors: editor_windows::Windows,
     editor_operations: editor_operations::Coordinator,
     navigation: navigation::State,
+    areas: areas::State,
+    host_tools: host_tools::State,
     workbench: Workbench,
     debugger: debugging::State,
     extensions: extensions::Extensions,
@@ -304,6 +308,8 @@ impl EditorApp {
             editors: Default::default(),
             editor_operations: Default::default(),
             navigation: navigation::State::load(storage),
+            areas: areas::State::load(storage),
+            host_tools: Default::default(),
             workbench: Workbench::load(storage),
             debugger: Default::default(),
             extensions: extensions::Extensions::load(storage),
@@ -397,6 +403,7 @@ impl EditorApp {
         self.persist_project_preferences(Some(&mut storage));
         self.persist_agent_preferences(Some(&mut storage));
         self.persist_extensions(Some(&mut storage));
+        self.areas.store(&mut storage);
         self.sandbox_presets.store(&mut storage);
         self.tunnels.store(&mut storage);
         self.navigation.bindings.store(&mut storage);
@@ -762,6 +769,7 @@ impl eframe::App for EditorApp {
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
         if ctx.input(|i| i.focused)
+            && self.areas.active == areas::Area::Projects
             && (self.editor.pdf_fullscreen.is_some()
                 || self.workbench.detached
                 || !self.tool_surface())
@@ -827,6 +835,7 @@ impl eframe::App for EditorApp {
             self.persist_agent_preferences(frame.storage_mut());
             self.persist_extensions(frame.storage_mut());
             if let Some(storage) = frame.storage_mut() {
+                self.areas.store(storage);
                 self.sandbox_presets.store(storage);
                 self.tunnels.store(storage);
                 self.navigation.bindings.store(storage);
@@ -850,6 +859,7 @@ impl eframe::App for EditorApp {
             return;
         }
         self.navigation.bindings.store(storage);
+        self.areas.store(storage);
         self.terminal_colors.store(storage);
         self.workbench.store(storage);
         self.agents.store(storage);

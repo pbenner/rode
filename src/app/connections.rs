@@ -34,7 +34,7 @@ impl EditorApp {
             self.terminal = None;
             self.release_workspace_transport();
             self.workers.invalidate_workspace();
-            self.workbench.reset_monitor();
+            self.workbench.stop_monitor();
             self.explorer_state.loading.clear();
             self.documents.reconnecting();
         } else {

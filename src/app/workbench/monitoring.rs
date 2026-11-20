@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 
 mod dashboard;
 mod timeline;
-pub(super) use timeline::View as ChartView;
+pub(in crate::app) use timeline::View as ChartView;
 
 // One sample per second for the longest selectable window plus its boundary.
 const HISTORY_LIMIT: usize = timeline::MAX_SECONDS as usize + 2;
@@ -239,12 +239,11 @@ impl EditorApp {
                 }
             },
         );
-        let mut view = self.workbench.prefs.monitor_chart;
+        let mut view = self.areas.prefs.monitor_chart;
         view.controls(ui);
-        if view != self.workbench.prefs.monitor_chart {
-            self.workbench.prefs.monitor_chart = view;
-            self.workbench.draft.monitor_chart = view;
-            self.workbench.save_preferences();
+        if view != self.areas.prefs.monitor_chart {
+            self.areas.prefs.monitor_chart = view;
+            self.areas.pending = true;
         }
         let state = &self.workbench.monitoring;
         if !state.monitor_error.is_empty() {
@@ -282,7 +281,7 @@ impl EditorApp {
                 duration_label(latest.at.elapsed().as_secs_f32())
             ));
         });
-        let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
+        let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
         ui.add_space(12.);
         dashboard::show(ui, state, interval, view, palette);
         if state.active && view.mode == timeline::Mode::Scrolling {
@@ -320,11 +319,7 @@ impl EditorApp {
                         .fill(palette.accent)
                         .text(format!(
                             "{} disk · {} free / {}",
-                            if self.project_ready() {
-                                "Project"
-                            } else {
-                                "Host"
-                            },
+                            "Host",
                             bytes(sample.disk_free),
                             bytes(sample.disk_total)
                         )),

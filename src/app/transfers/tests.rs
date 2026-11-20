@@ -6,6 +6,7 @@ fn app() -> (EditorApp, egui::Context) {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
+    app.reveal_panel(Panel::Transfers, &ctx);
     for (side, path) in [(0, "/local"), (1, "/remote")] {
         app.transfers.panes[side].browser.loaded(files::Response {
             path: path.into(),
@@ -17,7 +18,6 @@ fn app() -> (EditorApp, egui::Context) {
             ..Default::default()
         });
     }
-    app.reveal_panel(Panel::Transfers, &ctx);
     (app, ctx)
 }
 
@@ -48,7 +48,7 @@ fn extension_visibility_and_stale_listings_preserve_workspace_authority() {
     app.set_extension(crate::extensions::Feature::Transfers.id(), true);
     assert!(app.command_visible(Command::Panel(Panel::Transfers)));
     app.workspace.set_fixture(None);
-    assert!(!app.command_visible(Command::Panel(Panel::Transfers)));
+    assert!(app.command_visible(Command::Panel(Panel::Transfers)));
 }
 
 #[test]
@@ -181,6 +181,20 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
         let local = rect("transfer-path:0");
         let remote = rect("transfer-path:1");
         assert!(local[2] <= remote[0], "Browsers overlap: {snapshot}");
+        for (side, copy) in [(0, "transfer-upload"), (1, "transfer-download")] {
+            let path = rect(&format!("transfer-path:{side}"));
+            let filter = rect(&format!("transfer-filter:{side}"));
+            let drop = rect(&format!("transfer-drop:{side}"));
+            let action = rect(copy);
+            assert!(
+                path[3] <= filter[1] && filter[3] <= drop[1] && drop[3] <= action[1],
+                "Browser rows overlap the copy action: {snapshot}"
+            );
+            assert!(
+                drop[3] - drop[1] >= 30.,
+                "No usable file list at {width}x{height}: {snapshot}"
+            );
+        }
         for control in [
             local,
             remote,
@@ -197,4 +211,54 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
         }
         assert!(buttons.iter().any(|b| b["name"] == "transfer-idle"));
     }
+}
+
+#[test]
+fn drag_snapshots_reject_same_side_stale_listings_and_changed_workspaces() {
+    let (mut app, _) = app();
+    let drag = drag::Files {
+        side: 0,
+        generation: app.transfers.generation,
+        token: app.transfers.panes[0].browser.token,
+        directory: "/local".into(),
+        paths: vec!["/local/file.txt".into()],
+    };
+    assert!(drag.valid(&app.transfers, 1));
+    assert!(!drag.valid(&app.transfers, 0));
+    app.transfers.panes[0].browser.token += 1;
+    assert!(!drag.valid(&app.transfers, 1));
+    app.transfers.panes[0].browser.token -= 1;
+    app.transfers.panes[1].browser.location = "/typed destination".into();
+    assert!(!drag.valid(&app.transfers, 1));
+    app.transfers.panes[1].browser.location = "/remote".into();
+    let mut unknown = drag.clone();
+    unknown.paths.push("/not-listed".into());
+    assert!(!unknown.valid(&app.transfers, 1));
+    app.transfers.reset();
+    assert!(!drag.valid(&app.transfers, 1));
+}
+
+#[test]
+fn desktop_drops_require_real_absolute_paths_and_listed_destinations() {
+    let file = |path: Option<&str>| egui::DroppedFile {
+        path: path.map(PathBuf::from),
+        ..Default::default()
+    };
+    assert_eq!(
+        drag::desktop_paths(&[file(Some("/local/日本.txt"))]).unwrap(),
+        vec!["/local/日本.txt"]
+    );
+    assert!(drag::desktop_paths(&[file(None)]).is_err());
+    assert!(drag::desktop_paths(&[file(Some("relative.txt"))]).is_err());
+    let (mut app, ctx) = app();
+    app.queue_transfer_to(0, vec!["/local/file.txt".into()], "/unlisted".into(), &ctx);
+    assert!(app.transfers.queue.is_empty());
+    assert!(app.transfers.running.is_none());
+    assert!(
+        app.transfers
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("destination folder changed")
+    );
 }

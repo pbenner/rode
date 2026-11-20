@@ -45,7 +45,7 @@ mod visibility_tests {
             let snapshot: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             let buttons = snapshot["buttons"].as_array().unwrap();
-            for category in ["Code tools", "Monitoring", "LaTeX", "Presentations"] {
+            for category in ["Code tools", "LaTeX", "Presentations"] {
                 assert_eq!(
                     buttons
                         .iter()
@@ -70,7 +70,6 @@ pub(in crate::app) enum SettingsSection {
     #[default]
     CodeTools,
     Sandbox,
-    Monitoring,
     Latex,
     Presentations,
 }
@@ -79,10 +78,9 @@ pub(in crate::app) enum SettingsSection {
 pub(in crate::app) struct SettingsDraft(Preferences, SettingsSection);
 
 impl SettingsSection {
-    pub(super) const ALL: [Self; 5] = [
+    pub(super) const ALL: [Self; 4] = [
         Self::CodeTools,
         Self::Sandbox,
-        Self::Monitoring,
         Self::Latex,
         Self::Presentations,
     ];
@@ -92,7 +90,6 @@ impl SettingsSection {
         match self {
             Self::CodeTools => app.code_tools_enabled(),
             Self::Sandbox => true,
-            Self::Monitoring => app.feature(Feature::Monitor),
             Self::Latex => app.feature(Feature::Latex),
             Self::Presentations => app.feature(Feature::Marp),
         }
@@ -102,7 +99,6 @@ impl SettingsSection {
         match self {
             Self::CodeTools => "Code tools",
             Self::Sandbox => "Sandbox",
-            Self::Monitoring => "Monitoring",
             Self::Latex => "LaTeX",
             Self::Presentations => "Presentations",
         }
@@ -112,7 +108,6 @@ impl SettingsSection {
         match self {
             Self::CodeTools => "Automatic checks, formatting and the Ruff executable.",
             Self::Sandbox => "Project isolation, network access and shared paths.",
-            Self::Monitoring => "Refresh timing for the project host's system monitor.",
             Self::Latex => "PDF build commands, source paths and LaTeX tools.",
             Self::Presentations => "Marp rendering, browser selection and slide assets.",
         }
@@ -127,10 +122,6 @@ impl SettingsSection {
                     || saved.live_checks != draft.live_checks
             }
             Self::Sandbox => saved.sandbox != draft.sandbox,
-            Self::Monitoring => {
-                saved.monitor_interval != draft.monitor_interval
-                    || saved.monitor_chart != draft.monitor_chart
-            }
             Self::Latex => saved.latex != draft.latex,
             Self::Presentations => saved.marp != draft.marp,
         }
@@ -146,10 +137,6 @@ impl SettingsSection {
                 target.live_checks = source.live_checks;
             }
             Self::Sandbox => target.sandbox = source.sandbox.clone(),
-            Self::Monitoring => {
-                target.monitor_interval = source.monitor_interval;
-                target.monitor_chart = source.monitor_chart;
-            }
             Self::Latex => target.latex = source.latex.clone(),
             Self::Presentations => target.marp = source.marp.clone(),
         }
@@ -277,14 +264,6 @@ impl EditorApp {
                     match section {
                         SettingsSection::CodeTools => self.code_settings_ui(ui),
                         SettingsSection::Sandbox => self.sandbox_settings_ui(ui),
-                        SettingsSection::Monitoring => {
-                            layout::section(ui, "System monitor", palette, |ui| {
-                                ui.add(crate::keyboard::named("Refresh interval (s)", egui::Slider::new(&mut self.workbench.draft.monitor_interval, 1..=30)
-                                    .text("Refresh interval (s)")));
-                                self.workbench.draft.monitor_chart.controls(ui);
-                                layout::subtitle(ui, "Start and stop collection in the monitor. Once started, it continues while the panel is hidden.", palette);
-                            });
-                        }
                         SettingsSection::Latex => self.latex_settings_ui(ui),
                         SettingsSection::Presentations => self.marp_settings_ui(ui),
                     }
@@ -331,7 +310,6 @@ impl EditorApp {
                 self.prepare_project(self.root(), options, remote, true, None, ctx);
                 return;
             }
-            SettingsSection::Monitoring => {}
         }
         self.status = format!("{} settings saved for this project", section.label());
     }

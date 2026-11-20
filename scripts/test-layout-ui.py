@@ -13,7 +13,6 @@ from ui_harness import (
     BINARY,
     NativeUI,
     assert_pane_outline,
-    click,
     close_window,
     display,
     fixture_directory,
@@ -37,13 +36,6 @@ def wait_for(check, message):
             return
         time.sleep(0.05)
     raise AssertionError(message)
-
-
-def button(x, y, number=1):
-    xtest.XTestFakeMotionEvent(display, -1, x, y, 0)
-    xtest.XTestFakeButtonEvent(display, number, 1, 0)
-    xtest.XTestFakeButtonEvent(display, number, 0, 0)
-    x11.XFlush(display)
 
 
 def drag(start, end, check=None):
@@ -220,11 +212,16 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             wait_for(renamed.exists, "Save As did not finish")
             screenshot(window, "tabs-carbon.png")
             active_line(ui, "tabs-carbon.png", 1380, 900, (220, 163, 37), minimum=240)
-            click(1356, 66)  # All open editors
+            ui.hint("All open editors")
+            key("Return")
             screenshot(window, "open-editors.png")
-            click(1130, 101)  # README, first item
+            ui.hint("README.md")
+            key("Return")
             append_save(ui, root / "README.md", "selected_from_editors_list")
-            button(505, 66, 2)  # Close inactive main.rs with the middle button.
+            ui.click(
+                "editor-tab:" + hashlib.sha256(str(root / "src/main.rs").encode()).hexdigest(),
+                mouse_button=2,
+            )  # Close inactive main.rs with the middle button.
             ui.absent(
                 "editor-tab:" + hashlib.sha256(str(root / "src/main.rs").encode()).hexdigest()
             )
@@ -233,13 +230,28 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             key("Next", ("Control_L",))
             append_save(ui, root / "worker/config.toml", "worker_tab")
             screenshot(window, "duplicate-filenames.png")
-            click(1304, 66)  # Scroll to the first tab without changing selection.
-            click(1304, 66)
-            drag((355, 66), (610, 66))  # README after api/config.toml.
             before_tab = (
                 "editor-tab:" + hashlib.sha256(str(root / "api/config.toml").encode()).hexdigest()
             )
             moved_tab = "editor-tab:" + hashlib.sha256(str(root / "README.md").encode()).hexdigest()
+            # Follow actual tab rectangles. The project toolbar, host banner and
+            # font scale determine their position; fixed screen coordinates do not.
+            for _ in range(len(names)):
+                if any(b["name"] == moved_tab for b in ui.layout()["buttons"]):
+                    break
+                ui.hint("Scroll tabs left")
+                key("Return")
+            else:
+                raise AssertionError("The first tab did not become visible after scrolling")
+            start = ui.control(moved_tab, hovered=True)
+            target = ui.control(before_tab)
+            state = ui.layout()
+            rect = next(b["rect"] for b in state["buttons"] if b["name"] == before_tab)
+            end = (
+                target[0] + round((rect[2] - rect[0]) * state["pixels_per_point"] / 4),
+                target[1],
+            )
+            drag(start, end)
             ui.layout(
                 lambda state: (
                     any(b["name"] == before_tab for b in state["buttons"])
@@ -288,7 +300,7 @@ with fixture_directory(prefix="rode-layout-ui-") as base:
             ui.navigate("f")
             assert_pane_outline(ui, "Explorer", "explorer-focus-compact.png")
             ui.navigate("e")
-            click(410, 215)
+            ui.control("source-editor", focused=True)
             key("f", ("Control_L",))
             text("layout")
             screenshot(window, "minimum-window.png")

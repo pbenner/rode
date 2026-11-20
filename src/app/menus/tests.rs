@@ -59,9 +59,7 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
             .collect();
         for name in [
             "activity:Stocks",
-            "activity:Source control",
-            "activity:Agent chat",
-            "activity:Debugger",
+            "activity:System monitor",
             "menu-item:Stocks",
             "menu-item:New Jupyter notebook",
             "menu-item:New Marp presentation",
@@ -76,7 +74,9 @@ fn disabling_features_removes_their_activity_menu_and_palette_entries_and_reenab
             );
         }
         for name in [
-            "activity:Explorer",
+            "activity:Projects",
+            "activity:Connections",
+            "activity:App settings",
             "activity:Extensions…",
             "menu-file",
             "menu-view",

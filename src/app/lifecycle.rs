@@ -95,7 +95,9 @@ impl EditorApp {
             notebooks: self.notebook_lifetime_pending(),
             debugger: self.debugger.lifetime_pending(),
             installation: self.agent_installation_pending(),
-            exports: self.workers.exports_pending() || self.transfers.pending(),
+            exports: self.workers.exports_pending()
+                || self.transfers.pending()
+                || self.host_tools.preparing,
         }
     }
 }

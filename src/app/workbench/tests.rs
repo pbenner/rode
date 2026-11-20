@@ -276,7 +276,7 @@ fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     assert!(!app.workbench.monitoring.monitor_busy);
     assert!(panel_text(&mut app, &ctx).contains("Start monitoring"));
     app.workbench.monitoring.set_active(true);
-    app.navigation.zoom = Some(navigation::Pane::Editor);
+    app.open_area(areas::Area::Projects, &ctx);
     assert!(!app.panel_visible(Panel::Monitor));
     app.workbench_tick(&ctx);
     assert!(app.workbench.monitoring.monitor_busy);
@@ -301,10 +301,10 @@ fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     assert!(app.workspace.is_none());
     assert!(app.terminal.is_none());
     assert!(app.workbench.preferences.is_empty());
-    app.navigation.zoom = None;
+    app.open_area(areas::Area::Monitor, &ctx);
     let labels = panel_text(&mut app, &ctx);
     assert!(labels.contains("Host overview"), "{labels}");
-    assert!(labels.contains("LOCAL HOST"), "{labels}");
+    assert!(labels.contains("This computer"), "{labels}");
     assert!(!labels.contains("Open a project"), "{labels}");
     assert!(labels.contains("Stop monitoring"), "{labels}");
 
@@ -406,8 +406,8 @@ fn stopping_and_disabling_monitoring_drain_pending_replies_before_a_restart() {
     app.handle_tool(ToolJob::Monitor, reply(), &ctx);
     assert_eq!(app.workbench.monitoring.history.len(), 1);
     app.workbench.reset_project();
-    assert!(!app.workbench.monitoring.active);
-    assert!(app.workbench.monitoring.history.is_empty());
+    assert!(app.workbench.monitoring.active);
+    assert_eq!(app.workbench.monitoring.history.len(), 1);
 }
 
 #[test]
@@ -848,16 +848,9 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
     assert!(app.workbench.draft.latex.program.is_empty());
     assert_eq!(app.workbench.draft.monitor_interval, 25);
     assert_eq!(app.workbench.draft.monitor_chart.seconds, 300);
-    click_settings(&mut app, &ctx, "Monitoring •");
-    click_settings(&mut app, &ctx, "Discard changes");
-    assert_eq!(
-        app.workbench.draft.monitor_interval,
-        app.workbench.prefs.monitor_interval
-    );
-    assert_eq!(
-        app.workbench.draft.monitor_chart,
-        app.workbench.prefs.monitor_chart
-    );
+    // Legacy monitoring drafts no longer affect application-wide host settings.
+    assert_eq!(app.areas.prefs.monitor_interval, 2);
+    assert_eq!(app.areas.prefs.monitor_chart.seconds, 120);
     assert!(
         app.workbench.draft.latex.program.is_empty(),
         "Discard must be category-scoped too"
@@ -892,4 +885,21 @@ fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits(
         assert_eq!(app.workbench.surface, Surface::Tools);
         assert_eq!(app.workbench.draft.ruff, "/unfinished/ruff");
     }
+}
+
+#[test]
+fn legacy_monitor_preferences_import_once_and_project_changes_keep_application_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, ctx) = app(root.path());
+    app.workbench.prefs.monitor_interval = 7;
+    app.workbench.prefs.monitor_chart.seconds = 300;
+    app.initialize_host_tool(Panel::Monitor, &ctx);
+    assert!(app.areas.monitor_configured && app.areas.pending);
+    assert_eq!(app.areas.prefs.monitor_interval, 7);
+    assert_eq!(app.areas.prefs.monitor_chart.seconds, 300);
+    app.workbench.prefs.monitor_interval = 19;
+    app.workbench.prefs.monitor_chart.seconds = 30;
+    app.migrate_monitor_preferences();
+    assert_eq!(app.areas.prefs.monitor_interval, 7);
+    assert_eq!(app.areas.prefs.monitor_chart.seconds, 300);
 }

@@ -69,26 +69,40 @@ Agent and runtime views keep exclusive control while their attachment is live.
 
 ## File transfers
 
-After connecting, choose **Remote: File transfers** in the command palette, or
-**Transfers** in the connection banner on wide windows. The remote Explorer also
+Choose **File transfers** in the left rail or **Remote: File transfers** in the
+command palette. Select the connected SSH host using **Host**. The remote Explorer also
 offers **Download…** and **Upload here…**. The optional **File transfers** extension
 must be enabled; disabling it hides these controls and cancels its work.
 
-The view has independent, resizable **Local computer** and **Remote SSH host**
-browsers. Enter a path and choose **Go**, use the directory breadcrumbs, or
-double-click a folder. Filtering, hidden files and new folders work on either
-side. Browsing does not change the project, chat, terminal or execution settings.
-Compact windows put selection and folder actions under **Actions…**. **Select this
-folder** copies the current folder itself, including a sandboxed project root.
-The **Layout…** menu provides keyboard controls for browser width and queue height.
+The view has independent, resizable **Local files** and **Remote files** panes,
+with vector file icons, a folder address bar, filtering and a compact activity tray.
+Type a path and press **Enter** or the arrow beside it; use **Parent folder** to
+move up, or double-click a folder. The **···** menu contains Home, Refresh, hidden
+files, selection actions and New folder. **Select this folder** copies the current
+folder itself, including a sandboxed project root. Browsing does not change the
+project, chat, terminal or execution settings. Drag the pane/queue dividers to
+resize; **Layout…** provides the same adjustments by keyboard. On short windows,
+the tray becomes an **Activity…** bar; open it for progress, cancel, retry and
+finished copies while both file panes retain their space.
+
+Drag files or folders to the opposite pane to copy them into that displayed
+folder, or drop onto a folder row to copy into that folder. Dragging a selected
+row copies the whole selection; dragging an unselected row copies just that item.
+A highlighted destination and copy cursor show valid targets. Escape cancels a
+drag, and dropping back on the source pane does nothing. A drag is rejected if
+its source listing or selected transfer scope changed. You can also drop local files/folders
+from your desktop file manager onto the remote pane to upload. Desktop drops
+require actual local filesystem paths; virtual attachments are not supported.
+Every drop uses the same queue, filesystem policy and collision choices as the
+buttons; it always copies and leaves the source intact.
 
 Click rows to check several files/folders, or focus the list and use arrows,
 **Space** to check entries, and **Enter/Right** to enter a directory.
-**Upload →** copies selected local entries into the displayed remote directory;
-**← Download** copies the other way. Entire directory trees and empty directories
+**Upload** copies selected local entries into the displayed remote directory;
+**Download** copies the other way. Entire directory trees and empty directories
 are included. Symbolic links and special files are rejected rather than followed.
 
-The resizable queue shows progress and average speed and supports cancellation,
+The resizable **Activity** tray shows progress and average speed and supports cancellation,
 removing waiting jobs and explicitly retrying failures. Existing files require
 **Skip**, **Replace** or **Rename**, with an option to apply that decision to the
 remaining conflicts in the batch. A blank rename chooses an unused name. Existing
@@ -99,16 +113,20 @@ retain destination permissions.
 
 Transfers reuse the authenticated SSH master and native helper, with dedicated
 channels and bounded read/write windows. They require no separate transfer tool,
-remote Python or SFTP subsystem. Remote operations use the captured project
-filesystem policy, including read-only restrictions and explicit grants; the local
-browser uses this computer's normal permissions. A denied operation never retries
-outside that policy. Older helpers need the `streaming_file_transfers` capability.
+remote Python or SFTP subsystem. **Access → Use current project permissions** captures
+that project's filesystem policy, including read-only restrictions and explicit
+grants. It expires when the project changes. **Access → Use host access (outside
+project sandbox)** explicitly prepares ordinary user access to the selected SSH
+host, initially at its home folder; that scope survives project switches on the
+same connection. Opening the view or navigating application areas never widens
+permissions. The local browser uses this computer's normal permissions. A denied
+operation never retries outside its captured policy. Older helpers need the `streaming_file_transfers` capability.
 
 Each file is staged beside its destination, checked for length/SHA-256 and
 published atomically. Cancellation or failure abandons the current stage; files
 already completed remain. A disconnect can lose the final acknowledgement, so
-check the destination before retrying. Switching projects, disconnecting, locking
-an encrypted project or disabling the extension cancels queued/running work;
+check the destination before retrying. Switching projects cancels work using project permissions. Disconnecting the selected
+host, locking an encrypted project or disabling the extension cancels queued/running work;
 normal window exit waits for local cleanup. Interrupted copies restart through
 an explicit retry; automatic synchronization and resume are not implemented.
 
