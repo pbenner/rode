@@ -39,17 +39,40 @@ impl GridLayout {
 
 /// Render CPU, memory and available GPUs as top-aligned equal-height rows;
 /// all curves come from cached history and rendering performs no telemetry collection.
-pub(super) fn show(ui: &mut egui::Ui, state: &State, interval: Duration, palette: theme::Palette) {
+pub(super) fn show(
+    ui: &mut egui::Ui,
+    state: &State,
+    interval: Duration,
+    view: ChartView,
+    palette: theme::Palette,
+) {
     let (Some(sample), Some(latest)) = (&state.monitor, state.history.back()) else {
         return;
     };
+    let axis = view.axis(
+        state.history.front().unwrap().at,
+        latest.at,
+        Instant::now(),
+        interval,
+    );
+    // Keep one reading before the left boundary to clip a crossing curve
+    // cleanly. Older readings never participate in drawing or hit testing.
+    let start = state
+        .history
+        .iter()
+        .position(|reading| axis.contains(reading.at))
+        .unwrap_or(state.history.len())
+        .saturating_sub(1);
+    let history: Vec<_> = state.history.iter().skip(start).collect();
+    let times = history.iter().map(|reading| reading.at).collect();
     let dashboard = Dashboard {
-        state,
+        history,
         sample,
         latest,
         interval,
         palette,
-        times: state.history.iter().map(|reading| reading.at).collect(),
+        times,
+        axis,
     };
     let metrics: Vec<_> = [Metric::Cpu, Metric::Memory]
         .into_iter()
@@ -86,12 +109,13 @@ pub(super) fn show(ui: &mut egui::Ui, state: &State, interval: Duration, palette
 
 /// Borrowed current sample/history and shared chart styling for a single render pass.
 struct Dashboard<'a> {
-    state: &'a State,
+    history: Vec<&'a Reading>,
     sample: &'a project::Monitor,
     latest: &'a Reading,
     times: Vec<Instant>,
     interval: Duration,
     palette: theme::Palette,
+    axis: timeline::Axis,
 }
 
 impl Dashboard<'_> {
@@ -108,12 +132,12 @@ impl Dashboard<'_> {
                         Series {
                             name: "Overall",
                             color: palette.accent,
-                            values: self.state.history.iter().map(|r| r.cpu).collect(),
+                            values: self.history.iter().map(|r| r.cpu).collect(),
                         },
                         Series {
                             name: "Busiest core",
                             color: secondary,
-                            values: self.state.history.iter().map(|r| r.busiest).collect(),
+                            values: self.history.iter().map(|r| r.busiest).collect(),
                         },
                     ],
                 ),
@@ -123,14 +147,13 @@ impl Dashboard<'_> {
                     vec![Series {
                         name: "RAM",
                         color: palette.accent,
-                        values: self.state.history.iter().map(|r| r.memory).collect(),
+                        values: self.history.iter().map(|r| r.memory).collect(),
                     }],
                 ),
                 Metric::Gpu(index) => {
                     let gpu = &self.sample.gpus[index];
                     // Device order keeps identical models independent, as in collection.
                     let readings: Vec<_> = self
-                        .state
                         .history
                         .iter()
                         .map(|r| r.gpus.get(index).filter(|g| g.name == gpu.name))
@@ -162,7 +185,7 @@ impl Dashboard<'_> {
                     legend(ui, &curves);
                 },
             );
-            chart(ui, &self.times, &curves, self.interval, palette);
+            chart(ui, &self.times, &curves, self.interval, self.axis, palette);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), 42.),
                 Layout::top_down(Align::Min),

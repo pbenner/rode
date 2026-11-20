@@ -207,10 +207,13 @@ with fixture_directory(prefix="rode-execution-ui-") as base:
                 wait_for_button(window, process, log_path, state_path, name, changed_after=before)
 
             if remote:
-                # Remote startup intentionally foregrounds chat and hides the
-                # explorer. Select the surfaces this execution-mode test uses.
-                click("workspace-tab:Terminal")
-                command("Toggle explorer")
+                # Startup may finish attaching the project shell before input
+                # arrives. Focus it idempotently rather than toggling visibility.
+                ui.navigate("t")
+                control("workspace-tab:Terminal")
+                if not any(b["name"] == "pane-Explorer" for b in ui.layout()["buttons"]):
+                    command("Toggle explorer")
+                control("explorer-root")
             first = created(set())
             active = first["mode"].startswith("SANDBOX")
             if active:

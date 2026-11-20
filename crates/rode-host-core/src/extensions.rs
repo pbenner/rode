@@ -35,6 +35,8 @@ pub const MAX_EXTENSIONS: usize = 64;
 /// code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
+    /// Explicit local/SSH file copies, independent of project navigation.
+    Transfers,
     /// Explicitly bookmarked local and SSH project locations in the Explorer.
     ProjectBookmarks,
     /// Optional mise toolchain, environment and task integration; disabled by default.
@@ -76,6 +78,7 @@ impl Feature {
     /// Stable namespaced bundled-feature identifier used by preferences.
     pub fn id(self) -> &'static str {
         match self {
+            Self::Transfers => "rode.transfers",
             Self::ProjectBookmarks => "rode.project-bookmarks",
             Self::Mise => "rode.mise",
             Self::Git => "rode.git",
@@ -311,6 +314,12 @@ impl Registry {
                 "Stocks",
                 "Global symbol search, saved watchlists and native price/volume charts. Uses desktop internet access on demand.",
                 "Opened panel / explicit search or refresh",
+            ),
+            (
+                Feature::Transfers,
+                "File transfers",
+                "Browse local and SSH folders and copy files through a cancellable background queue.",
+                "Explicit browse / upload / download",
             ),
             (
                 Feature::Python,

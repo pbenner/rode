@@ -67,6 +67,51 @@ persistent terminals and notebook/debugger runtimes remain available to
 reattach. Off/nonpersistent work follows its normal last-view cleanup policy.
 Agent and runtime views keep exclusive control while their attachment is live.
 
+## File transfers
+
+After connecting, choose **Remote: File transfers** in the command palette, or
+**Transfers** in the connection banner on wide windows. The remote Explorer also
+offers **Download…** and **Upload here…**. The optional **File transfers** extension
+must be enabled; disabling it hides these controls and cancels its work.
+
+The view has independent, resizable **Local computer** and **Remote SSH host**
+browsers. Enter a path and choose **Go**, use the directory breadcrumbs, or
+double-click a folder. Filtering, hidden files and new folders work on either
+side. Browsing does not change the project, chat, terminal or execution settings.
+Compact windows put selection and folder actions under **Actions…**. **Select this
+folder** copies the current folder itself, including a sandboxed project root.
+The **Layout…** menu provides keyboard controls for browser width and queue height.
+
+Click rows to check several files/folders, or focus the list and use arrows,
+**Space** to check entries, and **Enter/Right** to enter a directory.
+**Upload →** copies selected local entries into the displayed remote directory;
+**← Download** copies the other way. Entire directory trees and empty directories
+are included. Symbolic links and special files are rejected rather than followed.
+
+The resizable queue shows progress and average speed and supports cancellation,
+removing waiting jobs and explicitly retrying failures. Existing files require
+**Skip**, **Replace** or **Rename**, with an option to apply that decision to the
+remaining conflicts in the batch. A blank rename chooses an unused name. Existing
+directories are merged; directories are never replaced by files. Copies use saved
+disk contents and refuse destinations with unsaved editor changes. New files are
+private to your user and retain the source owner's execute bit; replacement files
+retain destination permissions.
+
+Transfers reuse the authenticated SSH master and native helper, with dedicated
+channels and bounded read/write windows. They require no separate transfer tool,
+remote Python or SFTP subsystem. Remote operations use the captured project
+filesystem policy, including read-only restrictions and explicit grants; the local
+browser uses this computer's normal permissions. A denied operation never retries
+outside that policy. Older helpers need the `streaming_file_transfers` capability.
+
+Each file is staged beside its destination, checked for length/SHA-256 and
+published atomically. Cancellation or failure abandons the current stage; files
+already completed remain. A disconnect can lose the final acknowledgement, so
+check the destination before retrying. Switching projects, disconnecting, locking
+an encrypted project or disabling the extension cancels queued/running work;
+normal window exit waits for local cleanup. Interrupted copies restart through
+an explicit retry; automatic synchronization and resume are not implemented.
+
 ## Client compatibility
 
 The Rust backend supports `Host` patterns and negation, bounded `Include` files,

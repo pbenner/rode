@@ -50,6 +50,7 @@ pub mod slurm;
 pub mod ssh;
 pub mod terminal;
 pub mod theme;
+pub(crate) mod transfers;
 pub mod vault;
 
 mod keyboard;

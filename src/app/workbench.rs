@@ -25,6 +25,7 @@ pub(super) use workspace::{Surface, ToolTab};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// Tool-view identity used by tabs, commands and feature gates; it carries no running job.
 pub(super) enum Panel {
+    Transfers,
     Git,
     Monitor,
     Stocks,
@@ -38,6 +39,7 @@ pub(super) enum Panel {
 impl Panel {
     fn title(self) -> &'static str {
         match self {
+            Self::Transfers => "FILE TRANSFERS",
             Self::Git => "SOURCE CONTROL",
             Self::Monitor => "SYSTEM MONITOR",
             Self::Stocks => "STOCKS",
@@ -65,6 +67,8 @@ pub(super) struct Preferences {
     live_checks: bool,
     /// Requested sampling seconds, clamped to 1–30 when scheduling host telemetry.
     monitor_interval: u64,
+    /// Presentation only; chart timing never changes host sampling frequency.
+    monitor_chart: monitoring::ChartView,
     /// Requested grants; only the prepared workspace plan establishes actual isolation.
     sandbox: sandbox::Options,
     /// User-operated Git defaults to normal host permissions.
@@ -109,6 +113,7 @@ impl Default for Preferences {
             check_on_save: true,
             live_checks: true,
             monitor_interval: 2,
+            monitor_chart: Default::default(),
             sandbox: Default::default(),
             git_sandbox: false,
             terminal_sandbox: true,
@@ -383,6 +388,10 @@ impl EditorApp {
             return;
         }
         let palette = self.themes.active().palette;
+        if panel == Panel::Transfers {
+            self.transfers_ui(ui, ctx);
+            return;
+        }
         if panel == Panel::Stocks {
             layout::page(ui, 1740., |ui| self.stocks_ui(ui, ctx));
             return;
@@ -446,7 +455,11 @@ impl EditorApp {
                         Panel::Problems => self.problems_ui(ui, ctx),
                         Panel::Environment => self.environment_ui(ui, ctx),
                         Panel::Tasks => self.tasks_ui(ui, ctx),
-                        Panel::Settings | Panel::Agent | Panel::Debug | Panel::Stocks => {
+                        Panel::Settings
+                        | Panel::Agent
+                        | Panel::Debug
+                        | Panel::Stocks
+                        | Panel::Transfers => {
                             unreachable!()
                         }
                     });
@@ -519,7 +532,7 @@ impl EditorApp {
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
-fn bytes(value: u64) -> String {
+pub(super) fn bytes(value: u64) -> String {
     if value >= 1024 * 1024 * 1024 {
         format!("{:.1} GiB", value as f64 / 1073741824.)
     } else if value >= 1024 * 1024 {

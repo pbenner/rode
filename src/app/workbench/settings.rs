@@ -127,7 +127,10 @@ impl SettingsSection {
                     || saved.live_checks != draft.live_checks
             }
             Self::Sandbox => saved.sandbox != draft.sandbox,
-            Self::Monitoring => saved.monitor_interval != draft.monitor_interval,
+            Self::Monitoring => {
+                saved.monitor_interval != draft.monitor_interval
+                    || saved.monitor_chart != draft.monitor_chart
+            }
             Self::Latex => saved.latex != draft.latex,
             Self::Presentations => saved.marp != draft.marp,
         }
@@ -143,7 +146,10 @@ impl SettingsSection {
                 target.live_checks = source.live_checks;
             }
             Self::Sandbox => target.sandbox = source.sandbox.clone(),
-            Self::Monitoring => target.monitor_interval = source.monitor_interval,
+            Self::Monitoring => {
+                target.monitor_interval = source.monitor_interval;
+                target.monitor_chart = source.monitor_chart;
+            }
             Self::Latex => target.latex = source.latex.clone(),
             Self::Presentations => target.marp = source.marp.clone(),
         }
@@ -275,6 +281,7 @@ impl EditorApp {
                             layout::section(ui, "System monitor", palette, |ui| {
                                 ui.add(crate::keyboard::named("Refresh interval (s)", egui::Slider::new(&mut self.workbench.draft.monitor_interval, 1..=30)
                                     .text("Refresh interval (s)")));
+                                self.workbench.draft.monitor_chart.controls(ui);
                                 layout::subtitle(ui, "Monitoring runs only while the monitor is visible. It reads the project host outside the sandbox.", palette);
                             });
                         }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real native Git/Ruff/venv/monitor/settings checks on an isolated X display."""
 
+import hashlib
 import json
 import os
 import re
@@ -187,6 +188,28 @@ def run(remote=False, scenario="all"):
                     )
                     command("System: Monitor")
                     ui.control("monitor-sample")
+                    count_names = [
+                        "monitor-history-count:" + hashlib.sha256(str(i).encode()).hexdigest()
+                        for i in range(603)
+                    ]
+                    collected = set(count_names[2:])
+                    ui.layout(
+                        lambda state: any(b["name"] in collected for b in state["buttons"]),
+                        "Monitor did not collect multiple samples",
+                    )
+                    ui.click("monitor-chart-mode")
+                    ui.click("monitor-view-Fit history")
+                    ui.control("monitor-chart-window", enabled=False)
+                    ui.click("monitor-reset-history")
+                    fresh = set(count_names[:2])
+                    ui.layout(
+                        lambda state: any(b["name"] in fresh for b in state["buttons"]),
+                        "Reset did not clear old monitor history",
+                    )
+                    ui.control("monitor-sample")
+                    ui.control("monitor-chart-window", enabled=False)
+                    ui.click("monitor-chart-mode")
+                    ui.click("monitor-view-Scrolling")
                     screenshot(window, label + "-monitor.png")
                 if scenario in ("all", "git"):
                     command("Git: Source control")

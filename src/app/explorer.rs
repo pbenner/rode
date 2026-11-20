@@ -53,7 +53,7 @@ pub(super) struct Change {
     entry: Entry,
 }
 
-fn valid_name(name: &str) -> bool {
+pub(super) fn valid_name(name: &str) -> bool {
     !name.trim().is_empty()
         && name != "."
         && name != ".."
@@ -184,6 +184,15 @@ impl EditorApp {
                 dir: true,
             }
         };
+        if self.panel_enabled(Panel::Transfers) {
+            if item(ui, "explorer-download", "Download…", ready) {
+                self.open_transfers(Some(entry.clone()), None, ctx);
+            }
+            if item(ui, "explorer-upload", "Upload here…", ready) {
+                self.open_transfers(None, Some(parent.path.clone()), ctx);
+            }
+            ui.separator();
+        }
         for (kind, name, label) in [
             (Kind::File, "explorer-new-file", "New file…"),
             (Kind::Folder, "explorer-new-folder", "New folder…"),

@@ -131,6 +131,7 @@ impl Command {
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
         Self::Panel(Panel::Stocks),
+        Self::Panel(Panel::Transfers),
         Self::Panel(Panel::Problems),
         Self::Python,
         Self::Panel(Panel::Environment),
@@ -186,6 +187,7 @@ impl Command {
         Self::DebugOut,
     ];
     pub(in crate::app) const PANELS: &'static [Self] = &[
+        Self::Panel(Panel::Transfers),
         Self::Panel(Panel::Git),
         Self::Panel(Panel::Monitor),
         Self::Panel(Panel::Stocks),
@@ -254,6 +256,9 @@ impl Command {
             }
             Self::Panel(Panel::Stocks) => Definition::new("Stocks", Icon::Stocks)
                 .palette("Stocks: Market charts and watchlist"),
+            Self::Panel(Panel::Transfers) => {
+                Definition::new("File transfers", Icon::Files).palette("Remote: File transfers")
+            }
             Self::Panel(Panel::Problems) => {
                 Definition::new("Problems", Icon::Problems).palette("Code: Problems")
             }

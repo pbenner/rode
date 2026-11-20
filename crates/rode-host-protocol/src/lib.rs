@@ -3,6 +3,7 @@
 pub mod files;
 pub mod framing;
 pub mod helper;
+pub mod transfer;
 
 /// Handshake is exchanged before any operation, including preparation.
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

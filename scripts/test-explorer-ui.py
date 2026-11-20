@@ -16,7 +16,6 @@ from ui_harness import (
     fixture_environment,
     focus_window,
     key,
-    palette_command,
     screenshot,
     text,
     wait_for_project,
@@ -97,7 +96,7 @@ with fixture_directory(prefix="rode-explorer-ui-") as base:
                 ui.absent("explorer-apply")
 
             if remote:
-                palette_command(window, process, log.name, state, "Toggle explorer")
+                ui.navigate("e")
             menu()
             screenshot(window, "root-menu.png")
             key("Escape")

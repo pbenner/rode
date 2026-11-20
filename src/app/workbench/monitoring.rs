@@ -5,8 +5,11 @@ use crate::app::layout::card;
 use std::collections::VecDeque;
 
 mod dashboard;
+mod timeline;
+pub(super) use timeline::View as ChartView;
 
-const HISTORY_LIMIT: usize = 120;
+// One sample per second for the longest selectable window plus its boundary.
+const HISTORY_LIMIT: usize = timeline::MAX_SECONDS as usize + 2;
 
 #[derive(Default)]
 /// Bounded successful telemetry snapshots and derived rate baselines. Request timing
@@ -21,6 +24,8 @@ pub(super) struct State {
     pub(super) history: VecDeque<Reading>,
     /// Received/sent bytes per second from two recent successful counter snapshots.
     network_rate: Option<(f32, f32)>,
+    /// A reset keeps ownership of an in-flight poll but rejects its old result.
+    discard_pending: bool,
 }
 
 /// One monotonic-time chart sample; utilization values are percentages in 0–100
@@ -44,6 +49,24 @@ struct GpuReading {
 }
 
 impl State {
+    /// Start fresh without releasing the busy guard for an outstanding request.
+    /// CPU/network counters need two new samples after a reset.
+    pub(super) fn reset_history(&mut self) {
+        self.monitor = None;
+        self.history.clear();
+        self.cpu_usage.clear();
+        self.network_rate = None;
+        self.monitor_last = None;
+        self.monitor_error.clear();
+        self.discard_pending |= self.monitor_busy;
+    }
+
+    /// Consume the one old reply rejected by a reset; its completion must not
+    /// postpone the fresh poll or repopulate the cleared chart with old data.
+    pub(super) fn discard_reply(&mut self) -> bool {
+        std::mem::take(&mut self.discard_pending)
+    }
+
     /// Derive CPU percentages and network bytes/second from a recent successful sample,
     /// then append bounded history. Counter resets, zero deltas and long pauses produce
     /// unavailable rates instead of invented zeroes; callers provide increasing sample times.
@@ -97,7 +120,11 @@ impl State {
                 })
                 .collect(),
         });
-        if self.history.len() > HISTORY_LIMIT {
+        while self.history.len() > HISTORY_LIMIT
+            || self.history.len() > 1
+                && now.duration_since(self.history[1].at)
+                    > Duration::from_secs(timeline::MAX_SECONDS)
+        {
             self.history.pop_front();
         }
         self.monitor = Some(sample);
@@ -124,21 +151,43 @@ impl EditorApp {
     /// sampling is scheduled separately by the visible-workbench tick.
     pub(in crate::app) fn monitor_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
-        let state = &self.workbench.monitoring;
         layout::header(
             ui,
             "Host overview",
             "Live telemetry · sampled while this panel is visible",
             palette,
             |ui| {
-                if state.monitor_busy {
+                if self.workbench.monitoring.monitor_busy {
                     ui.spinner();
+                }
+                let state = &mut self.workbench.monitoring;
+                let reset = ui
+                    .add_enabled(
+                        !state.history.is_empty() || !state.monitor_error.is_empty(),
+                        crate::keyboard::Button::new("Reset history"),
+                    )
+                    .on_hover_text("Clear past readings and start collecting a fresh graph.");
+                ui_probe::button(ui, "monitor-reset-history", &reset);
+                ui_probe::value(
+                    ui,
+                    "monitor-history-count",
+                    &reset,
+                    &state.history.len().to_string(),
+                );
+                if reset.clicked() {
+                    state.reset_history();
+                    ui.ctx().request_repaint();
                 }
             },
         );
-        if self.workspace.as_ref().is_some_and(|w| w.plan.active) {
-            ui.label("Host and GPU readings are collected outside the project sandbox.");
+        let mut view = self.workbench.prefs.monitor_chart;
+        view.controls(ui);
+        if view != self.workbench.prefs.monitor_chart {
+            self.workbench.prefs.monitor_chart = view;
+            self.workbench.draft.monitor_chart = view;
+            self.workbench.save_preferences();
         }
+        let state = &self.workbench.monitoring;
         if !state.monitor_error.is_empty() {
             ui.colored_label(palette.error, &state.monitor_error);
         }
@@ -172,7 +221,12 @@ impl EditorApp {
         });
         let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
         ui.add_space(12.);
-        dashboard::show(ui, state, interval, palette);
+        dashboard::show(ui, state, interval, view, palette);
+        if view.mode == timeline::Mode::Scrolling {
+            // Animate cached samples only. Host collection remains interval-based
+            // and both repainting and sampling stop when this panel is hidden.
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
         if sample.gpus.is_empty() || !sample.gpu_note.is_empty() {
             ui.add_space(12.);
             card(ui, palette, |ui| {
@@ -393,6 +447,7 @@ fn chart(
     times: &[Instant],
     series: &[Series<'_>],
     interval: Duration,
+    axis: timeline::Axis,
     palette: theme::Palette,
 ) {
     // The plot itself is 16:9; reserve the same axis gutters at every width.
@@ -421,16 +476,10 @@ fn chart(
             palette.text,
         );
     }
-    let (Some(&start), Some(&end)) = (times.first(), times.last()) else {
-        return;
-    };
-    let span = end
-        .duration_since(start)
-        .as_secs_f32()
-        .max(interval.as_secs_f32());
+    let span = axis.span.as_secs_f32();
     let position = |time: Instant, value: f32| {
         egui::pos2(
-            plot.right() - plot.width() * end.duration_since(time).as_secs_f32() / span,
+            plot.left() + plot.width() * axis.fraction(time),
             plot.bottom() - plot.height() * value / 100.,
         )
     };
@@ -476,7 +525,11 @@ fn chart(
         }
         let x = plot.left() + plot.width() * fraction;
         let label = if fraction == 1. {
-            "Latest".into()
+            if axis.live {
+                "Now".into()
+            } else {
+                "Latest".into()
+            }
         } else {
             format!("−{}", duration_label(span * (1. - fraction)))
         };
@@ -488,7 +541,12 @@ fn chart(
             palette.text,
         );
     }
-    if !series.iter().any(|s| s.values.iter().any(Option::is_some)) {
+    if !series.iter().any(|s| {
+        times
+            .iter()
+            .zip(&s.values)
+            .any(|(&time, value)| axis.contains(time) && value.is_some())
+    }) {
         painter.text(
             plot.center(),
             egui::Align2::CENTER_CENTER,
@@ -498,16 +556,30 @@ fn chart(
         );
     }
     if let Some(pointer) = response.hover_pos().filter(|p| plot.contains(*p)) {
-        let index = times
+        let nearest = times
             .iter()
             .enumerate()
+            .filter(|(_, time)| axis.contains(**time))
             .min_by(|(_, a), (_, b)| {
                 (position(**a, 0.).x - pointer.x)
                     .abs()
                     .total_cmp(&(position(**b, 0.).x - pointer.x).abs())
             })
-            .map(|(i, _)| i)
+            .map(|(i, _)| i);
+        let Some(index) = nearest else {
+            return;
+        };
+        let first_x = times
+            .iter()
+            .find(|&&time| axis.contains(time))
+            .map(|&time| position(time, 0.).x)
             .unwrap();
+        let last_x = times.last().map(|&time| position(time, 0.).x).unwrap();
+        // Empty startup history and time since the last poll are genuinely
+        // blank: hovering them must not imply that a reading was collected.
+        if pointer.x < first_x - 6. || pointer.x > last_x + 6. {
+            return;
+        }
         let x = position(times[index], 0.).x;
         painter.line_segment(
             [egui::pos2(x, plot.top()), egui::pos2(x, plot.bottom())],
@@ -515,8 +587,13 @@ fn chart(
         );
         response.on_hover_ui(|ui| {
             ui.label(format!(
-                "{} before latest sample",
-                duration_label(end.duration_since(times[index]).as_secs_f32())
+                "{} {}",
+                duration_label(axis.end.duration_since(times[index]).as_secs_f32()),
+                if axis.live {
+                    "ago"
+                } else {
+                    "before latest sample"
+                }
             ));
             for series in series {
                 ui.label(format!(
@@ -579,7 +656,13 @@ mod tests {
                             egui::CentralPanel::default().show(ctx, |ui| {
                                 let bounds = ui.max_rect();
                                 origin.set(ui.next_widget_position());
-                                dashboard::show(ui, &state, interval, palette);
+                                dashboard::show(
+                                    ui,
+                                    &state,
+                                    interval,
+                                    ChartView::default(),
+                                    palette,
+                                );
                                 assert!(
                                     ui.min_rect().right() <= bounds.right() + 1.,
                                     "Dashboard overflow at {width}"
@@ -698,7 +781,7 @@ mod tests {
         for index in 11..150 {
             state.record(sample(index as u64 * 100), now + interval * index, interval);
         }
-        assert_eq!(state.history.len(), HISTORY_LIMIT);
+        assert!(state.history.len() <= HISTORY_LIMIT);
         assert_eq!(state.history.back().unwrap().at, now + interval * 149);
         // Host counter resets and zero deltas do not create artificial idle readings.
         state.record(sample(1), now + interval * 150, interval);
@@ -706,6 +789,58 @@ mod tests {
         assert!(state.network_rate.is_none());
         state.record(sample(1), now + interval * 151, interval);
         assert!(state.history.back().unwrap().cpu.is_none());
+        let mut bounded = State::default();
+        for index in 0..HISTORY_LIMIT + 20 {
+            bounded.record(
+                sample(index as u64 * 100),
+                now + Duration::from_secs(index as u64),
+                Duration::from_secs(1),
+            );
+        }
+        assert_eq!(bounded.history.len(), HISTORY_LIMIT);
+        assert!(
+            bounded
+                .history
+                .back()
+                .unwrap()
+                .at
+                .duration_since(bounded.history[1].at)
+                <= Duration::from_secs(timeline::MAX_SECONDS)
+        );
+        // At slower sample rates, retention still follows elapsed time rather
+        // than retaining hours of data in the same number of sample slots.
+        bounded.record(sample(100_000), now + Duration::from_secs(3600), interval);
+        assert_eq!(bounded.history.len(), 2);
+        assert!(bounded.history.back().unwrap().cpu.is_none());
+    }
+
+    #[test]
+    fn resetting_history_clears_rate_baselines_and_makes_the_next_poll_due() {
+        let mut state = State::default();
+        let interval = Duration::from_secs(2);
+        let now = Instant::now();
+        state.record(sample(100), now, interval);
+        state.record(sample(200), now + interval, interval);
+        state.monitor_last = Some(now + interval);
+        assert!(state.network_rate.is_some());
+        assert_eq!(state.cpu_usage[0], Some(50.));
+        state.reset_history();
+        assert!(state.monitor.is_none());
+        assert!(state.history.is_empty());
+        assert!(state.cpu_usage.is_empty());
+        assert!(state.network_rate.is_none());
+        assert!(state.monitor_last.is_none());
+        assert!(!state.monitor_busy);
+        assert!(!state.discard_reply());
+        let fresh = now + Duration::from_secs(3 * 3600);
+        state.record(sample(300), fresh, interval);
+        assert_eq!(state.history.len(), 1);
+        assert!(state.history[0].cpu.is_none());
+        assert!(state.network_rate.is_none());
+        state.record(sample(400), fresh + interval, interval);
+        assert_eq!(state.history.len(), 2);
+        assert_eq!(state.history[1].cpu, Some(50.));
+        assert!(state.network_rate.is_some());
     }
 
     #[test]
@@ -834,6 +969,16 @@ mod tests {
                                         values: vec![Some(10.), Some(75.), Some(45.)],
                                     }],
                                     Duration::from_secs(2),
+                                    ChartView {
+                                        mode: timeline::Mode::History,
+                                        ..Default::default()
+                                    }
+                                    .axis(
+                                        times[0],
+                                        times[2],
+                                        times[2],
+                                        Duration::from_secs(2),
+                                    ),
                                     palette,
                                 );
                             });

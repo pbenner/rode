@@ -63,6 +63,8 @@ fn main() -> eframe::Result {
                 | "--compute-runtime"
                 | "--process"
                 | "--runtime-cache"
+                | "--file-transfer"
+                | "--file-transfer-worker"
         )
     }) {
         if let Err(error) = rode_session::cli(&args) {

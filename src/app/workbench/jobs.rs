@@ -294,6 +294,10 @@ impl EditorApp {
                     return;
                 }
                 self.workbench.monitoring.monitor_busy = false;
+                if self.workbench.monitoring.discard_reply() {
+                    ctx.request_repaint();
+                    return;
+                }
                 self.workbench.monitoring.monitor_error.clear();
                 match result {
                     Ok(project::Response::Monitor(sample)) => {

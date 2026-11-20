@@ -46,6 +46,7 @@ impl EditorApp {
     /// Release foreground views/controllers and wait for lifetime acknowledgements before
     /// normal exit; persistent host work follows its existing acknowledged policy.
     pub(super) fn request_exit(&mut self, ctx: &egui::Context) {
+        self.transfers.reset();
         if !self.debugger.change_pending() {
             self.leave_debugger();
         }
@@ -93,7 +94,7 @@ impl EditorApp {
             notebooks: self.notebook_lifetime_pending(),
             debugger: self.debugger.lifetime_pending(),
             installation: self.agent_installation_pending(),
-            exports: self.workers.exports_pending(),
+            exports: self.workers.exports_pending() || self.transfers.pending(),
         }
     }
 }

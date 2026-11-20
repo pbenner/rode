@@ -66,6 +66,7 @@ mod saved_connections;
 mod sessions;
 mod stocks;
 mod terminal_colors;
+mod transfers;
 mod tunnels;
 mod ui_probe;
 mod vaults;
@@ -222,6 +223,7 @@ pub struct EditorApp {
     themes: theme::Themes,
     terminal_colors: terminal_colors::State,
     stocks: stocks::State,
+    transfers: transfers::State,
     theme_save_pending: bool,
     syntax_save_pending: bool,
     started: Instant,
@@ -348,6 +350,7 @@ impl EditorApp {
             ui_scale_save_pending: false,
             terminal_colors: terminal_colors::State::load(storage, &themes),
             stocks: Default::default(),
+            transfers: Default::default(),
             themes,
             theme_save_pending: startup.theme.is_some(),
             syntax_save_pending: startup.syntax_theme.is_some(),
@@ -751,6 +754,7 @@ impl eframe::App for EditorApp {
         self.poll_agents(ctx);
         self.poll_debugger(ctx);
         self.stocks.poll(ctx);
+        self.transfer_tick(ctx);
         self.poll_notebooks(ctx);
         self.marp_tick();
         self.workbench_tick(ctx);
@@ -783,6 +787,7 @@ impl eframe::App for EditorApp {
             }
             app.dialogs(ctx);
             app.workbench_windows(ctx);
+            app.transfer_windows(ctx);
             app.extension_windows(ctx);
             app.latex_window(ctx);
             app.terminal_colors.show(ctx, app.themes.active());

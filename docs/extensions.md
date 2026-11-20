@@ -23,6 +23,14 @@ actions independently of the bundled Language tools extension.
 
 Changing extensions/settings or the workspace cancels executable adapter jobs and rejects stale edits/diagnostics. Source saves already submitted by a user can complete with their original buffer if formatting was cancelled. Disabling a bundled module stops future activation; short built-in tool requests already running may finish, but their disabled/stale results are not applied. Runtime disabling does not remove compiled dependencies or promise a smaller executable.
 
+## File transfers
+
+The **File transfers** module adds local/remote browsing and a background copy
+queue while SSH is connected. Its browsers do not change the open project. See
+[File transfers](remote.md#file-transfers) for navigation, collision choices and
+the captured filesystem policy. Disabling it cancels queued/running transfers and
+hides its tab, palette command, connection-banner and Explorer entry points.
+
 ## Project bookmarks
 
 The bundled **Project bookmarks** extension (`rode.project-bookmarks`) adds a

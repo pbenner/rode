@@ -45,6 +45,7 @@ pub const CAPABILITIES: &[&str] = &[
     "compact_sandbox_arguments",
     "explorer_mutations",
     "large_document_transfer",
+    "streaming_file_transfers",
     "connection_heartbeats",
     "agent_auto_persist",
     "private_home_tmp",

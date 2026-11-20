@@ -61,6 +61,7 @@ impl EditorApp {
     /// Map optional tool views to their bundled feature gate; core views have no extra gate.
     pub(super) fn panel_feature(panel: Panel) -> Option<Feature> {
         match panel {
+            Panel::Transfers => Some(Feature::Transfers),
             Panel::Git => Some(Feature::Git),
             Panel::Monitor => Some(Feature::Monitor),
             Panel::Stocks => Some(Feature::Stocks),
@@ -72,6 +73,9 @@ impl EditorApp {
     /// Allow core panels and only enabled optional feature panels.
     pub(super) fn panel_enabled(&self, panel: Panel) -> bool {
         Self::panel_feature(panel).is_none_or(|f| self.feature(f))
+            && (panel != Panel::Transfers
+                || self.project_ready()
+                    && self.workspace.as_ref().is_some_and(|w| w.remote.is_some()))
     }
     /// Persist explicitly changed extension preferences; retain pending state when storage is absent.
     pub(super) fn persist_extensions<S: eframe::Storage + ?Sized>(
@@ -99,6 +103,9 @@ impl EditorApp {
         // Invalidates all source-tool results, including jobs queued before disabling.
         self.workbench.invalidate_tools();
         if !enabled {
+            if id == Feature::Transfers.id() {
+                self.transfers.reset();
+            }
             if id == Feature::Debugger.id() {
                 self.leave_debugger();
             }

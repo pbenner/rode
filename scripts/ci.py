@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FAST = ["workspace", "agents", "terminals", "ssh"]
 EXTENDED = ["tools", "documents", "remote", "runtimes", "sandbox", "landlock"]
 TEST_BINARIES = {
+    "transfers",
     "files",
     "runtimes",
     "ssh_roundtrip",
@@ -190,6 +191,7 @@ SUITES = {
         ),
     ],
     "remote-smoke": [
+        ui("transfers"),
         ui("execution-modes", RODE_EXECUTION_UI_REMOTE="1"),
         ui("git-identity", RODE_GIT_IDENTITY_UI_REMOTE="1"),
         ui("git-gutter", RODE_GIT_GUTTER_UI_REMOTE="1"),
@@ -293,6 +295,7 @@ SUITES = {
         ui("notebooks", RODE_NOTEBOOK_UI_REMOTE_ONLY="1"),
     ],
     "sandbox": [
+        rust("transfers", RODE_TEST_REQUIRE_SANDBOX="1"),
         ui("git-gutter", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         ui("execution-modes", RODE_TEST_SANDBOX_BACKEND="bwrap", RODE_TEST_REQUIRE_SANDBOX="1"),
         rust("native_host", RODE_TEST_REQUIRE_SANDBOX="1"),
@@ -304,6 +307,7 @@ SUITES = {
     ],
     # Namespace denial must not suppress independent Landlock enforcement coverage.
     "landlock": [
+        rust("transfers", RODE_TEST_REQUIRE_LANDLOCK="1"),
         rust("landlock"),
         rust("agents"),
         rust("background_agents"),

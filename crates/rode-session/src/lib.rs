@@ -1381,6 +1381,8 @@ pub fn cli(args: &[String]) -> Result<()> {
     }
     if args.len() == 1 {
         match args[0].as_str() {
+            "--file-transfer" => return rode_host_core::transfer::launch(),
+            "--file-transfer-worker" => return rode_host_core::transfer::serve(),
             "--agent-file-tool" => return rode_host_core::agent_files::serve(),
             "host-rpc" => return host::serve(),
             "--host-info" => return host::info(),

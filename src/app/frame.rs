@@ -208,6 +208,15 @@ impl EditorApp {
                         if crate::keyboard::button(ui, "Open project…").clicked() {
                             self.set_dialog(Dialog::Folder);
                         }
+                        if ctx.content_rect().width() >= 1180.
+                            && self.panel_enabled(Panel::Transfers)
+                        {
+                            let transfers = crate::keyboard::button(ui, "Transfers");
+                            ui_probe::button(ui, "open-transfers", &transfers);
+                            if transfers.clicked() {
+                                self.open_transfers(None, None, ctx);
+                            }
+                        }
                         ui.label(
                             RichText::new(if remote.is_some() && !connected && !connecting {
                                 "SSH OFFLINE"

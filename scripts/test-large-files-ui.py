@@ -18,13 +18,13 @@ os.environ["RODE_UI_ARTIFACTS"] = str(
 from ui_harness import (
     ARTIFACTS,
     BINARY,
+    NativeUI,
     click_button,
     close_window,
     fixture_directory,
     fixture_environment,
     focus_window,
     key,
-    palette_command,
     screenshot,
     text,
     wait_for_button,
@@ -105,7 +105,7 @@ with fixture_directory(prefix="rode-large-files-ui-") as base:
                 )
 
             if remote:
-                palette_command(window, process, log.name, state, "Toggle explorer")
+                NativeUI(window, process, log.name, state, root).navigate("e")
             # Open through the real explorer row after selecting its surface.
             button("explorer-row:" + str(path))
             point("hex-ready", timeout=60)

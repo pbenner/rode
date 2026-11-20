@@ -390,6 +390,7 @@ impl EditorApp {
             return;
         }
         self.stop_project_agent();
+        self.transfers.reset();
         self.leave_notebooks(workspace::LeaveReason::VaultLock);
         self.stop_debugger();
         self.stop_latex();

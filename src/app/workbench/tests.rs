@@ -313,6 +313,53 @@ fn monitor_samples_without_a_project_and_stops_scheduling_when_hidden() {
     assert_eq!(app.workbench.monitoring.monitor_last, Some(due));
 }
 #[test]
+fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, ctx) = app(root.path());
+    app.workbench.prefs.monitor_chart.seconds = 300;
+    let view = app.workbench.prefs.monitor_chart;
+    for result in [
+        Ok(project::Response::Monitor(project::Monitor {
+            hostname: "pre-reset".into(),
+            ..Default::default()
+        })),
+        Err("pre-reset error".into()),
+    ] {
+        app.workbench.monitoring.record(
+            project::Monitor::default(),
+            Instant::now() - Duration::from_secs(3 * 3600),
+            Duration::from_secs(2),
+        );
+        app.workbench.monitoring.monitor_busy = true;
+        app.workbench.monitoring.monitor_error = "Old error".into();
+        app.workbench.monitoring.reset_history();
+        assert!(app.workbench.monitoring.monitor_busy);
+        assert!(app.workbench.monitoring.history.is_empty());
+        app.handle_tool(ToolJob::Monitor, result, &ctx);
+        assert!(!app.workbench.monitoring.monitor_busy);
+        assert!(app.workbench.monitoring.monitor_last.is_none());
+        assert!(app.workbench.monitoring.monitor_error.is_empty());
+        assert!(app.workbench.monitoring.monitor.is_none());
+        assert!(app.workbench.monitoring.history.is_empty());
+        assert_eq!(app.workbench.prefs.monitor_chart, view);
+    }
+    app.handle_tool(
+        ToolJob::Monitor,
+        Ok(project::Response::Monitor(project::Monitor {
+            hostname: "fresh".into(),
+            ..Default::default()
+        })),
+        &ctx,
+    );
+    assert_eq!(app.workbench.monitoring.history.len(), 1);
+    assert_eq!(
+        app.workbench.monitoring.monitor.as_ref().unwrap().hostname,
+        "fresh"
+    );
+    assert!(app.workbench.monitoring.monitor_last.is_some());
+}
+
+#[test]
 fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -715,6 +762,7 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
     app.workbench.draft.marp.program = "another-marp".into();
     app.workbench.draft.sandbox.enabled = !app.workbench.prefs.sandbox.enabled;
     app.workbench.draft.monitor_interval = 25;
+    app.workbench.draft.monitor_chart.seconds = 300;
     app.workbench.draft.python = "/unfinished/python".into();
     app.workbench.draft.slurm_queue = "another-queue".into();
     click_settings(&mut app, &ctx, "Format supported files on save");
@@ -746,11 +794,16 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
     );
     assert!(app.workbench.draft.latex.program.is_empty());
     assert_eq!(app.workbench.draft.monitor_interval, 25);
+    assert_eq!(app.workbench.draft.monitor_chart.seconds, 300);
     click_settings(&mut app, &ctx, "Monitoring •");
     click_settings(&mut app, &ctx, "Discard changes");
     assert_eq!(
         app.workbench.draft.monitor_interval,
         app.workbench.prefs.monitor_interval
+    );
+    assert_eq!(
+        app.workbench.draft.monitor_chart,
+        app.workbench.prefs.monitor_chart
     );
     assert!(
         app.workbench.draft.latex.program.is_empty(),

@@ -25,4 +25,5 @@ pub mod runtime_cache;
 pub mod sandbox;
 pub mod slurm;
 pub mod supervisor;
+pub mod transfer;
 pub mod vault;

@@ -127,6 +127,41 @@ pub(super) fn rows(
     selected: Option<&str>,
     ready: bool,
 ) -> Option<Choice> {
+    rows_with_options(
+        ui,
+        id,
+        entries,
+        show_hidden,
+        list,
+        query,
+        path_keys,
+        selected,
+        ready,
+        RowOptions::default(),
+    )
+}
+
+/// Optional transfer-browser sizing and checkbox selection. Ordinary pickers
+/// retain their existing height and single-selection behavior.
+#[derive(Default)]
+pub(super) struct RowOptions<'a> {
+    pub height: Option<f32>,
+    pub checked: Option<&'a HashSet<String>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn rows_with_options(
+    ui: &mut egui::Ui,
+    id: &str,
+    entries: &[Entry],
+    show_hidden: bool,
+    list: &mut navigation::List,
+    query: &str,
+    path_keys: (isize, bool),
+    selected: Option<&str>,
+    ready: bool,
+    options: RowOptions<'_>,
+) -> Option<Choice> {
     let visible: Vec<_> = entries
         .iter()
         .filter(|entry| shown(entry, show_hidden))
@@ -138,6 +173,7 @@ pub(super) fn rows(
     let mut activate = false;
     let mut parent = false;
     let mut edge = None;
+    let mut toggle = false;
     if enabled && ctx.memory(|m| m.has_focus(host)) {
         ctx.memory_mut(|m| {
             m.set_focus_lock_filter(
@@ -169,6 +205,9 @@ pub(super) fn rows(
             parent = i.consume_key(egui::Modifiers::NONE, Key::Backspace)
                 || i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft);
             activate |= i.consume_key(egui::Modifiers::NONE, Key::ArrowRight);
+            if options.checked.is_some() {
+                toggle = i.consume_key(egui::Modifiers::NONE, Key::Space);
+            }
         });
     }
     let mut reveal = list.update(query, visible.len(), 0);
@@ -186,8 +225,13 @@ pub(super) fn rows(
     }
     activate |= enabled && path_keys.1 && list.navigated;
     // Respect an enclosing browser's height as well as the viewport budget.
-    let height = (ctx.content_rect().height() - 390.)
-        .clamp(70., 220.)
+    let height = options
+        .height
+        .unwrap_or(
+            (ctx.content_rect().height() - 390.)
+                .clamp(70., 220.)
+                .min(ui.available_height().max(1.)),
+        )
         .min(ui.available_height().max(1.));
     let response = ui.interact(
         egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height)),
@@ -197,6 +241,10 @@ pub(super) fn rows(
     crate::keyboard::field_target(ui, "Files and folders", &response);
     let mut action = if parent {
         Some(Choice::Parent)
+    } else if toggle {
+        visible
+            .get(list.index)
+            .map(|entry| Choice::Select((*entry).clone()))
     } else if activate {
         visible
             .get(list.index)
@@ -232,17 +280,23 @@ pub(super) fn rows(
         ui.spacing_mut().item_spacing.y = 2.;
         for index in range {
             let entry = visible[index];
-            let label = if entry.dir {
+            let mut label = if entry.dir {
                 format!("›  {}", entry.name)
             } else {
                 entry.name.clone()
             };
+            let marked = options
+                .checked
+                .is_some_and(|paths| paths.contains(&entry.path));
+            if options.checked.is_some() {
+                label = format!("{}  {label}", if marked { "☑" } else { "☐" });
+            }
             let response = ui
                 .push_id(&entry.path, |ui| {
                     ui.add_sized(
                         [ui.available_width(), row_height],
                         egui::Button::selectable(
-                            list.navigated && index == list.index,
+                            marked || list.navigated && index == list.index,
                             (label, egui::Atom::grow()),
                         )
                         .truncate()
@@ -259,7 +313,16 @@ pub(super) fn rows(
                 list.index = index;
                 list.navigated = true;
                 ctx.memory_mut(|m| m.request_focus(host));
-                action = Some(if response.double_clicked() {
+                // egui's pointer double-click state is global. A quick click
+                // in another browser/row must still select this entry rather
+                // than unexpectedly entering a newly positioned folder.
+                let same_row = ctx.data_mut(|data| {
+                    let key = egui::Id::new("file-picker-last-click");
+                    let previous = data.get_temp::<egui::Id>(key);
+                    data.insert_temp(key, response.id);
+                    previous == Some(response.id)
+                });
+                action = Some(if response.double_clicked() && same_row {
                     Choice::Open(entry.clone())
                 } else {
                     Choice::Select(entry.clone())
