@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_ssh_connections_focus_chat_and_hide_the_explorer() {
+    fn prepared_ssh_connections_show_welcome_without_late_terminal_takeover() {
         for ready in [false, true] {
             let ctx = egui::Context::default();
             let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -344,8 +344,8 @@ mod tests {
             app.commit_project(response, true, Default::default(), true, None, &ctx);
             assert!(app.project_ready());
             assert!(app.session_busy(), "The background shell still starts");
-            assert_eq!(app.show_explorer, ready);
-            assert_eq!(app.panel_visible(Panel::Agent), !ready);
+            assert!(app.show_explorer);
+            assert!(!app.panel_visible(Panel::Agent));
             assert_eq!(app.terminal_visible(), ready);
             if !ready {
                 let render = |app: &mut EditorApp| {
@@ -365,14 +365,13 @@ mod tests {
                     );
                 };
                 render(&mut app);
-                assert_eq!(
-                    ctx.memory(|memory| memory.focused()),
-                    Some(egui::Id::new("agent-composer"))
-                );
-                assert!(app.navigation.rect(navigation::Pane::Explorer).is_none());
+                assert_eq!(app.navigation.active, navigation::Pane::Editor);
+                assert!(app.navigation.rect(navigation::Pane::Explorer).is_some());
+                assert!(app.navigation.rect(navigation::Pane::Editor).is_some());
+                assert!(app.documents.active().is_none());
                 assert!(!app.agents.chat.busy);
 
-                // A shell can attach before a second chat frame remembers its child focus.
+                // A shell may attach after Welcome has already rendered.
                 let plan = &app.workspace.as_ref().unwrap().plan;
                 let policy = crate::sessions::fingerprint(plan);
                 let info = serde_json::from_value(serde_json::json!({
@@ -397,12 +396,10 @@ mod tests {
                     &ctx,
                 );
                 render(&mut app);
-                assert!(app.panel_visible(Panel::Agent));
+                assert!(!app.panel_visible(Panel::Agent));
                 assert!(!app.terminal_visible());
-                assert_eq!(
-                    ctx.memory(|memory| memory.focused()),
-                    Some(egui::Id::new("agent-composer"))
-                );
+                assert_eq!(app.navigation.active, navigation::Pane::Editor);
+                assert!(app.show_explorer);
             }
         }
     }

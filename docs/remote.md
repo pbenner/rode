@@ -32,9 +32,11 @@ name is preserved rather than overwritten.
 
 Blank optional fields defer to your OpenSSH configuration. Passwords, key passphrases, MFA, and host-key confirmation are handled interactively in the terminal. RODE does not store credentials or disable host-key verification. SSH agent forwarding is governed by your own SSH config. Work channels preserve the authenticated master's agent-forwarding policy; agent forwarding remains off unless you enable it for that host.
 
-Once a connection or reconnect finishes opening the project, RODE focuses Chat
-and hides the file Explorer. The project shell starts in the background; select
-the Terminal tab when you need it.
+Once a connection finishes opening the workspace, RODE shows the standard welcome
+screen and keeps Explorer available. Choose **Open project folder** to browse
+folders on the connected SSH host before starting work. Reconnecting with open
+buffers returns to the editor and preserves their unsaved changes. The project
+shell starts in the background; use **Toggle terminal** when you need it.
 
 To use your desktop's SSH agent for Git operations on a remote host, enable `ForwardAgent yes` for that host in your desktop SSH config, then reconnect RODE and open a new terminal. The desktop process must have access to the agent when it connects. In a normal-mode remote terminal, `ssh-add -l` should list the forwarded identities, and the Git tab uses the same agent. Existing persistent terminals retain their original environment. This is separate from the project's sandbox setting.
 

@@ -416,6 +416,7 @@ impl EditorApp {
                             .strong()
                             .color(palette.text),
                     );
+                    ui_probe::button(ui, "welcome-screen", &title);
                     let subtitle = ui.label(
                         RichText::new("Local projects and remote compute, together.")
                             .size(15.0)
@@ -447,6 +448,7 @@ impl EditorApp {
                         IconButton::new(Icon::Folder, "Open project folder")
                             .shortcut("Ctrl+Shift+O"),
                     );
+                    ui_probe::button(ui, "welcome-open-project", &folder);
                     if folder.clicked() {
                         self.set_dialog(Dialog::Folder);
                     }

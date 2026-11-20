@@ -198,9 +198,11 @@ impl EditorApp {
             self.start_project_terminal(ctx);
         }
         if opening_connection {
-            self.show_explorer = false;
-            self.reveal_panel(Panel::Agent, ctx);
-            self.agents.focus = true;
+            // Leave folder selection available after login. The existing editor
+            // shows Welcome without tabs, or the preserved buffers on reconnect.
+            // Editor focus also prevents a late shell attachment from taking over.
+            self.show_explorer = true;
+            self.focus_editor_in(egui::ViewportId::ROOT, ctx);
         }
     }
 

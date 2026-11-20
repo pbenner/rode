@@ -120,16 +120,19 @@ class ProjectUI(NativeUI):
         key("s", ("Control_L",))
         self.saved_edit(path, marker)
 
-    def picker(self, remote=False):
-        key("o", ("Control_L", "Shift_L"))
+    def picker(self, remote=False, welcome=False):
+        if welcome:
+            self.click("welcome-open-project")
+        else:
+            key("o", ("Control_L", "Shift_L"))
         self.control("project-dialog-path", focused=True)
         self.control("project-dialog-host:" + ("ssh" if remote else "local"))
         # Let the initial listing finish before editing its path; its response
         # otherwise competes with the typed destination.
         self.control("project-dialog-ready")
 
-    def open_project(self, project, remote=False, screenshot_name=None):
-        self.picker(remote)
+    def open_project(self, project, remote=False, screenshot_name=None, welcome=False):
+        self.picker(remote, welcome)
         self.path("project-dialog-path", str(project))
         self.click("project-dialog-browse")
         self.control("project-dialog-ready")
@@ -189,8 +192,8 @@ class ProjectUI(NativeUI):
         self.control(name, focused=True)
         return info
 
-    def remote_chat(self, project):
-        """Keep chat focused after the background shell has attached, including reconnects."""
+    def remote_editor(self, project, welcome=False):
+        """Keep Welcome or retained source visible after the background shell attaches."""
         self.wait(
             lambda: any(
                 info["root"] == str(project) and info["alive"] and info["clients"] > 0
@@ -198,13 +201,19 @@ class ProjectUI(NativeUI):
             ),
             "The background terminal did not attach",
         )
-        self.control("agent-composer", focused=True)
-        self.absent("explorer-root")
+        self.control("pane-Editor")
+        self.control("explorer-root")
+        self.absent("agent-composer")
+        if welcome:
+            self.control("welcome-screen")
+            self.control("welcome-open-project")
+        else:
+            self.control("source-editor", focused=True)
         self.layout(
             lambda state: all(
                 not button["name"].startswith("terminal-input:") for button in state["buttons"]
             ),
-            "The background terminal replaced chat",
+            "The background terminal replaced the editor",
         )
 
     def disconnected(self):
@@ -312,8 +321,9 @@ def run(remote=False, fallback=False):
                 ui = ProjectUI(window, process, log.name, environment)
                 ui.project(first, remote)
                 if remote:
-                    ui.remote_chat(first)
-                    screenshot(window, "ssh-chat-focused.png")
+                    ui.remote_editor(first, welcome=True)
+                    screenshot(window, "ssh-welcome.png")
+                    ui.open_project(first, remote=True, welcome=True)
                 if fallback:
                     assert "[Sandbox]" not in ui.title()
                 ui.edit_file(first / "alpha.rs", label + "-first-saved")
@@ -384,8 +394,9 @@ def run(remote=False, fallback=False):
                     ui.absent("project-dialog-path")
                     ui.command("Remote: Reconnect SSH")
                     ui.project(second, remote=True)
-                    ui.remote_chat(second)
-                    ui.click("workspace-tab:Terminal")
+                    ui.remote_editor(second)
+                    ui.copy("source-editor", contents + "\n// survives-disconnect")
+                    ui.command("Toggle terminal")
                     ui.terminal(second)
                     screenshot(window, "ssh-reconnected-compact.png")
                     ui.resize(1380, 900)
@@ -408,8 +419,8 @@ def run(remote=False, fallback=False):
                     ui.disconnected()
                     ui.command("Remote: Reconnect SSH")
                     ui.project(second, remote=True)
-                    ui.remote_chat(second)
-                    ui.click("workspace-tab:Terminal")
+                    ui.remote_editor(second)
+                    ui.command("Toggle terminal")
                     ui.terminal(second)
                     # Close only this GUI's private master to exercise
                     # unexpected transport loss rather than a palette action.
