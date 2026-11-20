@@ -322,20 +322,23 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                 let buttons = state["buttons"].as_array().unwrap();
                 let has = |name: &str| buttons.iter().any(|b| b["name"] == name);
                 for name in ["Chat", "Terminal", "Git", "Problems", "Tasks", "Settings"] {
-                    assert!(
+                    assert_eq!(
                         has(&format!("workspace-tab:{name}")),
+                        mode == 1,
                         "Missing {name} at {width}"
                     );
                 }
-                assert_eq!(has("workspace-tab:Debugger"), debug);
+                assert_eq!(has("workspace-tab:Debugger"), debug && mode == 1);
+                assert!(has("workspace-sidebar"));
+                assert!(!has("workspace-code"));
                 assert!(!has("workspace-tools"));
                 assert!(!has("workspace-project-menu"));
                 assert_eq!(has("workspace-detach"), mode == 1);
-                assert_eq!(has("workspace-dock"), mode == 2);
-                assert_eq!(has("workspace-detach-tab:Problems"), mode > 0);
+                assert!(!has("workspace-dock"));
+                assert_eq!(has("workspace-detach-tab:Problems"), mode == 1);
                 assert_eq!(
                     has("workspace-window-separator"),
-                    mode > 0,
+                    mode == 1,
                     "{width}/{font_scale}/{mode}: {state}"
                 );
                 assert!(!has("workspace-tab:Environment"));
@@ -347,7 +350,7 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                                 || name.starts_with("workspace-detach")
                                 || matches!(
                                     name,
-                                    "workspace-code"
+                                    "workspace-sidebar"
                                         | "workspace-explorer"
                                         | "workspace-dock"
                                         | "workspace-window-separator"
@@ -359,7 +362,7 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                         egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
                     })
                     .collect();
-                if mode > 0 {
+                if mode == 1 {
                     let right = rects.iter().map(|rect| rect.right()).fold(0., f32::max);
                     assert!(
                         (right - (width - theme::PANEL_MARGIN.right as f32)).abs() < 2.,

@@ -398,6 +398,14 @@ class NativeUI:
         return NativeUI(window, self.process, self.log_path, state, self.project_root)
 
     def click(self, name, *, mouse_button=1):
+        # Open project navigation through its real toggle before selecting a
+        # hidden tool tab. Actions are still sent once in this owning window.
+        if name.startswith("workspace-tab:"):
+            names = {button["name"] for button in self.layout()["buttons"]}
+            if name not in names and "workspace-sidebar-closed" in names:
+                click_button(
+                    self.window, self.process, self.log_path, self.state_path, "workspace-sidebar"
+                )
         click_button(
             self.window,
             self.process,
@@ -406,6 +414,13 @@ class NativeUI:
             name,
             mouse_button=mouse_button,
         )
+
+    def project_editor(self):
+        """Close the root tools view through its toggle, preserving its selected tab."""
+        names = {button["name"] for button in self.layout()["buttons"]}
+        if "pane-Editor" not in names:
+            self.click("workspace-sidebar")
+        return self.control("pane-Editor")
 
     def absent(self, name, after_pass=None):
         return self.layout(

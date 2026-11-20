@@ -78,10 +78,10 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         ui.value("agent-composer-value", "draft retained across application areas")
         ui.click("activity:System monitor")
         ui.control("monitor-start")
-        ui.absent("workspace-code")
+        ui.absent("workspace-sidebar")
         ui.absent("pane-Explorer")
         ui.click("activity:Connections")
-        ui.absent("workspace-code")
+        ui.absent("workspace-sidebar")
         ui.control("saved-connection-0")
         ui.control("tunnel-saved-load:local-setup")
         ui.control("tunnel-saved-load:remote-setup", enabled=False)
@@ -105,7 +105,7 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         ui.click("activity:Connections")
         ui.click("activity:Projects")
         ui.value("agent-composer-value", "draft retained across application areas")
-        ui.click("workspace-code")
+        ui.project_editor()
         ui.source("original source\nunsaved project edit")
         assert source.read_text() == "original source\n"
         key("s", ("Control_L",))
@@ -131,12 +131,13 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
             project / "returned-shell.pid"
         ).read_text()
         ui.click("activity:App settings")
-        ui.absent("workspace-code")
+        ui.absent("workspace-sidebar")
         screenshot(ui.window, "app-settings.png")
         ui.click("activity:Projects")
-        ui.click("workspace-code")
+        ui.project_editor()
         ui.resize(850, 560)
         ui.absent("workspace-tools")
+        ui.click("workspace-sidebar")
         for tab in ("Chat", "Terminal", "Git", "Problems", "Tasks", "Settings"):
             ui.control(f"workspace-tab:{tab}")
         ui.absent("workspace-tab:Environment")
@@ -159,7 +160,7 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         screenshot(ui.window, "connections-library-compact-tunnels.png")
         ui.open_file("second.txt")
         ui.source("explicit file opening\n")
-        ui.control("workspace-code-selected")
+        ui.control("pane-Editor")
         ui.open_file("main.txt")
         ui.source("original source\nunsaved project edit")
 
@@ -176,11 +177,11 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
             ui.click("area-detach")
             child = ui.child_window(f"RODE · {title}")
             child.control(f"workspace-reattach:{title}")
-            ui.control("workspace-code-selected")
+            ui.control("pane-Editor")
             # Clicking the icon raises its existing window without changing root content.
             ui.click(icon)
             child.control(f"workspace-reattach:{title}")
-            ui.control("workspace-code-selected")
+            ui.control("pane-Editor")
             # Xvfb has no window manager: expose the child before pixel capture.
             focus_window(child.window)
             child.control(f"workspace-reattach:{title}", hovered=True)
@@ -200,7 +201,7 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
                 child.click(f"workspace-reattach:{title}")
             else:
                 request_close(child.window)
-            ui.absent("workspace-code")
+            ui.absent("workspace-sidebar")
             if title == "Monitor":
                 ui.control("monitor-stop")
             ui.click("activity:Projects")

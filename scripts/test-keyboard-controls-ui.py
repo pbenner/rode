@@ -50,7 +50,7 @@ def run():
             ui.document(source)
             ui.navigate("p")
             ui.control("workbench-panel:PROBLEMS")
-            ui.hint("Code")
+            ui.hint("Project tools")
             key("Right")
             ui.control("workspace-tab:Chat", focused=True)
             assert not any(b["name"] == "agent-composer" for b in ui.layout()["buttons"])

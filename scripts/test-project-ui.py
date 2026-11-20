@@ -72,17 +72,7 @@ class ProjectUI(NativeUI):
         self.copy(name, value)
 
     def editor(self):
-        state = self.layout(
-            lambda state: any(
-                button["name"] in ("source-editor", "workspace-code") and button["enabled"]
-                for button in state["buttons"]
-            ),
-            "Neither the source editor nor its workspace tab became available",
-        )
-        if not any(
-            button["name"] == "source-editor" and button["enabled"] for button in state["buttons"]
-        ):
-            self.click("workspace-code")
+        self.project_editor()
         self.click("source-editor")
         self.control("source-editor", focused=True)
 

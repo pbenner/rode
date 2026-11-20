@@ -305,10 +305,33 @@ impl EditorApp {
             }
             self.focus_pane(navigation::Pane::Editor, ctx);
         } else {
-            let tab = self
-                .workbench
-                .last_tool
-                .unwrap_or(ToolTab::Panel(Panel::Agent));
+            let enabled = |tab: &ToolTab| {
+                tab.scope() == areas::Scope::Project
+                    && match tab {
+                        ToolTab::Panel(panel) => self.panel_enabled(*panel),
+                        ToolTab::Terminal => true,
+                        ToolTab::Area(_) => false,
+                    }
+            };
+            let remembered = self.workbench.last_tool.filter(enabled);
+            let docked_panel = |tab: &ToolTab| {
+                matches!(tab, ToolTab::Panel(_)) && enabled(tab) && !self.tab_detached(*tab)
+            };
+            // Opening navigation must remain possible after its last tab moved
+            // to a window or its extension was disabled. Prefer a docked panel;
+            // if every panel is detached, raise an enabled window without
+            // starting a shell for an unrelated, unavailable selection.
+            let tab = remembered
+                .filter(|tab| !self.tab_detached(*tab))
+                .or_else(|| {
+                    [Panel::Agent, Panel::Problems, Panel::Settings]
+                        .into_iter()
+                        .map(ToolTab::Panel)
+                        .find(docked_panel)
+                })
+                .or_else(|| ToolTab::ALL.into_iter().find(docked_panel))
+                .or(remembered)
+                .unwrap_or(ToolTab::Panel(Panel::Settings));
             match tab {
                 ToolTab::Panel(panel) if self.panel_enabled(panel) => {
                     if self.workbench.surface == Surface::Tools
@@ -418,23 +441,46 @@ impl EditorApp {
         }
     }
 
-    fn project_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, child: bool) {
+    /// Workspace controls belong only to the root; tool hosts contain tool tabs.
+    /// The editor keeps one tools toggle instead of pretending to be another tab.
+    fn project_tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        child: bool,
+        show_tabs: bool,
+    ) {
         ui.horizontal_wrapped(|ui| {
             keyboard::group(ui, "workspace-tabs", |ui| {
-                let explorer = ui.add(IconButton::toolbar(Icon::Files, "Toggle Explorer"));
-                ui_probe::button(ui, "workspace-explorer", &explorer);
-                if explorer.clicked() {
-                    self.execute_command(Command::Explorer, ctx);
+                if !child {
+                    let explorer = ui.add(IconButton::toolbar(Icon::Files, "Toggle Explorer"));
+                    ui_probe::button(ui, "workspace-explorer", &explorer);
+                    if explorer.clicked() {
+                        self.execute_command(Command::Explorer, ctx);
+                    }
+                    let open = self.tool_surface();
+                    let sidebar = ui
+                        .add(crate::keyboard::Button::selectable(open, "Project tools"))
+                        .on_hover_text(format!(
+                            "Show or hide project tools · {}",
+                            self.command_hint(Command::Sidebar)
+                        ));
+                    ui_probe::button(ui, "workspace-sidebar", &sidebar);
+                    ui_probe::button(
+                        ui,
+                        if open {
+                            "workspace-sidebar-open"
+                        } else {
+                            "workspace-sidebar-closed"
+                        },
+                        &sidebar,
+                    );
+                    if sidebar.clicked() {
+                        self.toggle_sidebar(ctx);
+                    }
                 }
-                let code_selected = !child && (self.workbench.detached || !self.tool_surface());
-                let code = crate::keyboard::selectable_label(ui, code_selected, "Code");
-                ui_probe::button(ui, "workspace-code", &code);
-                if code_selected {
-                    ui_probe::button(ui, "workspace-code-selected", &code);
-                }
-                if code.clicked() {
-                    self.focus_editor(ctx);
-                    self.editor_intent();
+                if !show_tabs {
+                    return;
                 }
                 for tab in ToolTab::ALL
                     .into_iter()
@@ -528,14 +574,15 @@ impl EditorApp {
         if self.foreign_modal(ctx) {
             ui.disable();
         }
-        let dock = if self.workbench.detached {
+        let show_tabs = child || (!self.workbench.detached && self.tool_surface());
+        let dock = if child {
             Some("Dock back")
-        } else if self.tool_surface() {
+        } else if show_tabs {
             Some("Detach")
         } else {
             None
         };
-        let tab = self.selected_tool_tab();
+        let tab = self.selected_tool_tab().filter(|_| show_tabs);
         let labels: Vec<_> = dock.into_iter().chain(tab.map(|_| "Detach tab")).collect();
         let spacing = ui.spacing().item_spacing.x;
         let actions_width = if labels.is_empty() {
@@ -551,7 +598,7 @@ impl EditorApp {
             .into_iter()
             .filter(|tab| tab.scope() == areas::Scope::Project)
             .map(|tab| Self::workspace_button_width(ui, tab.label()))
-            .fold(0., f32::max);
+            .fold(Self::workspace_button_width(ui, "Project tools"), f32::max);
         let inline = ui.available_width() >= actions_width + spacing + widest_tab;
         let tabs_width = (ui.available_width()
             - if inline && actions_width > 0. {
@@ -566,7 +613,7 @@ impl EditorApp {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     ui.set_min_width(tabs_width);
-                    self.project_tabs(ui, ctx, child);
+                    self.project_tabs(ui, ctx, child, show_tabs);
                 },
             );
             if inline && actions_width > 0. {
@@ -831,6 +878,125 @@ mod tests {
                 app.workspace_content(ctx);
             },
         );
+    }
+
+    #[test]
+    fn detached_headers_offer_only_tool_navigation_and_reattachment() {
+        for individual in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = EditorApp::new(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                Startup::default(),
+            );
+            app.toggle_panel(Panel::Agent, &ctx);
+            app.workbench.detached = !individual;
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("header.json");
+            ui_probe::install_at(&ctx, path.clone());
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(680., 420.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            if individual {
+                                app.detached_tab_header(ToolTab::Panel(Panel::Agent), ui, ctx);
+                            } else {
+                                app.workspace_tabs(ui, ctx, true);
+                            }
+                        });
+                    },
+                );
+            }
+            let state: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            let has = |name: &str| {
+                state["buttons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|b| b["name"] == name)
+            };
+            for name in ["workspace-code", "workspace-explorer", "workspace-sidebar"] {
+                assert!(
+                    !has(name),
+                    "Root control {name} leaked into a tool window: {state}"
+                );
+            }
+            assert_eq!(has("workspace-tab:Chat"), !individual);
+            assert_eq!(has("workspace-dock"), !individual);
+            assert_eq!(has("workspace-reattach:Chat"), individual);
+        }
+    }
+
+    #[test]
+    fn project_tools_can_reopen_after_the_remembered_tab_detaches_without_starting_a_shell() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::new(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            Startup::default(),
+        );
+        app.new_file();
+        app.documents[0].fixture_content().text = "unsaved source".into();
+        app.agents.chat.notice("retained conversation");
+        app.toggle_sidebar(&ctx);
+        assert_eq!(app.workbench.panel, Some(Panel::Agent));
+        app.detach_tab(ToolTab::Panel(Panel::Agent), &ctx);
+        assert_eq!(app.workbench.surface, Surface::Editor);
+        app.toggle_sidebar(&ctx);
+        assert!(app.tools_visible());
+        assert_eq!(app.workbench.panel, Some(Panel::Problems));
+        assert!(app.tab_detached(ToolTab::Panel(Panel::Agent)));
+        assert!(app.terminal.is_none() && !app.agents.chat.busy);
+        app.toggle_sidebar(&ctx);
+        assert_eq!(app.workbench.surface, Surface::Editor);
+        assert_eq!(
+            app.workbench.last_tool,
+            Some(ToolTab::Panel(Panel::Problems))
+        );
+        assert_eq!(app.documents[0].text, "unsaved source");
+        assert!(app.documents[0].dirty());
+        assert_eq!(
+            app.agents.chat.messages.back().unwrap().text,
+            "retained conversation"
+        );
+    }
+
+    #[test]
+    fn reopening_tools_does_not_start_a_terminal_when_enabled_panels_are_all_detached() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::new(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            Startup::default(),
+        );
+        let mut workspace = crate::app::tests::remote_workspace();
+        workspace.connected = false;
+        app.workspace.set_fixture(Some(workspace));
+        app.toggle_panel(Panel::Agent, &ctx);
+        for tab in ToolTab::ALL {
+            if matches!(tab, ToolTab::Panel(panel) if tab.scope() == areas::Scope::Project && panel != Panel::Agent && app.panel_enabled(panel))
+            {
+                app.detach_tab(tab, &ctx);
+            }
+        }
+        app.reveal_panel(Panel::Agent, &ctx);
+        app.set_extension(crate::extensions::Feature::Agents.id(), false);
+        assert_eq!(app.workbench.last_tool, Some(ToolTab::Panel(Panel::Agent)));
+        assert!(!app.show_terminal);
+        let windows = app.workbench.floating_tabs.clone();
+        app.toggle_sidebar(&ctx);
+        assert!(
+            !app.show_terminal,
+            "Opening tool navigation requested an unrelated terminal"
+        );
+        assert_ne!(app.workbench.surface, Surface::Terminal);
+        assert_eq!(app.workbench.floating_tabs, windows);
+        assert!(app.tab_detached(ToolTab::Panel(Panel::Problems)));
     }
 
     #[test]
@@ -1129,7 +1295,7 @@ mod tests {
             app.agents.chat.messages.back().unwrap().text,
             "retained conversation"
         );
-        // Selecting Code also preserves the last tools tab.
+        // Returning to editing also preserves the last tools tab.
         app.focus_editor(&ctx);
         app.workbench.reset_project();
         app.toggle_sidebar(&ctx);

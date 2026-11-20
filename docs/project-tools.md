@@ -2,7 +2,7 @@
 
 ## Git source control
 
-Use **Git** in the project toolbar, **View → Workspace panels → Source control**, or **Ctrl+Shift+G**. Git runs on the project host using its installed Git and configuration. **Git sandbox: off / on** selects execution outside the sandbox or under the project policy. Git defaults to outside the sandbox because these are user-operated actions. The choice is remembered per host/project and applies to status, commits, network operations, configuration, hooks and **Git terminal**. SSH Git still runs on the SSH host. Agent Git commands retain the agent’s project policy. Switching modes waits for pending operations and authentication prompts to finish; an operation never retries automatically in a less restricted mode. The native panel provides:
+Use **Project tools → Git**, **View → Workspace panels → Source control**, or **Ctrl+Shift+G**. Git runs on the project host using its installed Git and configuration. **Git sandbox: off / on** selects execution outside the sandbox or under the project policy. Git defaults to outside the sandbox because these are user-operated actions. The choice is remembered per host/project and applies to status, commits, network operations, configuration, hooks and **Git terminal**. SSH Git still runs on the SSH host. Agent Git commands retain the agent’s project policy. Switching modes waits for pending operations and authentication prompts to finish; an operation never retries automatically in a less restricted mode. The native panel provides:
 
 - Status, branch/upstream information, working/staged diffs, and file or individual text-hunk staging/unstaging.
 - Commits, amend, the latest 100 commits with patches, blame, cherry-pick, and revert.

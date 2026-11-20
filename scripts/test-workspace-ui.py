@@ -133,10 +133,12 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
 
             def disabled_tab(name):
                 focus(window)
+                driver().click("workspace-sidebar")
                 point = control("workspace-tab:" + name, enabled=False)
                 before = json.loads(state_path.read_text())["pass"]
                 click(*point)
-                control("workspace-code-selected", after_pass=before)
+                control("pane-Tools", after_pass=before)
+                driver().project_editor()
 
             def composer(target):
                 activate("agent-composer", target)
@@ -167,8 +169,12 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             key("End", ("Control_L",))
             text("\nunsaved workspace edit")
             ui.source("original source\n\nunsaved workspace edit")
+            ui.control("workspace-sidebar-closed")
+            ui.absent("workspace-code")
+            ui.absent("workspace-tab:Chat")
             screenshot(window, "code.png")
-            key("a", ("Control_L", "Shift_L"))
+            ui.click("workspace-sidebar")
+            ui.control("workspace-sidebar-open")
             control("agent-composer")
             send("before detach", window)
             screenshot(window, "chat-full-workspace.png")
@@ -191,6 +197,9 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             activate("workspace-detach")
             wait(tools_window, "No native tools window was created")
             child = tools_window()
+            for name in ("workspace-code", "workspace-explorer", "workspace-sidebar"):
+                driver(child).absent(name)
+            ui.absent("workspace-tab:Chat")
             send("while detached", child)
             screenshot(child, "chat-floating.png")
             focus(window)
@@ -274,7 +283,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             request_close(child)
             wait(lambda: tools_window() is None, "Queued chat did not dock back")
             focus(window)
-            activate("workspace-code")
+            ui.project_editor()
             key("s", ("Control_L",))
             wait(lambda: "unsaved workspace edit" in source.read_text(), "Code edits were lost")
             screenshot(window, "code-restored.png")
@@ -359,7 +368,7 @@ with fixture_directory(prefix="rode-workspace-ui-") as base:
             driver().absent("pane-outline-Tools", after_pass=root_pass)
             focus(window)
             activate("activity:Projects")
-            activate("workspace-code")
+            ui.project_editor()
             disabled_tab("Chat")
             activate("source-editor")
             control("source-editor", focused=True)

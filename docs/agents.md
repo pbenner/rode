@@ -1,6 +1,6 @@
 # Agent chat
 
-Open **View → Workspace panels → Agent chat**, use **Chat** in the project toolbar, or press **Ctrl+Shift+A**. Choose a provider and open its settings button. Send a message with **Send** or **Enter**; **Shift+Enter** inserts a newline. Replies stream into the chat with Markdown headings, emphasis, lists, tables, inline code and fenced code blocks. Text remains selectable across prose and code, with copy buttons and expandable tool results. Permission requests appear above the conversation; structured questions open a dedicated answer form.
+Open **View → Workspace panels → Agent chat**, use **Project tools → Chat**, or press **Ctrl+Shift+A**. Choose a provider and open its settings button. Send a message with **Send** or **Enter**; **Shift+Enter** inserts a newline. Replies stream into the chat with Markdown headings, emphasis, lists, tables, inline code and fenced code blocks. Text remains selectable across prose and code, with copy buttons and expandable tool results. Permission requests appear above the conversation; structured questions open a dedicated answer form.
 
 Follow-up messages keep the current conversation. Background interpreter discovery does not replace it. If its desktop connection is lost or its backend, project policy or interpreter selection no longer matches, sending keeps your draft and attachments and explains the conflict. Reattach a live conversation through **Running**, or choose **New chat** explicitly to start over.
 

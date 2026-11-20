@@ -208,7 +208,7 @@ Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, follow
 The Rust/egui application keeps the editor independent of an embedded browser application runtime. Cached layouts, virtualized rows and explicit worker jobs keep slow I/O and tool execution out of ordinary input/rendering. On-demand activation limits idle work, at the cost of waiting for a tool or preview's first result. This choice does not by itself establish a performance claim: measure relevant release workloads when changing those boundaries. Rationale lives in `src/lib.rs` and `src/app.rs`.
 
 `areas::Area` selects the main window's application surface without changing the
-project's selected `workbench::Surface` or controllers. The wrapping project tab bar uses the `ToolTab` registry and scope classification;
+project's selected `workbench::Surface` or controllers. The root Project tools toggle reveals the full-width tool view. Its wrapping tab bar uses the `ToolTab` registry and scope classification; detached tool hosts omit editor controls;
 Environment is a category of Project settings, with its own retained draft;
 secondary editor/tool windows keep their existing owners. Application navigation
 is presentation state, not execution authority.
