@@ -7,78 +7,168 @@
 use super::*;
 
 impl EditorApp {
-    /// Render native app menus and workspace identity using the same guarded actions as commands.
+    /// Root navigation is available above the editor even when the tools row is absent.
+    fn project_titlebar_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, compact: bool) {
+        let open = self.tool_surface();
+        let sidebar = if compact {
+            ui.add(IconButton::toolbar(Icon::Workspace, "Project tools").selected(open))
+        } else {
+            ui.add(crate::keyboard::Button::selectable(open, "Project tools"))
+        }
+        .on_hover_text(format!(
+            "Show or hide project tools · {}",
+            self.command_hint(Command::Sidebar)
+        ));
+        ui_probe::button(ui, "workspace-sidebar", &sidebar);
+        ui_probe::button(
+            ui,
+            if open {
+                "workspace-sidebar-open"
+            } else {
+                "workspace-sidebar-closed"
+            },
+            &sidebar,
+        );
+        if sidebar.clicked() {
+            keyboard::consume_activation(&sidebar);
+            self.toggle_sidebar(ctx);
+        }
+        let explorer = ui.add(IconButton::toolbar(Icon::Files, "Toggle Explorer"));
+        ui_probe::button(ui, "workspace-explorer", &explorer);
+        if explorer.clicked() {
+            keyboard::consume_activation(&explorer);
+            self.execute_command(Command::Explorer, ctx);
+        }
+    }
+
+    /// Reserve actions at the right before measuring search space. A clipped,
+    /// scrollable menu region keeps oversized fonts from overlapping those actions.
     pub(super) fn titlebar(&mut self, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
+        let frame = theme::frame(palette.panel);
+        let height = (theme::control_height_for_style(ctx, &ctx.style())
+            + frame.inner_margin.sum().y)
+            .max(48.);
+        let compact = ctx.content_rect().width() < 900.;
+        let minimal = ctx.content_rect().width() < 650.;
+        let project = ctx.viewport_id() == egui::ViewportId::ROOT
+            && self.areas.active == areas::Area::Projects
+            && (self.workspace.is_some()
+                || !self.documents.is_empty()
+                || self.tool_surface()
+                || workbench::ToolTab::ALL
+                    .into_iter()
+                    .any(|tab| self.tab_detached(tab)));
         egui::TopBottomPanel::top("titlebar")
-            .exact_height(48.0)
-            .frame(theme::frame(palette.panel))
+            .exact_height(height)
+            .frame(frame)
             .show(ctx, |ui| {
                 palette.paint_panel(ui);
-                ui.horizontal_centered(|ui| {
-                    let (mark, _) = ui.allocate_exact_size(egui::vec2(26., 26.), Sense::hover());
-                    ui.painter()
-                        .rect_filled(mark, 7, palette.accent.gamma_multiply(0.12));
-                    ui.painter().text(
-                        mark.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "[r]",
-                        FontId::monospace(13.),
-                        palette.accent,
-                    );
-                    ui.label(
-                        RichText::new("RODE")
-                            .strong()
-                            .size(15.0)
-                            .color(palette.heading_color()),
-                    );
-                    ui.add_space(14.0);
-                    self.menus(ui, ctx);
-                    ui.add_space(12.0);
-                    let label = self
-                        .workspace
-                        .as_ref()
-                        .map(|w| {
-                            format!(
-                                "{}  ·  {}",
-                                ssh::display_name(&w.root),
-                                if w.remote.is_some() {
-                                    "SSH workspace"
-                                } else {
-                                    "Local workspace"
-                                },
-                            )
-                        })
-                        .unwrap_or_else(|| "Your next workspace starts here".into());
-                    let roomy = ctx.content_rect().width() >= 1180.;
-                    let workspace_width =
-                        (ui.available_width() - if roomy { 250. } else { 230. }).clamp(90., 360.);
-                    let mut workspace_button = IconButton::new(Icon::Search, &label)
-                        .color(palette.muted)
-                        .truncate();
-                    if workspace_width >= 250. {
-                        workspace_button = workspace_button.shortcut("Ctrl+Shift+P");
+                if minimal {
+                    ui.spacing_mut().item_spacing.x = 4.;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let connect = if compact {
+                        IconButton::toolbar(Icon::Remote, "Connect SSH")
+                    } else {
+                        IconButton::new(Icon::Remote, "Connect SSH")
+                    };
+                    let connect = ui.add(connect.color(palette.accent));
+                    ui_probe::button(ui, "connect-ssh", &connect);
+                    if connect.clicked() {
+                        self.set_dialog(Dialog::Connect);
                     }
-                    if ui
-                        .add_sized([workspace_width, 30.], workspace_button)
-                        .on_hover_text(format!("{label}\nOpen command palette · Ctrl+Shift+P"))
-                        .clicked()
-                    {
-                        self.set_dialog(Dialog::Commands);
+                    let tunnels = self.tunnel_status_button(ui, palette);
+                    ui_probe::button(ui, "open-tunnels", &tunnels);
+                    if tunnels.clicked() {
+                        self.set_dialog(Dialog::Tunnels);
                     }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(IconButton::new(Icon::Remote, "Connect SSH").color(palette.accent))
-                            .clicked()
-                        {
-                            self.set_dialog(Dialog::Connect);
-                        }
-                        let tunnels = self.tunnel_status_button(ui, palette);
-                        ui_probe::button(ui, "open-tunnels", &tunnels);
-                        if tunnels.clicked() {
-                            self.set_dialog(Dialog::Tunnels);
-                        }
-                    });
+                    if project {
+                        ui.add_enabled_ui(!self.foreign_modal(ctx), |ui| {
+                            self.project_titlebar_controls(ui, ctx, minimal);
+                        });
+                    }
+                    let width = ui.available_width().max(0.);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, ui.available_height()),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            egui::ScrollArea::horizontal()
+                                .id_salt("titlebar-navigation")
+                                .auto_shrink([false, true])
+                                .scroll_bar_visibility(
+                                    egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
+                                .show(ui, |ui| {
+                                    ui.set_max_width(width);
+                                    ui.horizontal_centered(|ui| {
+                                        if !minimal {
+                                            let (mark, _) = ui.allocate_exact_size(
+                                                egui::vec2(26., 26.),
+                                                Sense::hover(),
+                                            );
+                                            ui.painter().rect_filled(
+                                                mark,
+                                                7,
+                                                palette.accent.gamma_multiply(0.12),
+                                            );
+                                            ui.painter().text(
+                                                mark.center(),
+                                                egui::Align2::CENTER_CENTER,
+                                                "[r]",
+                                                FontId::monospace(13.),
+                                                palette.accent,
+                                            );
+                                            ui.label(
+                                                RichText::new("RODE")
+                                                    .strong()
+                                                    .size(15.)
+                                                    .color(palette.heading_color()),
+                                            );
+                                            ui.add_space(14.);
+                                        }
+                                        self.menus(ui, ctx);
+                                        ui.add_space(if minimal { 4. } else { 12. });
+                                        let workspace_width = ui.available_width().clamp(0., 360.);
+                                        if workspace_width < 40. {
+                                            return;
+                                        }
+                                        let label = self
+                                            .workspace
+                                            .as_ref()
+                                            .map(|w| {
+                                                format!(
+                                                    "{}  ·  {}",
+                                                    ssh::display_name(&w.root),
+                                                    if w.remote.is_some() {
+                                                        "SSH workspace"
+                                                    } else {
+                                                        "Local workspace"
+                                                    }
+                                                )
+                                            })
+                                            .unwrap_or_else(|| {
+                                                "Your next workspace starts here".into()
+                                            });
+                                        let mut button = IconButton::new(Icon::Search, &label)
+                                            .color(palette.muted)
+                                            .truncate();
+                                        if workspace_width >= 250. {
+                                            button = button.shortcut("Ctrl+Shift+P");
+                                        }
+                                        let search = ui
+                                            .add_sized([workspace_width, 30.], button)
+                                            .on_hover_text(format!(
+                                                "{label}\nOpen command palette · Ctrl+Shift+P"
+                                            ));
+                                        ui_probe::button(ui, "workspace-search", &search);
+                                        if search.clicked() {
+                                            self.set_dialog(Dialog::Commands);
+                                        }
+                                    });
+                                });
+                        },
+                    );
                 });
             });
     }

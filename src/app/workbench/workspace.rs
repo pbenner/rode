@@ -441,47 +441,10 @@ impl EditorApp {
         }
     }
 
-    /// Workspace controls belong only to the root; tool hosts contain tool tabs.
-    /// The editor keeps one tools toggle instead of pretending to be another tab.
-    fn project_tabs(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        child: bool,
-        show_tabs: bool,
-    ) {
+    /// Tool hosts contain only tool tabs; root controls live in the main header.
+    fn project_tabs(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal_wrapped(|ui| {
             keyboard::group(ui, "workspace-tabs", |ui| {
-                if !child {
-                    let explorer = ui.add(IconButton::toolbar(Icon::Files, "Toggle Explorer"));
-                    ui_probe::button(ui, "workspace-explorer", &explorer);
-                    if explorer.clicked() {
-                        self.execute_command(Command::Explorer, ctx);
-                    }
-                    let open = self.tool_surface();
-                    let sidebar = ui
-                        .add(crate::keyboard::Button::selectable(open, "Project tools"))
-                        .on_hover_text(format!(
-                            "Show or hide project tools · {}",
-                            self.command_hint(Command::Sidebar)
-                        ));
-                    ui_probe::button(ui, "workspace-sidebar", &sidebar);
-                    ui_probe::button(
-                        ui,
-                        if open {
-                            "workspace-sidebar-open"
-                        } else {
-                            "workspace-sidebar-closed"
-                        },
-                        &sidebar,
-                    );
-                    if sidebar.clicked() {
-                        self.toggle_sidebar(ctx);
-                    }
-                }
-                if !show_tabs {
-                    return;
-                }
                 for tab in ToolTab::ALL
                     .into_iter()
                     .filter(|tab| tab.scope() == areas::Scope::Project)
@@ -574,15 +537,12 @@ impl EditorApp {
         if self.foreign_modal(ctx) {
             ui.disable();
         }
-        let show_tabs = child || (!self.workbench.detached && self.tool_surface());
         let dock = if child {
             Some("Dock back")
-        } else if show_tabs {
-            Some("Detach")
         } else {
-            None
+            Some("Detach")
         };
-        let tab = self.selected_tool_tab().filter(|_| show_tabs);
+        let tab = self.selected_tool_tab();
         let labels: Vec<_> = dock.into_iter().chain(tab.map(|_| "Detach tab")).collect();
         let spacing = ui.spacing().item_spacing.x;
         let actions_width = if labels.is_empty() {
@@ -598,7 +558,7 @@ impl EditorApp {
             .into_iter()
             .filter(|tab| tab.scope() == areas::Scope::Project)
             .map(|tab| Self::workspace_button_width(ui, tab.label()))
-            .fold(Self::workspace_button_width(ui, "Project tools"), f32::max);
+            .fold(0., f32::max);
         let inline = ui.available_width() >= actions_width + spacing + widest_tab;
         let tabs_width = (ui.available_width()
             - if inline && actions_width > 0. {
@@ -613,7 +573,7 @@ impl EditorApp {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     ui.set_min_width(tabs_width);
-                    self.project_tabs(ui, ctx, child, show_tabs);
+                    self.project_tabs(ui, ctx);
                 },
             );
             if inline && actions_width > 0. {
@@ -667,25 +627,18 @@ impl EditorApp {
         if self.navigation.zoom == Some(navigation::Pane::Explorer) {
             return;
         }
-        if self.workspace.is_none()
-            && self.documents.is_empty()
-            && !self.tool_surface()
-            && self.workbench.floating_tabs.is_empty()
-        {
-            self.in_editor(egui::ViewportId::ROOT, |app| {
-                app.git_gutter_tick(ctx);
-                app.editor(ctx);
-            });
-            return;
-        }
         let palette = self.themes.active().palette;
-        egui::TopBottomPanel::top("workspace-tabs")
-            .frame(theme::frame(palette.panel))
-            .show(ctx, |ui| {
-                self.in_editor(egui::ViewportId::ROOT, |app| {
-                    app.workspace_tabs(ui, ctx, false)
-                })
-            });
+        // The editor needs no extra navigation row. Keep the row only in its
+        // actual tool host, so hiding or detaching tools restores editor space.
+        if !self.workbench.detached && self.tool_surface() {
+            egui::TopBottomPanel::top("workspace-tabs")
+                .frame(theme::frame(palette.panel))
+                .show(ctx, |ui| {
+                    self.in_editor(egui::ViewportId::ROOT, |app| {
+                        app.workspace_tabs(ui, ctx, false)
+                    })
+                });
+        }
         if self.workbench.detached || !self.tool_surface() {
             self.in_editor(egui::ViewportId::ROOT, |app| {
                 app.git_gutter_tick(ctx);
@@ -873,6 +826,7 @@ mod tests {
             },
             |ctx| {
                 app.navigation.begin_layout();
+                app.titlebar(ctx);
                 app.activity(ctx);
                 app.explorer(ctx);
                 app.workspace_content(ctx);
@@ -1232,9 +1186,7 @@ mod tests {
         render(&mut app, &ctx);
         assert!(!app.workbench.detached);
         assert!(app.navigation.rect(navigation::Pane::Editor).is_none());
-        assert!(
-            (app.navigation.rect(navigation::Pane::Tools).unwrap().top() - code.top()).abs() < 1.
-        );
+        assert!(app.navigation.rect(navigation::Pane::Tools).unwrap().top() > code.top());
         assert_eq!(app.workbench.panel, Some(Panel::Settings));
         assert_eq!(
             app.agents.chat.messages.back().unwrap().text,

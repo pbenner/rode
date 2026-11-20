@@ -40,6 +40,52 @@ fn frame(ctx: &egui::Context, events: Vec<egui::Event>, enabled: bool, text: &mu
 }
 
 #[test]
+fn focus_transferring_buttons_consume_only_their_activation_and_keep_later_typing() {
+    for activation in [Key::Enter, Key::Space] {
+        let ctx = egui::Context::default();
+        let editor = Id::new("destination");
+        let mut value = String::new();
+        let mut activated = false;
+        let mut render = |events| {
+            let mut button_id = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let response = button(ui, "Open editor");
+                        button_id = Some(response.id);
+                        if response.clicked() {
+                            consume_activation(&response);
+                            ui.memory_mut(|memory| memory.request_focus(editor));
+                            activated = true;
+                        }
+                        ui.add(egui::TextEdit::multiline(&mut value).id(editor));
+                    });
+                },
+            );
+            button_id.unwrap()
+        };
+        let id = render(vec![]);
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        let mut events = vec![key(activation)];
+        if activation == Key::Space {
+            events.push(egui::Event::Text(" ".into()));
+        }
+        events.extend([
+            egui::Event::Text("ABC".into()),
+            key(Key::Enter),
+            egui::Event::Text("later".into()),
+        ]);
+        render(events);
+        assert!(activated);
+        assert_eq!(value, "ABC\nlater");
+    }
+}
+
+#[test]
 fn hint_badges_follow_live_themes_without_reassigning_codes_or_activating_controls() {
     let mut themes = crate::theme::Theme::builtins();
     themes.push(

@@ -300,6 +300,7 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                 let temp = tempfile::tempdir().unwrap();
                 let path = temp.path().join("tabs.json");
                 ui_probe::install_at(&ctx, path.clone());
+                let mut content_top = 0.;
                 for _ in 0..3 {
                     let _ = ctx.run(
                         egui::RawInput {
@@ -310,6 +311,9 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                             ..Default::default()
                         },
                         |ctx| {
+                            app.navigation.begin_layout();
+                            app.titlebar(ctx);
+                            content_top = ctx.available_rect().top();
                             egui::SidePanel::left("fixture-explorer")
                                 .exact_width(220.)
                                 .show(ctx, |_| {});
@@ -321,6 +325,20 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
                 let buttons = state["buttons"].as_array().unwrap();
                 let has = |name: &str| buttons.iter().any(|b| b["name"] == name);
+                let pane = if mode == 1 {
+                    navigation::Pane::Tools
+                } else {
+                    navigation::Pane::Editor
+                };
+                let top = app.navigation.rect(pane).unwrap().top();
+                if mode == 1 {
+                    assert!(top > content_top + 20., "Tool tabs have no reserved space");
+                } else {
+                    assert!(
+                        (top - content_top).abs() < 1.,
+                        "Closed/detached tools still consume editor space: {state}"
+                    );
+                }
                 for name in ["Chat", "Terminal", "Git", "Problems", "Tasks", "Settings"] {
                     assert_eq!(
                         has(&format!("workspace-tab:{name}")),
@@ -329,7 +347,50 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                     );
                 }
                 assert_eq!(has("workspace-tab:Debugger"), debug && mode == 1);
-                assert!(has("workspace-sidebar"));
+                for name in [
+                    "workspace-sidebar",
+                    "workspace-explorer",
+                    "open-tunnels",
+                    "connect-ssh",
+                ] {
+                    assert!(has(name), "Header control {name} missing: {state}");
+                }
+                let rect = |button: &serde_json::Value| {
+                    let r: [f32; 4] = serde_json::from_value(button["rect"].clone()).unwrap();
+                    egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
+                };
+                let header: Vec<_> = buttons
+                    .iter()
+                    .filter(|button| {
+                        button["name"].as_str().is_some_and(|name| {
+                            name.starts_with("menu-")
+                                || matches!(
+                                    name,
+                                    "workspace-sidebar"
+                                        | "workspace-explorer"
+                                        | "workspace-search"
+                                        | "open-tunnels"
+                                        | "connect-ssh"
+                                )
+                        })
+                    })
+                    .map(rect)
+                    .collect();
+                for (i, bounds) in header.iter().enumerate() {
+                    assert!(
+                        bounds.left() >= 0.
+                            && bounds.right() <= width
+                            && bounds.top() >= 0.
+                            && bounds.bottom() <= content_top,
+                        "Header control outside its reserved space: {state}"
+                    );
+                    assert!(
+                        header[i + 1..]
+                            .iter()
+                            .all(|other| !bounds.intersects(*other)),
+                        "Overlapping header controls: {state}"
+                    );
+                }
                 assert!(!has("workspace-code"));
                 assert!(!has("workspace-tools"));
                 assert!(!has("workspace-project-menu"));
@@ -348,19 +409,10 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                         b["name"].as_str().is_some_and(|name| {
                             name.starts_with("workspace-tab:")
                                 || name.starts_with("workspace-detach")
-                                || matches!(
-                                    name,
-                                    "workspace-sidebar"
-                                        | "workspace-explorer"
-                                        | "workspace-dock"
-                                        | "workspace-window-separator"
-                                )
+                                || matches!(name, "workspace-dock" | "workspace-window-separator")
                         })
                     })
-                    .map(|b| {
-                        let r: [f32; 4] = serde_json::from_value(b["rect"].clone()).unwrap();
-                        egui::Rect::from_min_max(egui::pos2(r[0], r[1]), egui::pos2(r[2], r[3]))
-                    })
+                    .map(rect)
                     .collect();
                 if mode == 1 {
                     let right = rects.iter().map(|rect| rect.right()).fold(0., f32::max);

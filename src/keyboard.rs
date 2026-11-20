@@ -15,8 +15,8 @@ mod widgets;
 pub(super) use view::finish;
 pub(crate) use widgets::{
     Button, CollapsingHeader, ComboBox, MenuButton, button, button_sense, checkbox, collapsing,
-    editor_named, group, menu_button, named, radio_value, selectable_label, selectable_value,
-    small_button,
+    consume_activation, editor_named, group, menu_button, named, radio_value, selectable_label,
+    selectable_value, small_button,
 };
 
 #[derive(Clone)]

@@ -188,6 +188,41 @@ impl Widget for Button<'_> {
 pub(crate) fn button(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> Response {
     ui.add(Button::new(text))
 }
+
+/// Consume a native button's keyboard activation before its action transfers
+/// focus to a text field rendered later in the same pass. Keep later input in
+/// order; Space's adjacent text event belongs to the activation as well.
+pub(crate) fn consume_activation(response: &Response) {
+    if !response.clicked() || response.clicked_by(egui::PointerButton::Primary) {
+        return;
+    }
+    response.ctx.input_mut(|input| {
+        let Some(index) = input.events.iter().position(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: Key::Enter | Key::Space,
+                    pressed: true,
+                    ..
+                }
+            )
+        }) else {
+            return;
+        };
+        let space = matches!(
+            input.events.remove(index),
+            egui::Event::Key {
+                key: Key::Space,
+                ..
+            }
+        );
+        if space && matches!(input.events.get(index), Some(egui::Event::Text(text)) if text == " ")
+        {
+            input.events.remove(index);
+        }
+    });
+}
+
 /// Render a compact native button and publish its visible name.
 pub(crate) fn small_button(ui: &mut egui::Ui, text: impl Into<WidgetText>) -> Response {
     ui.add(Button::new(text).small())
