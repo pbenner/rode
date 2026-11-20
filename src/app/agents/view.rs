@@ -432,13 +432,12 @@ impl Agents {
                             {
                                 if agents.chat.persistent() {
                                     agents.chat.detach();
+                                    agents.chat.notice("Agent detached. The next message starts a new conversation.");
                                 } else {
                                     agents.chat.disconnect();
+                                    agents.chat.notice("Agent disconnected. Choose New chat before sending another message.");
                                 }
                                 agents.queue.clear();
-                                agents
-                        .chat
-                        .notice("Agent disconnected. The next message starts a new conversation.");
                             }
                             let attach_button = ui.add_enabled(!offline && !modal && !agents.history_open && !agents.files.pending && agents.files.files.len() < rode_agent_core::attachment::MAX_ATTACHMENTS,
                                 crate::keyboard::Button::new("Attach…")).on_hover_text("Attach images, PDF text, or UTF-8 documents. Files stay with this message, including when queued.");

@@ -15,6 +15,81 @@ fn view(style: Personality) -> State {
 }
 
 #[test]
+fn follow_up_context_changes_do_not_create_another_controller() {
+    for change in ["interpreter", "policy", "backend"] {
+        let mut client = Client::test_style_view(Personality::Default, Personality::Default);
+        let mut state = view(Personality::Default);
+        state.chat.conversation = "keep-this-thread".into();
+        client.accept_state(state);
+        let mut launch = client.launch.clone();
+        match change {
+            "interpreter" => launch.python = "/usr/bin/python3".into(),
+            "policy" => launch.plan.project_read_only = true,
+            "backend" => launch.config.codex = "different-agent".into(),
+            _ => unreachable!(),
+        }
+        let mut chat = crate::agent::protocol::Chat::default();
+        chat.restore(crate::agent::history::Restored::Native(Box::new(client)));
+        chat.notice("Keep this transcript");
+        let error = chat
+            .submit(launch, "Follow up in this chat".into(), Arc::new(|| {}))
+            .unwrap_err();
+        assert!(error.to_string().contains("Choose New chat"), "{error:#}");
+        assert_eq!(chat.native_id(), Some("fixture"));
+        assert_eq!(chat.conversation_id(), Some("keep-this-thread"));
+        assert_eq!(chat.messages.back().unwrap().text, "Keep this transcript");
+        assert!(!chat.busy);
+    }
+}
+
+#[test]
+fn disconnected_follow_ups_keep_the_controller_in_every_lifetime_mode() {
+    for persistence in Persistence::ALL {
+        for alive in [false, true] {
+            let mut client = Client::test_style_view(Personality::Default, Personality::Default);
+            let mut state = view(Personality::Default);
+            state.info.persistent = persistence;
+            state.info.alive = alive;
+            state.chat.conversation = "keep-this-thread".into();
+            client.accept_state(state);
+            client.closed = true;
+            let launch = client.launch.clone();
+            let mut chat = crate::agent::protocol::Chat::default();
+            chat.restore(crate::agent::history::Restored::Native(Box::new(client)));
+            let error = chat
+                .submit(launch, "Do not start another chat".into(), Arc::new(|| {}))
+                .unwrap_err();
+            assert!(error.to_string().contains("disconnected"), "{error:#}");
+            assert_eq!(chat.native_id(), Some("fixture"));
+            assert_eq!(chat.conversation_id(), Some("keep-this-thread"));
+            assert_eq!(chat.persistence(), persistence);
+            assert!(!chat.busy);
+        }
+    }
+}
+
+#[test]
+fn completed_disconnect_releases_the_new_chat_barrier() {
+    for persistence in Persistence::ALL {
+        for alive in [true, false] {
+            let mut client = Client::test_style_view(Personality::Default, Personality::Default);
+            client.end();
+            let mut state = view(Personality::Default);
+            state.info.persistent = persistence;
+            state.info.alive = alive;
+            // A closing backend's last snapshot may still carry its Stop flag.
+            state.chat.stopping = true;
+            client.accept_state(state);
+            let mut chat = crate::agent::protocol::Chat::default();
+            chat.restore(crate::agent::history::Restored::Native(Box::new(client)));
+            assert_eq!(chat.stopping(), alive);
+            assert_eq!(chat.work_pending(), alive);
+            assert!(!chat.connected());
+        }
+    }
+}
+
+#[test]
 fn lifetime_changes_remain_pending_until_the_requested_mode_is_acknowledged() {
     let mut client = Client::test_style_view(Personality::Default, Personality::Default);
     client.persistence_pending = Some(Persistence::Auto);

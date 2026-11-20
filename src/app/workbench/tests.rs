@@ -3,6 +3,32 @@
 use super::*;
 
 #[test]
+fn interpreter_discovery_does_not_change_the_agent_launch_identity() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx);
+    let mut app = EditorApp::new(&cc, Startup::default());
+    for selected in ["auto", "", ".venv", "/opt/python/bin/python"] {
+        app.workbench.prefs.python = selected.into();
+        app.workbench.python.env = None;
+        let before = app.agent_python();
+        assert_eq!(before, selected);
+        for executable in ["/usr/bin/python3", "/project/.venv/bin/python"] {
+            app.workbench.python.env = Some(project::Environments {
+                executable: executable.into(),
+                ..Default::default()
+            });
+            assert_eq!(
+                app.agent_python(),
+                before,
+                "Discovery must not turn the next prompt into a different agent launch"
+            );
+        }
+    }
+    app.set_extension(crate::extensions::Feature::Python.id(), false);
+    assert_eq!(app.agent_python(), "off");
+}
+
+#[test]
 fn sandbox_backend_selector_changes_the_saved_options() {
     let ctx = egui::Context::default();
     let mut options = sandbox::Options {

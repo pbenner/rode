@@ -4,6 +4,53 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn rejected_follow_up_keeps_the_draft_attachments_and_prompt_history() {
+    let mut agents = Agents::load(None);
+    agents.chat = Chat::test_style_view(agent::Personality::Default, agent::Personality::Default);
+    agents.config.codex = "fixture-agent".into();
+    agents.draft = "Continue this conversation".into();
+    agents
+        .files
+        .files
+        .push(rode_agent_core::attachment::Attachment::Document {
+            name: "notes.txt".into(),
+            text: "Keep these notes with the draft".into(),
+        });
+    agents.composer.remember_prompt("Previous prompt".into());
+    let files = agents.files.files.clone();
+    agents.send(
+        &controller::Environment {
+            key: "fixture".into(),
+            plan: sandbox::Plan {
+                root: "/project".into(),
+                ..Default::default()
+            },
+            remote: None,
+            python: "/a/different/python".into(),
+            has_project: true,
+        },
+        &egui::Context::default(),
+    );
+    assert_eq!(agents.draft, "Continue this conversation");
+    assert_eq!(agents.files.files, files);
+    assert_eq!(
+        agents.composer.history().collect::<Vec<_>>(),
+        [&"Previous prompt"]
+    );
+    assert_eq!(agents.chat.native_id(), Some("fixture"));
+    assert!(!agents.chat.busy);
+    assert!(
+        agents
+            .chat
+            .messages
+            .back()
+            .unwrap()
+            .text
+            .contains("Your draft has been kept")
+    );
+}
+
+#[test]
 fn provider_controls_follow_native_selection_and_settings_visibility_without_starting_a_chat() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("widgets.json");

@@ -365,17 +365,11 @@ impl EditorApp {
             self.notify(error.to_string(), true);
         }
     }
-    /// Resolve the discovered executable or configured marker for a future agent launch.
+    /// Capture the saved interpreter selector for an agent launch. Discovery is
+    /// asynchronous: replacing `auto` with its resolved executable would change
+    /// the next prompt's launch identity while its conversation is still live.
     pub(in crate::app) fn agent_python(&self) -> String {
-        if !self.feature(crate::extensions::Feature::Python) {
-            return "off".into();
-        }
-        self.workbench
-            .python
-            .env
-            .as_ref()
-            .map(|env| env.executable.clone())
-            .unwrap_or_else(|| self.workbench.prefs.python.clone())
+        self.terminal_python_selection()
     }
     /// Clear the new terminal's recorded interpreter so initial environment setup can run once.
     pub(in crate::app) fn new_terminal_environment(&mut self) {

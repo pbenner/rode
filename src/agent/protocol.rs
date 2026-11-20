@@ -80,16 +80,18 @@ impl Chat {
             !self.inner.busy,
             "The agent is still working. Stop it or wait for its reply."
         );
-        ensure!(
-            !self.native.as_ref().is_some_and(|c| c.closed()
-                && c.persistent()
-                && c.state.as_ref().is_some_and(|s| s.info.alive)),
-            "Reattach the background agent from Running, or choose New chat before sending another message"
-        );
         launch.config.argv()?;
-        if let Some(client) = &self.native
-            && client.matches(&launch)
-        {
+        if let Some(client) = &self.native {
+            // A follow-up belongs to this controller. A changed launch context
+            // or lost bridge must never implicitly submit it to a new chat.
+            ensure!(
+                !client.closed() && !client.ending,
+                "This conversation is disconnected. Reattach it from Running, or choose New chat before sending another message. Your draft has been kept."
+            );
+            ensure!(
+                client.matches(&launch),
+                "The agent backend, project policy or interpreter changed. Choose New chat before sending with the new settings. Your draft has been kept."
+            );
             client.send(Command::Submit {
                 text,
                 attachments,
@@ -274,7 +276,9 @@ impl Chat {
     pub fn stopping(&self) -> bool {
         self.native
             .as_ref()
-            .map(|c| c.ending || c.state.as_ref().is_some_and(|s| s.chat.stopping))
+            // Retain the End intent for status/history, but do not let its
+            // final snapshot keep New chat disabled after the view has closed.
+            .map(|c| !c.closed() && (c.ending || c.state.as_ref().is_some_and(|s| s.chat.stopping)))
             .unwrap_or_else(|| self.inner.stopping())
     }
     /// UI-side pending setup/lifetime work; agent protocol deadlines live on the host.
