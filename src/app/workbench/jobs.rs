@@ -123,11 +123,12 @@ impl EditorApp {
             .unwrap_or_default()
     }
 
-    /// Schedule visible host/Git refreshes and debounced source diagnostics.
+    /// Schedule explicitly started host monitoring, visible Git refreshes and debounced diagnostics.
     /// Use cached timestamps and in-flight flags to avoid launching work every frame.
     pub(in crate::app) fn workbench_tick(&mut self, ctx: &egui::Context) {
         if self.feature(crate::extensions::Feature::Monitor)
-            && self.panel_visible(Panel::Monitor)
+            && self.workbench.monitoring.active
+            && !self.exit_pending()
             && self.monitor_ready()
         {
             let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
@@ -290,11 +291,12 @@ impl EditorApp {
                 }
             }
             ToolJob::Monitor => {
-                if !self.feature(crate::extensions::Feature::Monitor) {
-                    return;
-                }
                 self.workbench.monitoring.monitor_busy = false;
-                if self.workbench.monitoring.discard_reply() {
+                let discard = self.workbench.monitoring.discard_reply();
+                if !self.feature(crate::extensions::Feature::Monitor)
+                    || !self.workbench.monitoring.active
+                    || discard
+                {
                     ctx.request_repaint();
                     return;
                 }

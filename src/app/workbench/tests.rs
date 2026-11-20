@@ -261,7 +261,7 @@ fn opening_a_non_python_project_does_not_probe_python_and_disable_invalidates_to
     assert_eq!(app.terminal_python_selection(), "off");
 }
 #[test]
-fn monitor_samples_without_a_project_and_stops_scheduling_when_hidden() {
+fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
@@ -271,6 +271,13 @@ fn monitor_samples_without_a_project_and_stops_scheduling_when_hidden() {
     app.workbench_tick(&ctx);
     assert!(!app.workbench.monitoring.monitor_busy);
     app.toggle_panel(Panel::Monitor, &ctx);
+    app.workbench_tick(&ctx);
+    assert!(!app.workbench.monitoring.active);
+    assert!(!app.workbench.monitoring.monitor_busy);
+    assert!(panel_text(&mut app, &ctx).contains("Start monitoring"));
+    app.workbench.monitoring.set_active(true);
+    app.navigation.zoom = Some(navigation::Pane::Editor);
+    assert!(!app.panel_visible(Panel::Monitor));
     app.workbench_tick(&ctx);
     assert!(app.workbench.monitoring.monitor_busy);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -294,12 +301,16 @@ fn monitor_samples_without_a_project_and_stops_scheduling_when_hidden() {
     assert!(app.workspace.is_none());
     assert!(app.terminal.is_none());
     assert!(app.workbench.preferences.is_empty());
+    app.navigation.zoom = None;
     let labels = panel_text(&mut app, &ctx);
     assert!(labels.contains("Host overview"), "{labels}");
     assert!(labels.contains("LOCAL HOST"), "{labels}");
     assert!(!labels.contains("Open a project"), "{labels}");
+    assert!(labels.contains("Stop monitoring"), "{labels}");
 
-    // Make another sample due, then close the panel before scheduling it.
+    // Stop prevents due requests in both hidden and open panels and retains history.
+    app.workbench.monitoring.set_active(false);
+    let count = app.workbench.monitoring.history.len();
     let due = Instant::now() - Duration::from_secs(31);
     app.workbench.monitoring.monitor_last = Some(due);
     app.navigation.zoom = Some(navigation::Pane::Editor);
@@ -307,15 +318,16 @@ fn monitor_samples_without_a_project_and_stops_scheduling_when_hidden() {
     assert!(!app.workbench.monitoring.monitor_busy);
     assert_eq!(app.workbench.monitoring.monitor_last, Some(due));
     app.navigation.zoom = None;
-    app.toggle_panel(Panel::Monitor, &ctx);
     app.workbench_tick(&ctx);
     assert!(!app.workbench.monitoring.monitor_busy);
     assert_eq!(app.workbench.monitoring.monitor_last, Some(due));
+    assert_eq!(app.workbench.monitoring.history.len(), count);
 }
 #[test]
 fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
+    app.workbench.monitoring.set_active(true);
     app.workbench.prefs.monitor_chart.seconds = 300;
     let view = app.workbench.prefs.monitor_chart;
     for result in [
@@ -360,6 +372,45 @@ fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline
 }
 
 #[test]
+fn stopping_and_disabling_monitoring_drain_pending_replies_before_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut app, ctx) = app(root.path());
+    let reply = || {
+        Ok(project::Response::Monitor(project::Monitor {
+            hostname: "late".into(),
+            ..Default::default()
+        }))
+    };
+    for restart_before_reply in [false, true] {
+        app.workbench.monitoring.set_active(true);
+        app.workbench.monitoring.monitor_busy = true;
+        app.workbench.monitoring.set_active(false);
+        if restart_before_reply {
+            app.workbench.monitoring.set_active(true);
+        }
+        assert!(app.workbench.monitoring.monitor_busy);
+        app.handle_tool(ToolJob::Monitor, reply(), &ctx);
+        assert!(!app.workbench.monitoring.monitor_busy);
+        assert!(app.workbench.monitoring.monitor.is_none());
+        assert!(app.workbench.monitoring.history.is_empty());
+    }
+    app.workbench.monitoring.monitor_busy = true;
+    app.set_extension(crate::extensions::Feature::Monitor.id(), false);
+    assert!(!app.workbench.monitoring.active);
+    assert!(app.workbench.monitoring.monitor_busy);
+    app.handle_tool(ToolJob::Monitor, reply(), &ctx);
+    assert!(!app.workbench.monitoring.monitor_busy);
+    app.set_extension(crate::extensions::Feature::Monitor.id(), true);
+    assert!(!app.workbench.monitoring.active);
+    app.workbench.monitoring.set_active(true);
+    app.handle_tool(ToolJob::Monitor, reply(), &ctx);
+    assert_eq!(app.workbench.monitoring.history.len(), 1);
+    app.workbench.reset_project();
+    assert!(!app.workbench.monitoring.active);
+    assert!(app.workbench.monitoring.history.is_empty());
+}
+
+#[test]
 fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
@@ -378,6 +429,7 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
         sandbox_options: Default::default(),
     }));
     app.workbench.panel = Some(Panel::Monitor);
+    app.workbench.monitoring.set_active(true);
     assert!(!app.monitor_ready());
     app.workbench_tick(&ctx);
     assert!(!app.workbench.monitoring.monitor_busy);
@@ -418,6 +470,7 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
     assert!(app.workbench.monitoring.monitor.is_none());
     assert!(app.workbench.monitoring.history.is_empty());
     assert!(app.workbench.monitoring.monitor_last.is_none());
+    assert!(!app.workbench.monitoring.active);
 }
 #[test]
 fn live_checks_skip_unbound_buffers_even_with_a_plain_text_adapter() {

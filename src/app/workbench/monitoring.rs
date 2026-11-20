@@ -1,4 +1,4 @@
-//! Themed host charts with bounded, timestamped samples. Poll only while visible;
+//! Themed host charts with bounded, timestamped samples. Collection is explicitly started;
 //! preserve gaps and unavailable readings instead of plotting invented zeroes.
 use super::*;
 use crate::app::layout::card;
@@ -15,6 +15,8 @@ const HISTORY_LIMIT: usize = timeline::MAX_SECONDS as usize + 2;
 /// Bounded successful telemetry snapshots and derived rate baselines. Request timing
 /// is separate from sample timing so failed polls do not corrupt CPU/network deltas.
 pub(super) struct State {
+    /// Transient user intent, independent of panel visibility and never restored on startup.
+    pub(super) active: bool,
     pub(super) monitor: Option<project::Monitor>,
     pub(super) monitor_busy: bool,
     /// Last request completion for scheduling, including failures; not the rate baseline.
@@ -26,6 +28,10 @@ pub(super) struct State {
     network_rate: Option<(f32, f32)>,
     /// A reset keeps ownership of an in-flight poll but rejects its old result.
     discard_pending: bool,
+    /// Freeze a stopped scrolling chart at the moment collection stopped.
+    stopped_at: Option<Instant>,
+    /// A resumed collector needs a fresh counter baseline, even after a short pause.
+    rate_baseline: bool,
 }
 
 /// One monotonic-time chart sample; utilization values are percentages in 0–100
@@ -49,13 +55,30 @@ struct GpuReading {
 }
 
 impl State {
+    /// Start/stop scheduling without releasing an outstanding request's busy guard.
+    /// A quick Stop/Start must drain and discard that old reply before collecting again.
+    pub(super) fn set_active(&mut self, active: bool) {
+        if self.active == active {
+            return;
+        }
+        self.active = active;
+        self.discard_pending |= self.monitor_busy;
+        self.rate_baseline = false;
+        self.stopped_at = (!active).then(Instant::now);
+        if active {
+            self.monitor_last = None;
+            self.monitor_error.clear();
+        }
+    }
+
     /// Start fresh without releasing the busy guard for an outstanding request.
-    /// CPU/network counters need two new samples after a reset.
+    /// Keep the user's Start/Stop choice; CPU/network counters need two new samples.
     pub(super) fn reset_history(&mut self) {
         self.monitor = None;
         self.history.clear();
         self.cpu_usage.clear();
         self.network_rate = None;
+        self.rate_baseline = false;
         self.monitor_last = None;
         self.monitor_error.clear();
         self.discard_pending |= self.monitor_busy;
@@ -74,7 +97,8 @@ impl State {
         // Request scheduling also advances on errors. Rates must use the last successful sample.
         let elapsed = self.history.back().map(|r| now.duration_since(r.at));
         let previous = self.monitor.as_ref().filter(|_| {
-            elapsed.is_some_and(|elapsed| !elapsed.is_zero() && elapsed <= interval * 3)
+            self.rate_baseline
+                && elapsed.is_some_and(|elapsed| !elapsed.is_zero() && elapsed <= interval * 3)
         });
         self.cpu_usage = sample
             .cpus
@@ -128,6 +152,7 @@ impl State {
             self.history.pop_front();
         }
         self.monitor = Some(sample);
+        self.rate_baseline = true;
     }
 }
 
@@ -148,25 +173,59 @@ fn percent_label(value: Option<f32>) -> String {
 
 impl EditorApp {
     /// Render cached host metadata, responsive chart cards and expandable details;
-    /// sampling is scheduled separately by the visible-workbench tick.
+    /// collection is scheduled separately and does not depend on visibility.
     pub(in crate::app) fn monitor_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.themes.active().palette;
         layout::header(
             ui,
             "Host overview",
-            "Live telemetry · sampled while this panel is visible",
+            if self.workbench.monitoring.active {
+                "Running · collection continues while this panel is hidden"
+            } else {
+                "Stopped · start monitoring to collect host readings"
+            },
             palette,
             |ui| {
                 if self.workbench.monitoring.monitor_busy {
                     ui.spinner();
                 }
                 let state = &mut self.workbench.monitoring;
+                let toggle = crate::keyboard::button(
+                    ui,
+                    if state.active {
+                        "Stop monitoring"
+                    } else {
+                        "Start monitoring"
+                    },
+                );
+                ui_probe::button(
+                    ui,
+                    if state.active {
+                        "monitor-stop"
+                    } else {
+                        "monitor-start"
+                    },
+                    &toggle,
+                );
+                if toggle.clicked() {
+                    state.set_active(!state.active);
+                    ui.ctx().request_repaint();
+                }
+                ui_probe::button(
+                    ui,
+                    if state.active {
+                        "monitor-running"
+                    } else {
+                        "monitor-stopped"
+                    },
+                    &toggle,
+                );
                 let reset = ui
                     .add_enabled(
                         !state.history.is_empty() || !state.monitor_error.is_empty(),
                         crate::keyboard::Button::new("Reset history"),
                     )
-                    .on_hover_text("Clear past readings and start collecting a fresh graph.");
+                    .on_hover_text("Clear past readings; keep monitoring started or stopped.");
                 ui_probe::button(ui, "monitor-reset-history", &reset);
                 ui_probe::value(
                     ui,
@@ -192,7 +251,11 @@ impl EditorApp {
             ui.colored_label(palette.error, &state.monitor_error);
         }
         let (Some(sample), Some(latest)) = (&state.monitor, state.history.back()) else {
-            ui.label("Acquiring host telemetry…");
+            ui.label(if state.active {
+                "Acquiring host telemetry…"
+            } else {
+                "Press Start monitoring to collect readings."
+            });
             return;
         };
         let hostname = ui
@@ -222,9 +285,9 @@ impl EditorApp {
         let interval = Duration::from_secs(self.workbench.prefs.monitor_interval.clamp(1, 30));
         ui.add_space(12.);
         dashboard::show(ui, state, interval, view, palette);
-        if view.mode == timeline::Mode::Scrolling {
+        if state.active && view.mode == timeline::Mode::Scrolling {
             // Animate cached samples only. Host collection remains interval-based
-            // and both repainting and sampling stop when this panel is hidden.
+            // and continues while hidden; animation runs only for a visible panel.
             ui.ctx().request_repaint_after(Duration::from_millis(100));
         }
         if sample.gpus.is_empty() || !sample.gpu_note.is_empty() {
@@ -841,6 +904,37 @@ mod tests {
         assert_eq!(state.history.len(), 2);
         assert_eq!(state.history[1].cpu, Some(50.));
         assert!(state.network_rate.is_some());
+    }
+
+    #[test]
+    fn stopping_freezes_the_chart_and_resuming_requires_two_new_counter_samples() {
+        let mut state = State::default();
+        let interval = Duration::from_secs(2);
+        let now = Instant::now();
+        state.set_active(true);
+        state.record(sample(100), now, interval);
+        state.record(sample(200), now + interval, interval);
+        assert!(state.network_rate.is_some());
+        state.set_active(false);
+        let stopped = state.stopped_at;
+        state.set_active(false);
+        assert_eq!(state.stopped_at, stopped);
+        assert_eq!(state.history.len(), 2);
+        state.reset_history();
+        assert!(!state.active);
+        assert_eq!(state.stopped_at, stopped);
+        state.set_active(true);
+        assert!(state.stopped_at.is_none());
+        state.record(sample(300), now + interval * 2, interval);
+        assert!(state.network_rate.is_none());
+        assert!(state.history.back().unwrap().cpu.is_none());
+        state.record(sample(400), now + interval * 3, interval);
+        assert!(state.network_rate.is_some());
+        state.set_active(false);
+        state.set_active(true);
+        state.record(sample(450), now + interval * 4, interval);
+        assert!(state.network_rate.is_none());
+        assert!(state.history.back().unwrap().cpu.is_none());
     }
 
     #[test]

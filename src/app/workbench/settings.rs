@@ -282,7 +282,7 @@ impl EditorApp {
                                 ui.add(crate::keyboard::named("Refresh interval (s)", egui::Slider::new(&mut self.workbench.draft.monitor_interval, 1..=30)
                                     .text("Refresh interval (s)")));
                                 self.workbench.draft.monitor_chart.controls(ui);
-                                layout::subtitle(ui, "Monitoring runs only while the monitor is visible. It reads the project host outside the sandbox.", palette);
+                                layout::subtitle(ui, "Start and stop collection in the monitor. Once started, it continues while the panel is hidden.", palette);
                             });
                         }
                         SettingsSection::Latex => self.latex_settings_ui(ui),

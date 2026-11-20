@@ -43,7 +43,7 @@ pub enum Feature {
     Mise,
     /// Project-host Git tools and source-control panels.
     Git,
-    /// On-demand host and GPU monitoring.
+    /// Explicitly started host and GPU monitoring, including while the panel is hidden.
     Monitor,
     /// Desktop stock search, watchlists and interactive market charts.
     Stocks,
@@ -307,7 +307,7 @@ impl Registry {
                 Feature::Monitor,
                 "System monitor",
                 "Read-only host CPU, memory and GPU telemetry.",
-                "Visible panel only",
+                "Explicit Start / Stop; continues while hidden",
             ),
             (
                 Feature::Stocks,

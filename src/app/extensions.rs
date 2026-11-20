@@ -130,7 +130,8 @@ impl EditorApp {
                 self.stocks.invalidate();
             }
             if id == Feature::Monitor.id() {
-                self.workbench.reset_monitor();
+                // Drain an outstanding reply before a re-enabled collector can restart.
+                self.workbench.stop_monitor();
             }
             if self
                 .workbench

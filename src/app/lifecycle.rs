@@ -46,6 +46,7 @@ impl EditorApp {
     /// Release foreground views/controllers and wait for lifetime acknowledgements before
     /// normal exit; persistent host work follows its existing acknowledged policy.
     pub(super) fn request_exit(&mut self, ctx: &egui::Context) {
+        self.workbench.stop_monitor();
         self.transfers.reset();
         if !self.debugger.change_pending() {
             self.leave_debugger();

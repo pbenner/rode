@@ -52,7 +52,7 @@ pub(super) fn show(
     let axis = view.axis(
         state.history.front().unwrap().at,
         latest.at,
-        Instant::now(),
+        state.stopped_at.unwrap_or_else(Instant::now),
         interval,
     );
     // Keep one reading before the left boundary to clip a crossing curve

@@ -348,7 +348,11 @@ impl Workbench {
             ..Default::default()
         };
     }
-    /// Clear host telemetry and rate baselines when changing execution hosts.
+    /// Stop collection while retaining cached readings and ownership of an in-flight reply.
+    pub(super) fn stop_monitor(&mut self) {
+        self.monitoring.set_active(false);
+    }
+    /// Clear host telemetry, start intent and rate baselines when changing execution hosts.
     pub(super) fn reset_monitor(&mut self) {
         self.monitoring = Default::default();
     }
