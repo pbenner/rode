@@ -35,8 +35,9 @@ hides its application view, palette command and Explorer entry points.
 
 The bundled **Project bookmarks** extension (`rode.project-bookmarks`) adds a
 **Saved projects** section in the Connections sidebar. It is enabled by default.
-Use the bookmark icon in the Connections or Explorer header to save the current local or SSH
-project; the selected icon removes that bookmark. Open a saved project with one
+Use **Bookmark current project** at the top of **Saved projects** to save the
+current local or SSH project; it becomes **Remove project bookmark** when saved.
+The Explorer header also offers the compact bookmark icon. Open a saved project with one
 click, and right-click an entry to rename or remove it. The list is alphabetical
 and shares the Connections scrolling region with SSH profiles and saved tunnels.
 

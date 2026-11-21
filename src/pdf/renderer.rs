@@ -30,6 +30,9 @@ enum Header {
     Text {
         bytes: usize,
     },
+    PageText {
+        bytes: usize,
+    },
     Error {
         message: String,
     },
@@ -48,6 +51,7 @@ pub(super) struct Metadata {
 enum Request {
     Render { page: usize, side: usize },
     Text,
+    PageText { page: usize },
 }
 
 pub(super) struct Renderer {
@@ -291,6 +295,22 @@ impl Renderer {
         let mut text = vec![0; bytes];
         self.read(&mut text, cancel, start)?;
         Ok(String::from_utf8(text)?)
+    }
+    pub(super) fn page_text(&mut self, page: usize, cancel: &AtomicBool) -> Result<PageText> {
+        let start = Instant::now();
+        self.request(Request::PageText { page })?;
+        let Header::PageText { bytes } = self.header(cancel, start)? else {
+            bail!("Invalid PDF text layer response")
+        };
+        ensure!(
+            bytes <= super::positioned::FRAME_LIMIT,
+            "PDF text layer exceeds its limit."
+        );
+        let mut data = vec![0; bytes];
+        self.read(&mut data, cancel, start)?;
+        let page: PageText = serde_json::from_slice(&data)?;
+        page.validate()?;
+        Ok(page)
     }
 }
 
@@ -568,6 +588,21 @@ fn serve_document(path: &Path, format: Format, mut output: &mut impl Write) -> R
                 let text = document.text()?;
                 header(&mut output, &Header::Text { bytes: text.len() })?;
                 output.write_all(text.as_bytes())?;
+                output.flush()?;
+            }
+            Request::PageText { page } => {
+                ensure!((1..=pages).contains(&page), "Invalid PDF text page.");
+                let Backend::Pdf(pdf, _) = &document else {
+                    bail!("No PDF text layer.")
+                };
+                let text = super::positioned::page(&pdf.document, page)?;
+                let bytes = serde_json::to_vec(&text)?;
+                ensure!(
+                    bytes.len() <= super::positioned::FRAME_LIMIT,
+                    "PDF text layer exceeds its limit."
+                );
+                header(&mut output, &Header::PageText { bytes: bytes.len() })?;
+                output.write_all(&bytes)?;
                 output.flush()?;
             }
         }

@@ -3,6 +3,14 @@
 use super::*;
 use crate::theme::Palette;
 
+/// Active status and saved setups occupy identical full-width sidebar rows.
+pub(super) fn button(ui: &mut egui::Ui, button: IconButton<'_>) -> egui::Response {
+    ui.add_sized(
+        egui::vec2(ui.available_width(), layout::control_height(ui).max(32.)),
+        button.truncate(),
+    )
+}
+
 impl EditorApp {
     pub(in crate::app) fn saved_tunnels_ui(&mut self, ui: &mut egui::Ui, palette: Palette) {
         if let Some(error) = &self.tunnels.saved.error {
@@ -24,10 +32,7 @@ impl EditorApp {
                 let can_load = saved.host == host;
                 let load = ui
                     .add_enabled_ui(can_load, |ui| {
-                        ui.add_sized(
-                            egui::vec2(ui.available_width(), 32.),
-                            IconButton::new(Icon::Remote, &saved.spec.name).truncate(),
-                        )
+                        button(ui, IconButton::new(Icon::Remote, &saved.spec.name))
                     })
                     .inner;
                 ui_probe::button(ui, &format!("tunnel-saved-load:{id}"), &load);
@@ -111,12 +116,10 @@ impl EditorApp {
             .is_some_and(|saved| saved.host == self.tunnel_saved_host())
         {
             self.load_tunnel_configuration(id);
-            self.set_dialog(Dialog::Tunnels);
         }
     }
 
     pub(in crate::app) fn new_tunnel_dialog(&mut self) {
-        self.set_dialog(Dialog::Tunnels);
-        self.tunnels.page = Page::New;
+        self.set_dialog(Dialog::NewTunnel);
     }
 }

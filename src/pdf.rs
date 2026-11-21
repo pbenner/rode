@@ -15,9 +15,20 @@ use std::{
 };
 
 mod docx;
+mod positioned;
 mod pptx;
 mod renderer;
 mod text;
+pub use positioned::{PageText, TextCell};
+
+/// Separate, killable text interpreter so indexing never holds the page-render lock.
+pub struct TextReader(renderer::Renderer);
+impl TextReader {
+    /// Extract one bounded text layer from the immutable original snapshot.
+    pub fn page(&mut self, page: usize, cancel: &AtomicBool) -> Result<PageText> {
+        self.0.page_text(page, cancel)
+    }
+}
 
 /// Desktop interpreter selected from the submitted path, independently of host software.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +238,16 @@ impl images::PreviewCache for Source {
     }
 }
 impl Source {
+    /// Open a private text reader on a background thread. No host tools or files are consulted.
+    pub fn text_reader(&self, cancel: &AtomicBool) -> Result<TextReader> {
+        ensure!(
+            self.format == Format::Pdf,
+            "Text selection is available for PDF files."
+        );
+        Ok(TextReader(
+            renderer::Renderer::open(&self.bytes, self.format, cancel)?.0,
+        ))
+    }
     /// Number of missing or unsupported images skipped on a rendered page.
     /// Counts survive pixel-cache eviction and are bounded by the document's page count.
     pub fn skipped_images(&self, page: usize) -> usize {

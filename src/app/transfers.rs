@@ -256,6 +256,38 @@ impl State {
     }
 }
 
+/// Transfer panes and shared-folder pickers use the same captured endpoint and
+/// canonical directory response. Creating a folder never replaces an entry.
+fn list_directory(
+    endpoint: Endpoint,
+    path: &str,
+    create: Option<String>,
+    cancel: Arc<AtomicBool>,
+) -> anyhow::Result<files::Response> {
+    let mut client = endpoint.open(cancel)?;
+    if let Some(path) = create {
+        client.request(TransferRequest::Directory { path })?;
+    }
+    let reply = client.request(TransferRequest::List { path: path.into() })?;
+    let entries = reply
+        .entries
+        .into_iter()
+        .map(|entry| Entry {
+            path: std::path::Path::new(&reply.path)
+                .join(&entry.name)
+                .to_string_lossy()
+                .into(),
+            name: entry.name,
+            dir: entry.directory,
+        })
+        .collect();
+    Ok(files::Response {
+        path: reply.path,
+        entries,
+        ..Default::default()
+    })
+}
+
 impl EditorApp {
     fn transfer_endpoint(&self, side: Side) -> Option<Endpoint> {
         if side == Side::Local {
@@ -300,31 +332,8 @@ impl EditorApp {
         std::thread::spawn(move || {
             let _work = work;
             let pending = pending;
-            let result = (|| -> anyhow::Result<files::Response> {
-                let mut client = endpoint.open(cancel)?;
-                if let Some(path) = create {
-                    client.request(TransferRequest::Directory { path })?;
-                }
-                let reply = client.request(TransferRequest::List { path: path.clone() })?;
-                let entries = reply
-                    .entries
-                    .into_iter()
-                    .map(|entry| Entry {
-                        path: std::path::Path::new(&reply.path)
-                            .join(&entry.name)
-                            .to_string_lossy()
-                            .into(),
-                        name: entry.name,
-                        dir: entry.directory,
-                    })
-                    .collect();
-                Ok(files::Response {
-                    path: reply.path,
-                    entries,
-                    ..Default::default()
-                })
-            })()
-            .map_err(|e| format!("{e:#}"));
+            let result =
+                list_directory(endpoint, &path, create, cancel).map_err(|e| format!("{e:#}"));
             drop(pending);
             drop(listing);
             let _ = send.send(Event::Listed {
@@ -433,6 +442,9 @@ impl EditorApp {
         self.restore_bookmark_shares();
         if self.dialog != Dialog::TransferFiles {
             self.transfers.file_form = None;
+        }
+        if self.dialog != Dialog::SharedFolder {
+            self.transfers.sharing.cancel_picker();
         }
         let mut mutations = Vec::new();
         if self.transfers.running.is_some() || !self.transfers.queue.is_empty() {

@@ -529,7 +529,7 @@ impl EditorApp {
                             self.list(path, ctx);
                         }
                     }
-                    self.project_bookmark_button(ui);
+                    self.project_bookmark_button(ui, project_bookmarks::ButtonStyle::Toolbar);
                     let new = ui.add(icons::IconButton::toolbar(Icon::NewFile, "New file"));
                     ui_probe::button(ui, "explorer-new-document", &new);
                     if new.clicked() {

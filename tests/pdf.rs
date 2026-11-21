@@ -21,6 +21,33 @@ const PPTX: &[u8] = include_bytes!("fixtures/slides.pptx");
 const DOCX: &[u8] = include_bytes!("fixtures/word.docx");
 
 #[test]
+fn positioned_text_uses_the_same_snapshot_and_a_cancellable_independent_reader() {
+    let budget = Arc::new(Budget::default());
+    let loaded = pdf::load_bytes(FIXTURE.to_vec(), 1, &budget, 128).unwrap();
+    let cancel = AtomicBool::new(false);
+    let mut reader = loaded.source.text_reader(&cancel).unwrap();
+    for (number, expected) in [(1, "RODE - Page One"), (2, "RODE - Page Two")] {
+        let page = reader.page(number, &cancel).unwrap();
+        assert_eq!(page.text, expected);
+        assert!(
+            page.cells
+                .iter()
+                .all(|cell| page.text.get(cell.range[0]..cell.range[1]).is_some())
+        );
+    }
+    // Raster requests retain their own parser/cache while text is being read.
+    assert!(loaded.source.render(2, &budget, 128, &cancel).is_ok());
+    cancel.store(true, std::sync::atomic::Ordering::Release);
+    assert!(
+        reader
+            .page(1, &cancel)
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+    );
+}
+
+#[test]
 fn word_pages_render_text_tables_images_and_related_stories_without_changing_source() {
     let budget = Arc::new(Budget::default());
     let root = tempfile::tempdir().unwrap();

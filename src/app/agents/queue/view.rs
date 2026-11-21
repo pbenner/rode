@@ -2,7 +2,7 @@
 //! the parent module; resizing, scrolling and theme changes never submit work.
 use super::{Action, Edit, Prompt, Queue, valid};
 use crate::app::{
-    agents::splitter,
+    agents::{splitter, text_submit},
     icons::{Icon, IconButton},
     layout, ui_probe,
 };
@@ -235,32 +235,44 @@ fn row(
         }
         if let Some(edit) = editing.as_mut().filter(|edit| edit.id == prompt.id) {
             ui.add_enabled_ui(enabled, |ui| {
+                let mut save_by_key = false;
                 // Long edits scroll inside the row, keeping Save/Cancel outside
                 // the editor's clip. The outer list can still reveal the row.
                 egui::ScrollArea::vertical()
                     .id_salt("queued-edit-scroll")
                     .max_height(120.)
                     .show(ui, |ui| {
-                        let input = ui.add(crate::keyboard::named(
-                            "Queued prompt",
-                            egui::TextEdit::multiline(&mut edit.text)
-                                .id_salt(("queued-edit", edit.id))
-                                .desired_rows(3)
-                                .desired_width(f32::INFINITY)
-                                .char_limit(crate::agent::PROMPT_LIMIT),
-                        ));
+                        let id = ui.make_persistent_id(("queued-edit", edit.id));
+                        save_by_key = text_submit(ui, id, !enabled, &mut edit.composing);
+                        let input = ui
+                            .add(crate::keyboard::named(
+                                "Queued prompt",
+                                egui::TextEdit::multiline(&mut edit.text)
+                                    .id(id)
+                                    .desired_rows(3)
+                                    .desired_width(f32::INFINITY)
+                                    .return_key(egui::KeyboardShortcut::new(
+                                        egui::Modifiers::SHIFT,
+                                        egui::Key::Enter,
+                                    ))
+                                    .char_limit(crate::agent::PROMPT_LIMIT),
+                            ))
+                            .on_hover_text("Enter to save · Shift+Enter for a new line");
                         ui_probe::button(ui, "agent-queue-edit-input", &input);
                         ui_probe::value(ui, "agent-queue-edit-input-value", &input, &edit.text);
                     });
                 ui.horizontal_wrapped(|ui| {
-                    let save = ui.add_enabled(
-                        valid(&edit.text)
-                            || edit.text.len() <= crate::agent::PROMPT_LIMIT
-                                && !prompt.files.is_empty(),
-                        crate::keyboard::Button::new("Save prompt").small(),
-                    );
+                    let can_save = valid(&edit.text)
+                        || edit.text.len() <= crate::agent::PROMPT_LIMIT
+                            && !prompt.files.is_empty();
+                    let save = ui
+                        .add_enabled(
+                            can_save,
+                            crate::keyboard::Button::new("Save prompt").small(),
+                        )
+                        .on_hover_text("Save the edited queued prompt · Enter");
                     ui_probe::button(ui, "agent-queue-save", &save);
-                    if save.clicked() {
+                    if can_save && (save.clicked() || save_by_key) {
                         action = Some(Action::Save);
                     }
                     let cancel = crate::keyboard::small_button(ui, "Cancel edit");

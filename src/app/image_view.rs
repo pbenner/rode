@@ -7,6 +7,9 @@
 use super::*;
 use crate::images;
 
+/// Reader-owned paint and input overlay inside the image's scroll coordinates.
+type CanvasOverlay<'a> = &'a mut dyn FnMut(&mut egui::Ui, egui::Rect, &egui::Response);
+
 /// Preview interaction flags returned to its owner, including unused edge-scroll
 /// movement for PDF page navigation; no reload is performed by the renderer.
 pub(super) struct ImageResponse {
@@ -79,17 +82,6 @@ impl ImageView {
     pub fn focus_id(id: u64) -> egui::Id {
         egui::Id::new(("image-preview", id))
     }
-    /// Render cached pixels with fit/zoom/pan controls and return reload/edge-navigation intents.
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        id: u64,
-        palette: theme::Palette,
-        focus: bool,
-    ) -> ImageResponse {
-        self.show(ui, ctx, id, palette, focus, false)
-    }
     /// Render only the page canvas; the shared paged reader owns its fixed toolbar.
     pub fn pdf_ui(
         &mut self,
@@ -98,8 +90,9 @@ impl ImageView {
         id: u64,
         palette: theme::Palette,
         focus: bool,
+        overlay: Option<CanvasOverlay<'_>>,
     ) -> ImageResponse {
-        self.canvas(ui, ctx, id, palette, focus)
+        self.canvas(ui, ctx, id, palette, focus, overlay)
     }
     fn upload(&mut self, ctx: &egui::Context, id: u64) {
         if let Some(pixels) = self.pixels.take() {
@@ -142,11 +135,11 @@ impl ImageView {
     pub fn displayed_at(&mut self, scale: f32) {
         self.displayed_zoom = scale;
     }
-    /// Draw shared preview/reader zoom and reload controls.
-    pub fn controls(&mut self, ui: &mut egui::Ui, palette: theme::Palette, pdf: bool) -> bool {
+    /// Image toolbar; paged readers own their compact document toolbar.
+    fn controls(&mut self, ui: &mut egui::Ui, palette: theme::Palette) -> bool {
         let mut reload = false;
         ui.horizontal_wrapped(|ui| {
-            self.fit_controls(ui, pdf);
+            self.fit_controls(ui, false);
             self.zoom_controls(ui, palette);
             if ui
                 .add_enabled(!self.loading, crate::keyboard::Button::new("Reload"))
@@ -223,33 +216,31 @@ impl ImageView {
             egui::Label::new(palette.tag(format!("{:.0}%", self.displayed_zoom * 100.))).truncate(),
         );
     }
-    fn show(
+    /// Render an image's fit/zoom/pan controls, metadata and cached pixels.
+    pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         id: u64,
         palette: theme::Palette,
         focus: bool,
-        pdf: bool,
     ) -> ImageResponse {
-        let reload = self.controls(ui, palette, pdf);
-        if !pdf {
-            let metadata = format!(
-                "{} · {} × {} px · {:.1} KiB{}",
-                self.format,
-                self.original[0],
-                self.original[1],
-                self.encoded_bytes as f64 / 1024.,
-                if self.preview_size != [self.original[0] as usize, self.original[1] as usize] {
-                    " · reduced preview"
-                } else {
-                    ""
-                }
-            );
-            ui.add(egui::Label::new(palette.tag(&metadata)).truncate()).on_hover_text(format!("{metadata}\nScroll or drag to pan. Large images are downsampled to the GPU preview limit. Animated images show their first frame."));
-        }
+        let reload = self.controls(ui, palette);
+        let metadata = format!(
+            "{} · {} × {} px · {:.1} KiB{}",
+            self.format,
+            self.original[0],
+            self.original[1],
+            self.encoded_bytes as f64 / 1024.,
+            if self.preview_size != [self.original[0] as usize, self.original[1] as usize] {
+                " · reduced preview"
+            } else {
+                ""
+            }
+        );
+        ui.add(egui::Label::new(palette.tag(&metadata)).truncate()).on_hover_text(format!("{metadata}\nScroll or drag to pan. Large images are downsampled to the GPU preview limit. Animated images show their first frame."));
         ui.separator();
-        let mut response = self.canvas(ui, ctx, id, palette, focus);
+        let mut response = self.canvas(ui, ctx, id, palette, focus, None);
         response.reload = reload;
         response
     }
@@ -261,8 +252,10 @@ impl ImageView {
         id: u64,
         palette: theme::Palette,
         focus: bool,
+        mut overlay: Option<CanvasOverlay<'_>>,
     ) -> ImageResponse {
         self.upload(ctx, id);
+        let text_layer = overlay.is_some();
         let viewport = ui.available_size().max(egui::vec2(1., 1.));
         let original = egui::vec2(self.original[0] as f32, self.original[1] as f32);
         let width_fit = (viewport.x - 16.).max(1.) / original.x;
@@ -283,7 +276,10 @@ impl ImageView {
         let mut scroll = egui::ScrollArea::both()
             .id_salt(("image-scroll", id))
             .auto_shrink([false, false])
-            .scroll_source(egui::scroll_area::ScrollSource::ALL);
+            .scroll_source(egui::scroll_area::ScrollSource {
+                drag: !text_layer,
+                ..egui::scroll_area::ScrollSource::ALL
+            });
         let origin = self.reset_scroll.take();
         if let Some(origin) = origin {
             let y = if matches!(origin, ScrollOrigin::End) {
@@ -327,12 +323,23 @@ impl ImageView {
                     egui::Color32::WHITE,
                 );
             }
-            let response = ui.interact(canvas, Self::focus_id(id), Sense::click());
+            let response = ui.interact(
+                canvas,
+                Self::focus_id(id),
+                if text_layer {
+                    Sense::click_and_drag()
+                } else {
+                    Sense::click()
+                },
+            );
             if !self.loading && self.texture.is_some() {
                 ui_probe::button(ui, "image-preview", &response);
             }
-            if focus || response.clicked() {
+            if focus || response.clicked() || response.drag_started() {
                 response.request_focus();
+            }
+            if let Some(overlay) = &mut overlay {
+                overlay(ui, image_rect, &response);
             }
             response.on_hover_text(format!(
                 "{:.0}% · {} × {} px",
@@ -341,6 +348,9 @@ impl ImageView {
                 self.original[1]
             ));
         });
+        if text_layer {
+            middle_pan(ui, ctx, &mut output);
+        }
         if matches!(origin, Some(ScrollOrigin::End)) {
             // Account for the scrollbars and clipping margins after layout.
             output.state.offset.y = (output.content_size.y - output.inner_rect.height()).max(0.);
@@ -359,6 +369,38 @@ impl ImageView {
             at_end: output.state.offset.y
                 >= (output.content_size.y - output.inner_rect.height()).max(0.) - 0.5,
         }
+    }
+}
+
+/// Selection owns the primary button; panning uses the middle button and the
+/// same scroll state for single-page and continuous readers.
+pub(super) fn middle_pan<R>(
+    ui: &egui::Ui,
+    ctx: &egui::Context,
+    output: &mut egui::scroll_area::ScrollAreaOutput<R>,
+) {
+    let delta = ctx.input(|input| {
+        if ui.is_enabled()
+            && input.pointer.middle_down()
+            && !input.pointer.button_pressed(egui::PointerButton::Middle)
+            && input
+                .pointer
+                .interact_pos()
+                .is_some_and(|point| output.inner_rect.contains(point))
+        {
+            input.pointer.delta()
+        } else {
+            egui::Vec2::ZERO
+        }
+    });
+    if delta != egui::Vec2::ZERO {
+        let maximum = (output.content_size - output.inner_rect.size()).max(egui::Vec2::ZERO);
+        output.state.offset = (output.state.offset - delta)
+            .max(egui::Vec2::ZERO)
+            .min(maximum);
+        output.state.store(ctx, output.id);
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        ctx.request_repaint();
     }
 }
 

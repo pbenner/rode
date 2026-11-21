@@ -18,6 +18,7 @@ struct Prompt {
 struct Edit {
     id: u64,
     text: String,
+    composing: bool,
 }
 
 #[derive(Default)]
@@ -154,6 +155,7 @@ impl Queue {
                 self.prompts.iter().find(|p| p.id == id).map(|p| Edit {
                     id,
                     text: p.text.clone(),
+                    composing: false,
                 })
             });
         }
@@ -270,6 +272,7 @@ impl Queue {
                     self.edit = Some(Edit {
                         id,
                         text: prompt.text.clone(),
+                        composing: false,
                     });
                 }
             }

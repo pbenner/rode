@@ -23,6 +23,8 @@ impl PdfView {
             "Page"
         };
         let limit = ui.ctx().input(|i| i.max_texture_side);
+        let selectable =
+            self.source.format == pdf::Format::Pdf && matches!(display, Display::Document { .. });
         let mut page = None;
         let mut toggle_fullscreen = false;
         let mut reload_requested = false;
@@ -64,6 +66,7 @@ impl PdfView {
                 page = Some(self.wanted + 1);
             }
             self.image.zoom_controls(ui, palette);
+            if selectable { self.text.search_button(ui); }
             let settings = ui.add(crate::keyboard::Button::new("View settings").selected(self.settings_open));
             ui_probe::button(ui, "pdf-view-settings", &settings);
             if settings.clicked() { self.settings_open = !self.settings_open; }
@@ -135,6 +138,9 @@ impl PdfView {
                     reload_requested = reload.clicked();
                     ui.label(palette.tag("READ ONLY"));
                 });
+            }
+            if selectable {
+                self.text.search_ui(ui);
             }
         });
         ui_probe::button(ui, "pdf-toolbar", &toolbar.response);

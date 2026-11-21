@@ -454,32 +454,23 @@ impl EditorApp {
     }
 }
 
-/// Shared by the composer and question fields: consume only a fresh, unmodified Enter. egui's
+/// Shared by the composer, queued edits and question fields: consume only a fresh, unmodified Enter. egui's
 /// consume_key ignores extra Shift/Alt, which would also consume newlines.
 /// IME confirmation belongs to the text editor, including a commit+Enter frame.
 fn text_submit(ui: &mut egui::Ui, id: egui::Id, modal: bool, composing: &mut bool) -> bool {
-    if modal || !ui.memory(|m| m.has_focus(id)) {
-        *composing = false;
+    if !crate::keyboard::text_shortcuts_allowed(ui, id, modal, composing) {
         return false;
     }
     ui.input_mut(|input| {
-        let mut ime_frame = *composing;
-        for event in &input.events {
-            if let egui::Event::Ime(event) = event {
-                ime_frame = true;
-                *composing = matches!(event, egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_));
-            }
-        }
         let mut send = false;
         input.events.retain(|event| {
-            if !ime_frame
-                && let egui::Event::Key {
-                    key: Key::Enter,
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                    repeat,
-                    ..
-                } = event
+            if let egui::Event::Key {
+                key: Key::Enter,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+                repeat,
+                ..
+            } = event
             {
                 send |= !repeat;
                 false

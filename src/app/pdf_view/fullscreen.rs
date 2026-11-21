@@ -119,6 +119,11 @@ impl EditorApp {
         {
             return;
         }
+        if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf.as_mut())
+            && view.text.close_on_escape(ctx)
+        {
+            return;
+        }
         if self.editor.pdf_fullscreen.is_some()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape))
         {

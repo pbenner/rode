@@ -12,6 +12,12 @@ use model::{Bookmark, Project};
 const FEATURE: Feature = Feature::ProjectBookmarks;
 const SETTING: &str = "projects";
 
+/// Contextual sidebar action and compact Explorer action share one toggle and menu.
+pub(super) enum ButtonStyle {
+    Toolbar,
+    Sidebar,
+}
+
 enum Edit {
     Insert(Bookmark),
     Remove(String),
@@ -262,7 +268,7 @@ impl EditorApp {
 
     /// Render the current project’s bookmark toggle using the same stored catalogue and mutation
     /// path as the sidebar list.
-    pub(super) fn project_bookmark_button(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn project_bookmark_button(&mut self, ui: &mut egui::Ui, style: ButtonStyle) {
         if !self.feature(FEATURE) {
             return;
         }
@@ -277,18 +283,21 @@ impl EditorApp {
             && self.project_bookmarks.error.is_none()
             && self.dialog == Dialog::None
             && !self.pending.modal();
-        let button = ui.add_enabled(
-            enabled,
-            IconButton::toolbar(
-                Icon::Bookmark,
-                if saved {
-                    "Remove project bookmark"
-                } else {
-                    "Bookmark current project"
-                },
-            )
-            .selected(saved),
-        );
+        let label = if saved {
+            "Remove project bookmark"
+        } else {
+            "Bookmark current project"
+        };
+        let button = match style {
+            ButtonStyle::Toolbar => IconButton::toolbar(Icon::Bookmark, label),
+            ButtonStyle::Sidebar => IconButton::new(Icon::Bookmark, label)
+                .min_size(egui::vec2(
+                    ui.available_width(),
+                    layout::control_height(ui).max(30.),
+                ))
+                .truncate(),
+        };
+        let button = ui.add_enabled(enabled, button.selected(saved));
         let button = button.on_disabled_hover_text(if self.vaults.has_active() {
             "Reopen encrypted projects through Open encrypted project."
         } else {

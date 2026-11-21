@@ -272,6 +272,25 @@ pub(super) fn value(ui: &egui::Ui, name: &str, response: &egui::Response, value:
     }
 }
 
+/// Compute geometry-only test regions lazily; ordinary rendering never scans document cells.
+pub(super) fn region(
+    ui: &egui::Ui,
+    name: &str,
+    response: &egui::Response,
+    bounds: impl FnOnce() -> Option<egui::Rect>,
+) {
+    if ui
+        .ctx()
+        .data(|data| data.get_temp::<Probe>(Id::new("native-ui-probe")))
+        .is_some()
+        && let Some(rect) = bounds()
+    {
+        let mut response = response.clone();
+        response.rect = rect;
+        button(ui, name, &response);
+    }
+}
+
 /// Register an existing response without changing its layout, state or input handling.
 pub(super) fn button(ui: &egui::Ui, name: &str, response: &egui::Response) {
     let Some(probe) = ui

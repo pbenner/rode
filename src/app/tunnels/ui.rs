@@ -1,5 +1,5 @@
-//! Tunnel-manager presentation. Navigation and primary actions stay outside the
-//! scrolling body; form widget identities survive tab switches and resizing.
+//! Separate active-tunnel and setup dialogs share host ownership and fixed
+//! footer actions. Reopening either view retains the existing setup draft.
 use super::*;
 use crate::theme::Palette;
 
@@ -27,7 +27,11 @@ impl EditorApp {
                 Some(Ok(())) => None,
             });
         let (label, color, details) = if let Some(reason) = unavailable {
-            ("Tunnels (?)".to_owned(), palette.muted, reason.to_owned())
+            (
+                "Active Tunnels (?)".to_owned(),
+                palette.muted,
+                reason.to_owned(),
+            )
         } else {
             let mut connected = 0;
             let mut connecting = 0;
@@ -43,11 +47,11 @@ impl EditorApp {
             }
             let total = self.tunnels.available.len();
             let label = if total == 0 {
-                "Tunnels".to_owned()
+                "Active Tunnels".to_owned()
             } else if connected == total {
-                format!("Tunnels ({connected})")
+                format!("Active Tunnels ({connected})")
             } else {
-                format!("Tunnels ({connected}/{total})")
+                format!("Active Tunnels ({connected}/{total})")
             };
             let color = if attention > 0 {
                 palette.error
@@ -66,19 +70,37 @@ impl EditorApp {
                 ),
             )
         };
-        crate::keyboard::button(ui, RichText::new(label).color(color))
+        library::button(ui, IconButton::new(Icon::Remote, &label).color(color))
             .on_hover_text(format!("Manage SSH tunnels on {host}.\n{details}"))
     }
 
     /// Render tunnel configuration and route user actions to the existing tunnel manager.
     pub(in crate::app) fn tunnels_dialog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
+        let creating = self.dialog == Dialog::NewTunnel;
         let top = ui.cursor().top();
         layout::heading(
             ui,
-            "SSH tunnels",
-            "Keep access to this compute host through a relay.",
+            if creating {
+                "New tunnel"
+            } else {
+                "Active Tunnels"
+            },
+            if creating {
+                "Keep access to this compute host through a relay."
+            } else {
+                "Manage the tunnels retained by this host."
+            },
             palette,
+        );
+        ui_probe::button(
+            ui,
+            if creating {
+                "tunnel-dialog-new"
+            } else {
+                "tunnel-dialog-active"
+            },
+            &ui.response(),
         );
         let remote = self.workspace.as_ref().and_then(|w| w.remote.as_ref());
         let host = remote.map_or_else(
@@ -101,30 +123,13 @@ impl EditorApp {
             return;
         }
         ui.add_space(8.);
-        ui.horizontal_wrapped(|ui| {
-            let list = crate::keyboard::selectable_value(
-                ui,
-                &mut self.tunnels.page,
-                Page::Tunnels,
-                format!("Tunnels ({})", self.tunnels.available.len()),
-            );
-            ui_probe::button(ui, "tunnel-tab-list", &list);
-            let new = crate::keyboard::selectable_value(
-                ui,
-                &mut self.tunnels.page,
-                Page::New,
-                "New tunnel",
-            );
-            ui_probe::button(ui, "tunnel-tab-new", &new);
-        });
         ui.separator();
         ui.add_space(4.);
 
-        let page = self.tunnels.page;
         let header_height = ui.cursor().top() - top;
         // Reserve room for wrapped validation/lifetime copy and the action row,
         // independent of an Area retaining its previous dialog's dimensions.
-        let footer_height = if page == Page::New { 144. } else { 90. };
+        let footer_height = if creating { 144. } else { 90. };
         let body_height =
             (ctx.content_rect().height() - 80. - header_height - footer_height).max(40.);
         // Reserve the gutter before Grid measures its cells. An appearing
@@ -133,8 +138,8 @@ impl EditorApp {
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .id_salt((
                 "tunnel-page",
-                page,
-                if page == Page::New {
+                creating,
+                if creating {
                     self.tunnels.draft_epoch
                 } else {
                     0
@@ -150,14 +155,15 @@ impl EditorApp {
                     });
                     ui.add_space(8.);
                 }
-                match page {
-                    Page::Tunnels => self.tunnel_list_ui(ui, ctx, palette),
-                    Page::New => self.tunnel_form_ui(ui, palette),
+                if creating {
+                    self.tunnel_form_ui(ui, palette);
+                } else {
+                    self.tunnel_list_ui(ui, ctx, palette);
                 }
             });
         ui.add_space(8.);
         ui.separator();
-        self.tunnel_footer(ui, ctx, page, palette);
+        self.tunnel_footer(ui, ctx, creating, palette);
     }
 
     fn tunnel_list_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: Palette) {
@@ -174,7 +180,7 @@ impl EditorApp {
             );
             ui.add_space(8.);
             if crate::keyboard::button(ui, "New tunnel").clicked() {
-                self.tunnels.page = Page::New;
+                self.new_tunnel_dialog();
             }
             return;
         }
@@ -348,7 +354,7 @@ impl EditorApp {
                 self.tunnels.spec = info.spec.clone();
                 self.tunnels.saved_id = None;
                 self.tunnels.draft_epoch += 1;
-                self.tunnels.page = Page::New;
+                self.new_tunnel_dialog();
             }
             if ui
                 .add_enabled(
@@ -477,11 +483,11 @@ impl EditorApp {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
-        page: Page,
+        creating: bool,
         palette: Palette,
     ) {
         let validation = self.tunnels.spec.validate();
-        if page == Page::New {
+        if creating {
             let hint = if self.tunnels.spec.relay_host.is_empty()
                 || self.tunnels.spec.relay_user.is_empty()
             {
@@ -494,18 +500,16 @@ impl EditorApp {
                 "Next: verify the relay’s host key.".to_owned()
             };
             layout::subtitle(ui, &hint, palette);
-        } else if page == Page::Tunnels {
+        } else {
             layout::subtitle(
                 ui,
                 "Tunnels keep running when you close this window.",
                 palette,
             );
-        } else {
-            layout::subtitle(ui, "Loading a saved setup opens it for review.", palette);
         }
         ui.add_space(6.);
         ui.horizontal_wrapped(|ui| {
-            if page == Page::New {
+            if creating {
                 ui.add_enabled_ui(validation.is_ok() && self.tunnels.pending.is_none(), |ui| {
                     let start = palette.primary(ui, "Start tunnel");
                     ui_probe::button(ui, "tunnel-start", &start);
@@ -514,7 +518,7 @@ impl EditorApp {
                         match rode_session::new_id() {
                             Ok(id) => {
                                 self.tunnel_request(Control::StartTunnel { id, spec }, ctx);
-                                self.tunnels.page = Page::Tunnels;
+                                self.set_dialog(Dialog::Tunnels);
                             }
                             Err(error) => self.tunnels.error = error.to_string(),
                         }

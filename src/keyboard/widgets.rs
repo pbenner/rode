@@ -1,6 +1,30 @@
 //! Named native controls and button-only focus groups. Widget behavior stays with egui.
 use super::*;
 
+/// Text actions require native focus and leave IME confirmation to TextEdit,
+/// including frames carrying both a commit and Enter. Composition is per field.
+pub(crate) fn text_shortcuts_allowed(
+    ui: &egui::Ui,
+    id: Id,
+    blocked: bool,
+    composing: &mut bool,
+) -> bool {
+    if blocked || !ui.is_enabled() || !ui.memory(|memory| memory.has_focus(id)) {
+        *composing = false;
+        return false;
+    }
+    ui.input(|input| {
+        let mut ime_frame = *composing;
+        for event in &input.events {
+            if let egui::Event::Ime(event) = event {
+                ime_frame = true;
+                *composing = matches!(event, egui::ImeEvent::Enabled | egui::ImeEvent::Preedit(_));
+            }
+        }
+        !ime_frame
+    })
+}
+
 /// Discoverable native disclosure header, including collapsed sections whose
 /// child controls are not rendered yet.
 pub(crate) struct CollapsingHeader {

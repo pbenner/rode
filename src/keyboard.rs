@@ -16,7 +16,7 @@ pub(super) use view::finish;
 pub(crate) use widgets::{
     Button, CollapsingHeader, ComboBox, MenuButton, button, button_sense, checkbox, collapsing,
     consume_activation, editor_named, group, menu_button, named, radio_value, selectable_label,
-    selectable_value, small_button,
+    selectable_value, small_button, text_shortcuts_allowed,
 };
 
 #[derive(Clone)]

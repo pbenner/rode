@@ -117,6 +117,45 @@ def run(remote=False):
                     lambda: color(window, label + "-first-page.png", "red"),
                     "First PDF page missing",
                 )
+                ui.control("pdf-text-ready:1")
+                bounds = next(
+                    b["rect"] for b in ui.layout()["buttons"] if b["name"] == "pdf-text-bounds:1"
+                )
+                scale = ui.layout()["pixels_per_point"]
+                start = (
+                    round((bounds[0] + 1) * scale),
+                    round((bounds[1] + bounds[3]) * 0.5 * scale),
+                )
+                end = (round((bounds[2] - 1) * scale), start[1])
+                xtest.XTestFakeMotionEvent(display, -1, *start, 0)
+                xtest.XTestFakeButtonEvent(display, 1, 1, 0)
+                x11.XFlush(display)
+                time.sleep(0.08)
+                xtest.XTestFakeMotionEvent(display, -1, *end, 0)
+                x11.XFlush(display)
+                ui.value("pdf-selection", "RODE - Page One")
+                xtest.XTestFakeButtonEvent(display, 1, 0, 0)
+                x11.XFlush(display)
+                ui.control("image-preview", focused=True)
+                key("c", ("Control_L",))
+                ui.wait(lambda: ui.clipboard() == "RODE - Page One", "PDF text drag/copy failed")
+                screenshot(window, label + "-selection.png")
+                key("f", ("Control_L",))
+                ui.control("pdf-find-input", focused=True)
+                ui.fill("pdf-find-input", "page")
+                ui.control("pdf-find-count:2")
+                ui.press("pdf-find-input", "Return")
+                ui.control("pdf-current-page:2")
+                ui.control("pdf-page-ready:2")
+                screenshot(window, label + "-search.png")
+                ui.press("pdf-find-input", "Return", ("Shift_L",))
+                ui.control("pdf-current-page:1")
+                ui.click("pdf-find-case")
+                ui.control("pdf-find-count:0")
+                ui.click("pdf-find-case")
+                ui.control("pdf-find-count:2")
+                key("Escape")
+                ui.absent("pdf-find-input")
                 # Fullscreen uses the same reader, retains page/mode, and restores
                 # the ordinary editor chrome without changing sidebar preferences.
                 ui.click("pdf-fullscreen-toggle")
@@ -128,6 +167,17 @@ def run(remote=False):
                 key("Page_Down")
                 ui.control("pdf-current-page:2")
                 ui.control("pdf-page-ready:2")
+                ui.control("pdf-text-ready:2")
+                key("a", ("Control_L",))
+                key("c", ("Control_L",))
+                ui.wait(
+                    lambda: ui.clipboard() == "RODE - Page Two", "Fullscreen copied the wrong page"
+                )
+                key("f", ("Control_L",))
+                ui.control("pdf-find-input", focused=True)
+                key("Escape")
+                ui.absent("pdf-find-input")
+                ui.control("pdf-fullscreen")
                 screenshot(window, label + "-fullscreen.png")
                 # Escape first dismisses an open palette, then exits the reader.
                 key("p", ("Control_L", "Shift_L"))
@@ -194,6 +244,18 @@ def run(remote=False):
                 key("Home")
                 ui.control("pdf-current-page:1")
                 ui.control("pdf-page-ready:1")
+                key("f", ("Control_L",))
+                ui.control("pdf-find-input", focused=True)
+                ui.fill("pdf-find-input", "PAGE TWO")
+                ui.control("pdf-find-count:1")
+                ui.control("pdf-current-page:2")
+                ui.control("pdf-page-ready:2")
+                screenshot(window, label + "-continuous-search.png")
+                key("Escape")
+                ui.absent("pdf-find-input")
+                ui.click("pdf-document")
+                key("Home")
+                ui.control("pdf-current-page:1")
                 wheel(False, 4)
                 ui.layout(
                     lambda state: {"pdf-page-ready:1", "pdf-page-ready:2"}.issubset(

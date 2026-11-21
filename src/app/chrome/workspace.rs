@@ -13,7 +13,8 @@ enum Connection {
 struct Summary {
     title: String,
     connection: Connection,
-    label: String,
+    host_label: String,
+    project: Option<String>,
     details: String,
     mode: Option<String>,
     mode_details: String,
@@ -29,7 +30,8 @@ impl Summary {
                     format!("RODE · {} [File mode]", ssh::display_name(path))
                 }),
                 connection: Connection::Local,
-                label: "Local".into(),
+                host_label: "LOCAL".into(),
+                project: None,
                 details: "Local computer".into(),
                 mode: file_mode.then(|| "File mode".into()),
                 mode_details: "No project is open. File access is not sandboxed; project sandbox preferences are unchanged.".into(),
@@ -58,6 +60,12 @@ impl Summary {
             Connection::Connected => format!("SSH connected · {}", host.as_ref().unwrap()),
             Connection::Connecting => format!("SSH connecting · {}", host.as_ref().unwrap()),
             Connection::Offline => format!("SSH offline · {}", host.as_ref().unwrap()),
+        };
+        let host_label = match connection {
+            Connection::Local => "LOCAL".into(),
+            Connection::Connected => format!("SSH · {}", host.as_ref().unwrap()),
+            Connection::Connecting => format!("SSH · {} · connecting", host.as_ref().unwrap()),
+            Connection::Offline => format!("SSH · {} · offline", host.as_ref().unwrap()),
         };
         let plan = &workspace.plan;
         let unavailable = plan.requested && !plan.active;
@@ -119,7 +127,8 @@ impl Summary {
         Self {
             title,
             connection,
-            label: workspace.root.clone(),
+            host_label,
+            project: (!workspace.root.is_empty()).then(|| workspace.root.clone()),
             details: format!("{state}\nProject: {}", workspace.root),
             mode: Some(mode),
             mode_details,
@@ -162,106 +171,113 @@ impl EditorApp {
         let summary = Summary::new(self);
         let palette = self.themes.active().palette;
         let color = match summary.connection {
+            Connection::Local => palette.muted,
+            Connection::Connected => palette.success,
             Connection::Offline => palette.error,
             Connection::Connecting => palette.accent,
-            _ => palette.success,
         };
         let mode_color = if summary.warning {
             palette.accent
         } else {
             palette.muted
         };
-        let natural_width = |text: &str| {
-            ui.painter()
-                .layout_no_wrap(text.into(), FontId::proportional(12.), color)
+        let path = summary.project.as_deref().unwrap_or("No project folder");
+        let natural_width = |text: RichText, framed: bool| {
+            egui::WidgetText::from(text.size(12.))
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Button,
+                )
                 .size()
                 .x
-                + 8.
+                + if framed {
+                    2. * ui.spacing().button_padding.x
+                } else {
+                    0.
+                }
+                + 1.
         };
-        // Project paths need more room than a short transport label. Reserve
-        // the access mode, both gaps and a bounded share for transient messages;
-        // the native button truncates within the remaining path slot.
-        let available = (width - 2. * ui.spacing().item_spacing.x).max(0.);
+        // Give host identity and access state their own bounded slots. Long
+        // project paths use the remainder; transient messages yield space first.
+        let gaps = if summary.mode.is_some() { 3. } else { 2. };
+        let available = (width - gaps * ui.spacing().item_spacing.x).max(0.);
+        let host_width = natural_width(RichText::new(&summary.host_label).strong(), true)
+            .min(280.)
+            .min(available * 0.45);
         let mode_width = summary.mode.as_ref().map_or(0., |mode| {
-            natural_width(mode).min(170.).min(available * 0.35)
+            natural_width(RichText::new(mode), false)
+                .min(170.)
+                .min(available * 0.3)
         });
-        let message_width = (available * 0.2).min(140.);
-        let path_width =
-            natural_width(&summary.label).min((available - mode_width - message_width).max(0.));
-        slot(ui, path_width, |ui| {
-            ui.add_enabled_ui(!self.foreign_modal(ctx), |ui| {
-                let response = crate::keyboard::MenuButton::from_button(
-                    egui::Button::new(RichText::new(&summary.label).size(12.).color(color))
-                        .small()
-                        .frame(false)
-                        .truncate()
-                        .min_size(egui::vec2(0., 19.)),
+        let path_width = natural_width(RichText::new(path), false)
+            .min((available - host_width - mode_width).max(0.));
+        let enabled = !self.foreign_modal(ctx);
+        slot(ui, host_width, |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
+                let response = footer_menu(
+                    RichText::new(&summary.host_label).strong().color(color),
                     "Connection status",
+                    Some(color.gamma_multiply(0.12)),
                 )
-                // The wrapper applies its stroke with Button::stroke, which
-                // restores a frame. Apply this after wrapping so themed padding
-                // cannot consume the label's measured width.
-                .frame(false)
                 .ui(ui, |ui| {
-                    ui.set_max_width((ctx.content_rect().width() - 64.).clamp(120., 460.));
-                    ui.add(egui::Label::new(&summary.details).wrap());
-                    ui.separator();
-                    let remote = summary.connection != Connection::Local;
-                    if remote || self.workspace.reconnect_profile().is_some() {
-                        let (label, name, command, enabled) = if matches!(
-                            summary.connection,
-                            Connection::Local | Connection::Offline
-                        ) {
-                            ("Reconnect", "status-reconnect", Command::Reconnect, true)
-                        } else {
-                            (
-                                "Disconnect",
-                                "status-disconnect",
-                                Command::Disconnect,
-                                !self.runtime_work_pending(),
-                            )
-                        };
-                        let button = ui.add_enabled(enabled, crate::keyboard::Button::new(label));
-                        ui_probe::button(ui, name, &button);
-                        if button.clicked() {
-                            keyboard::consume_activation(&button);
-                            self.execute_command(command, ctx);
-                            ui.close();
-                        }
-                    }
-                    if crate::keyboard::button(ui, "Connect via SSH…").clicked() {
-                        self.set_dialog(Dialog::Connect);
-                        ui.close();
-                    }
+                    menus::contents(ui, 340., |ui| {
+                        self.connection_status_menu(ui, ctx, &summary)
+                    })
                 })
                 .0
                 .on_hover_text(&summary.details);
                 ui_probe::button(ui, "status-connection", &response);
-                ui_probe::value(ui, "status-connection-value", &response, &summary.label);
+                ui_probe::value(
+                    ui,
+                    "status-connection-value",
+                    &response,
+                    &summary.host_label,
+                );
+            });
+        });
+        slot(ui, path_width, |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
+                let response = footer_menu(
+                    RichText::new(path).color(palette.text),
+                    "Project folder",
+                    None,
+                )
+                .ui(ui, |ui| {
+                    menus::contents(ui, 380., |ui| self.project_status_menu(ui, ctx, &summary))
+                })
+                .0
+                .on_hover_text(path);
+                ui_probe::button(ui, "status-project", &response);
+                ui_probe::value(ui, "status-project-value", &response, path);
             });
         });
         if let Some(mode) = &summary.mode {
             slot(ui, mode_width, |ui| {
-                let response = crate::keyboard::MenuButton::from_button(
-                    egui::Button::new(RichText::new(mode).size(12.).color(mode_color))
-                        .small()
-                        .frame(false)
-                        .truncate()
-                        .min_size(egui::vec2(0., 19.)),
-                    "Project access mode",
-                )
-                // The wrapper applies its stroke with Button::stroke, which
-                // restores a frame. Apply this after wrapping so themed padding
-                // cannot consume the label's measured width.
-                .frame(false)
-                .ui(ui, |ui| {
-                    ui.set_max_width((ctx.content_rect().width() - 64.).clamp(120., 460.));
-                    ui.add(egui::Label::new(&summary.mode_details).wrap());
-                })
-                .0
-                .on_hover_text(&summary.mode_details);
-                ui_probe::button(ui, "status-access", &response);
-                ui_probe::value(ui, "status-access-value", &response, mode);
+                ui.add_enabled_ui(enabled, |ui| {
+                    let response = footer_menu(
+                        RichText::new(mode).color(mode_color),
+                        "Project access mode",
+                        None,
+                    )
+                    .ui(ui, |ui| {
+                        menus::contents(ui, 380., |ui| {
+                            ui.label(palette.tag("PROJECT ACCESS"));
+                            ui.strong(mode);
+                            ui.separator();
+                            ui.add(
+                                egui::Label::new(&summary.mode_details)
+                                    .wrap()
+                                    .selectable(true),
+                            );
+                        })
+                    })
+                    .0
+                    .on_hover_text(&summary.mode_details);
+                    ui_probe::button(ui, "status-access", &response);
+                    ui_probe::value(ui, "status-access-value", &response, mode);
+                });
             });
         }
         let remaining = ui.available_width().max(0.);
@@ -273,11 +289,209 @@ impl EditorApp {
         )
         .on_hover_text(&self.status);
     }
+
+    fn connection_status_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        summary: &Summary,
+    ) {
+        let palette = self.themes.active().palette;
+        ui.label(palette.tag("CONNECTION"));
+        ui.add(
+            egui::Label::new(RichText::new(&summary.host_label).strong())
+                .wrap()
+                .selectable(true),
+        );
+        ui.separator();
+        let remote = summary.connection != Connection::Local;
+        if remote || self.workspace.reconnect_profile().is_some() {
+            let (label, name, command, icon, enabled) =
+                if matches!(summary.connection, Connection::Local | Connection::Offline) {
+                    (
+                        "Reconnect SSH",
+                        "status-reconnect",
+                        Command::Reconnect,
+                        Icon::Refresh,
+                        true,
+                    )
+                } else {
+                    (
+                        "Disconnect SSH",
+                        "status-disconnect",
+                        Command::Disconnect,
+                        Icon::Exit,
+                        !self.runtime_work_pending(),
+                    )
+                };
+            let button = ui.add_enabled(enabled, IconButton::new(icon, label));
+            ui_probe::button(ui, name, &button);
+            if button.clicked() {
+                keyboard::consume_activation(&button);
+                self.execute_command(command, ctx);
+                ui.close();
+            }
+        }
+        if ui
+            .add(IconButton::new(Icon::Remote, "Connect via SSH…"))
+            .clicked()
+        {
+            self.set_dialog(Dialog::Connect);
+            ui.close();
+        }
+    }
+
+    /// Bound the path preview separately from its actions, so a long path can
+    /// scroll without displacing Copy path or Open project off the popup.
+    fn project_status_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, summary: &Summary) {
+        let palette = self.themes.active().palette;
+        ui.label(palette.tag("PROJECT FOLDER"));
+        ui.label(palette.tag(&summary.host_label));
+        if let Some(path) = &summary.project {
+            egui::ScrollArea::vertical()
+                .id_salt("project-folder-preview")
+                .max_height((ctx.content_rect().height() - 260.).clamp(24., 140.))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(path).monospace())
+                            .wrap()
+                            .selectable(true),
+                    );
+                });
+            ui.separator();
+            let copy = ui.add(IconButton::new(Icon::Copy, "Copy path"));
+            ui_probe::button(ui, "status-copy-project", &copy);
+            if copy.clicked() {
+                ctx.copy_text(path.clone());
+                ui.close();
+            }
+        } else {
+            ui.weak("Choose a project folder on this host.");
+            ui.separator();
+        }
+        let open = ui.add(IconButton::new(Icon::Folder, "Open project…"));
+        ui_probe::button(ui, "status-open-project", &open);
+        if open.clicked() {
+            keyboard::consume_activation(&open);
+            self.execute_command(Command::Folder, ctx);
+            ui.close();
+        }
+    }
+}
+
+/// Footer anchors retain their 19-point geometry; popup rows reuse the normal
+/// menu spacing and viewport constraints instead of inheriting footer sizing.
+fn footer_menu(
+    label: RichText,
+    name: &str,
+    fill: Option<egui::Color32>,
+) -> keyboard::MenuButton<'static> {
+    let mut button = egui::Button::new(label.size(12.))
+        .small()
+        .truncate()
+        .min_size(egui::vec2(0., 19.));
+    if let Some(fill) = fill {
+        button = button.fill(fill).corner_radius(3);
+    }
+    keyboard::MenuButton::from_button(button, name)
+        .config(egui::containers::menu::MenuConfig::new().style(menus::style))
+        .frame(fill.is_some())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_popup_bounds_long_paths_keeps_actions_visible_and_copies_the_full_path() {
+        for (size, scale) in [(egui::vec2(850., 560.), 1.), (egui::vec2(480., 360.), 1.5)] {
+            let ctx = egui::Context::default();
+            let mut app = EditorApp::new(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                Startup::default(),
+            );
+            ctx.set_zoom_factor(scale);
+            ctx.style_mut(|style| style.animation_time = 0.);
+            app.workspace
+                .set_fixture(Some(crate::app::tests::remote_workspace()));
+            let folder = format!(
+                "/scratch/{}研究 project",
+                "a-long-project-parent/".repeat(40)
+            );
+            app.workspace.as_mut().unwrap().root = folder.clone();
+            let directory = tempfile::tempdir().unwrap();
+            let probe = directory.path().join("popup.json");
+            ui_probe::install_at(&ctx, probe.clone());
+            let frame = |app: &mut EditorApp, events| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.titlebar(ctx);
+                        app.statusbar(ctx);
+                    },
+                )
+            };
+            let rect = |name: &str| {
+                let state: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&probe).unwrap()).unwrap();
+                let control = state["buttons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|b| b["name"] == name)
+                    .unwrap_or_else(|| panic!("Missing {name}: {state}"));
+                let [x1, y1, x2, y2]: [f32; 4] =
+                    serde_json::from_value(control["rect"].clone()).unwrap();
+                egui::Rect::from_min_max(egui::pos2(x1, y1), egui::pos2(x2, y2))
+            };
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let events = |point, pressed| {
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ]
+            };
+            let point = rect("status-project").center();
+            frame(&mut app, events(point, true));
+            frame(&mut app, events(point, false));
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let copy = rect("status-copy-project");
+            let open = rect("status-open-project");
+            for control in [copy, open] {
+                assert!(
+                    ctx.content_rect().contains_rect(control),
+                    "{size}/{scale}: {control:?}"
+                );
+                assert!(
+                    control.height() >= 28.,
+                    "Clipped action at {size}/{scale}: {control:?}"
+                );
+            }
+            assert!(!copy.intersects(open));
+            frame(&mut app, events(copy.center(), true));
+            let output = frame(&mut app, events(copy.center(), false));
+            assert!(
+                output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .any(|c| matches!(c, egui::OutputCommand::CopyText(text) if text == &folder))
+            );
+        }
+    }
 
     #[test]
     fn status_reports_actual_access_and_transport_without_changing_authority() {
@@ -301,7 +515,11 @@ mod tests {
             .set_fixture(Some(crate::app::tests::remote_workspace()));
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Connected);
-        assert_eq!(summary.label, "/scratch/researcher/project");
+        assert_eq!(summary.host_label, "SSH · researcher@test-host");
+        assert_eq!(
+            summary.project.as_deref(),
+            Some("/scratch/researcher/project")
+        );
         assert!(
             summary
                 .details
@@ -338,7 +556,15 @@ mod tests {
         app.workspace.as_mut().unwrap().connected = false;
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Offline);
-        assert_eq!(summary.label, "/scratch/researcher/project");
+        assert!(
+            summary
+                .host_label
+                .contains("SSH · researcher@test-host · offline")
+        );
+        assert_eq!(
+            summary.project.as_deref(),
+            Some("/scratch/researcher/project")
+        );
         assert_eq!(summary.mode.as_deref(), Some("Offline"));
         assert!(summary.warning);
         assert!(summary.title.contains("offline"));
@@ -348,7 +574,10 @@ mod tests {
         app.workspace.begin_preparation();
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Connecting);
-        assert_eq!(summary.label, "/scratch/researcher/project");
+        assert_eq!(
+            summary.project.as_deref(),
+            Some("/scratch/researcher/project")
+        );
         assert_eq!(summary.mode.as_deref(), Some("Opening project…"));
         assert!(summary.title.contains("[Opening project]"));
         assert!(app.workspace.preparing());
@@ -359,7 +588,10 @@ mod tests {
         app.workspace.set_fixture(Some(local));
         let summary = Summary::new(&app);
         assert_eq!(summary.connection, Connection::Local);
-        assert_eq!(summary.label, "/home/researcher/local-project");
+        assert_eq!(
+            summary.project.as_deref(),
+            Some("/home/researcher/local-project")
+        );
         assert_eq!(summary.mode.as_deref(), Some("Normal"));
         assert!(summary.details.contains("Local project"));
         assert!(!summary.title.contains("SSH"));

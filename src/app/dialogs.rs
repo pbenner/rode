@@ -102,10 +102,10 @@ impl EditorApp {
                 }
                 let width: f32 = if matches!(
                     self.dialog,
-                    Dialog::Sessions | Dialog::AgentSessions | Dialog::Tunnels
+                    Dialog::Sessions | Dialog::AgentSessions | Dialog::Tunnels | Dialog::NewTunnel
                 ) {
                     680.
-                } else if self.dialog == Dialog::Folder {
+                } else if matches!(self.dialog, Dialog::Folder | Dialog::SharedFolder) {
                     720.
                 } else if self.dialog == Dialog::Connect {
                     500.
@@ -115,7 +115,9 @@ impl EditorApp {
                 ui.set_width(width.min((ctx.content_rect().width() - 64.).max(1.)));
                 if self.dialog == Dialog::Folder {
                     self.folder_dialog(ui, ctx);
-                } else if self.dialog == Dialog::Tunnels {
+                } else if self.dialog == Dialog::SharedFolder {
+                    self.shared_folder_picker(ui, ctx);
+                } else if matches!(self.dialog, Dialog::Tunnels | Dialog::NewTunnel) {
                     // Like the project picker, the tunnel manager owns its
                     // scrolling body and keeps its actions visible.
                     self.tunnels_dialog(ui, ctx);
@@ -291,7 +293,9 @@ impl EditorApp {
         let error = *error;
         // Project browsing owns the foreground until confirmation. Retain
         // background notices without painting them over its fixed actions.
-        let order = if self.dialog == Dialog::Folder && self.dialog_viewport == ctx.viewport_id() {
+        let order = if matches!(self.dialog, Dialog::Folder | Dialog::SharedFolder)
+            && self.dialog_viewport == ctx.viewport_id()
+        {
             egui::Order::Middle
         } else {
             egui::Order::Tooltip

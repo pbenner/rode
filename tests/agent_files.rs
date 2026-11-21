@@ -60,6 +60,34 @@ fn log(root: &Path) -> Vec<Value> {
 
 #[test]
 fn native_edit_journal_undo_restores_updates_deletions_and_creations_without_model_metadata() {
+    // Integration tests link the ordinary desktop library, whose default service
+    // entry point is the editor executable. A libtest main cannot serve that
+    // protocol. Select Cargo's matching helper in a child, without changing the
+    // process environment shared by parallel tests or inheriting a local override.
+    let runtime = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "native_edit_journal_undo_child",
+            "--nocapture",
+        ])
+        .env("RODE_SESSION_HELPER", native::binary())
+        .env("RODE_SESSION_DIR", runtime.path().join("sessions"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Native undo fixture failed ({}): {}{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+#[ignore = "isolated child with Cargo's matching native session helper"]
+fn native_edit_journal_undo_child() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     fs::write(root.join("updated.txt"), "original\n").unwrap();
@@ -79,6 +107,11 @@ fn native_edit_journal_undo_restores_updates_deletions_and_creations_without_mod
     chat.submit(launch.clone(), "Edit these files".into(), Arc::new(|| {}))
         .unwrap();
     wait(&mut chat);
+    assert!(
+        chat.last_turn_succeeded,
+        "Native agent did not complete its file edits: {}: {:?}",
+        chat.status, chat.messages,
+    );
     let view = chat.undo_view().expect("Host undo view");
     assert_eq!(view.files.len(), 3, "{}", view.reason);
     let conversation = chat.conversation_id().map(str::to_owned);

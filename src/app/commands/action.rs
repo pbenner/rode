@@ -568,6 +568,12 @@ impl EditorApp {
                 self.set_explorer_visible(viewport, !visible);
             }
             Command::Find => {
+                if let Some(view) = self.documents.active_mut().and_then(|doc| doc.pdf.as_mut())
+                    && view.source.format == crate::pdf::Format::Pdf
+                {
+                    view.find_text();
+                    return;
+                }
                 self.markdown_source();
                 self.editor.show_find = true;
                 self.editor.find_focus = true;

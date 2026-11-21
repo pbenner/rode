@@ -60,7 +60,12 @@ class ProjectUI(NativeUI):
 
     def project(self, project, remote=False):
         wait_for_project(self.window, self.process, self.log_path, project)
-        self.value("status-connection-value", str(project))
+        self.value("status-project-value", str(project))
+        self.value("status-connection-value", "SSH · rode-test" if remote else "LOCAL")
+        if remote:
+            self.control("disconnect-ssh")
+        else:
+            self.absent("disconnect-ssh")
         assert ("[SSH" in self.title()) == remote, self.title()
 
     def path(self, name, value):
@@ -209,6 +214,8 @@ class ProjectUI(NativeUI):
 
     def disconnected(self):
         self.wait(lambda: '"RODE"' in self.title(), "Disconnect did not clear the host")
+        self.value("status-connection-value", "LOCAL")
+        self.absent("disconnect-ssh")
 
     def failure(self, label):
         state_path = Path(self.state_path)
@@ -311,6 +318,15 @@ def run(remote=False, fallback=False):
                 window = window_for(process, log.name)
                 ui = ProjectUI(window, process, log.name, environment)
                 ui.project(first, remote)
+                ui.click("status-project")
+                ui.control("status-copy-project")
+                ui.control("status-open-project")
+                screenshot(window, label + "-project-popup.png")
+                ui.click("status-copy-project")
+                ui.wait(
+                    lambda: ui.clipboard() == str(first), "Project popup did not copy the full path"
+                )
+                ui.absent("status-copy-project")
                 if remote:
                     ui.remote_editor(first, welcome=True)
                     screenshot(window, "ssh-welcome.png")
@@ -367,8 +383,7 @@ def run(remote=False, fallback=False):
                     ui.append(contents, "survives-disconnect")
                     ui.resize(850, 560)
                     screenshot(window, "ssh-disconnect-compact.png")
-                    ui.click("status-connection")
-                    ui.click("status-disconnect")
+                    ui.click("disconnect-ssh")
                     ui.disconnected()
                     ui.wait(
                         lambda: (

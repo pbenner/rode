@@ -2,6 +2,7 @@
 //! recipes are inert: only Mount starts a service, and a bookmark restores settings.
 use super::*;
 use crate::shared_folders::{Config, Control, Event as MountEvent};
+mod picker;
 mod view;
 
 /// Changes that retarget or release the authority retained by a live mount.
@@ -36,6 +37,13 @@ struct Row {
     message: String,
 }
 enum Reply {
+    Listed {
+        generation: u64,
+        picker: u64,
+        token: u64,
+        path: String,
+        result: Result<Box<files::Response>, String>,
+    },
     Status {
         generation: u64,
         id: u64,
@@ -50,6 +58,9 @@ enum Reply {
 pub(in crate::app) struct Sharing {
     pub open: bool,
     view: view::View,
+    picker: Option<picker::Picker>,
+    picker_serial: u64,
+    browsing: Arc<AtomicBool>,
     rows: Vec<Row>,
     serial: u64,
     generation: u64,
@@ -63,6 +74,9 @@ impl Default for Sharing {
         Self {
             open: false,
             view: Default::default(),
+            picker: None,
+            picker_serial: 0,
+            browsing: Arc::default(),
             rows: vec![],
             serial: 0,
             generation: 0,
@@ -123,6 +137,7 @@ impl Sharing {
         self.generation = self.generation.wrapping_add(1);
         self.rows.clear();
         self.view = Default::default();
+        self.picker = None;
     }
     pub(in crate::app) fn restore(&mut self, configs: Vec<Config>) {
         self.reset();
@@ -225,10 +240,26 @@ impl EditorApp {
     pub(in crate::app) fn poll_shared_folders(&mut self) {
         let state = &mut self.transfers.sharing;
         while let Ok(reply) = state.rx.try_recv() {
+            if let Reply::Listed {
+                generation,
+                picker,
+                token,
+                path,
+                result,
+            } = reply
+            {
+                if generation == state.generation
+                    && let Some(current) = state.picker.as_mut().filter(|p| p.serial == picker)
+                {
+                    current.loaded(token, &path, result);
+                }
+                continue;
+            }
             let (generation, id) = match &reply {
                 Reply::Status { generation, id, .. } | Reply::Finished { generation, id, .. } => {
                     (*generation, *id)
                 }
+                Reply::Listed { .. } => unreachable!(),
             };
             if generation != state.generation {
                 continue;
@@ -237,6 +268,7 @@ impl EditorApp {
                 continue;
             };
             match reply {
+                Reply::Listed { .. } => unreachable!(),
                 Reply::Status {
                     event: MountEvent::Ready,
                     ..
@@ -267,6 +299,7 @@ impl EditorApp {
         let state = &mut self.transfers.sharing;
         let intent = state.view.show(ui, &state.rows, palette, available);
         match intent {
+            Some(view::Intent::Browse(field)) => self.open_shared_folder_picker(field, ctx),
             Some(view::Intent::Mount(id)) => self.start_shared_folder(id, ctx),
             Some(view::Intent::Stop(id)) => self.transfers.sharing.stop(id),
             Some(view::Intent::Remove(id)) => self

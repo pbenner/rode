@@ -147,8 +147,12 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         ):
             ui.click("connections-section:" + section)
             ui.absent(row)
+            if section == "Saved projects":
+                ui.absent("bookmark-project")
             ui.click("connections-section:" + section)
             ui.control(row)
+            if section == "Saved projects":
+                ui.control("bookmark-project")
         ui.control("tunnel-saved-load:remote-setup", enabled=False)
         rows = [
             button["rect"]
@@ -157,7 +161,29 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         ]
         assert len(rows) == 4, rows
         assert max(rect[2] for rect in rows) - min(rect[0] for rect in rows) <= 450, rows
+        buttons = ui.layout()["buttons"]
+        active = next(b["rect"] for b in buttons if b["name"] == "connections-manage-tunnels")
+        for saved_row in (b["rect"] for b in buttons if b["name"].startswith("tunnel-saved-load:")):
+            assert abs(active[0] - saved_row[0]) < 1 and abs(active[2] - saved_row[2]) < 1
+            assert abs((active[3] - active[1]) - (saved_row[3] - saved_row[1])) < 1
         screenshot(ui.window, "connections-library.png")
+        ui.click("connections-new-tunnel")
+        ui.control("tunnel-dialog-new")
+        ui.control("tunnel-field-Name")
+        ui.absent("tunnel-dialog-active")
+        ui.absent("tunnel-tab-list")
+        ui.absent("tunnel-tab-new")
+        screenshot(ui.window, "new-tunnel.png")
+        ui.click("tunnel-close")
+        ui.absent("tunnel-close")
+        ui.click("connections-manage-tunnels")
+        ui.control("tunnel-dialog-active")
+        ui.absent("tunnel-dialog-new")
+        ui.absent("tunnel-field-Name")
+        ui.absent("tunnel-start")
+        screenshot(ui.window, "active-tunnels.png")
+        ui.click("tunnel-close")
+        ui.absent("tunnel-close")
         ui.absent("tunnel-saved-remove:remote-setup")
         ui.click("tunnel-saved-row:remote-setup", mouse_button=3)
         ui.click("tunnel-saved-remove:remote-setup")

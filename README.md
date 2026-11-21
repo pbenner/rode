@@ -40,8 +40,9 @@ editor window returns its tabs and unsaved edits to the main window. These windo
 share one application process and project; chat, terminals and project tools keep
 their existing location.
 
-Bookmark the current local or SSH project with the **bookmark icon** in the
-Connections or Explorer header. **Saved projects** in the **Connections** sidebar
+Bookmark the current local or SSH project with **Bookmark current project** under
+**Saved projects** in the **Connections** sidebar, or the Explorer header's
+**bookmark icon**. **Saved projects**
 reopens a project with one click; right-click an entry to rename or remove it.
 This bundled **Project bookmarks** extension can be disabled in **View → Extensions**.
 

@@ -205,16 +205,38 @@ with fixture_directory(prefix="rode-agent-queue-ui-") as base:
             screenshot(window, "editing.png")
             ui.click("agent-queue-edit-input")
             long_edit = "queued edit line\n" * 24 + "edited second queued"
-            ui.fill("agent-queue-edit-input", long_edit)
+            # Plain Return now saves; paste multiline text as one native edit.
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=long_edit,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=5,
+            )
+            ui.wait(lambda: ui.clipboard() == long_edit, "Multiline clipboard was not ready")
+            ui.press("agent-queue-edit-input", "a", ("Control_L",))
+            ui.press("agent-queue-edit-input", "v", ("Control_L",))
+            ui.value("agent-queue-edit-input-value", long_edit, focused=True)
             ui.resize(850, 560)
             ui.resize(1380, 900)
             ui.control(
                 "agent-queue-edit-input-value:" + hashlib.sha256(long_edit.encode()).hexdigest()
             )
+            ui.fill("agent-queue-edit-input", " ")
+            ui.control("agent-queue-save", enabled=False)
+            before = ui.layout()["pass"]
+            ui.press("agent-queue-edit-input", "Return")
+            ui.value("agent-queue-edit-input-value", " ", focused=True, after_pass=before)
             ui.fill("agent-queue-edit-input", "edited second queued")
-            ui.click("agent-queue-save")
+            ui.press("agent-queue-edit-input", "Return", ("Shift_L",))
+            ui.value("agent-queue-edit-input-value", "edited second queued\n", focused=True)
+            ui.fill("agent-queue-edit-input", "edited second queued")
+            ui.press("agent-queue-edit-input", "Return")
             ui.absent("agent-queue-edit-input")
             queued(0, "edited second queued")
+            assert prompts() == ["wait"], "Saving an edit submitted work during the active turn"
             ui.click("agent-queue-2-delete")
             ui.absent("agent-queue-2-delete")
             ui.click("agent-composer")

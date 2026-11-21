@@ -167,8 +167,8 @@ impl EditorApp {
         self.tunnels.relay_jump = saved.relay_jump.clone();
         self.tunnels.saved_id = Some(id.into());
         self.tunnels.draft_epoch += 1;
-        self.tunnels.page = Page::New;
         self.tunnels.error.clear();
+        self.new_tunnel_dialog();
     }
 
     /// Queue removal of a saved configuration and clear its draft/deletion selection.

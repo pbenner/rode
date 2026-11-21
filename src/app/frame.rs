@@ -113,6 +113,28 @@ impl EditorApp {
                         keyboard::consume_activation(&open);
                         self.execute_command(Command::Folder, ctx);
                     }
+                    if self
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|w| w.remote.is_some() && w.connected)
+                    {
+                        let button = if minimal {
+                            IconButton::toolbar(Icon::Exit, "Disconnect SSH")
+                        } else {
+                            IconButton::new(Icon::Exit, "Disconnect")
+                        };
+                        let disconnect = ui
+                            .add_enabled(
+                                !self.foreign_modal(ctx) && !self.runtime_work_pending(),
+                                button,
+                            )
+                            .on_hover_text("Disconnect from the SSH host");
+                        ui_probe::button(ui, "disconnect-ssh", &disconnect);
+                        if disconnect.clicked() {
+                            keyboard::consume_activation(&disconnect);
+                            self.execute_command(Command::Disconnect, ctx);
+                        }
+                    }
                     let width = ui.available_width().max(0.);
                     ui.allocate_ui_with_layout(
                         egui::vec2(width, ui.available_height()),

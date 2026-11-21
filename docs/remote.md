@@ -172,9 +172,13 @@ an explicit retry; automatic synchronization and resume are not implemented.
 ## Shared folders
 
 In **File transfers**, select **Shared folders → Add shared folder**. Choose
-**Local folder on SSH host** or **SSH folder on this computer**, enter the source
-and an existing empty mount folder on the receiving machine, and choose **Save
-shared folder**. Paths are absolute or start with `~/`, interpreted on their
+**Local folder on SSH host** or **SSH folder on this computer**. Use **Browse…**
+beside each path to select a source folder and an empty mount folder on the
+receiving machine. The picker shows its host, supports folder filtering, hidden
+folders, parent/home navigation and keyboard selection. In the mount-folder
+picker, **New folder** creates and opens an empty directory. Cancelling a picker
+keeps the form's paths unchanged. Choose **Save shared folder** when ready.
+You can still enter paths directly: paths are absolute or start with `~/`, interpreted on their
 respective hosts. Mount folders must be owned by you and not writable by other
 users. Choose a specific source subfolder; whole-home and filesystem-root exports
 are refused.
@@ -282,9 +286,10 @@ launch unrestricted remote commands.
 
 ## Compute-node return tunnels
 
-Use **New tunnel…** at the top of Connections, or its **Tunnels** status button
-below the saved lists. **File → SSH tunnels** and the command palette also open
-the tunnel manager. With a local project or no project open, it manages **This
+Use **New tunnel…** at the top of Connections to open the setup form. The
+full-width **Active Tunnels** button under **Saved tunnels** opens the separate
+active-tunnel list. **File → SSH tunnels** and the command palette also open
+that list. With a local project or no project open, it manages **This
 computer** and needs no initial SSH connection. With an SSH workspace selected,
 it manages that remote host; a lost SSH connection never falls back to the local
 service. The dialog identifies which host owns the tunnels.
@@ -351,12 +356,14 @@ The compute name comes from the owning service. Older remote services use the
 selected SSH host/alias as a display fallback; local tunnels use this computer's
 hostname. These labels do not change the fixed loopback destination on the compute host.
 **New tunnel** groups relay, forwarding and compute-host credentials;
-its draft survives tab switches. Background status checks do not disable setup fields or actions.
-Tabs and the Start/Close controls remain visible while the form scrolls.
+its draft survives closing and reopening the form or viewing active tunnels.
+Background status checks do not disable setup fields or actions. The Start/Close
+controls remain visible while the form scrolls. Starting a tunnel opens the active
+list so you can review its status and verify its relay key.
 
-The Connections sidebar’s **Tunnels** status button shows the connected count, or connected/total
+The Connections sidebar’s **Active Tunnels** button shows the connected count, or connected/total
 when some retained tunnels are connecting, reconnecting or need attention.
-Hover for the breakdown. **Tunnels (?)** means status is unknown or the host
+Hover for the breakdown. **Active Tunnels (?)** means status is unknown or the host
 is unavailable. Status is checked every 15 seconds outside the list and every
 2 seconds while viewing it, on the current host only. These read-only checks
 never start a tunnel service or reconnect SSH.
@@ -365,9 +372,9 @@ Choose **Save configuration** in setup or on a running tunnel's card to keep it
 across editor and service restarts. Saved setups appear in the **Connections**
 sidebar, below SSH connections. Click a setup to fill the form, review it, then
 choose **Start tunnel**. Loading does not connect or start a service. The tunnel
-manager has **Tunnels** and **New tunnel** tabs; saved setups are managed in the
+list and setup form are separate dialogs; saved setups are managed in the
 sidebar. **Update configuration** saves changes, including a renamed setup.
-Use the remove icon beside a saved tunnel and confirm **Delete configuration**
+Right-click a saved tunnel, choose **Remove saved tunnel**, and confirm **Delete configuration**
 to remove only its saved setup; running tunnels remain intact.
 
 Setups for another host are disabled; hover for the host required to load them.
@@ -566,7 +573,7 @@ Saved profiles live in `${XDG_CONFIG_HOME:-~/.config}/rode/connections.json`. **
 
 The Rust SSH master receives its launch profile through an owner-only file in its private connection directory, which it removes after opening. Its process arguments contain only the internal mode, socket path and a SHA-256 digest that detects substituted profile data before authentication. Helper discovery and bootstrap scripts travel over the existing SSH input stream, followed by any executable upload; `ps` shows a short launcher instead of the full script. Host verification, interactive login and helper digest checks still apply. Restart the editor and reconnect to use these launch changes; existing processes keep their original arguments.
 
-Open the SSH host menu in the bottom status bar and choose **Disconnect**, or **Remote: Disconnect SSH** in the command palette. Disconnecting, losing the connection, or a failed login clears the selected host and project. The title and explorer return to the local, no-folder state; **Open project folder…** and **Open file…** work locally immediately. Open remote tabs and unsaved edits stay in memory as disconnected buffers. Use **Save As** for a local copy, or **Remote: Reconnect SSH** to reconnect to their original project and restore their file bindings. Their original paths are never used for local file access. Opening a local project follows the usual unsaved-change protection. Disconnect stops project kernels/builds and detaches agent/terminal views: **Persist: on** sessions continue, while **Persist: off** sessions end after their last view closes. Reattach agents through **Agent chat → Running** under their original project policy. Disconnect is briefly unavailable while terminal/agent startup or a persistence change is pending.
+Choose **Disconnect** beside **Open project…** in the top header, open the SSH badge in the bottom status bar and choose **Disconnect SSH**, or use **Remote: Disconnect SSH** in the command palette. The header button appears only while SSH is connected. Disconnecting, losing the connection, or a failed login clears the selected host and project. The title and explorer return to the local, no-folder state; **Open project folder…** and **Open file…** work locally immediately. Open remote tabs and unsaved edits stay in memory as disconnected buffers. Use **Save As** for a local copy, or **Remote: Reconnect SSH** to reconnect to their original project and restore their file bindings. Their original paths are never used for local file access. Opening a local project follows the usual unsaved-change protection. Disconnect stops project kernels/builds and detaches agent/terminal views: **Persist: on** sessions continue, while **Persist: off** sessions end after their last view closes. Reattach agents through **Agent chat → Running** under their original project policy. Disconnect is briefly unavailable while terminal/agent startup or a persistence change is pending.
 
 If login fails or the connection ends unexpectedly, the terminal shows **SSH ERROR / host** and retains the login's output, including client errors such as `Permission denied` or `Connection refused`. It is read-only: the SSH process is stopped, and this is not a local shell. Scroll to earlier output, use **Copy**, and choose **New terminal → Outside sandbox** when you want a local shell. Folder/file opening already uses the local computer; **Remote: Reconnect SSH** starts a fresh attempt. The bounded terminal output stays only in this window's memory and is cleared when replaced by a new terminal/project or the window closes. RODE does not save the login output to preferences or a log file.
 
@@ -574,7 +581,7 @@ If login fails or the connection ends unexpectedly, the terminal shows **SSH ERR
 
 [Encrypted projects](encrypted-projects.md) can be unlocked on the connected host through **File → Open encrypted project…**. gocryptfs and FUSE run there; the desktop uses the existing SSH channels. Lock the encrypted project before explicitly disconnecting.
 
-The bottom status bar shows the selected SSH host and connecting/offline state; its menu contains connection details, **Disconnect**, and **Reconnect**. The native window title also identifies the SSH host. **Open project…** in the top header (**File → Open project folder…** / **Ctrl+Shift+O**) browses the currently selected host: remote folders when connected over SSH, local folders otherwise. Navigate with the path field, **Browse**, the parent-folder arrow, and the folder list, then choose **Open project** (or **Ctrl+Enter**). The explorer, relative file paths, saves, and project terminal then use that folder. Switching remote projects reuses the authenticated connection and protects unsaved buffers. **File → Open local folder…** explicitly switches back to this machine.
+The bottom status bar separates a **LOCAL** or **SSH · user@host** badge from the project path and access mode. The SSH badge also identifies connecting/offline states; its menu offers **Disconnect SSH** and **Reconnect SSH**. Clicking the project path opens a bounded folder popup with **Copy path** and **Open project…**; long paths scroll independently of those actions. The native window title also identifies the SSH host. **Open project…** in the top header (**File → Open project folder…** / **Ctrl+Shift+O**) browses the currently selected host: remote folders when connected over SSH, local folders otherwise. Navigate with the path field, **Browse**, the parent-folder arrow, and the folder list, then choose **Open project** (or **Ctrl+Enter**). The explorer, relative file paths, saves, and project terminal then use that folder. Switching remote projects reuses the authenticated connection and protects unsaved buffers. **File → Open local folder…** explicitly switches back to this machine.
 
 Enable sandboxing and choose **bwrap** or **Landlock** in the folder picker or SSH profile. You can allow/block network access and grant additional read-only or read-write paths. The selected backend is probed on the project host. If it is unavailable, the bottom status bar shows **Normal · unavailable**; open its access-mode menu or hover it for the full policy and reason. The project is not presented as isolated. Once active, an operation failure never triggers an unrestricted retry.
 

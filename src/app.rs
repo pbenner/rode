@@ -163,6 +163,7 @@ enum Dialog {
     Commands,
     Sessions,
     Tunnels,
+    NewTunnel,
     Slurm,
     AgentSessions,
     TerminalExit,
@@ -172,6 +173,7 @@ enum Dialog {
     HexOpen,
     Explorer,
     TransferFiles,
+    SharedFolder,
     MarpExport(u64, crate::marp::Format),
 }
 

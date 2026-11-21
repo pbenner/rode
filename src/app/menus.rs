@@ -5,7 +5,7 @@ use super::*;
 mod tests;
 
 /// Keep native menu focus, dismissal and submenu handling; only change presentation.
-fn style(style: &mut egui::Style) {
+pub(super) fn style(style: &mut egui::Style) {
     egui::containers::menu::menu_style(style);
     style.spacing.button_padding = egui::vec2(10., 5.);
     style.spacing.item_spacing = egui::vec2(10., 2.);
@@ -14,7 +14,12 @@ fn style(style: &mut egui::Style) {
     style.spacing.scroll = egui::style::ScrollStyle::solid();
 }
 
-fn contents<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+/// Header and footer menus share viewport bounds, padding and scroll behavior.
+pub(super) fn contents<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     let width = (ui.ctx().content_rect().width() - 32.).clamp(1., width);
     ui.set_width(width);
     let height = (ui.ctx().content_rect().height() - 80.).max(1.);

@@ -15,15 +15,10 @@ impl EditorApp {
 
     pub(in crate::app) fn connections_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
-        ui.horizontal(|ui| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.project_bookmark_button(ui);
-                let size = egui::vec2(ui.available_width().max(0.), 24.);
-                ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
-                    ui.set_min_size(size);
-                    ui.add(egui::Label::new(palette.tag("CONNECTIONS")).truncate());
-                });
-            });
+        let header_size = egui::vec2(ui.available_width(), 24.);
+        ui.allocate_ui_with_layout(header_size, Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_size(header_size);
+            ui.add(egui::Label::new(palette.tag("CONNECTIONS")).truncate());
         });
         ui.add_space(8.);
         let size = egui::vec2(ui.available_width(), 32.);
@@ -52,6 +47,7 @@ impl EditorApp {
                 ui.add_space(8.);
                 if self.feature(crate::extensions::Feature::ProjectBookmarks) {
                     sidebar::section(ui, "Saved projects", "project-bookmarks", |ui| {
+                        self.project_bookmark_button(ui, project_bookmarks::ButtonStyle::Sidebar);
                         self.project_bookmarks_ui(ui, ctx);
                     });
                     ui.separator();

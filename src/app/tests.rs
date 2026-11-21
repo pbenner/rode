@@ -61,11 +61,15 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                             },
                         ));
                     }
-                    if width >= 850. && !long_path {
+                    if ctx.content_rect().width() >= 850. && !long_path {
                         for label in if file_mode {
-                            ["Local", "File mode"]
+                            ["LOCAL", "No project folder", "File mode"]
                         } else {
-                            ["/scratch/researcher/project", "Normal · unavailable"]
+                            [
+                                "SSH · researcher@test-host",
+                                "/scratch/researcher/project",
+                                "Normal · unavailable",
+                            ]
                         } {
                             let galley = output
                                 .as_ref()
@@ -81,7 +85,7 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                                 .unwrap_or_else(|| panic!("Missing status text {label}"));
                             assert!(
                                 !galley.elided,
-                                "Status text {label} was unnecessarily truncated in {theme}"
+                                "Status text {label} was unnecessarily truncated in {theme} at {width}/{scale}"
                             );
                         }
                     }
@@ -102,20 +106,35 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
                         bounds.max,
                     );
                     let connection = rect("status-connection");
+                    let project = rect("status-project");
                     let mode = rect("status-access");
                     let appearance = rect("appearance-menu");
-                    for control in [connection, mode, appearance] {
+                    for control in [connection, project, mode, appearance] {
                         assert!(
                             footer.contains_rect(control),
                             "Footer control escapes in {theme}/{scale}: {state}"
                         );
                     }
                     assert!(
-                        !connection.intersects(mode)
+                        !connection.intersects(project)
+                            && !project.intersects(mode)
+                            && !project.intersects(appearance)
+                            && !connection.intersects(mode)
                             && !connection.intersects(appearance)
                             && !mode.intersects(appearance),
                         "Overlapping status controls: {state}"
                     );
+                    if file_mode {
+                        assert!(!buttons.iter().any(|b| b["name"] == "disconnect-ssh"));
+                    } else {
+                        let disconnect = rect("disconnect-ssh");
+                        let open = rect("open-project");
+                        assert!(
+                            disconnect.right() <= open.left() && !disconnect.intersects(open),
+                            "{state}"
+                        );
+                        assert!(ctx.content_rect().contains_rect(disconnect), "{state}");
+                    }
                     assert!(
                         rect("open-project").bottom() < footer.top(),
                         "Open project is not in the top header: {state}"

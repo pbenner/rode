@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native shared-folder UI, both SSH clients, kernel mounts and bookmark settings."""
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -15,6 +16,31 @@ from ui_harness import fixture_directory, fixture_environment, key, screenshot
 def fill(ui, name, value):
     ui.click(name)
     ui.fill(name, str(value))
+
+
+def pick_folder(ui, field, folder, *, remote=False, create=False, capture=None):
+    """Exercise the shared directory rows, keyboard navigation and captured host."""
+    ui.click(field + "-browse")
+    ui.value("share-picker-host", "remote" if remote else "local")
+    ui.control("share-picker-path")
+    fill(ui, "share-picker-path", folder.parent)
+    ui.click("share-picker-go")
+    ui.value("share-picker-directory", folder.parent)
+    if create:
+        ui.click("share-picker-new")
+        fill(ui, "share-picker-name", folder.name)
+        ui.click("share-picker-create")
+    else:
+        fill(ui, "share-picker-filter", folder.name)
+        row = "file-picker-row:" + hashlib.sha256(str(folder).encode()).hexdigest()
+        ui.click(row)
+        key("Return")
+    ui.value("share-picker-directory", folder)
+    if capture:
+        screenshot(ui.window, capture)
+    ui.click("share-picker-select")
+    ui.absent("share-picker-select")
+    ui.value(field + "-value", folder)
 
 
 for backend in ("russh", "openssh"):
@@ -49,13 +75,30 @@ for backend in ("russh", "openssh"):
                 1,
             ):
                 destination = (base if reverse else project) / f"mount-{index}"
-                destination.mkdir()
+                if index != 1:
+                    destination.mkdir()
                 ui.click("share-add")
                 if reverse:
                     ui.click("share-direction")
                     ui.click("share-remote-to-local")
-                fill(ui, "share-source", source)
-                fill(ui, "share-destination", destination)
+                if index == 1:
+                    ui.click("share-source-browse")
+                    ui.control("share-picker-path")
+                    ui.click("share-picker-cancel")
+                    ui.absent("share-picker-select")
+                    ui.value("share-source-value", "")
+                pick_folder(ui, "share-source", source, remote=reverse)
+                pick_folder(
+                    ui,
+                    "share-destination",
+                    destination,
+                    remote=not reverse,
+                    create=index == 1,
+                    capture=backend + "-mount-picker.png" if index == 1 else None,
+                )
+                assert destination.is_dir(), "Picker did not create the mount folder"
+                if index == 1:
+                    screenshot(ui.window, backend + "-share-form.png")
                 if writable:
                     ui.click("share-read-only")
                 ui.click("share-save")

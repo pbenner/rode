@@ -16,8 +16,7 @@ fn new_tunnel_setup_allows_automatic_credentials_without_selecting_a_key_filenam
             app.workspace
                 .set_fixture(Some(crate::app::tests::remote_workspace()));
         }
-        app.dialog = Dialog::Tunnels;
-        app.tunnels.page = Page::New;
+        app.dialog = Dialog::NewTunnel;
         app.tunnels.spec.relay_host = "relay.example.org".into();
         app.tunnels.spec.relay_user = "researcher".into();
         assert!(app.tunnels.spec.identity.is_empty() && app.tunnels.spec.agent_socket.is_empty());
@@ -108,7 +107,6 @@ fn tunnel_errors_can_be_copied_without_starting_host_work() {
         );
         assert!(app.tunnels.pending.is_none());
         assert!(app.dialog == Dialog::Tunnels);
-        assert_eq!(app.tunnels.page, Page::Tunnels);
     }
 }
 
@@ -171,7 +169,7 @@ fn local_tunnel_manager_is_reachable_without_a_workspace_and_offers_return_detai
     };
     title_frame(vec![]);
     let output = title_frame(vec![]);
-    let (rect, clip) = text_bounds(&output, "Tunnels (?)");
+    let (rect, clip) = text_bounds(&output, "Active Tunnels (?)");
     assert!(clip.contains_rect(rect));
     for pressed in [true, false] {
         title_frame(vec![
@@ -210,7 +208,8 @@ fn local_tunnel_manager_is_reachable_without_a_workspace_and_offers_return_detai
         fingerprint: String::new(),
         attempts: 1,
     }];
-    click(&mut app, &ctx, "Tunnels (1)");
+    click(&mut app, &ctx, "Close");
+    app.execute_command(Command::Tunnels, &ctx);
     let output = click(&mut app, &ctx, "Copy connection details");
     text_bounds(&output, "[2001:db8::1]:22022");
     let hostname = rode_session::tunnels::local_hostname().expect("Test host has a hostname");
@@ -309,11 +308,7 @@ fn tunnel_addresses_name_the_service_host_and_support_older_remote_services() {
 
 #[test]
 fn tunnel_route_result_respects_dismissal_and_setup_navigation() {
-    for (dialog, page) in [
-        (Dialog::None, Page::Tunnels),
-        (Dialog::Folder, Page::Tunnels),
-        (Dialog::Tunnels, Page::New),
-    ] {
+    for dialog in [Dialog::None, Dialog::Folder, Dialog::NewTunnel] {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = EditorApp::new(&cc, Startup::default());
@@ -322,7 +317,6 @@ fn tunnel_route_result_respects_dismissal_and_setup_navigation() {
         app.tunnels.generation = Some(app.workers.generation());
         app.tunnels.pending = Some(rx);
         app.dialog = dialog;
-        app.tunnels.page = page;
         app.tunnels.spec.name = "Unfinished setup".into();
         let expected = std::mem::discriminant(&app.dialog);
         tx.send(Ok(Outcome::Route(Box::new(Profile {
@@ -333,7 +327,6 @@ fn tunnel_route_result_respects_dismissal_and_setup_navigation() {
         app.tunnel_tick(&ctx);
         assert_eq!(app.connection_profiles.draft.host, "current-compute");
         assert_eq!(std::mem::discriminant(&app.dialog), expected);
-        assert_eq!(app.tunnels.page, page);
         assert_eq!(app.tunnels.spec.name, "Unfinished setup");
         assert!(app.tunnels.pending.is_none());
     }
@@ -388,8 +381,12 @@ fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_a
             attempts: 1,
         }];
         app.tunnels.spec.listen_on = ListenOn::AllInterfaces;
-        for (page_index, page) in [Page::Tunnels, Page::New].into_iter().enumerate() {
-            app.tunnels.page = page;
+        for (page_index, creating) in [false, true].into_iter().enumerate() {
+            app.dialog = if creating {
+                Dialog::NewTunnel
+            } else {
+                Dialog::Tunnels
+            };
             for frame in 0..3 {
                 let _ = ctx.run(
                     egui::RawInput {
@@ -409,7 +406,7 @@ fn tunnel_controls_render_without_starting_workers_and_background_checks_leave_a
                             let content = ui.scope(|ui| app.tunnels_dialog(ui, ctx)).response.rect;
                             assert!(
                                 content.right() <= available.right() + 1.,
-                                "Tunnel {page:?} overflows at {width}: {content:?} vs {available:?}"
+                                "Tunnel {creating} overflows at {width}: {content:?} vs {available:?}"
                             );
                         });
                     },
@@ -508,7 +505,7 @@ fn click(app: &mut EditorApp, ctx: &egui::Context, label: &str) -> egui::FullOut
 }
 
 #[test]
-fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
+fn tunnel_setup_retains_edits_and_focus_across_dialogs_and_status_updates() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
@@ -517,7 +514,7 @@ fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
     app.dialog = Dialog::Tunnels;
     app.tunnels.generation = Some(app.workers.generation());
     click(&mut app, &ctx, "New tunnel");
-    assert_eq!(app.tunnels.page, Page::New);
+    assert!(app.dialog == Dialog::NewTunnel);
     app.tunnel_tick(&ctx);
     assert!(
         app.tunnels.pending.is_none(),
@@ -544,14 +541,16 @@ fn tunnel_setup_retains_edits_and_focus_across_tabs_and_status_updates() {
     assert_eq!(app.tunnels.spec.name, "Research node");
     tx.send(Ok(vec![])).unwrap();
     app.tunnel_tick(&ctx);
-    assert_eq!(app.tunnels.page, Page::New);
+    assert!(app.dialog == Dialog::NewTunnel);
     assert!(app.tunnels.pending.is_none());
-    click(&mut app, &ctx, "Tunnels (0)");
-    click(&mut app, &ctx, "New tunnel");
+    click(&mut app, &ctx, "Close");
+    app.execute_command(Command::Tunnels, &ctx);
+    click(&mut app, &ctx, "Close");
+    app.new_tunnel_dialog();
     assert_eq!(app.tunnels.spec.name, "Research node");
     assert!(
         app.tunnels.pending.is_none(),
-        "Tab navigation must not start a tunnel"
+        "Opening either dialog must not start a tunnel"
     );
     app.workspace
         .as_ref()
@@ -615,32 +614,43 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                     },
                     false,
                 );
-                for page in [Page::Tunnels, Page::New] {
-                    app.tunnels.page = page;
+                for creating in [false, true] {
+                    app.dialog = if creating {
+                        Dialog::NewTunnel
+                    } else {
+                        Dialog::Tunnels
+                    };
                     for _ in 0..3 {
                         dialog_frame(&mut app, &ctx, size, vec![]);
                     }
                     let output = dialog_frame(&mut app, &ctx, size, vec![]);
                     let screen = ctx.content_rect();
-                    for label in ["New tunnel", "Tunnels (8)", "Close"]
-                        .into_iter()
-                        .chain((page == Page::New).then_some("Start tunnel"))
+                    for label in [
+                        if creating {
+                            "New tunnel"
+                        } else {
+                            "Active Tunnels"
+                        },
+                        "Close",
+                    ]
+                    .into_iter()
+                    .chain(creating.then_some("Start tunnel"))
                     {
                         let (rect, clip) = text_bounds(&output, label);
                         assert!(
                             screen.contains_rect(rect) && clip.contains_rect(rect),
-                            "{theme}/{page:?} at {size:?}, scale {scale}: {label} is clipped: {rect:?}, screen {screen:?}, clip {clip:?}"
+                            "{theme}/{creating} at {size:?}, scale {scale}: {label} is clipped: {rect:?}, screen {screen:?}, clip {clip:?}"
                         );
                     }
                     for label in ["Close"]
                         .into_iter()
-                        .chain((page == Page::New).then_some("Start tunnel"))
-                        .chain((page == Page::New).then_some("Save configuration"))
+                        .chain(creating.then_some("Start tunnel"))
+                        .chain(creating.then_some("Save configuration"))
                     {
                         let (rect, clip) = layout::tests::button_frame(&output, label);
                         assert!(
                             screen.contains_rect(rect) && clip.contains_rect(rect),
-                            "Full {label} button clipped: {theme}/{page:?}/{size:?}/{scale}: {rect:?}"
+                            "Full {label} button clipped: {theme}/{creating}/{size:?}/{scale}: {rect:?}"
                         );
                     }
                     // Scroll only the body: navigation and actions must stay put.
@@ -666,7 +676,7 @@ fn tunnel_modal_keeps_navigation_and_actions_visible_across_sizes_and_themes() {
                     let (after, clip) = text_bounds(&output, "Close");
                     assert!(
                         (before.top() - after.top()).abs() <= 1.,
-                        "Footer moved while scrolling: {theme}/{page:?}/{size:?}/{scale}: {before:?} -> {after:?}"
+                        "Footer moved while scrolling: {theme}/{creating}/{size:?}/{scale}: {before:?} -> {after:?}"
                     );
                     assert!(screen.contains_rect(after) && clip.contains_rect(after));
                 }
@@ -722,8 +732,7 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
             app.workspace
                 .set_fixture(Some(crate::app::tests::remote_workspace()));
         }
-        app.dialog = Dialog::Tunnels;
-        app.tunnels.page = Page::New;
+        app.dialog = Dialog::NewTunnel;
         app.tunnels.spec = saved_spec();
         app.tunnels.relay_jump = "desktop-relay-alias".into();
         click(&mut app, &ctx, "Save configuration");
@@ -745,7 +754,7 @@ fn saved_tunnel_setup_survives_restart_and_supports_load_rename_and_confirmed_de
         reopened.dialog = Dialog::None;
         reopened.show_connections(&ctx);
         click(&mut reopened, &ctx, "Compute access");
-        assert_eq!(reopened.tunnels.page, Page::New);
+        assert!(reopened.dialog == Dialog::NewTunnel);
         assert_eq!(reopened.tunnels.spec, saved_spec());
         assert_eq!(reopened.tunnels.relay_jump, "desktop-relay-alias");
         assert!(reopened.tunnels.pending.is_none());
@@ -894,8 +903,7 @@ fn connections_sidebar_orders_actions_and_host_bound_lists_without_replacing_the
                 ],
             );
         }
-        assert!(app.dialog == Dialog::Tunnels);
-        assert_eq!(app.tunnels.page, Page::New);
+        assert!(app.dialog == Dialog::NewTunnel);
         assert_eq!(app.tunnels.spec, saved_spec());
         assert!(app.tunnels.pending.is_none() && app.tunnels.available.is_empty());
         assert!(app.ssh_master.is_none());
@@ -1001,7 +1009,7 @@ fn saved_tunnel_loads_are_bound_to_the_selected_host_account_port_and_config() {
         );
         let before = app.tunnels.spec.clone();
         app.load_tunnel_configuration(&id);
-        assert_eq!(app.tunnels.page, Page::Tunnels);
+        assert!(app.dialog == Dialog::None);
         assert_eq!(app.tunnels.spec, before);
         assert!(app.tunnels.error.contains("before loading"));
         assert!(app.tunnels.pending.is_none());
@@ -1061,8 +1069,7 @@ fn network_listener_choice_survives_saving_and_offers_direct_connection_details(
             app.workspace
                 .set_fixture(Some(crate::app::tests::remote_workspace()));
         }
-        app.dialog = Dialog::Tunnels;
-        app.tunnels.page = Page::New;
+        app.dialog = Dialog::NewTunnel;
         app.tunnels.spec = saved_spec();
         assert_eq!(app.tunnels.spec.listen_on, ListenOn::Loopback);
         click(&mut app, &ctx, "Localhost only");
@@ -1092,7 +1099,7 @@ fn network_listener_choice_survives_saving_and_offers_direct_connection_details(
             fingerprint: String::new(),
             attempts: 1,
         }];
-        app.tunnels.page = Page::Tunnels;
+        app.dialog = Dialog::Tunnels;
         let output = click(&mut app, &ctx, "Copy connection details");
         assert!(output.platform_output.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text.contains("Host: relay.example.org\nPort: 22022\nJump / ProxyJump: leave blank") && text.contains("Host: 127.0.0.1\nPort: 22022") && text.contains("verify its host key"))));
         assert!(app.tunnels.pending.is_none());
@@ -1151,10 +1158,18 @@ fn sidebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     for (observation, statuses, label) in [
-        (None, vec![], "Tunnels (?)"),
-        (Some(Ok(())), vec![], "Tunnels"),
-        (Some(Ok(())), vec![Status::Connected; 2], "Tunnels (2)"),
-        (Some(Ok(())), vec![Status::Connecting], "Tunnels (0/1)"),
+        (None, vec![], "Active Tunnels (?)"),
+        (Some(Ok(())), vec![], "Active Tunnels"),
+        (
+            Some(Ok(())),
+            vec![Status::Connected; 2],
+            "Active Tunnels (2)",
+        ),
+        (
+            Some(Ok(())),
+            vec![Status::Connecting],
+            "Active Tunnels (0/1)",
+        ),
         (
             Some(Ok(())),
             vec![
@@ -1163,12 +1178,12 @@ fn sidebar_tunnel_counts_distinguish_connected_pending_failed_and_unknown() {
                 Status::HostKeyRequired,
                 Status::Attention,
             ],
-            "Tunnels (1/4)",
+            "Active Tunnels (1/4)",
         ),
         (
             Some(Err("Connection lost".to_owned())),
             vec![Status::Connected],
-            "Tunnels (?)",
+            "Active Tunnels (?)",
         ),
     ] {
         app.tunnels.observation = observation;
@@ -1211,7 +1226,7 @@ fn hidden_status_refreshes_are_throttled_and_do_not_occupy_setup_actions() {
     let (tx, rx) = mpsc::channel();
     app.tunnels.background = Some(rx);
     app.tunnels.spec.name = "Unfinished setup".into();
-    app.tunnels.page = Page::New;
+    app.dialog = Dialog::NewTunnel;
     tx.send(Ok(vec![observed_tunnel(Status::Connected)]))
         .unwrap();
     app.tunnel_tick(&ctx);
@@ -1227,7 +1242,7 @@ fn hidden_status_refreshes_are_throttled_and_do_not_occupy_setup_actions() {
     app.tunnel_tick(&ctx);
     assert!(app.tunnels.background.is_some() && app.tunnels.pending.is_none());
     assert_eq!(app.tunnels.spec.name, "Unfinished setup");
-    assert_eq!(app.tunnels.page, Page::New);
+    assert!(app.dialog == Dialog::NewTunnel);
     // Starting a lifetime action must discard the older background observation.
     let (tx, rx) = mpsc::channel();
     app.tunnels.background = Some(rx);
@@ -1276,7 +1291,7 @@ fn locking_offline_and_changed_hosts_cannot_advertise_a_previous_connected_count
         app.connections_sidebar(ctx);
         egui::CentralPanel::default().show(ctx, |_| {});
     });
-    text_bounds(&output, "Tunnels (?)");
+    text_bounds(&output, "Active Tunnels (?)");
     app.workspace.as_mut().unwrap().connected = true;
     app.workspace.as_mut().unwrap().ready = false;
     app.tunnel_tick(&ctx);

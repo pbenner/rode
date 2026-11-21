@@ -7,6 +7,7 @@ use super::*;
 use crate::pdf;
 
 mod fullscreen;
+mod text;
 mod toolbar;
 pub(super) use fullscreen::Fullscreen;
 
@@ -169,8 +170,13 @@ pub(super) struct PdfView {
     offset: egui::Vec2,
     jump: Option<(usize, PageEntry)>,
     visible: Vec<usize>,
+    text: text::State,
 }
 impl PdfView {
+    /// Reuse the editor's Find command without opening source replacement controls.
+    pub(in crate::app) fn find_text(&mut self) {
+        self.text.open();
+    }
     /// Initialize the reader from a bounded initial raster.
     pub fn new(loaded: pdf::Loaded) -> Self {
         Self {
@@ -194,6 +200,7 @@ impl PdfView {
             offset: egui::Vec2::ZERO,
             jump: None,
             visible: vec![],
+            text: Default::default(),
         }
     }
     /// Cancellation flag for the current page request or a guarded reload.
@@ -224,6 +231,7 @@ impl PdfView {
         self.textures.clear();
         self.failed.clear();
         self.layout = Default::default();
+        self.text = Default::default();
         self.jump = Some((self.page, PageEntry::Start));
     }
     /// End a failed reload while preserving its previous source and caches.
@@ -338,6 +346,23 @@ impl PdfView {
         let limit = ctx.input(|i| i.max_texture_side);
         let controls = self.toolbar(ui, palette, display);
         let mut page = controls.page;
+        let selectable =
+            self.source.format == pdf::Format::Pdf && matches!(display, Display::Document { .. });
+        if selectable {
+            let mut visible = vec![self.page];
+            visible.extend(
+                self.visible
+                    .iter()
+                    .copied()
+                    .filter(|page| *page != self.page),
+            );
+            if let Some(target) =
+                self.text
+                    .update(&self.source, &ctx, visible, keyboard && ui.is_enabled(), id)
+            {
+                page = Some(target);
+            }
+        }
         let mut entry = PageEntry::Start;
         let focused = keyboard
             && !self.reloading
@@ -369,7 +394,20 @@ impl PdfView {
         if self.continuous {
             self.continuous_ui(ui, &ctx, id, palette, focus, focused);
         } else {
-            let response = self.image.pdf_ui(ui, &ctx, id, palette, focus);
+            let loading = self.image.loading;
+            let mut overlay = |ui: &mut egui::Ui, rect, response: &egui::Response| {
+                if !loading {
+                    self.text.paint(ui, self.image_page, rect, response);
+                }
+            };
+            let response = self.image.pdf_ui(
+                ui,
+                &ctx,
+                id,
+                palette,
+                focus,
+                if selectable { Some(&mut overlay) } else { None },
+            );
             if keyboard && response.hovered && ctx.input(|i| i.modifiers.is_none()) {
                 ctx.input_mut(|i| i.smooth_scroll_delta.y = 0.);
                 let edge = (response.edge_scroll > 0. && response.at_start)
@@ -406,6 +444,7 @@ impl PdfView {
             self.navigate(page, entry, limit);
             ctx.request_repaint();
         }
+        self.text.end_frame(&ctx);
         Response {
             reload: controls.reload,
             page: self.next_page(limit),
@@ -501,12 +540,21 @@ impl PdfView {
             .clamp(0., (self.layout.total.y - viewport.y).max(0.));
         let mut scroller = egui::ScrollArea::both()
             .id_salt(("pdf-continuous", id))
-            .auto_shrink([false, false]);
+            .auto_shrink([false, false])
+            .scroll_source(egui::scroll_area::ScrollSource {
+                drag: self.source.format != pdf::Format::Pdf,
+                ..Default::default()
+            });
         if reposition {
             scroller = scroller.scroll_offset(self.offset).animated(false);
         }
-        let output = scroller.show_viewport(ui, |ui, visible| {
+        let mut output = scroller.show_viewport(ui, |ui, visible| {
             ui.set_min_size(self.layout.total);
+            let mut document_response = ui.interact(
+                ui.min_rect(),
+                image_view::ImageView::focus_id(id),
+                Sense::click(),
+            );
             self.visible.clear();
             let first = self.layout.page_at(visible.top()).saturating_sub(1);
             let last = (self.layout.page_at(visible.bottom()) + 1).min(self.source.pages - 1);
@@ -552,8 +600,18 @@ impl PdfView {
                         false
                     }
                 };
-                let response =
-                    ui.interact(rect, egui::Id::new(("pdf-page", id, page)), Sense::hover());
+                let response = ui.interact(
+                    rect,
+                    egui::Id::new(("pdf-page", id, page)),
+                    Sense::click_and_drag(),
+                );
+                if response.clicked() || response.drag_started() {
+                    ui.memory_mut(|m| m.request_focus(image_view::ImageView::focus_id(id)));
+                }
+                if self.source.format == pdf::Format::Pdf && ready {
+                    self.text.paint(ui, page, rect, &response);
+                }
+                document_response = document_response.union(response.clone());
                 if ready {
                     ui_probe::button(ui, &format!("pdf-page-ready:{page}"), &response);
                 } else {
@@ -570,14 +628,9 @@ impl PdfView {
                     );
                 }
             }
-            let response = ui.interact(
-                ui.min_rect(),
-                image_view::ImageView::focus_id(id),
-                Sense::click(),
-            );
-            ui_probe::button(ui, "pdf-document", &response);
-            if focus || response.clicked() {
-                response.request_focus();
+            ui_probe::button(ui, "pdf-document", &document_response);
+            if focus || document_response.clicked() {
+                ui.memory_mut(|m| m.request_focus(image_view::ImageView::focus_id(id)));
             }
             let selected = self.layout.page_at(visible.center().y) + 1;
             if self.page != selected {
@@ -587,6 +640,9 @@ impl PdfView {
             }
             self.wanted = selected;
         });
+        if self.source.format == pdf::Format::Pdf {
+            image_view::middle_pan(ui, ctx, &mut output);
+        }
         self.offset = output.state.offset;
         self.textures
             .retain(|(page, _)| self.visible.contains(page));

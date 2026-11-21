@@ -14,13 +14,6 @@ mod library;
 mod saved;
 mod ui;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Hash)]
-enum Page {
-    #[default]
-    Tunnels,
-    New,
-}
-
 enum Outcome {
     Listed(Vec<Info>),
     Route(Box<Profile>),
@@ -125,7 +118,6 @@ pub(super) struct Tunnels {
     saved_id: Option<String>,
     delete_saved: Option<String>,
     generation: Option<u64>,
-    page: Page,
     draft_epoch: u64,
     spec: Spec,
     available: Vec<Info>,
@@ -229,9 +221,7 @@ impl EditorApp {
                     self.tunnels.available = list;
                     self.tunnels.observation = Some(Ok(()));
                 }
-                Ok(Outcome::Route(profile))
-                    if self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels =>
-                {
+                Ok(Outcome::Route(profile)) if self.dialog == Dialog::Tunnels => {
                     self.connection_profiles.select(*profile, false);
                     self.set_dialog(Dialog::Connect);
                 }
@@ -248,7 +238,7 @@ impl EditorApp {
             self.tunnels.last = None;
             return;
         }
-        let manager = self.dialog == Dialog::Tunnels && self.tunnels.page == Page::Tunnels;
+        let manager = self.dialog == Dialog::Tunnels;
         let interval = Duration::from_secs(if manager { 2 } else { 15 });
         if self.tunnels.pending.is_none()
             && self.tunnels.background.is_none()
