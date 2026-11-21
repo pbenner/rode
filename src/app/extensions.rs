@@ -136,11 +136,11 @@ impl EditorApp {
                 self.host_tools.stop_monitor();
             }
             if self
-                .workbench
+                .tool_windows
                 .panel
                 .is_some_and(|panel| !self.panel_enabled(panel))
             {
-                self.workbench.panel = None;
+                self.tool_windows.panel = None;
             }
             for doc in &mut self.documents {
                 if doc

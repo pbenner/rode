@@ -174,7 +174,7 @@ Ink edges and tips use anti-aliasing sized to physical display pixels, and curve
 detail adapts to display scale so small and high-DPI icons stay smooth.
 Switching themes updates the icons in menus, toolbars and all editor windows.
 Custom variants can set `"artwork": "none"` and `"icons": "outline"` independently;
-see the [theme format](theme-format.md).
+see the [theme format](../themes/README.md).
 
 | Sumi-e Light | Sumi-e Dark |
 | --- | --- |

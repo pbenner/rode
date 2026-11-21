@@ -58,11 +58,11 @@ impl Area {
 
     /// One existing window owner for each detachable application area. Projects
     /// keeps its editor/tool hosts instead of duplicating the entire workspace.
-    pub fn tab(self) -> Option<workbench::ToolTab> {
+    pub fn tab(self) -> Option<tool_windows::ToolTab> {
         match self {
             Self::Projects => None,
-            Self::Connections | Self::Settings => Some(workbench::ToolTab::Area(self)),
-            _ => self.panel().map(workbench::ToolTab::Panel),
+            Self::Connections | Self::Settings => Some(tool_windows::ToolTab::Area(self)),
+            _ => self.panel().map(tool_windows::ToolTab::Panel),
         }
     }
 
@@ -216,15 +216,15 @@ impl EditorApp {
             self.initialize_host_tool(panel);
         }
         if area == Area::Projects {
-            let pane = match self.workbench.surface {
-                workbench::Surface::Terminal => navigation::Pane::Terminal,
-                workbench::Surface::Tools if self.workbench.panel.is_some() => {
+            let pane = match self.tool_windows.surface {
+                tool_windows::Surface::Terminal => navigation::Pane::Terminal,
+                tool_windows::Surface::Tools if self.tool_windows.panel.is_some() => {
                     navigation::Pane::Tools
                 }
                 _ => navigation::Pane::Editor,
             };
             self.focus_pane(pane, ctx);
-            if self.workbench.panel == Some(Panel::Agent) {
+            if self.tool_windows.panel == Some(Panel::Agent) {
                 self.agents.focus = true;
             }
         } else {

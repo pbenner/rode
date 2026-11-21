@@ -44,6 +44,8 @@ On 2026-11-08, the Linux x86_64 release executable with embedded russh measured 
 
 Launch `rode /path/to/project`, open a file directly with `rode /path/to/file`, or use **File → Open project folder**. Use **Ctrl+P** to open another file by path and **Ctrl+S** to save. **Ctrl+Shift+P** opens the command palette.
 
-Use **New** in the terminal header for multiple native shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). Enable **Persist** for shells that should survive exit; new shells default to ending when their last view closes.
+Open **Project tools** in the main header to select Chat, Terminal, Git, Problems, Tasks or Settings. Close it with the same button, or open a file in Explorer, to return to the editor. Application-level Connections, System monitor and File transfers are in the left activity bar. Optional extensions hide their controls when disabled; see [workspace layout](editing.md#workspace-layout).
+
+Use **New terminal** in the terminal header for multiple native shells; **Sessions** reattaches them and shows [Slurm allocations](slurm.md). Enable **Persist** for shells that should survive exit; new shells default to ending when their last view closes.
 
 For remote files, use [SSH connections](remote.md). For isolation, see [sandbox access](sandbox.md). Configuration paths and detailed theme settings are documented under [Themes](themes.md).

@@ -117,7 +117,7 @@ impl EditorApp {
             && (self.workspace.is_some()
                 || !self.documents.is_empty()
                 || self.tool_surface()
-                || workbench::ToolTab::ALL
+                || tool_windows::ToolTab::ALL
                     .into_iter()
                     .any(|tab| self.tab_detached(tab)));
         egui::TopBottomPanel::top("titlebar")

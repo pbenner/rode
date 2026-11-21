@@ -62,6 +62,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
 | `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
 | `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
+| `src/app/tool_windows.rs`, `src/app/tool_windows/` | Application-owned tool navigation and native-window registry, project/global presentation hosts and docking regressions; independent of project resets |
 | `src/keyboard.rs`, `src/keyboard/` | Window-local control metadata, native focus handoffs, hints/search and button-only focus groups |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
@@ -172,7 +173,7 @@ transports, which retain their own codecs.
 
 The choices below explain the current implementation. Module-level rustdoc records ownership and local constraints; the main service modules also include **Design decisions** sections beside the code they constrain. The sections below describe consequences as well as benefits; they are not a list of proposed features.
 
-Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and connection banners belong in `app/frame.rs`, file/decode dispatch in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Project-tool background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Git operation admission lives in `workbench/git/controller.rs`; `workbench/git/jobs.rs` connects admitted operations and completion effects to the captured project workers. Git rendering consumes cached state and invokes those same operations for buttons, confirmations and credential retries. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules and retain their existing Rust module/test paths.
+Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and connection banners belong in `app/frame.rs`, file/decode dispatch in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Project-tool background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Git operation admission lives in `workbench/git/controller.rs`; `workbench/git/jobs.rs` connects admitted operations and completion effects to the captured project workers. Git rendering consumes cached state and invokes those same operations for buttons, confirmations and credential retries. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules under the domain that owns the behavior.
 
 ### Theme composition
 
@@ -223,13 +224,20 @@ Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, follow
 The Rust/egui application keeps the editor independent of an embedded browser application runtime. Cached layouts, virtualized rows and explicit worker jobs keep slow I/O and tool execution out of ordinary input/rendering. On-demand activation limits idle work, at the cost of waiting for a tool or preview's first result. This choice does not by itself establish a performance claim: measure relevant release workloads when changing those boundaries. Rationale lives in `src/lib.rs` and `src/app.rs`.
 
 `areas::Area` selects the main window's application surface without changing the
-project's selected `workbench::Surface` or controllers. The Project tools toggle
+project's selected `tool_windows::Surface` or controllers. `tool_windows::State`
+owns panel selection, remembered navigation, visibility and detached hosts for
+the application lifetime. `Workbench` owns project settings and caches; resetting
+it never reconstructs or manually preserves window fields. The Project tools toggle
 in the main header reveals the full-width tool view. Its wrapping tab bar uses
 the `ToolTab` registry and scope classification and occupies space only while
 tools are docked and open; detached tool hosts omit editor controls;
 Environment is a category of Project settings, with its own retained draft;
 secondary editor/tool windows keep their existing owners. Application navigation
 is presentation state, not execution authority.
+
+Panel selection and detachment use `refresh_project_panel` for the same Git and
+environment refresh rules. Settings drafts remain with the project owner, so
+moving a view neither copies a draft nor applies it to running work.
 
 The main header reserves its fixed actions before measuring the menus/search
 region. Project tab rendering, sizing and fallback selection use the same ordered
@@ -850,18 +858,18 @@ The internal entry points below are included by `--document-private-items`. Thei
 
 | Operation | Entry points and completion path | Contract to preserve |
 | --- | --- | --- |
-| Open a document | `app/workers.rs`: `open_file` → `dispatch` → `poll` | Capture the selected host and actual plan before reading; a late reply cannot bind a tab to another workspace. |
+| Open a document | `app/workers.rs`: `open_file` → `dispatch` → `poll`; `workers/inbox.rs`: `Inbox`; `workers/completions.rs`: `file_completed` | Capture the selected host and actual plan before reading; a late reply cannot bind a tab to another workspace. |
 | Render/edit the active document | `app/editor_view.rs`: `editor`, `find_bar`; `app/navigation/editing.rs` | Specialized views delegate to their owner. Source changes retain native undo/cursor state and advance the document version; find byte ranges become character selections only at the UI boundary. |
-| Save or format | `app.rs`: `save_document`; `workbench/code_tools.rs`: `save_with_tools`, `analyze_document`; `workbench.rs`: `handle_tool` | `false` from `save_with_tools` delegates to ordinary saving. Analysis accepts only its submitted source/version/epoch. Save acknowledgement advances the saved baseline, preserving newer typing. |
+| Save or format | `app.rs`: `save_document`; `workbench/code_tools.rs`: `save_with_tools`, `analyze_document`; `workbench/jobs.rs`: `handle_tool` | `false` from `save_with_tools` delegates to ordinary saving. Analysis accepts only its submitted source/version/epoch. Save acknowledgement advances the saved baseline, preserving newer typing. |
 | Run a notebook | `notebook_view.rs`: `run_notebook`, `poll_notebooks`, `View::sync`; `notebook/kernel.rs` and `runtime.rs` | Parsing/viewing does not start execution. Outputs bind to captured cell/source versions. Accepted structured edits serialize through the document's normal save path. |
 | Stop a notebook | `notebook_view/shutdowns.rs`: `Shutdowns::stop`, `poll`; `sessions/runtimes/ending.rs`: `Queue` | Stopping or removing a tab does not discard cleanup ownership. Confirmed termination retains its original host even if discovery or the project view changes. |
 | Submit queued chat | `app/agents/queue.rs`: `Queue`; `app/agents.rs`: `flush_queue`, `poll_agents`; `rode-agent-core::queue`; `rode-session/src/agents.rs` | UI edits transfer once accepted by the bounded transport. The native controller owns scheduling and attachment payloads after detachment. A failed command must remain visible and retryable. |
 | Attach a running job | `app/agents/background.rs`, `app/sessions/runtimes.rs`; the host stores' `find`/`attach` methods | Discovery does not create computation. ID and original policy must match; only one controlling agent/runtime attachment is accepted. Terminal views have their separate shared-PTY contract. |
 | Change interpreter/settings | `workbench/python.rs`: `python_environment_picker`; `workbench/settings.rs`; `Workbench::invalidate_tools` | Applied settings and form drafts are distinct. New jobs capture accepted settings; existing processes retain their environment unless an explicit supported operation changes it. |
-| Refresh telemetry | `EditorApp::workbench_tick` → `host_tools::dispatch_host_monitor` → `poll_host_tools` → `monitoring::State::record` → `monitoring/dashboard.rs` | Rendering uses cached successful samples. Rate baselines use successful sample times, not failed-request scheduling times. Missing measurements remain gaps. |
+| Refresh telemetry | `EditorApp::monitor_tick` → `host_tools::dispatch_host_monitor` → `poll_host_tools` → `complete_host_monitor` → `monitoring::State::record` → `monitoring/dashboard.rs` | Collection is independent of project-tool readiness. Rendering uses cached successful samples. Rate baselines use successful sample times, not failed-request scheduling times. Missing measurements remain gaps. |
 | Navigate debugger source | `app/debugging/navigation.rs`: `Target`, `resolve_debug_source`; `debugging::State::source_version` | A source jump belongs to a stopped inspection epoch and the original host. Resume, changed source or a failed read cannot trigger a stale jump or local fallback. |
 | Change appearance | `app/appearance.rs`: `select_theme`, `select_syntax_theme`, `persist_theme_choice`, `set_ui_scale` | Applying appearance is immediate; saving is a separate queued preference edit. Interface scale, editor font size and syntax selection are independent. |
-| Close or lock | `app/lifecycle.rs`: `handle_close_request`; `app.rs`: `guarded`; `sessions.rs`: `quit_terminals`; `vaults.rs`: `lock_encrypted`, `poll_vaults` | Native close and menu Quit share guards. A queued lifetime mutation or unmount request is not completed cleanup. Failed cleanup keeps the window and truthful mount state available. |
+| Close or lock | `app/lifecycle.rs`: `handle_close_request`, `exit_readiness`, `advance_exit`; `app/transitions.rs`: `guarded`; `lifecycle/exit.rs`: `Exit`; `vaults.rs`: `lock_encrypted`, `poll_vaults` | Native close and menu Quit share guards. Domain owners retain pending cleanup while the exit controller waits for acknowledgements. Failed cleanup keeps the window and truthful mount state available. |
 
 ### Units, identities and absence
 

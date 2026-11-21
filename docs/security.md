@@ -162,7 +162,7 @@ runtime-directory path after capture. The log redirection regression failed
 before the fix and passes after it.
 
 Implementation: `crates/rode-host-core/src/locking.rs`, `persistence.rs`,
-`crates/rode-session/src/lib.rs` and `control_tests.rs`. These checks protect
+`crates/rode-session/src/control.rs` and `control_tests.rs`. These checks protect
 runtime artifacts; they do not isolate unrestricted processes with the same UID.
 
 ### Unauthenticated control connections could create unbounded workers
@@ -185,7 +185,7 @@ same still-running terminal. It failed against the previous implementation and
 passes with admission control. This bounds unauthenticated worker growth; it
 does not promise availability against a sustained connection flood.
 
-Implementation: `crates/rode-session/src/lib.rs`. Regression:
+Implementation: `crates/rode-session/src/control.rs`. Regression:
 `tests/sessions.rs::unauthenticated_connections_are_bounded_without_ending_retained_work`.
 
 ### Vendored SSH adapters retained an affected RSA prerelease

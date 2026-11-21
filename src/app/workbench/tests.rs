@@ -108,7 +108,7 @@ fn panel_text(app: &mut EditorApp, ctx: &egui::Context) -> String {
             ..Default::default()
         },
         |ctx| {
-            app.workbench.surface = Surface::Tools;
+            app.tool_windows.surface = Surface::Tools;
             app.workspace_content(ctx);
         },
     )
@@ -277,7 +277,7 @@ fn opening_a_non_python_project_does_not_probe_python_and_disable_invalidates_to
     assert!(cancel.load(Ordering::Acquire));
     assert!(app.workbench.epoch > epoch);
     app.toggle_panel(Panel::Monitor, &ctx);
-    assert_ne!(app.workbench.panel, Some(Panel::Monitor));
+    assert_ne!(app.tool_windows.panel, Some(Panel::Monitor));
     assert_eq!(app.documents[0].text, "keep dirty");
     assert!(app.documents[0].dirty());
     app.set_extension(Feature::Python.id(), false);
@@ -452,7 +452,7 @@ fn remote_monitor_waits_for_authentication_before_sampling() {
         plan: Default::default(),
         sandbox_options: Default::default(),
     }));
-    app.workbench.panel = Some(Panel::Monitor);
+    app.tool_windows.panel = Some(Panel::Monitor);
     app.host_tools.monitoring.set_active(true);
     assert!(!app.monitor_host_ready());
     app.monitor_tick(&ctx);
@@ -882,8 +882,8 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
 fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
-    app.workbench.surface = Surface::Tools;
-    app.workbench.panel = Some(Panel::Settings);
+    app.tool_windows.surface = Surface::Tools;
+    app.tool_windows.panel = Some(Panel::Settings);
     app.workbench.draft.ruff = "/unfinished/ruff".into();
     for category in [
         SettingsSection::Latex,
@@ -892,8 +892,8 @@ fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits(
     ] {
         app.reveal_settings(category, &ctx);
         assert_eq!(app.workbench.settings_section, category);
-        assert_eq!(app.workbench.panel, Some(Panel::Settings));
-        assert_eq!(app.workbench.surface, Surface::Tools);
+        assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
+        assert_eq!(app.tool_windows.surface, Surface::Tools);
         assert_eq!(app.workbench.draft.ruff, "/unfinished/ruff");
     }
 }

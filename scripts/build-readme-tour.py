@@ -58,10 +58,10 @@ def main():
         frames = []
         chapters = max(scene[2] for scene in SCENES)
         for index, (name, seconds, chapter, title, subtitle, note) in enumerate(SCENES):
-            if name == "03-sandbox" and metadata.get("sandbox_backend") in ("bwrap", "landlock"):
+            if name == "05-sandbox" and metadata.get("sandbox_backend") in ("bwrap", "landlock"):
                 backend = "Landlock" if metadata["sandbox_backend"] == "landlock" else "bubblewrap"
                 note = f"Actual {backend} sandbox | explicit filesystem grants"
-            elif name == "03-sandbox" and metadata["sandbox_backend"] == "none":
+            elif name == "05-sandbox" and metadata["sandbox_backend"] == "none":
                 title = "Configure project access."
                 note = "Sandbox setup controls | normal mode shown; enforcement disabled for this capture"
             filters = ["pad=1380:1040:0:100:color=0x101010"]
@@ -124,7 +124,7 @@ def main():
             *source,
             "-filter_complex",
             "scale=960:-2:flags=lanczos,split[a][b];"
-            "[a]palettegen=max_colors=256:stats_mode=full[p];"
+            "[a]palettegen=max_colors=128:stats_mode=full[p];"
             "[b][p]paletteuse=dither=none:diff_mode=rectangle",
             "-t",
             duration,

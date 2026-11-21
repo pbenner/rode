@@ -81,7 +81,7 @@ Operations use the prepared project's actual filesystem policy. Mutation control
 - Literal find/replace, case-sensitive or Unicode-aware case-insensitive matching
 - [Multiple persistent PTY terminals](terminals.md) with reattachment, shared views, ANSI colors, resizing, scrollback, bracketed paste, shell control keys, and a copy-output button
 - Command palette, separate editor font size and interface scale, and persistent configurable themes
-- Optional local/remote bubblewrap project mode with explicit normal-mode fallback
+- Optional local/remote bubblewrap or Landlock project isolation with visible normal-mode fallback
 - Configurable sandbox access table, Git source control/worktrees, project environments and tasks, Ruff diagnostics/formatting, and on-demand system/GPU monitoring
 
 Open File, Open as hex, and Save As share the project-folder browser's directory rows. Double-click a folder to enter it, or select it and press Right/Enter; the **Up** button returns to its parent. Select a file and choose Open, or double-click it. Arrow keys navigate results, and Tab moves between controls. The filename field also filters the current listing and known files in expanded folders/open tabs; exact paths still work. Save As lets you enter a new name. File browsing runs on the displayed local/SSH host under the active project's sandbox rules.
@@ -144,7 +144,9 @@ Choose a percentage in **View → Interface scale** to resize the entire GUI, in
 Source text defaults to **15 pt**. Saved text sizes are retained; use the existing
 **Editor font size** control or **Ctrl+Plus / Ctrl+Minus** to adjust them.
 
-The left rail contains application areas: **Projects**, **Connections**, **Monitor**, **Transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Global areas use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
+## Workspace layout
+
+The left rail contains application areas: **Projects**, **Connections**, **System monitor**, **File transfers**, and **Stocks**. **App settings**, **Extensions**, and keyboard help sit at the bottom. Disabled extensions hide their entries. Global areas use the main content space without duplicating project tools. Returning to **Projects** restores its selected view, unsaved files, chat draft and running shell.
 
 Within Projects, the main header has an Explorer toggle and a **Project tools** button. The editor is the default view. Open **Project tools** to show **Chat**, **Terminal**, **Git**, **Problems**, **Tasks**, **Settings**, and **Debugger** when its extension is enabled. Every enabled project tool has a direct tab in that view; the tool bar wraps on narrow windows. The tool bar disappears when tools are closed or detached, giving the space back to the editor. **Settings → Environment** contains runtime paths, project variables and Python environments. Right-click a tool tab to open it in a separate window.
 

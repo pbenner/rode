@@ -483,7 +483,7 @@ impl EditorApp {
                 let restore = (self.navigation.active != navigation::Pane::Terminal)
                     .then_some(self.navigation.active);
                 let restore_composer = restore == Some(navigation::Pane::Tools)
-                    && self.workbench.panel == Some(Panel::Agent)
+                    && self.tool_windows.panel == Some(Panel::Agent)
                     && ctx.memory(|memory| memory.has_focus(egui::Id::new("agent-composer")));
                 self.attach_info(info.clone(), ctx);
                 if let Some(error) = self.sessions.finish_creation(&info) {

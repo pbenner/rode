@@ -820,7 +820,7 @@ impl EditorApp {
         if !self.feature(crate::extensions::Feature::Git) {
             self.workbench.git.clear_auth();
         }
-        if ctx.viewport_id() != self.tool_viewport(workspace::ToolTab::Panel(Panel::Git)) {
+        if ctx.viewport_id() != self.tool_viewport(ToolTab::Panel(Panel::Git)) {
             return;
         }
         let palette = self.themes.active().palette;

@@ -12,14 +12,12 @@ mod jobs;
 mod python;
 mod sandbox_access;
 mod settings;
-mod workspace;
 use super::*;
 use crate::project::{self, Diagnostic};
 pub(super) use sandbox_access::{options_ui as sandbox_options_ui, rules_ui as sandbox_rules_ui};
 use serde::{Deserialize, Serialize};
 pub(super) use settings::SettingsSection;
 use std::collections::BTreeMap;
-pub(super) use workspace::{Surface, ToolTab};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 /// Tool-view identity used by tabs, commands and feature gates; it carries no running job.
@@ -206,16 +204,10 @@ struct Diff {
 }
 
 #[derive(Default)]
-/// Window-owned tool state with a persisted settings map and a separate editable draft.
-/// Runtime epochs invalidate pending format/check results without rewriting source.
+/// Project-owned tool caches with a persisted settings map and a separate editable draft.
+/// Runtime epochs invalidate pending format/check results without rewriting source;
+/// application navigation and tool-window placement have their own lifetime.
 pub(super) struct Workbench {
-    pub panel: Option<Panel>,
-    pub surface: Surface,
-    pub detached: bool,
-    pub tools_hidden: bool,
-    /// Tabs hosted in their own native windows, independent of the whole sidebar.
-    floating_tabs: Vec<workspace::ToolTab>,
-    last_tool: Option<workspace::ToolTab>,
     preferences: BTreeMap<String, Preferences>,
     pub preferences_pending: bool,
     key: String,
@@ -328,25 +320,14 @@ impl Workbench {
             storage.set_string("project_preferences", text);
         }
     }
-    /// Discard project runtime caches while retaining saved preferences and workspace-view choices.
+    /// Discard project runtime caches while retaining saved preferences and pending writes.
+    /// Tool-window placement has a separate application owner and is untouched.
     pub(super) fn reset_project(&mut self) {
         let preferences = std::mem::take(&mut self.preferences);
         let pending = self.preferences_pending;
-        let panel = self.panel;
-        let surface = self.surface;
-        let detached = self.detached;
-        let tools_hidden = self.tools_hidden;
-        let last_tool = self.last_tool;
-        let floating_tabs = std::mem::take(&mut self.floating_tabs);
         *self = Self {
             preferences,
             preferences_pending: pending,
-            panel,
-            surface,
-            detached,
-            tools_hidden,
-            last_tool,
-            floating_tabs,
             ..Default::default()
         };
     }
@@ -382,7 +363,7 @@ impl EditorApp {
     /// Render the active enabled tool view after checking host/project readiness.
     /// Monitoring needs only a connected host; project tools need a prepared project.
     pub(in crate::app) fn workbench_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let Some(panel) = self.workbench.panel else {
+        let Some(panel) = self.tool_windows.panel else {
             return;
         };
         self.panel_content(panel, ui, ctx);
@@ -495,10 +476,28 @@ impl EditorApp {
         self.areas.active = areas::Area::Projects;
         if self.tab_detached(ToolTab::Panel(panel)) {
             self.focus_tool_tab(ToolTab::Panel(panel), ctx);
-        } else if self.workbench.panel == Some(panel) && self.workbench.surface == Surface::Tools {
+        } else if self.tool_windows.panel == Some(panel)
+            && self.tool_windows.surface == Surface::Tools
+        {
             self.focus_pane(navigation::Pane::Tools, ctx);
         } else {
             self.toggle_panel(panel, ctx);
+        }
+    }
+
+    /// Use the same domain refresh on selection and detachment. A settings draft
+    /// remains project-owned; moving its view never copies or reapplies it.
+    pub(in crate::app) fn refresh_project_panel(&mut self, panel: Panel, ctx: &egui::Context) {
+        match panel {
+            Panel::Git => self.refresh_git(ctx),
+            Panel::Tasks | Panel::Settings
+                if panel == Panel::Tasks
+                    || self.workbench.settings_section == SettingsSection::Environment =>
+            {
+                self.refresh_environment(false, ctx);
+                self.refresh_runtimes(ctx);
+            }
+            _ => {}
         }
     }
 
@@ -518,44 +517,36 @@ impl EditorApp {
         }
         let from_project = self.areas.active == areas::Area::Projects;
         self.areas.active = areas::Area::Projects;
-        self.workbench.last_tool = Some(workspace::ToolTab::Panel(panel));
-        if self.tab_detached(workspace::ToolTab::Panel(panel)) {
-            self.focus_tool_tab(workspace::ToolTab::Panel(panel), ctx);
+        self.tool_windows.last_tool = Some(ToolTab::Panel(panel));
+        if self.tab_detached(ToolTab::Panel(panel)) {
+            self.focus_tool_tab(ToolTab::Panel(panel), ctx);
             return;
         }
-        if self.workbench.detached
-            && self.workbench.panel == Some(panel)
-            && self.workbench.surface == Surface::Tools
+        if self.tool_windows.detached
+            && self.tool_windows.panel == Some(panel)
+            && self.tool_windows.surface == Surface::Tools
         {
-            self.workbench.tools_hidden = false;
+            self.tool_windows.tools_hidden = false;
             ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
             return;
         }
-        self.workbench.panel = if from_project
-            && self.workbench.panel == Some(panel)
-            && self.workbench.surface == Surface::Tools
+        self.tool_windows.panel = if from_project
+            && self.tool_windows.panel == Some(panel)
+            && self.tool_windows.surface == Surface::Tools
         {
             None
         } else {
             Some(panel)
         };
-        if panel == Panel::Git && self.workbench.panel.is_some() {
-            self.refresh_git(ctx);
+        if self.tool_windows.panel.is_some() {
+            self.refresh_project_panel(panel, ctx);
         }
-        if self.workbench.panel.is_some()
-            && (panel == Panel::Tasks
-                || panel == Panel::Settings
-                    && self.workbench.settings_section == SettingsSection::Environment)
-        {
-            self.refresh_environment(false, ctx);
-            self.refresh_runtimes(ctx);
-        }
-        if panel == Panel::Agent && self.workbench.panel.is_some() {
+        if panel == Panel::Agent && self.tool_windows.panel.is_some() {
             self.agents.focus = true;
         }
         self.focus_pane(
-            if self.workbench.panel.is_some() {
+            if self.tool_windows.panel.is_some() {
                 navigation::Pane::Tools
             } else {
                 navigation::Pane::Editor

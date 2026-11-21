@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from contextlib import contextmanager
@@ -184,7 +185,56 @@ def main():
         # Remote enforcement is required unless normal mode was explicitly selected.
         preferences = Path(environment["XDG_DATA_HOME"]) / "rode/app.ron"
         preferences.parent.mkdir(parents=True, exist_ok=True)
-        preferences.write_text(json.dumps({"sandbox_defaults": json.dumps({"enabled": False})}))
+        preferences.write_text(
+            json.dumps(
+                {
+                    "sandbox_defaults": json.dumps({"enabled": False}),
+                    "tunnel_profiles": json.dumps(
+                        {
+                            identifier: {
+                                "host": {"kind": "local", "hostname": socket.gethostname()},
+                                "spec": {
+                                    "name": label,
+                                    "relay_host": "relay.example.invalid",
+                                    "relay_user": "researcher",
+                                },
+                            }
+                            for identifier, label in (
+                                ("compute-return", "Compute node return"),
+                                ("lab-access", "Lab workstation access"),
+                            )
+                        }
+                    ),
+                }
+            )
+        )
+        # Populate the application-wide library without contacting these demo hosts.
+        connections = Path(environment["XDG_CONFIG_HOME"]) / "rode/connections.json"
+        connections.parent.mkdir(parents=True, exist_ok=True)
+        connections.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "Research cluster",
+                        "host": "compute.example.invalid",
+                        "user": "researcher",
+                        "root": "/work/signal-lab",
+                    },
+                    {
+                        "name": "Lab workstation",
+                        "host": "lab.example.invalid",
+                        "user": "scientist",
+                        "root": "/home/scientist/signal-lab",
+                    },
+                    {
+                        "name": "Experiment archive",
+                        "host": "archive.example.invalid",
+                        "user": "analyst",
+                        "root": "/srv/experiments",
+                    },
+                ]
+            )
+        )
 
         def capture(native, name):
             """Capture an acknowledged native scene with its pointer outside the content."""
@@ -250,7 +300,24 @@ def main():
                 native.open_file("README.md")
                 native.open_file("analysis.py")
                 native.control("git-change-modified:4")
+                native.control("workspace-sidebar-closed")
+                native.absent("workspace-tab:Chat")
+                native.absent("workspace-code")
                 capture(native, "01-editor")
+                native.click("workspace-tab:Git")
+                native.control("workbench-panel:SOURCE CONTROL")
+                native.control("git-stage-all")
+                native.control("workspace-detach")
+                native.control("workspace-detach-tab:Git")
+                native.control("workspace-sidebar-open")
+                capture(native, "02-project-tools")
+                native.click("activity:Connections")
+                native.control("saved-connection-0")
+                native.control("tunnel-saved-load:compute-return")
+                native.absent("workspace-sidebar")
+                assert native.layout()["project"]["root"] == str(project)
+                capture(native, "03-connections")
+                native.click("activity:Projects")
                 native.command("Terminal: New terminal")
                 wait_for(lambda: len(sessions()) == 1, "Demo terminal did not start")
                 native.terminal_input()
@@ -260,12 +327,12 @@ def main():
                     "Terminal command did not finish",
                 )
                 native.button_fill(
-                    "terminal-persist:off", "terminal-new-menu", "04-persist-off.png", filled=False
+                    "terminal-persist:off", "terminal-new-menu", "06-persist-off.png", filled=False
                 )
                 native.click("terminal-persist:off")
                 wait_for(lambda: sessions()[0]["persistent"], "Persistence was not enabled")
                 native.button_fill(
-                    "terminal-persist:on", "terminal-new-menu", "04-persist-on.png", filled=True
+                    "terminal-persist:on", "terminal-new-menu", "06-persist-on.png", filled=True
                 )
                 native.click("terminal-persist:on")
                 wait_for(lambda: not sessions()[0]["persistent"], "Persistence was not disabled")
@@ -298,16 +365,16 @@ def main():
                     return any("image/png" in output.get("data", {}) for output in outputs)
 
                 wait_for(plot_saved, "The real notebook kernel did not return a plot", timeout=45)
-                capture(native, "05-notebook")
+                capture(native, "07-notebook")
                 native.command("Agent: Chat")
                 native.click("agent-provider-menu")
                 native.control("agent-provider-Claude")
-                capture(native, "06-agents")
+                capture(native, "08-agents")
                 ui.key("Escape")
                 native.absent("agent-provider-Claude")
                 native.command("Terminal: Allocate Slurm resources")
                 native.control("menu-file", enabled=False)
-                capture(native, "07-slurm")
+                capture(native, "09-slurm")
                 assert not (base / "slurm-state/job.json").exists(), (
                     "Demo requested a scheduler allocation"
                 )
@@ -315,7 +382,7 @@ def main():
                 native.open_file("analysis.py")
                 native.click("git-change-modified:4")
                 native.control("git-peek-diff")
-                capture(native, "08-git")
+                capture(native, "10-git")
                 native.click("git-peek-close")
                 native.click("source-editor")
                 ui.key("Home", ("Control_L",))
@@ -330,7 +397,7 @@ def main():
                         f"Theme selection was not saved: {theme_id}",
                     )
                     native.control("source-editor")
-                    capture(native, f"09-theme-{theme_id}")
+                    capture(native, f"11-theme-{theme_id}")
         finally:
             # Only this fixture's private service and its owned terminals.
             for session in sessions():
@@ -396,11 +463,11 @@ def main():
             )
             native.open_file("analysis.py")
             native.control("source-editor", focused=True)
-            capture(native, "02-ssh")
+            capture(native, "04-ssh")
             native.command("Project: Settings and sandbox access")
             native.click("settings-category-Sandbox")
             native.control("settings-save")
-            capture(native, "03-sandbox")
+            capture(native, "05-sandbox")
 
         manifest = {
             "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -408,6 +475,11 @@ def main():
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip(),
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+            "recorder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "scenes_sha256": hashlib.sha256(
+                (ROOT / "scripts/readme_tour.py").read_bytes()
+            ).hexdigest(),
             "sandbox_backend": options.sandbox_backend,
             "themes": [theme_id for theme_id, _, _ in THEMES],
             "captures": {},

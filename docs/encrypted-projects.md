@@ -13,7 +13,7 @@ Cancelling an unlock lets the host operation finish and performs normal cleanup;
 
 After opening, the explorer, Git, terminals, agents, language tools, notebooks and previews use the decrypted project root. **ENCRYPTED PROJECT · UNLOCKED** stays visible. The optional sandbox is prepared around this root; mount management itself runs on the host outside that sandbox. The backing store is not added as a project grant.
 
-Existing gocryptfs forward-mode storage using its standard `gocryptfs.conf` is supported. A blank password can reuse a mount already unlocked by RODE under the same host account. RODE verifies the mount's filesystem type and unique identity before accepting it; an ordinary directory or a tool merely exiting successfully is insufficient. There is no plaintext fallback when encryption cannot start. Encryption remains active when optional bubblewrap falls back to normal mode.
+Existing gocryptfs forward-mode storage using its standard `gocryptfs.conf` is supported. A blank password can reuse a mount already unlocked by RODE under the same host account. RODE verifies the mount's filesystem type and unique identity before accepting it; an ordinary directory or a tool merely exiting successfully is insufficient. There is no plaintext fallback when encryption cannot start. Encryption remains active if the optional project sandbox is unavailable and the workspace uses normal mode.
 
 ## Lock and exit
 

@@ -624,14 +624,17 @@ mod tests {
         app.prepare_environment_draft();
         app.workbench.environment.variables = "MODE=unsaved".into();
         app.execute_command(Command::Environment, &ctx);
-        assert_eq!(app.workbench.panel, Some(Panel::Settings));
+        assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
         assert_eq!(app.workbench.settings_section, SettingsSection::Environment);
         app.reveal_settings(SettingsSection::CodeTools, &ctx);
         app.reveal_settings(SettingsSection::Environment, &ctx);
         assert_eq!(app.workbench.environment.variables, "MODE=unsaved");
         app.detach_tab(ToolTab::Panel(Panel::Settings), &ctx);
         assert_eq!(
-            app.workbench.floating_tabs,
+            ToolTab::ALL
+                .into_iter()
+                .filter(|tab| app.tab_detached(*tab))
+                .collect::<Vec<_>>(),
             [ToolTab::Panel(Panel::Settings)]
         );
         assert!(app.environment_visible());

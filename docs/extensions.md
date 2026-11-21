@@ -29,7 +29,7 @@ The **File transfers** module adds local/remote browsing and a background copy
 queue while SSH is connected. Its browsers do not change the open project. See
 [File transfers](remote.md#file-transfers) for navigation, collision choices and
 the captured filesystem policy. Disabling it cancels queued/running transfers and
-hides its tab, palette command, connection-banner and Explorer entry points.
+hides its application view, palette command, connection-banner and Explorer entry points.
 
 ## Project bookmarks
 
@@ -63,9 +63,10 @@ project preparation has finished.
 ## Stocks
 
 The bundled **Stocks** extension (`rode.stocks`) adds a native market viewer. Open
-it from the rising-chart icon in the activity bar, **View → Stocks**, or the
+it from the rising-chart icon in the activity bar, **View → Workspace panels → Stocks**, or the
 command palette: **Stocks: Market charts and watchlist**. It works without an
-open project and can use the existing **Detach tab** control for its own window.
+open project. Right-click its activity icon and choose **Open in separate window**
+to detach it; **Reattach** or closing that window returns it to the main window.
 Enable or disable it in the extension manager.
 
 - Search by company name or ticker, then select a result. **Open ticker** opens

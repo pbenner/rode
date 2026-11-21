@@ -8,18 +8,18 @@ A lightweight native Rust code editor for local and SSH projects, with persisten
 - **[Project sandbox with explicit user controls](docs/sandbox.md).** Choose bubblewrap or rootless Landlock locally or over SSH. Editor I/O, agents and code tools use the project policy. User-operated Git defaults outside it; Git and interactive terminals have separate, visible sandbox controls. The backends have different isolation limits; unavailable enforcement is clearly labelled normal mode.
 - **[Coding agents on the project host](docs/agents.md).** Use Codex, Claude Code / Anthropic, local models through Ollama, or ACP agents. Read Markdown replies with native LaTeX maths, browse saved conversations and control model, reasoning and tool permissions. Approvals cannot widen the active project sandbox.
 - **[Slurm CPU/GPU allocations](docs/slurm.md).** Request resources for interactive shells, notebook kernels and debuggers. Run on compute nodes through the existing SSH connection, with persistent reservations for longer work.
-- **Scientific and technical workspace.** Run [Jupyter notebooks](docs/notebooks.md), preview [Markdown](docs/markdown.md), build [LaTeX](docs/latex.md), and prepare [Marp slides](docs/marp.md). Inspect [images](docs/images.md), [PDFs](docs/pdf.md) and [binaries with hex editing and analysis](docs/binary.md) in the editor.
+- **Scientific and technical workspace.** Run [Jupyter notebooks](docs/notebooks.md), preview [Markdown](docs/markdown.md), build [LaTeX](docs/latex.md), and prepare [Marp slides](docs/marp.md). Read [PDFs](docs/pdf.md), [PowerPoint](docs/powerpoint.md) and [Word](docs/word.md) documents, view [images](docs/images.md), and inspect [binaries with hex editing and analysis](docs/binary.md) in the editor.
 - **[Encrypted local and remote projects](docs/encrypted-projects.md).** Open gocryptfs storage as a normal project; locking requires active project jobs to stop.
 
 Also included:
 
-- [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md), including Carbon Edge’s charcoal and amber cut-corner frames, Afterglow’s magenta and cyan accents, and Knight Rider’s black-and-red cockpit palette.
+- [Standard, Emacs and Vim editing / pane shortcuts](docs/editing.md#keyboard-pane-navigation), plus [independent interface and syntax themes](docs/themes.md), including Atelier's light/dark pair, Sumi-e and Samurai artwork, and SynthWave ’84.
 - [Multi-language highlighting and tools](docs/languages.md), [Git branches/worktrees, project environments and tasks](docs/project-tools.md), [Python/native debugging](docs/debugger.md), and [extensions](docs/extensions.md).
 - On-demand [CPU/GPU host monitoring](docs/project-tools.md#host-monitor).
 
-[![RODE feature tour: native editing, SSH, persistent terminals, notebooks, agents, Slurm, inline Git previews and selected light, dark and artistic themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
+[![RODE feature tour: streamlined project tools and application navigation, native editing, SSH, notebooks, agents and selected light, dark and artistic themes](assets/rode-tour.gif)](assets/rode-tour.mp4)
 
-40-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Includes **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native UI captures use demo data, a real notebook kernel and loopback SSH in normal mode; agent, Slurm and sandbox scenes show setup controls.
+46-second tour · [MP4 video](assets/rode-tour.mp4) · [Still image](assets/rode-tour.png). Shows the current editor layout, header-based **Project tools**, and the **Connections** library, plus **Atelier Light**, **Atelier Dark**, **Sumi-e Light**, **Samurai**, and **SynthWave ’84**. Native captures use synthetic profiles, a real notebook kernel and loopback SSH with Landlock enforcement. Agent and Slurm scenes show setup controls without model calls or resource allocations.
 
 ```sh
 cargo xtask install
@@ -30,7 +30,9 @@ rode /path/to/project/main.py
 rode --ssh user@host --remote-path '~/project'
 ```
 
-Use **Project: Settings and sandbox access** in the command palette for categorised [project settings](docs/configuration.md#project-settings): code tools, sandbox access, monitoring, LaTeX and presentations. Each category saves its own changes.
+Open **Project tools** in the main header for Chat, Terminal, Git, Problems, Tasks and Settings. Close it to restore the full editor canvas; **Detach** and **Detach tab** move tools to separate windows while retaining their sessions. Connections, file transfers and monitoring live in the left activity bar.
+
+Use **Project: Settings and sandbox access** in the command palette for categorised [project settings](docs/configuration.md#project-settings): code tools, environments, sandbox access, LaTeX and presentations. Each category saves its own changes.
 
 Use **File → New editor window** for another native editor window with its own tabs.
 Right-click a file tab to move it to a new or existing editor window. Closing an
@@ -47,8 +49,9 @@ For a coordinated light/dark interface, choose **Atelier Light** or **Atelier Da
 from **View → Color theme**. Both include matching code and terminal palettes;
 see [themes](docs/themes.md).
 
-Manage saved SSH connections directly in the Explorer: right-click to rename,
-edit or remove a connection, and drag rows to save your preferred order.
+Manage saved SSH connections in **Connections** in the left activity bar, or in
+the Explorer when no folder is open. Right-click a profile card's title or an
+Explorer row to rename, edit or remove it; drag Explorer rows to save your preferred order.
 
 Files normally use their containing folder as the workspace. With sandbox defaults enabled, a file directly in your home directory opens in **File mode · Normal mode** instead: no project or project tools are started, and your sandbox preferences stay unchanged. Explicit `--sandbox` requests and saved folder policies still apply. See [file startup](docs/getting-started.md#run).
 

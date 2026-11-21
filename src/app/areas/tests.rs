@@ -1,6 +1,6 @@
 //! Navigation state and independently merged application preferences.
 use super::*;
-use workbench::{Surface, ToolTab};
+use tool_windows::{Surface, ToolTab};
 
 #[derive(Default)]
 struct Storage(HashMap<String, String>);
@@ -34,8 +34,8 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
     ] {
         app.open_area(area, &ctx);
         assert_eq!(app.areas.active, area);
-        assert_eq!(app.workbench.surface, Surface::Tools);
-        assert_eq!(app.workbench.panel, Some(Panel::Agent));
+        assert_eq!(app.tool_windows.surface, Surface::Tools);
+        assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
         assert!(!app.tools_visible());
         assert_eq!(
             app.agents.chat.messages.back().unwrap().text,
@@ -45,7 +45,7 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
         assert!(app.documents[0].dirty());
         app.open_area(Area::Projects, &ctx);
         assert!(app.tools_visible());
-        assert_eq!(app.workbench.panel, Some(Panel::Agent));
+        assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
     }
 }
 
@@ -96,7 +96,7 @@ fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view
             app.documents[0].fixture_content().text = "unsaved source".into();
             app.agents.chat.notice("retained conversation");
             app.toggle_panel(Panel::Agent, &ctx);
-            app.workbench.detached = detached_tools;
+            app.tool_windows.detached = detached_tools;
             app.open_area(area, &ctx);
             app.detach_area(area, &ctx);
             let tab = area.tab().unwrap();
@@ -111,14 +111,14 @@ fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view
             app.open_area(area, &ctx);
             assert_eq!(app.tool_viewport(tab), owner);
             assert_eq!(app.areas.active, Area::Projects);
-            assert_eq!(app.workbench.surface, Surface::Tools);
-            assert_eq!(app.workbench.panel, Some(Panel::Agent));
+            assert_eq!(app.tool_windows.surface, Surface::Tools);
+            assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
             app.reattach_tool_tab(tab, &ctx);
             assert!(!app.area_detached(area));
             assert_eq!(app.tool_viewport(tab), egui::ViewportId::ROOT);
             assert_eq!(app.areas.active, area);
-            assert_eq!(app.workbench.panel, Some(Panel::Agent));
-            assert_eq!(app.workbench.detached, detached_tools);
+            assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+            assert_eq!(app.tool_windows.detached, detached_tools);
             assert_eq!(app.documents.owner(document), Some(egui::ViewportId::ROOT));
             assert_eq!(
                 app.documents.by_id(document).unwrap().text,
@@ -220,11 +220,11 @@ fn global_navigation_keeps_visible_detached_project_tools_refreshing() {
         Startup::default(),
     );
     app.toggle_panel(Panel::Problems, &ctx);
-    app.workbench.detached = true;
+    app.tool_windows.detached = true;
     app.open_area(Area::Connections, &ctx);
     assert!(app.tools_visible());
     assert!(app.panel_visible(Panel::Problems));
-    app.workbench.tools_hidden = true;
+    app.tool_windows.tools_hidden = true;
     assert!(!app.panel_visible(Panel::Problems));
     assert_eq!(app.areas.active, Area::Connections);
 }
@@ -238,7 +238,7 @@ fn the_project_tools_shortcut_stays_in_projects_when_no_tool_is_selected() {
     );
     app.focus_pane(navigation::Pane::Tools, &ctx);
     assert_eq!(app.areas.active, Area::Projects);
-    assert_eq!(app.workbench.panel, Some(Panel::Problems));
+    assert_eq!(app.tool_windows.panel, Some(Panel::Problems));
     assert!(app.tools_visible());
 }
 
@@ -254,7 +254,7 @@ fn invoking_a_remembered_project_tool_from_a_global_area_reveals_it() {
         app.open_area(Area::Connections, &ctx);
         app.toggle_panel(panel, &ctx);
         assert_eq!(app.areas.active, Area::Projects);
-        assert_eq!(app.workbench.panel, Some(panel));
+        assert_eq!(app.tool_windows.panel, Some(panel));
         assert!(app.tools_visible());
         app.open_area(Area::Connections, &ctx);
         app.reveal_panel(panel, &ctx);
@@ -262,7 +262,7 @@ fn invoking_a_remembered_project_tool_from_a_global_area_reveals_it() {
         assert!(app.tools_visible());
         // The ordinary project command keeps its existing toggle behavior.
         app.toggle_panel(panel, &ctx);
-        assert!(app.workbench.panel.is_none());
+        assert!(app.tool_windows.panel.is_none());
     }
 }
 
@@ -294,7 +294,7 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                 app.new_file();
                 if mode > 0 {
                     app.reveal_panel(Panel::Problems, &ctx);
-                    app.workbench.detached = mode == 2;
+                    app.tool_windows.detached = mode == 2;
                 }
                 app.set_extension(crate::extensions::Feature::Debugger.id(), debug);
                 let temp = tempfile::tempdir().unwrap();

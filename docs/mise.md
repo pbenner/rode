@@ -2,9 +2,9 @@
 
 RODE includes an optional **mise** bundled extension (`rode.mise`), disabled by default. Enable it in **View → Extensions**, then open **Settings → Environment**. Install [mise](https://mise.jdx.dev/) on the project host first; an SSH project uses the remote installation. RODE searches that host's PATH and `~/.local/bin/mise`, or uses the executable override you enter.
 
-The host also needs Python 3 for the bounded environment launcher and metadata bridge.
+Environment resolution and tool/task discovery use the native RODE helper and the installed mise executable; this integration does not require Python, Node.js or npm. Individual project tools still need their own runtimes.
 
-The bundled extension owns its native Environment/Tasks UI and launch integration. API v1 installed adapters currently provide formatting, diagnostics and palette commands; they cannot supply a project environment, so this integration uses the existing bundled-feature mechanism. Mise remains an external, optional executable.
+The bundled extension adds controls to **Project tools → Settings → Environment** and **Project tools → Tasks** and owns its launch integration. API v1 installed adapters currently provide formatting, diagnostics and palette commands; they cannot supply a project environment, so this integration uses the existing bundled-feature mechanism. Mise remains an external, optional executable.
 
 With an active sandbox, grant access to the mise config/state/cache paths you use through the existing access settings. Tool installations under `~/.local` are read-only by default; trusting configurations or installing tools needs the corresponding writable paths. RODE never adds these grants automatically or retries a denied command outside the sandbox.
 

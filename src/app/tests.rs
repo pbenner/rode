@@ -276,7 +276,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             assert_eq!(doc.path.as_deref(), absolute_file.to_str());
             assert_eq!(doc.text, "startup contents\n");
             assert!(!doc.dirty());
-            assert_eq!(app.workbench.surface, workbench::Surface::Editor);
+            assert_eq!(app.tool_windows.surface, tool_windows::Surface::Editor);
             doc.fixture_content().text.push_str("edited\n");
             doc.set_dirty_fixture(true);
             doc.advance_version_fixture();

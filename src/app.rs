@@ -69,6 +69,7 @@ mod saved_connections;
 mod sessions;
 mod stocks;
 mod terminal_colors;
+mod tool_windows;
 mod transfers;
 mod tunnels;
 mod ui_probe;
@@ -90,6 +91,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tool_windows::{Surface, ToolTab};
 use workbench::{Panel, ToolJob, Workbench};
 use workers::{Job, WorkspaceEvent};
 
@@ -186,6 +188,7 @@ pub struct EditorApp {
     navigation: navigation::State,
     areas: areas::State,
     host_tools: host_tools::State,
+    tool_windows: tool_windows::State,
     workbench: Workbench,
     debugger: debugging::State,
     extensions: extensions::Extensions,
@@ -311,6 +314,7 @@ impl EditorApp {
             navigation: navigation::State::load(storage),
             areas: areas::State::load(storage),
             host_tools: Default::default(),
+            tool_windows: Default::default(),
             workbench: Workbench::load(storage),
             debugger: Default::default(),
             extensions: extensions::Extensions::load(storage),
@@ -702,11 +706,11 @@ impl EditorApp {
 
     /// Select or hide the terminal surface, lazily creating a shell only when none is owned or starting.
     fn toggle_terminal(&mut self, ctx: &egui::Context) {
-        if self.tab_detached(workbench::ToolTab::Terminal) {
-            self.focus_tool_tab(workbench::ToolTab::Terminal, ctx);
+        if self.tab_detached(tool_windows::ToolTab::Terminal) {
+            self.focus_tool_tab(tool_windows::ToolTab::Terminal, ctx);
             return;
         }
-        self.show_terminal = !self.terminal_visible() || self.workbench.detached;
+        self.show_terminal = !self.terminal_visible() || self.tool_windows.detached;
         if self.show_terminal {
             self.terminal_intent();
             if self.terminal.is_none() && self.ssh_master.is_none() && !self.session_busy() {
@@ -773,7 +777,7 @@ impl eframe::App for EditorApp {
         if ctx.input(|i| i.focused)
             && self.areas.active == areas::Area::Projects
             && (self.editor.pdf_fullscreen.is_some()
-                || self.workbench.detached
+                || self.tool_windows.detached
                 || !self.tool_surface())
         {
             self.remember_editor_focus(egui::ViewportId::ROOT);

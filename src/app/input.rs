@@ -159,7 +159,7 @@ impl EditorApp {
             return;
         }
         if self.terminal_any_visible()
-            && self.tool_viewport(workbench::ToolTab::Terminal) == ctx.viewport_id()
+            && self.tool_viewport(tool_windows::ToolTab::Terminal) == ctx.viewport_id()
             && self.dialog == Dialog::None
             && !egui::Popup::is_any_open(ctx)
         {
@@ -167,7 +167,7 @@ impl EditorApp {
         }
         let terminal_focus = Terminal::focused(ctx)
             && self.terminal_any_visible()
-            && self.tool_viewport(workbench::ToolTab::Terminal) == ctx.viewport_id();
+            && self.tool_viewport(tool_windows::ToolTab::Terminal) == ctx.viewport_id();
         let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
         if consume(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::P) {
             self.set_dialog(Dialog::Commands);

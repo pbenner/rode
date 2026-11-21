@@ -2,6 +2,8 @@
 
 Run multiple RODE processes normally. Each window has its own workspace, buffers, terminal views, agent process, SSH master/socket, sandbox helper, and temporary GUI snapshot. Closing one window releases its private resources without disconnecting another window's SSH master. [Native persistent terminals](terminals.md) belong to the per-user service on their host and may be shared between windows. Detaching/keeping sessions leaves all views and work intact; explicitly ending a shared session affects every attached view.
 
+For additional editor windows within the same process, choose **File → New editor window**, or right-click a file tab to move it to a new or existing editor window. These windows share the project, document collection and connection. Each has its own tabs, find state and hideable Explorer; chat, terminals and project tools keep their existing owner. Opening an already open file raises its current window. Closing an editor window returns its tabs and unsaved changes to the main window. Project tools and application views have separate detach/reattach controls; see [workspace layout](editing.md#workspace-layout).
+
 Shared configuration stays in the existing locations:
 
 | File on Linux | Contents |
@@ -14,8 +16,10 @@ Settings saves lock the configuration, read its latest contents, apply only the 
 
 Existing windows keep their current in-memory settings. Other windows' changes are loaded on a new launch; the SSH connection picker reloads saved profiles when opened. RODE does not watch configuration files continuously or change an active sandbox/agent behind your back. Window size/layout uses the last saved GUI state as the default for future launches.
 
-Manage saved SSH profiles from the Explorer's **Connections** list: right-click
-to rename, edit, remove or move a profile, or drag rows to reorder them. An optional
+Manage saved SSH profiles from **Connections** in the left activity bar or the
+Explorer's **Connections** list when no folder is open. Right-click a profile card's
+title or an Explorer row to rename, edit, remove or move it; drag Explorer rows to
+reorder them. An optional
 **Connection name** labels it in the Explorer and picker without changing the SSH
 address. **Rename…** selects that field; **Save profile** applies the change. The order is the
 array order in `connections.json`. Reordering moves one current record relative
@@ -42,14 +46,18 @@ Malformed, oversized, or unwritable configuration is preserved and a save error 
 ## Project settings
 
 Open **Project: Settings and sandbox access** from the command palette. The tab
-has four categories: **Code tools**, **Sandbox**, **LaTeX** and
-**Presentations**. Category navigation and save controls stay visible while the
+has five categories when their extensions are enabled: **Code tools**,
+**Environment**, **Sandbox**, **LaTeX** and **Presentations**. Environment contains
+runtime paths, project variables and Python environments; it also opens through
+**Environment: Runtimes and project variables** in the command palette.
+Category navigation and save controls stay visible while the
 selected form scrolls, including in compact or detached tool panes. The host and
 project path identify the scope; these settings are saved per project.
 
 A dot marks categories with unsaved changes. Switching categories keeps their
 drafts. **Save changes** and **Discard changes** affect only the selected category;
-incomplete edits elsewhere are retained. LaTeX and presentation Settings buttons
+Environment uses **Apply environment** for its settings. Incomplete edits elsewhere
+are retained. LaTeX and presentation Settings buttons
 open their corresponding category directly.
 
 **Apply sandbox settings** validates the requested policy and probes enforcement

@@ -527,7 +527,7 @@ impl EditorApp {
                 match self.navigation.active {
                     Pane::Explorer => self.set_explorer_visible(ctx.viewport_id(), false),
                     Pane::Terminal => self.show_terminal = false,
-                    Pane::Tools => self.workbench.panel = None,
+                    Pane::Tools => self.tool_windows.panel = None,
                     _ => {}
                 }
                 self.set_pane_zoom(ctx.viewport_id(), None);
@@ -598,9 +598,9 @@ impl EditorApp {
             }
         }
         let tab = match pane {
-            Pane::Terminal => Some(workbench::ToolTab::Terminal),
-            Pane::Tools => Some(workbench::ToolTab::Panel(
-                self.workbench.panel.unwrap_or(Panel::Problems),
+            Pane::Terminal => Some(tool_windows::ToolTab::Terminal),
+            Pane::Tools => Some(tool_windows::ToolTab::Panel(
+                self.tool_windows.panel.unwrap_or(Panel::Problems),
             )),
             _ => None,
         };
@@ -621,7 +621,7 @@ impl EditorApp {
             |tab| self.tool_viewport(tab),
         );
         if viewport == Self::tools_viewport() {
-            self.workbench.tools_hidden = false;
+            self.tool_windows.tools_hidden = false;
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
         }
         if viewport != ctx.viewport_id() {
@@ -644,10 +644,10 @@ impl EditorApp {
                 }
             }
             Pane::Tools => {
-                self.workbench.surface = workbench::Surface::Tools;
-                self.workbench.tools_hidden = false;
+                self.tool_windows.surface = tool_windows::Surface::Tools;
+                self.tool_windows.tools_hidden = false;
                 self.remember_tool_tab();
-                if self.workbench.panel.is_none() {
+                if self.tool_windows.panel.is_none() {
                     self.toggle_panel(Panel::Problems, ctx);
                 }
             }

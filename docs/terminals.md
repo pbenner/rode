@@ -40,7 +40,7 @@ RODE uses your shell's existing prompt configuration (`PS1` for Bash). It does n
 
 RODE follows [xterm's default boldColors behavior](https://www.invisible-island.net/xterm/manpage/xterm.html): a bold basic foreground uses the corresponding bright color. For example, `\[\e[1;30m\]` in PS1 uses **Bright black**, rather than ordinary black that can disappear against a dark background; `\[\e[1;34m\]` uses the theme’s **Bright blue** slot (warm gold in Carbon/Amber). The `\[...\]` markers belong to Bash/readline and keep invisible escape sequences out of its cursor-width calculation. `\e[22m` clears bold, and `\e[0m` resets attributes. Backgrounds, explicit RGB and extended color indices retain their color mapping.
 
-Under **View → Terminal colors… → ANSI colors**, adjust the **Bright black** or **Bright blue** swatch if those prompt segments need a different shade for your theme. These changes immediately affect existing local/SSH terminal views without restarting commands. Minimum contrast defaults to **1:1** (off); its optional global text correction is separate from prompt escape handling. Explicit saved contrast overrides remain in effect until changed or reset to theme defaults.
+Under **View → Terminal colors… → ANSI colors**, adjust the **Bright black** or **Bright blue** swatch if those prompt segments need a different shade for your theme. These changes immediately affect existing local/SSH terminal views without restarting commands. Minimum contrast defaults to **4.5:1** in Atelier, Sumi-e and Samurai, and **1:1** (off) in the other built-in themes. This optional text correction is separate from prompt escape handling. Explicit saved contrast overrides remain in effect until changed or reset to theme defaults; see [terminal color settings](themes.md).
 
 ## Closing RODE
 
@@ -82,11 +82,11 @@ Package `rode-sessiond-static` beside `rode`, or set desktop `RODE_SESSION_HELPE
 
 A compatible preinstalled remote `rode-sessiond` is discovered automatically, or selected with the SSH profile’s **Remote helper** / `--remote-helper PATH`. It is copied on the host into the private cache after version/capability checks, so no desktop artifact for that architecture is needed. Explicit remote paths fail on incompatibility; automatic discovery can fall back to desktop deployment.
 
-The [native SSH helper](remote.md#host-service-backends) is verified and published at `~/.rode-host/host-<sha256>` for both ordinary host work and session control. The cache is private to the user. Session control uses no separate TCP listener or application port forwarding; optional X11 uses OpenSSH's display forwarding. Helper images referenced by live jobs are retained; service ownership remains independent of the connection gateway.
+The [native SSH helper](remote.md#host-service-backends) is verified and published at `~/.rode-host/host-<sha256>` for both ordinary host work and session control. The cache is private to the user. Session control uses no separate TCP listener or application port forwarding; optional X11 uses the selected SSH backend's display forwarding. Helper images referenced by live jobs are retained; service ownership remains independent of the connection gateway.
 
 ## Lifetime and limits
 
-The service owns the PTYs independently of the desktop and SSH master. It runs outside the project sandbox; the actual shell and descendants run **inside the project's original prepared sandbox**. Control/attachment clients run on the host. The Linux service checks UID and mount namespace so sandboxed tools cannot use an exposed control socket to start unrestricted host commands.
+The service owns the PTYs independently of the desktop and SSH master. It runs outside the project sandbox; each shell and its descendants retain the execution mode captured when that terminal was created. **Sandboxed** terminals use the project's prepared policy; **Outside sandbox** terminals use ordinary permissions on the same host. Reattachment never changes that mode. Control/attachment clients run on the host. The Linux service checks UID and mount namespace so sandboxed tools cannot use an exposed control socket to start unrestricted host commands.
 
 The default runtime is `~/.cache/rode/session-<host-hash>/`, with mode `0700`,
 a stable singleton lock, and `service.log`. `rode_session::PROTOCOL` defines the
