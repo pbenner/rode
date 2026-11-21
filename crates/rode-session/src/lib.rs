@@ -31,8 +31,10 @@
 //!
 //! `protocol` defines the shared wire schema; `framing` owns bounded socket
 //! encoding, and `runtime_directory` owns protected host artifacts. This root
-//! composes authentication, PTY ownership and dispatch. Agent/runtime controllers
-//! and stdin attachment cleanup live in their corresponding private modules.
+//! composes server authentication, PTY ownership and dispatch. `control` owns
+//! authenticated client connections and the shared service startup/retry rules.
+//! Agent/runtime controllers and stdin attachment cleanup live in their
+//! corresponding private modules.
 #![warn(missing_docs)]
 use anyhow::{Context, Result, bail, ensure};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
@@ -45,11 +47,9 @@ use std::{
         unix::{
             fs::MetadataExt,
             net::{UnixListener, UnixStream},
-            process::CommandExt,
         },
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -60,6 +60,7 @@ use std::{
 
 mod agents;
 mod attachment;
+mod control;
 #[cfg(target_os = "linux")]
 pub mod control_auth;
 mod entry;
@@ -70,11 +71,12 @@ mod runtimes;
 mod terminal_output;
 pub mod tunnels;
 
+pub use control::{Launcher, connect_control, request};
 pub use entry::helper_main;
 use framing::{MAX_FRAME, frame, read_frame, recv_json, send_json};
 pub use protocol::{Info, PROTOCOL, Request, Response};
 pub use runtime_directory::directory;
-use runtime_directory::{private_directory, private_directory_at, private_listener, runtime_path};
+use runtime_directory::{private_directory, private_listener, runtime_path};
 
 const MAX_SESSIONS: usize = 32;
 const MAX_CLIENTS: usize = 8;
@@ -99,15 +101,6 @@ pub fn current_executable() -> Result<PathBuf> {
     }
     Ok(path)
 }
-/// Executable identity used to start this client's matching service generation.
-#[derive(Clone)]
-pub struct Launcher {
-    /// Native helper executable path, which may refer to the running image after an upgrade.
-    pub executable: PathBuf,
-    /// Arguments inserted before the service subcommand, such as `--session-service`.
-    pub prefix: Vec<String>,
-}
-
 #[cfg(target_os = "linux")]
 fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::SocketAddr> {
     use std::os::linux::net::SocketAddrExt;
@@ -119,270 +112,9 @@ fn control_address(meta: &fs::Metadata) -> std::io::Result<std::os::unix::net::S
     ))
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-struct ControlAuthentication;
-
-#[cfg(target_os = "linux")]
-impl std::fmt::Display for ControlAuthentication {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("Cannot authenticate terminal control")
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-struct ControlDisconnected;
-
-#[cfg(target_os = "linux")]
-impl std::fmt::Display for ControlDisconnected {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("Terminal service disconnected during control authentication")
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn connect_authenticated(
-    dir: &Path,
-    address: &std::os::unix::net::SocketAddr,
-) -> Result<UnixStream> {
-    let mut stream = UnixStream::connect_addr(address)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    control_auth::authenticate(&mut stream, dir)
-        .map_err(|error| control_authentication_error(&stream, error))
-        .context(ControlAuthentication)?;
-    Ok(stream)
-}
-
-#[cfg(target_os = "linux")]
-fn control_authentication_error(stream: &UnixStream, error: anyhow::Error) -> anyhow::Error {
-    // An exiting service can lose access to its proc descriptor before the
-    // kernel closes its sockets. Retry only after that connected peer has
-    // actually disconnected; a live service's capability denial stays fatal.
-    if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-        matches!(
-            error.kind(),
-            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
-        )
-    }) {
-        let mut fd = libc::pollfd {
-            fd: stream.as_raw_fd(),
-            events: libc::POLLRDHUP,
-            revents: 0,
-        };
-        if unsafe { libc::poll(&mut fd, 1, 100) } > 0
-            && fd.revents & (libc::POLLHUP | libc::POLLRDHUP) != 0
-        {
-            return error.context(ControlDisconnected);
-        }
-    }
-    error
-}
-
-/// Authenticate control and require the current protocol in a private runtime directory.
-pub fn connect_control(dir: &Path) -> Result<UnixStream> {
-    let meta = fs::symlink_metadata(dir)?;
-    ensure!(
-        meta.is_dir() && meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o077 == 0,
-        "Unsafe session directory"
-    );
-    #[cfg(target_os = "linux")]
-    let mut stream = connect_authenticated(dir, &control_address(&meta)?)
-        .context("Cannot access terminal control; use a client outside the project sandbox")?;
-    #[cfg(not(target_os = "linux"))]
-    let mut stream = UnixStream::connect(dir.join("socket"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    send_json(&mut stream, &Request::Protocol)?;
-    ensure!(
-        matches!(recv_json::<_, Response>(&mut stream)?.checked()?, Response::Protocol(version) if version == PROTOCOL),
-        "Terminal service protocol mismatch; use the matching service in a new runtime directory"
-    );
-    Ok(stream)
-}
-
 #[cfg(all(test, target_os = "linux"))]
 mod control_tests;
 
-/// Perform a blocking control request, starting a matching service when needed. Service
-/// creation is serialized; only the current runtime directory is used.
-pub fn request(request: &Request, launcher: &Launcher) -> Result<Response> {
-    let until = Instant::now()
-        + if matches!(
-            request,
-            Request::List | Request::Agents | Request::Runtimes | Request::Tunnels
-        ) {
-            Duration::from_millis(500)
-        } else {
-            Duration::from_secs(10)
-        };
-    loop {
-        let result = request_current(request, launcher);
-        let retry = matches!(
-            request,
-            Request::StartTunnel { .. }
-                | Request::Create { .. }
-                | Request::CreateAgent { .. }
-                | Request::CreateRuntime { .. }
-                | Request::List
-                | Request::Agents
-                | Request::Runtimes
-                | Request::Tunnels
-        ) && result.as_ref().err().is_some_and(|error| {
-            #[cfg(target_os = "linux")]
-            if error.downcast_ref::<ControlDisconnected>().is_some() {
-                return true;
-            }
-            error.to_string() == "Session service is stopping"
-                || error.chain().any(|cause| {
-                    cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
-                        matches!(
-                            io.kind(),
-                            std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::ConnectionReset
-                                | std::io::ErrorKind::BrokenPipe
-                                | std::io::ErrorKind::UnexpectedEof
-                        )
-                    })
-                })
-        });
-        if !retry || Instant::now() >= until {
-            return result;
-        }
-        // Last-view cleanup or End may race the daemon unlinking its socket.
-        // Retry idempotent Create and read-only List across that transition.
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-fn service_offline(error: &anyhow::Error) -> bool {
-    // A missing capability or proc descriptor is an authentication failure,
-    // not evidence that the listener and its jobs have gone away.
-    #[cfg(target_os = "linux")]
-    if error.downcast_ref::<ControlAuthentication>().is_some() {
-        return false;
-    }
-    error.chain().any(|cause| {
-        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
-            matches!(
-                io.kind(),
-                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
-            )
-        })
-    })
-}
-fn request_current(request: &Request, launcher: &Launcher) -> Result<Response> {
-    let response = match request_once(request, launcher, &directory()?) {
-        Err(error) if service_offline(&error) => match request {
-            Request::List => Response::Sessions(vec![]),
-            Request::Agents => Response::Agents(vec![]),
-            Request::Runtimes => Response::Runtimes(vec![]),
-            Request::Tunnels => Response::Tunnels(vec![]),
-            Request::StopTunnel { .. }
-            | Request::End { .. }
-            | Request::EndAgent { .. }
-            | Request::EndRuntime { .. }
-            | Request::Shutdown => Response::Ok,
-            _ => return Err(error),
-        },
-        result => result?,
-    };
-    Ok(match response {
-        Response::Sessions(mut infos) => {
-            infos.retain(|info| info.alive);
-            infos.sort_by_key(|info| info.created);
-            Response::Sessions(infos)
-        }
-        Response::Agents(mut infos) => {
-            infos.retain(|info| info.alive);
-            infos.sort_by_key(|info| info.created);
-            Response::Agents(infos)
-        }
-        Response::Runtimes(mut infos) => {
-            infos.sort_by_key(|info| info.created);
-            Response::Runtimes(infos)
-        }
-        response => response,
-    })
-}
-fn request_once(request: &Request, launcher: &Launcher, dir: &Path) -> Result<Response> {
-    let mut stream = match connect_control(dir) {
-        Ok(stream) => stream,
-        Err(error) => {
-            if matches!(
-                request,
-                Request::List | Request::Agents | Request::Runtimes | Request::Tunnels
-            ) {
-                return Err(error)
-                    .context("Session service is unavailable; existing jobs were not touched");
-            }
-            if !matches!(
-                request,
-                Request::StartTunnel { .. }
-                    | Request::Create { .. }
-                    | Request::CreateAgent { .. }
-                    | Request::CreateRuntime { .. }
-            ) {
-                return Err(error)
-                    .context("Session service is offline; no session was created or ended.");
-            }
-            if !service_offline(&error) {
-                return Err(error);
-            }
-            let directory = private_directory_at(dir)?;
-            let log = rode_host_core::locking::open_private(
-                &runtime_path(dir, &directory).join("service.log"),
-                rode_host_core::locking::PrivateFile::Append,
-            )
-            .with_context(|| {
-                format!(
-                    "Cannot open private session log {}",
-                    dir.join("service.log").display()
-                )
-            })?;
-            let mut command = Command::new(&launcher.executable);
-            command
-                .args(&launcher.prefix)
-                .arg("serve")
-                .env("RODE_SESSION_DIR", dir)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(log);
-            unsafe {
-                command.pre_exec(|| {
-                    if libc::setsid() < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            let mut child = command.spawn().with_context(|| {
-                format!(
-                    "Cannot start native session service executable {}",
-                    launcher.executable.display()
-                )
-            })?;
-            // Reap our daemon if it exits while this client remains alive.
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-            let until = Instant::now() + Duration::from_secs(5);
-            loop {
-                if let Ok(stream) = connect_control(dir) {
-                    break stream;
-                }
-                ensure!(
-                    Instant::now() < until,
-                    "Terminal service did not start; check {}",
-                    dir.join("service.log").display()
-                );
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-    };
-    send_json(&mut stream, request)?;
-    recv_json::<_, Response>(&mut stream)?.checked()
-}
 fn valid_id(id: &str) -> bool {
     id.len() == 34 && id.starts_with("s-") && id[2..].bytes().all(|b| b.is_ascii_hexdigit())
 }

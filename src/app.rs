@@ -765,6 +765,7 @@ impl eframe::App for EditorApp {
         self.transfer_tick(ctx);
         self.poll_notebooks(ctx);
         self.marp_tick();
+        self.monitor_tick(ctx);
         self.workbench_tick(ctx);
 
         self.session_tick(ctx);

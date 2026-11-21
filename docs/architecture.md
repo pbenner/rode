@@ -104,6 +104,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `crates/rode-session/src/protocol.rs` | Tagged control schema and required service protocol, re-exported from the crate root for clients |
 | `crates/rode-session/src/framing.rs` | One bounded length/kind/payload codec for control, terminal and runtime sockets, with separate domain size limits |
 | `crates/rode-session/src/runtime_directory.rs` | Owner-only runtime directory validation, Linux inode-anchored artifact paths and startup-only socket permissions |
+| `crates/rode-session/src/control.rs` | Authenticated control client, shared service startup/retry rules and offline discovery; public client entry points are re-exported from the crate root |
 | `crates/rode-session/src/attachment.rs` | Shared typed stdin-command forwarding and socket shutdown for agent/runtime attachments; each owner selects its frame budget and retains its output lifecycle |
 | `crates/rode-runtime-core/src/process/group.rs` | Shared process-group cancellation, delayed escalation and acknowledged cleanup for desktop, agent and runtime transports |
 | `crates/rode-runtime-core/src/process/wait.rs` | Nonreaping child-exit observation shared by transport ownership and synchronous capture guards |
@@ -112,6 +113,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/bundled.rs`, `src/bundled/install.rs`, `src/app/agents/runtime.rs`, `crates/rode-host-core/src/runtime_cache.rs`, `scripts/bundle-codex.py` | Pinned native Codex discovery, explicit native per-user setup, verified private SSH-cache deployment and release-bundle preparation |
 | `crates/rode-host-core/src/runtime_cache/pins.rs` | Shared runtime artifact/notice model, pin/version validation, deterministic transfer order and uniform immutable cache identity |
 | `crates/rode-agent-core/` | Shared Codex/ACP state machines, bounded chat/history, capabilities, personalities and host-service wire views |
+| `crates/rode-agent-core/src/protocol/incoming.rs` | Incoming Codex/ACP response correlation, conversation-scoped notifications and permission/question normalization into the owned chat state |
 | `crates/rode-runtime-core/`, `crates/rode-session/src/runtimes.rs`, `src/runtime.rs` | Shared notebook/DAP controllers, bounded output/state replay, exclusive leases, mutation acknowledgements and native runtime discovery |
 | `src/agent/`, `src/agent.rs`, `src/app/agents.rs`, `src/app/agents/background.rs` | Project-host preparation, disposable agent attachment, live-session discovery, history and permission/question UI |
 | `crates/rode-session/src/agents.rs`, `agents/transport.rs` | Headless agent ownership, fixed sandbox/executable/environment, controller leases, bounded subprocess I/O and lifetime cleanup |
@@ -140,6 +142,19 @@ RODE requires the current session protocol. Each control connection authenticate
 
 Runtime command validation belongs to `rode_runtime_core::service::Spec::validate_command` and runs before host executable resolution as well as controller creation. The per-execution notebook source limit lives in `rode_runtime_core::notebook::MAX_CODE`, re-exported by the desktop model, so moving execution into the service cannot leave a stale desktop-only limit.
 
+The session control client has one startup-policy classification for both
+connection retries and daemon creation. Discovery never starts a service;
+creation requests may start one only when the authenticated service is absent.
+Other operations never start a daemon or replay control requests. Authentication
+denials remain errors rather than evidence that existing jobs have disappeared.
+The service root retains PTY/server ownership; control clients retain no job state.
+
+The agent protocol controller owns conversation lifecycle, deadlines, pending
+calls and bounded transcript state. Its `protocol/incoming.rs` module routes
+incoming Codex/ACP messages, checks their conversation/call identities and applies
+the same controller's permission policy. Routing creates no second controller or
+transport owner; outgoing work and recovery retain their existing lifecycle guards.
+
 The session service keeps its tagged wire types in `protocol.rs` and re-exports
 `Info`, `Request`, `Response` and `PROTOCOL` from the crate root. Filesystem
 startup in `runtime_directory.rs` holds the validated directory inode open;
@@ -157,7 +172,7 @@ transports, which retain their own codecs.
 
 The choices below explain the current implementation. Module-level rustdoc records ownership and local constraints; the main service modules also include **Design decisions** sections beside the code they constrain. The sections below describe consequences as well as benefits; they are not a list of proposed features.
 
-Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and connection banners belong in `app/frame.rs`, file/decode dispatch in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Workbench background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules and retain their existing Rust module/test paths.
+Keep the desktop coordinator focused on application state and shared lifecycle guards. Application menus and connection banners belong in `app/frame.rs`, file/decode dispatch in `app/workers.rs`, modal presentation in `app/dialogs.rs`, and appearance controls in `app/appearance.rs`. Project-tool background work lives in `workbench/jobs.rs`, independently of tool-panel rendering and saved settings. Git operation admission lives in `workbench/git/controller.rs`; `workbench/git/jobs.rs` connects admitted operations and completion effects to the captured project workers. Git rendering consumes cached state and invokes those same operations for buttons, confirmations and credential retries. Domain views own their rendering and controller state; notebook rendering lives in `notebook_view/ui.rs` so it can be changed without navigating kernel ownership and background-result code. Large regression suites live in adjacent `tests.rs` modules and retain their existing Rust module/test paths.
 
 ### Theme composition
 
@@ -222,8 +237,10 @@ registry. Inline and wrapped toolbars share their window-control allocation;
 neither layout owns a controller or starts work.
 
 `host_tools::State` captures the selected SSH connection separately from the
-workspace and owns live monitoring state. `src/app/monitoring.rs` and its chart
-modules render that application-wide state; project resets need no monitor
+workspace and owns live monitoring state. `src/app/monitoring.rs` schedules
+explicitly started sampling and renders that application-wide state with its
+chart modules. The desktop ticks it separately from project tools, so project
+readiness and panel visibility cannot gate collection. Project resets need no monitor
 retention exception. The host reply channel is independent of project-generation invalidation,
 so an in-flight monitor poll cannot lose its busy acknowledgement during a
 project switch. Admitted replies complete in the monitoring module, outside the

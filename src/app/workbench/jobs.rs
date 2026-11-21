@@ -1,8 +1,8 @@
 //! Project-tool dispatch, refresh scheduling and version-checked completion routing.
 //!
 //! Capture host policy, generation and document/tool epochs before leaving the UI
-//! thread. Shared readiness checks separate host telemetry from project commands;
-//! accepting a reply never widens its captured policy or replaces newer edits.
+//! thread. Requests require prepared project access; accepting a reply never
+//! widens its captured policy or replaces newer edits.
 
 use super::*;
 
@@ -105,30 +105,9 @@ impl EditorApp {
             .unwrap_or_default()
     }
 
-    /// Schedule explicitly started host monitoring, visible Git refreshes and debounced diagnostics.
+    /// Schedule visible Git refreshes and debounced diagnostics for the prepared project.
     /// Use cached timestamps and in-flight flags to avoid launching work every frame.
     pub(in crate::app) fn workbench_tick(&mut self, ctx: &egui::Context) {
-        if self.host_tools.monitoring.active {
-            self.initialize_host_tool(Panel::Monitor);
-        }
-        if self.feature(crate::extensions::Feature::Monitor)
-            && self.host_tools.monitoring.active
-            && !self.exit_pending()
-            && self.monitor_host_ready()
-        {
-            let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
-            if !self.host_tools.monitoring.monitor_busy
-                && self
-                    .host_tools
-                    .monitoring
-                    .monitor_last
-                    .is_none_or(|time| time.elapsed() >= interval)
-            {
-                self.host_tools.monitoring.monitor_busy = true;
-                self.dispatch_host_monitor(ctx);
-            }
-            ctx.request_repaint_after(interval);
-        }
         if !self.project_ready() {
             return;
         }

@@ -1,6 +1,6 @@
 //! Explicit HTTPS retries. Forms and credentials are transient and never enter
 //! preferences, Git configuration, command arguments or the output window.
-use super::*;
+use super::{controller::Operation, *};
 use project::git_auth::Credentials;
 
 #[derive(Default)]

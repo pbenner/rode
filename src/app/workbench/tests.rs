@@ -293,17 +293,17 @@ fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     assert!(app.workspace.is_none());
     assert!(app.monitor_host_ready());
     assert!(!app.project_ready());
-    app.workbench_tick(&ctx);
+    app.monitor_tick(&ctx);
     assert!(!app.host_tools.monitoring.monitor_busy);
     app.toggle_panel(Panel::Monitor, &ctx);
-    app.workbench_tick(&ctx);
+    app.monitor_tick(&ctx);
     assert!(!app.host_tools.monitoring.active);
     assert!(!app.host_tools.monitoring.monitor_busy);
     assert!(panel_text(&mut app, &ctx).contains("Start monitoring"));
     app.host_tools.monitoring.set_active(true);
     app.open_area(areas::Area::Projects, &ctx);
     assert!(!app.panel_visible(Panel::Monitor));
-    app.workbench_tick(&ctx);
+    app.monitor_tick(&ctx);
     assert!(app.host_tools.monitoring.monitor_busy);
     let deadline = Instant::now() + Duration::from_secs(10);
     while app.host_tools.monitoring.monitor_busy && Instant::now() < deadline {
@@ -339,11 +339,11 @@ fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     let due = Instant::now() - Duration::from_secs(31);
     app.host_tools.monitoring.monitor_last = Some(due);
     app.navigation.zoom = Some(navigation::Pane::Editor);
-    app.workbench_tick(&ctx);
+    app.monitor_tick(&ctx);
     assert!(!app.host_tools.monitoring.monitor_busy);
     assert_eq!(app.host_tools.monitoring.monitor_last, Some(due));
     app.navigation.zoom = None;
-    app.workbench_tick(&ctx);
+    app.monitor_tick(&ctx);
     assert!(!app.host_tools.monitoring.monitor_busy);
     assert_eq!(app.host_tools.monitoring.monitor_last, Some(due));
     assert_eq!(app.host_tools.monitoring.history.len(), count);
@@ -353,8 +353,8 @@ fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
     app.host_tools.monitoring.set_active(true);
-    app.workbench.prefs.monitor_chart.seconds = 300;
-    let view = app.workbench.prefs.monitor_chart;
+    app.areas.prefs.monitor_chart.seconds = 300;
+    let view = app.areas.prefs.monitor_chart;
     for result in [
         Ok(project::Response::Monitor(project::Monitor {
             hostname: "pre-reset".into(),
@@ -378,7 +378,7 @@ fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline
         assert!(app.host_tools.monitoring.monitor_error.is_empty());
         assert!(app.host_tools.monitoring.monitor.is_none());
         assert!(app.host_tools.monitoring.history.is_empty());
-        assert_eq!(app.workbench.prefs.monitor_chart, view);
+        assert_eq!(app.areas.prefs.monitor_chart, view);
     }
     app.complete_host_monitor(
         Ok(project::Response::Monitor(project::Monitor {
@@ -455,7 +455,7 @@ fn remote_monitor_waits_for_authentication_before_sampling() {
     app.workbench.panel = Some(Panel::Monitor);
     app.host_tools.monitoring.set_active(true);
     assert!(!app.monitor_host_ready());
-    app.workbench_tick(&ctx);
+    app.monitor_tick(&ctx);
     assert!(!app.host_tools.monitoring.monitor_busy);
     assert!(app.host_tools.monitoring.monitor.is_none());
 

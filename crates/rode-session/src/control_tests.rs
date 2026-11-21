@@ -1,6 +1,13 @@
 //! Control-socket regressions for private-directory ownership, authentication and replacement.
 
-use super::*;
+use super::{
+    control::{
+        ControlAuthentication, ControlDisconnected, control_authentication_error, request_once,
+        service_offline,
+    },
+    runtime_directory::private_directory_at,
+    *,
+};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::PermissionsExt;
 
