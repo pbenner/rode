@@ -3,12 +3,12 @@
 use super::*;
 
 impl EditorApp {
-    pub(super) fn transfer_pane_ui(&mut self, ui: &mut egui::Ui, side: usize, ctx: &egui::Context) {
+    pub(super) fn transfer_pane_ui(&mut self, ui: &mut egui::Ui, side: Side, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let generation = self.transfers.generation;
         let host_ready = self.transfer_host_endpoint().is_some();
         let can_transfer = host_ready && self.transfers.panes.iter().all(Pane::ready);
-        if side == 1 && !host_ready {
+        if side == Side::Remote && !host_ready {
             ui.disable();
         }
         let host = self.transfer_host_label();
@@ -17,7 +17,7 @@ impl EditorApp {
         let mut transfer = false;
         let mut folder_target = None;
         let mut list_rect = egui::Rect::NOTHING;
-        ui.push_id(side, |ui| {
+        ui.push_id(side.index(), |ui| {
             let pane = &mut self.transfers.panes[side];
             let footer_height = layout::control_height(ui)
                 * if ui.available_width() < 230. { 2. } else { 1. }
@@ -28,11 +28,15 @@ impl EditorApp {
                 .show_inside(ui, |ui| {
                     ui.add_space(5.);
                     ui.horizontal_wrapped(|ui| {
-                        let label = if side == 0 { "Upload" } else { "Download" };
+                        let label = if side == Side::Local {
+                            "Upload"
+                        } else {
+                            "Download"
+                        };
                         let button = ui.add_enabled(
                             !pane.selected.is_empty() && can_transfer,
                             IconButton::new(
-                                if side == 0 {
+                                if side == Side::Local {
                                     Icon::ChevronRight
                                 } else {
                                     Icon::ChevronLeft
@@ -42,7 +46,7 @@ impl EditorApp {
                         );
                         ui_probe::button(
                             ui,
-                            if side == 0 {
+                            if side == Side::Local {
                                 "transfer-upload"
                             } else {
                                 "transfer-download"
@@ -55,12 +59,13 @@ impl EditorApp {
                 });
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(20.), Sense::hover());
-                (if side == 0 { Icon::Files } else { Icon::Remote }).paint(
-                    ui.painter(),
-                    rect,
-                    palette.accent,
-                );
-                ui.strong(if side == 0 {
+                (if side == Side::Local {
+                    Icon::Files
+                } else {
+                    Icon::Remote
+                })
+                .paint(ui.painter(), rect, palette.accent);
+                ui.strong(if side == Side::Local {
                     "Local files"
                 } else {
                     "Remote files"
@@ -99,9 +104,13 @@ impl EditorApp {
             if ui.available_height() >= 270. {
                 ui.add(
                     egui::Label::new(
-                        RichText::new(if side == 0 { "This computer" } else { &host })
-                            .small()
-                            .color(palette.muted),
+                        RichText::new(if side == Side::Local {
+                            "This computer"
+                        } else {
+                            &host
+                        })
+                        .small()
+                        .color(palette.muted),
                     )
                     .truncate(),
                 )
@@ -115,7 +124,7 @@ impl EditorApp {
                 );
                 ui_probe::button(ui, &format!("transfer-Up:{side}"), &up);
                 if up.clicked() {
-                    browse = Some(parent(&pane.browser.directory));
+                    browse = Some(file_browser::parent(&pane.browser.directory));
                 }
                 let go_width = 28.;
                 let path = ui.add_sized(
@@ -309,7 +318,7 @@ impl EditorApp {
                     pane.selected.insert(entry.path);
                 }
                 Some(file_browser::Choice::Parent) => {
-                    browse = Some(parent(&pane.browser.directory))
+                    browse = Some(file_browser::parent(&pane.browser.directory))
                 }
                 None => {}
             }
@@ -355,14 +364,6 @@ impl EditorApp {
             );
         }
     }
-}
-
-fn parent(path: &str) -> String {
-    std::path::Path::new(path)
-        .parent()
-        .unwrap_or(std::path::Path::new("/"))
-        .to_string_lossy()
-        .into()
 }
 
 fn pane_actions(ui: &mut egui::Ui, pane: &mut Pane) {

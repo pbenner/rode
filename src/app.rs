@@ -58,6 +58,7 @@ use transitions::Action;
 mod markdown;
 mod marp_view;
 mod menus;
+mod monitoring;
 mod navigation;
 mod notebook_view;
 mod pdf_view;

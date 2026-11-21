@@ -7,7 +7,7 @@ fn app() -> (EditorApp, egui::Context) {
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
     app.reveal_panel(Panel::Transfers, &ctx);
-    for (side, path) in [(0, "/local"), (1, "/remote")] {
+    for (side, path) in [(Side::Local, "/local"), (Side::Remote, "/remote")] {
         app.transfers.panes[side].browser.loaded(files::Response {
             path: path.into(),
             entries: vec![Entry {
@@ -27,15 +27,18 @@ fn extension_visibility_and_stale_listings_preserve_workspace_authority() {
     let root = app.workspace.as_ref().unwrap().root.clone();
     assert!(app.command_visible(Command::Panel(Panel::Transfers)));
     let generation = app.transfers.generation;
-    app.transfers.panes[1].view = file_browser::View::Icons;
+    app.transfers.panes[Side::Remote].view = file_browser::View::Icons;
     app.set_extension(crate::extensions::Feature::Transfers.id(), false);
-    assert_eq!(app.transfers.panes[1].view, file_browser::View::Icons);
+    assert_eq!(
+        app.transfers.panes[Side::Remote].view,
+        file_browser::View::Icons
+    );
     assert!(!app.command_visible(Command::Panel(Panel::Transfers)));
     app.transfers
         .send
         .send(Event::Listed {
             generation,
-            side: 1,
+            side: Side::Remote,
             token: 0,
             path: "/unrelated".into(),
             result: Ok(Box::new(files::Response {
@@ -45,7 +48,12 @@ fn extension_visibility_and_stale_listings_preserve_workspace_authority() {
         })
         .unwrap();
     app.transfer_tick(&ctx);
-    assert!(app.transfers.panes[1].browser.directory.is_empty());
+    assert!(
+        app.transfers.panes[Side::Remote]
+            .browser
+            .directory
+            .is_empty()
+    );
     assert_eq!(app.workspace.as_ref().unwrap().root, root);
     app.set_extension(crate::extensions::Feature::Transfers.id(), true);
     assert!(app.command_visible(Command::Panel(Panel::Transfers)));
@@ -56,9 +64,9 @@ fn extension_visibility_and_stale_listings_preserve_workspace_authority() {
 #[test]
 fn moving_the_transfer_view_preserves_listings_selection_and_running_copy() {
     let (mut app, ctx) = app();
-    app.transfers.panes[0].view = file_browser::View::Icons;
-    app.transfers.panes[0].query = "file".into();
-    app.transfers.panes[0]
+    app.transfers.panes[Side::Local].view = file_browser::View::Icons;
+    app.transfers.panes[Side::Local].query = "file".into();
+    app.transfers.panes[Side::Local]
         .selected
         .insert("/local/file.txt".into());
     let cancel = Arc::new(AtomicBool::new(false));
@@ -82,11 +90,21 @@ fn moving_the_transfer_view_preserves_listings_selection_and_running_copy() {
         app.detach_area(areas::Area::Transfers, &ctx);
         app.reattach_tool_tab(workbench::ToolTab::Panel(Panel::Transfers), &ctx);
         assert_eq!(app.transfers.generation, generation);
-        assert_eq!(app.transfers.panes[0].browser.directory, "/local");
-        assert_eq!(app.transfers.panes[1].browser.directory, "/remote");
-        assert_eq!(app.transfers.panes[0].view, file_browser::View::Icons);
-        assert_eq!(app.transfers.panes[0].query, "file");
-        assert!(app.transfers.panes[0].selected.contains("/local/file.txt"));
+        assert_eq!(app.transfers.panes[Side::Local].browser.directory, "/local");
+        assert_eq!(
+            app.transfers.panes[Side::Remote].browser.directory,
+            "/remote"
+        );
+        assert_eq!(
+            app.transfers.panes[Side::Local].view,
+            file_browser::View::Icons
+        );
+        assert_eq!(app.transfers.panes[Side::Local].query, "file");
+        assert!(
+            app.transfers.panes[Side::Local]
+                .selected
+                .contains("/local/file.txt")
+        );
         let running = app.transfers.running.as_ref().unwrap();
         assert_eq!(running.id, 42);
         assert!(Arc::ptr_eq(&running.progress, &progress));
@@ -189,7 +207,7 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
         (850., 560., 1.5, file_browser::View::Icons),
     ] {
         let (mut app, ctx) = app();
-        for pane in &mut app.transfers.panes {
+        for pane in app.transfers.panes.iter_mut() {
             pane.view = view;
         }
         ctx.set_pixels_per_point(scale);
@@ -235,7 +253,10 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
         let local = rect("transfer-path:0");
         let remote = rect("transfer-path:1");
         assert!(local[2] <= remote[0], "Browsers overlap: {snapshot}");
-        for (side, copy) in [(0, "transfer-upload"), (1, "transfer-download")] {
+        for (side, copy) in [
+            (Side::Local, "transfer-upload"),
+            (Side::Remote, "transfer-download"),
+        ] {
             let path = rect(&format!("transfer-path:{side}"));
             let filter = rect(&format!("transfer-filter:{side}"));
             let drop = rect(&format!("transfer-drop:{side}"));
@@ -275,25 +296,25 @@ fn compact_and_scaled_browsers_keep_separate_nonoverlapping_controls() {
 fn drag_snapshots_reject_same_side_stale_listings_and_changed_workspaces() {
     let (mut app, _) = app();
     let drag = drag::Files {
-        side: 0,
+        side: Side::Local,
         generation: app.transfers.generation,
-        token: app.transfers.panes[0].browser.token,
+        token: app.transfers.panes[Side::Local].browser.token,
         directory: "/local".into(),
         paths: vec!["/local/file.txt".into()],
     };
-    assert!(drag.valid(&app.transfers, 1));
-    assert!(!drag.valid(&app.transfers, 0));
-    app.transfers.panes[0].browser.token += 1;
-    assert!(!drag.valid(&app.transfers, 1));
-    app.transfers.panes[0].browser.token -= 1;
-    app.transfers.panes[1].browser.location = "/typed destination".into();
-    assert!(!drag.valid(&app.transfers, 1));
-    app.transfers.panes[1].browser.location = "/remote".into();
+    assert!(drag.valid(&app.transfers, Side::Remote));
+    assert!(!drag.valid(&app.transfers, Side::Local));
+    app.transfers.panes[Side::Local].browser.token += 1;
+    assert!(!drag.valid(&app.transfers, Side::Remote));
+    app.transfers.panes[Side::Local].browser.token -= 1;
+    app.transfers.panes[Side::Remote].browser.location = "/typed destination".into();
+    assert!(!drag.valid(&app.transfers, Side::Remote));
+    app.transfers.panes[Side::Remote].browser.location = "/remote".into();
     let mut unknown = drag.clone();
     unknown.paths.push("/not-listed".into());
-    assert!(!unknown.valid(&app.transfers, 1));
+    assert!(!unknown.valid(&app.transfers, Side::Remote));
     app.transfers.reset();
-    assert!(!drag.valid(&app.transfers, 1));
+    assert!(!drag.valid(&app.transfers, Side::Remote));
 }
 
 #[test]
@@ -309,7 +330,12 @@ fn desktop_drops_require_real_absolute_paths_and_listed_destinations() {
     assert!(drag::desktop_paths(&[file(None)]).is_err());
     assert!(drag::desktop_paths(&[file(Some("relative.txt"))]).is_err());
     let (mut app, ctx) = app();
-    app.queue_transfer_to(0, vec!["/local/file.txt".into()], "/unlisted".into(), &ctx);
+    app.queue_transfer_to(
+        Side::Local,
+        vec!["/local/file.txt".into()],
+        "/unlisted".into(),
+        &ctx,
+    );
     assert!(app.transfers.queue.is_empty());
     assert!(app.transfers.running.is_none());
     assert!(

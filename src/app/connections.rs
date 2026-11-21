@@ -30,15 +30,7 @@ impl EditorApp {
             }
         };
         if reconnect {
-            self.leave_debugger();
-            self.stop_latex();
-            self.workspace.cancel_connection();
-            self.terminal = None;
-            self.release_workspace_transport();
-            self.workers.invalidate_workspace();
-            self.workbench.stop_monitor();
-            self.explorer_state.loading.clear();
-            self.documents.reconnecting();
+            self.prepare_ssh_recovery();
         } else {
             self.reset_workspace(workspace::LeaveReason::ProjectChanged);
         }
@@ -86,6 +78,20 @@ impl EditorApp {
                 self.ssh_failed(format!("{error:#}"), ctx);
             }
         }
+    }
+
+    /// Release views bound to the replaced SSH transport while retaining recovery
+    /// bindings. Independent host tools reconcile their own selected connections;
+    /// reconnecting a project must not stop a local monitor.
+    fn prepare_ssh_recovery(&mut self) {
+        self.leave_debugger();
+        self.stop_latex();
+        self.workspace.cancel_connection();
+        self.terminal = None;
+        self.release_workspace_transport();
+        self.workers.invalidate_workspace();
+        self.explorer_state.loading.clear();
+        self.documents.reconnecting();
     }
 
     /// Await saves/file/lifetime acknowledgements before explicit disconnect; encrypted
@@ -208,6 +214,33 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_recovery_stops_only_monitoring_bound_to_the_replaced_connection() {
+        for remote_monitor in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = EditorApp::new(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                Startup::default(),
+            );
+            if !remote_monitor {
+                app.initialize_host_tool(Panel::Monitor);
+            }
+            app.workspace
+                .set_fixture(Some(crate::app::tests::remote_workspace()));
+            app.initialize_host_tool(Panel::Monitor);
+            app.host_tools.monitoring.set_active(true);
+            app.host_tools.monitoring.record(
+                crate::project::Monitor::default(),
+                Instant::now(),
+                Duration::from_secs(2),
+            );
+            app.prepare_ssh_recovery();
+            app.poll_host_tools(&ctx);
+            assert_eq!(app.host_tools.monitoring.active, !remote_monitor);
+            assert_eq!(app.host_tools.monitoring.history.len(), 1);
+        }
+    }
 
     #[test]
     fn explorer_shortcut_requests_connection_and_preserves_the_unsaved_buffer_guard() {

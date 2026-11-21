@@ -80,9 +80,9 @@ impl EditorApp {
         if let Some(error) = &self.transfers.error {
             ui.colored_label(palette.error, error);
         }
-        for side in 0..2 {
+        for side in Side::ALL {
             if self.transfers.panes[side].browser.location.is_empty() {
-                self.transfers.panes[side].browser.location = if side == 0 {
+                self.transfers.panes[side].browser.location = if side == Side::Local {
                     files::expand_home("~").to_string_lossy().into()
                 } else {
                     let Some(root) = self.transfer_host_root() else {
@@ -156,10 +156,10 @@ impl EditorApp {
             .resizable(true)
             .default_width((width - 8.) * 0.5)
             .width_range(minimum..=(width - minimum - 8.).max(minimum))
-            .show_inside(ui, |ui| self.transfer_pane_ui(ui, 0, ctx));
+            .show_inside(ui, |ui| self.transfer_pane_ui(ui, Side::Local, ctx));
         egui::CentralPanel::default()
             .frame(surface(palette))
-            .show_inside(ui, |ui| self.transfer_pane_ui(ui, 1, ctx));
+            .show_inside(ui, |ui| self.transfer_pane_ui(ui, Side::Remote, ctx));
         self.transfer_drag_preview(ctx);
     }
     /// Conflicts remain operable at compact sizes, independent of queue height

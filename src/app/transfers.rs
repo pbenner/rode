@@ -16,6 +16,57 @@ use rode_host_protocol::transfer::Request as TransferRequest;
 use std::sync::atomic::AtomicUsize;
 use std::{collections::VecDeque, sync::Mutex};
 
+/// Direction is part of a browser/drag intent, not an unchecked array index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Side {
+    Local,
+    Remote,
+}
+impl Side {
+    const ALL: [Self; 2] = [Self::Local, Self::Remote];
+    fn other(self) -> Self {
+        match self {
+            Self::Local => Self::Remote,
+            Self::Remote => Self::Local,
+        }
+    }
+    fn index(self) -> usize {
+        match self {
+            Self::Local => 0,
+            Self::Remote => 1,
+        }
+    }
+}
+impl std::fmt::Display for Side {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Keep existing native widget/probe identities independent of this model change.
+        self.index().fmt(formatter)
+    }
+}
+
+/// Only a Side can select per-endpoint state; the pair retains local/remote order.
+#[derive(Default)]
+struct Sides<T>([T; 2]);
+impl<T> Sides<T> {
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.0.iter_mut()
+    }
+}
+impl<T> std::ops::Index<Side> for Sides<T> {
+    type Output = T;
+    fn index(&self, side: Side) -> &T {
+        &self.0[side.index()]
+    }
+}
+impl<T> std::ops::IndexMut<Side> for Sides<T> {
+    fn index_mut(&mut self, side: Side) -> &mut T {
+        &mut self.0[side.index()]
+    }
+}
+
 struct Pending(Arc<AtomicUsize>);
 struct Listing(Arc<AtomicBool>);
 impl Drop for Listing {
@@ -72,7 +123,7 @@ struct Running {
 enum Event {
     Listed {
         generation: u64,
-        side: usize,
+        side: Side,
         token: u64,
         path: String,
         result: Result<Box<files::Response>, String>,
@@ -90,13 +141,13 @@ struct Finished {
 }
 /// Transient browser/queue state. Only explicit user actions launch workers.
 pub(super) struct State {
-    panes: [Pane; 2],
+    panes: Sides<Pane>,
     generation: u64,
     next: u64,
     send: mpsc::Sender<Event>,
     receive: mpsc::Receiver<Event>,
-    listings: [Arc<AtomicBool>; 2],
-    listing_active: [Arc<AtomicBool>; 2],
+    listings: Sides<Arc<AtomicBool>>,
+    listing_active: Sides<Arc<AtomicBool>>,
     queue: VecDeque<Task>,
     running: Option<Running>,
     history: VecDeque<Finished>,
@@ -173,29 +224,30 @@ impl State {
         if let Some(running) = &self.running {
             running.cancel.store(true, Ordering::Release);
         }
-        for (side, pane) in self.panes.iter_mut().enumerate() {
+        for side in Side::ALL {
+            let pane = &mut self.panes[side];
             self.listings[side].store(true, Ordering::Release);
             self.listings[side] = Arc::default();
             pane.browser.loading = false;
             pane.selected.clear();
         }
-        self.panes[1] = Pane {
-            view: self.panes[1].view,
+        self.panes[Side::Remote] = Pane {
+            view: self.panes[Side::Remote].view,
             ..Default::default()
         };
     }
 }
 
 impl EditorApp {
-    fn transfer_endpoint(&self, side: usize) -> Option<Endpoint> {
-        if side == 0 {
+    fn transfer_endpoint(&self, side: Side) -> Option<Endpoint> {
+        if side == Side::Local {
             return Some(Endpoint::local());
         }
         self.transfer_host_endpoint()
     }
     fn transfer_list(
         &mut self,
-        side: usize,
+        side: Side,
         path: String,
         create: Option<String>,
         ctx: &egui::Context,
@@ -267,15 +319,15 @@ impl EditorApp {
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         });
     }
-    fn queue_transfer(&mut self, side: usize, paths: Vec<String>, ctx: &egui::Context) {
-        let directory = self.transfers.panes[1 - side].browser.directory.clone();
+    fn queue_transfer(&mut self, side: Side, paths: Vec<String>, ctx: &egui::Context) {
+        let directory = self.transfers.panes[side.other()].browser.directory.clone();
         self.queue_transfer_to(side, paths, directory, ctx);
     }
     /// Buttons and drops enter the same bounded queue, with destination authority
     /// derived from a ready listing rather than from an arbitrary drag payload.
     fn queue_transfer_to(
         &mut self,
-        side: usize,
+        side: Side,
         paths: Vec<String>,
         directory: String,
         ctx: &egui::Context,
@@ -283,8 +335,8 @@ impl EditorApp {
         if paths.is_empty() || !self.panel_enabled(Panel::Transfers) {
             return;
         }
-        let target = &self.transfers.panes[1 - side];
-        if !target.ready() || (side == 1 && !self.transfers.panes[side].ready()) {
+        let target = &self.transfers.panes[side.other()];
+        if !target.ready() || (side == Side::Remote && !self.transfers.panes[side].ready()) {
             self.transfers.error =
                 Some("Finish browsing both folders before starting a copy.".into());
             return;
@@ -320,7 +372,7 @@ impl EditorApp {
             }
         }
         let paths = roots;
-        let target = 1 - side;
+        let target = side.other();
         if directory.is_empty() {
             self.transfers.error = Some("Choose a destination folder first.".into());
             return;
@@ -333,7 +385,11 @@ impl EditorApp {
         };
         let label = format!(
             "{} · {} selected",
-            if side == 0 { "Upload" } else { "Download" },
+            if side == Side::Local {
+                "Upload"
+            } else {
+                "Download"
+            },
             paths.len()
         );
         let job = Job {
@@ -414,7 +470,7 @@ impl EditorApp {
                             "{} files copied · {} skipped · {}",
                             progress.files,
                             progress.skipped,
-                            workbench::bytes(progress.bytes)
+                            layout::bytes(progress.bytes)
                         ),
                         Err(_) if cancelled => {
                             format!("Cancelled · {} files completed", progress.files)
@@ -424,8 +480,7 @@ impl EditorApp {
                     let refresh = running
                         .job
                         .to
-                        .remote
-                        .as_ref()
+                        .remote()
                         .map(|_| running.job.directory.clone());
                     state.history.push_front(Finished {
                         job: running.job,
@@ -436,7 +491,7 @@ impl EditorApp {
                     state.history.truncate(12);
                     if running.generation == state.generation {
                         state.refresh = refresh;
-                        for pane in &mut state.panes {
+                        for pane in state.panes.iter_mut() {
                             pane.browser.needs_load = true;
                         }
                     }
@@ -514,8 +569,8 @@ impl EditorApp {
         }
         self.reveal_panel(Panel::Transfers, ctx);
         if let Some(directory) = upload_to {
-            self.transfers.panes[1].browser.needs_load = true;
-            self.transfers.panes[1].browser.location = directory;
+            self.transfers.panes[Side::Remote].browser.needs_load = true;
+            self.transfers.panes[Side::Remote].browser.location = directory;
         }
         if let Some(entry) = download {
             let directory = if entry.dir {
@@ -527,9 +582,9 @@ impl EditorApp {
                     .to_string_lossy()
                     .into_owned()
             };
-            self.transfers.panes[1].browser.location = directory;
-            self.transfers.panes[1].browser.needs_load = true;
-            self.transfers.panes[1].reveal = Some(entry.path);
+            self.transfers.panes[Side::Remote].browser.location = directory;
+            self.transfers.panes[Side::Remote].browser.needs_load = true;
+            self.transfers.panes[Side::Remote].reveal = Some(entry.path);
             self.transfers.error = None;
         }
     }

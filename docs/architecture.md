@@ -216,15 +216,41 @@ Environment is a category of Project settings, with its own retained draft;
 secondary editor/tool windows keep their existing owners. Application navigation
 is presentation state, not execution authority.
 
+The main header reserves its fixed actions before measuring the menus/search
+region. Project tab rendering, sizing and fallback selection use the same ordered
+registry. Inline and wrapped toolbars share their window-control allocation;
+neither layout owns a controller or starts work.
+
 `host_tools::State` captures the selected SSH connection separately from the
-workspace. Its reply channel is independent of project-generation invalidation,
+workspace and owns live monitoring state. `src/app/monitoring.rs` and its chart
+modules render that application-wide state; project resets need no monitor
+retention exception. The host reply channel is independent of project-generation invalidation,
 so an in-flight monitor poll cannot lose its busy acknowledgement during a
-project switch. Changing the monitor host discards the old result before another
+project switch. Admitted replies complete in the monitoring module, outside the
+project-tool job dispatcher. Changing the monitor host discards the old result before another
 poll starts. Transfer bindings retain either the captured project generation or
 an explicitly prepared host-access context. Project authority expires with that
 project; neither a disconnected host nor an expired scope can fall back to local
 access. Explicit SSH disconnect still releases the original transport and leaves
 the tool's selection offline.
+
+File pickers and transfer panes reuse the directory-item renderer, selection
+visuals and lexical parent navigation. Their requests retain separate endpoint,
+generation and permission checks: sharing presentation never grants file access
+or changes the selected workspace.
+
+Transfer endpoints distinguish desktop access from SSH access. An SSH endpoint
+owns its connection and captured policy together, so missing policies and local
+endpoints carrying a remote policy cannot be constructed. Prepared host context
+and live transport checks still apply when opening its channel. Normal transfer
+I/O renews an idle timeout; shutdown uses one absolute cleanup I/O deadline for
+both pipes, so a slow responsive peer cannot keep cancellation waiting. Browser, queue
+and drag intents use a typed local/remote side; numeric ordinals are confined to
+collection indexing and stable widget identities.
+
+SSH recovery releases only the replaced connection's project views. Host tools
+reconcile their own selected connections, so a local monitor continues through
+project SSH reconnects while monitoring of a lost SSH host stops.
 
 One UI-thread owner avoids concurrent mutation of source buffers. Cancellation alone cannot revoke a result already queued, so generation/source checks remain necessary even for cancellable jobs. Stable tab/cell IDs preserve ownership across reordering, while positional indices are presentation state. See [worker results](#worker-results-and-version-checks).
 

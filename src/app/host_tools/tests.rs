@@ -14,8 +14,8 @@ fn app() -> (EditorApp, egui::Context) {
 
 #[test]
 fn selected_monitor_never_follows_a_new_workspace_or_falls_back_locally() {
-    let (mut app, ctx) = app();
-    app.initialize_host_tool(Panel::Monitor, &ctx);
+    let (mut app, _ctx) = app();
+    app.initialize_host_tool(Panel::Monitor);
     let socket = app
         .host_tools
         .monitor_remote
@@ -24,7 +24,7 @@ fn selected_monitor_never_follows_a_new_workspace_or_falls_back_locally() {
         .socket
         .clone();
     app.workspace.set_fixture(None);
-    app.initialize_host_tool(Panel::Monitor, &ctx);
+    app.initialize_host_tool(Panel::Monitor);
     assert_eq!(
         app.host_tools.monitor_remote.as_ref().unwrap().socket,
         socket
@@ -37,9 +37,51 @@ fn selected_monitor_never_follows_a_new_workspace_or_falls_back_locally() {
 }
 
 #[test]
-fn project_transfer_authority_expires_but_explicit_host_authority_survives_project_changes() {
+fn a_host_switch_drains_the_old_monitor_reply_before_admitting_the_new_host() {
     let (mut app, ctx) = app();
-    app.initialize_host_tool(Panel::Transfers, &ctx);
+    app.initialize_host_tool(Panel::Monitor);
+    let previous = app.host_tools.monitor_generation;
+    app.host_tools.monitoring.set_active(true);
+    app.host_tools.monitoring.monitor_busy = true;
+    app.select_monitor_host(None);
+    app.host_tools.monitoring.set_active(true);
+    app.host_tools
+        .tx
+        .send(Reply::Monitor {
+            generation: previous,
+            result: Err("Previous host disconnected".into()),
+        })
+        .unwrap();
+    app.poll_host_tools(&ctx);
+    assert!(!app.host_tools.monitoring.monitor_busy);
+    assert!(app.host_tools.monitoring.monitor_error.is_empty());
+    assert!(app.host_tools.monitoring.history.is_empty());
+    assert!(app.host_tools.monitoring.monitor_last.is_none());
+    assert!(app.host_tools.monitoring.active);
+
+    app.host_tools.monitoring.monitor_busy = true;
+    app.host_tools
+        .tx
+        .send(Reply::Monitor {
+            generation: app.host_tools.monitor_generation,
+            result: Ok(crate::project::Response::Monitor(crate::project::Monitor {
+                hostname: "selected-host".into(),
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    app.poll_host_tools(&ctx);
+    assert_eq!(app.host_tools.monitoring.history.len(), 1);
+    assert_eq!(
+        app.host_tools.monitoring.monitor.as_ref().unwrap().hostname,
+        "selected-host"
+    );
+}
+
+#[test]
+fn project_transfer_authority_expires_but_explicit_host_authority_survives_project_changes() {
+    let (mut app, _ctx) = app();
+    app.initialize_host_tool(Panel::Transfers);
     assert!(app.transfer_host_endpoint().is_some());
     let remote = app.host_tools.transfer_remote.clone().unwrap();
     app.workers.invalidate_workspace();
@@ -61,7 +103,7 @@ fn project_transfer_authority_expires_but_explicit_host_authority_survives_proje
 #[test]
 fn late_host_preparation_cannot_replace_a_newer_project_policy() {
     let (mut app, ctx) = app();
-    app.initialize_host_tool(Panel::Transfers, &ctx);
+    app.initialize_host_tool(Panel::Transfers);
     let generation = app.host_tools.transfer_generation;
     let remote = app.host_tools.transfer_remote.clone().unwrap();
     app.bind_project_transfers();

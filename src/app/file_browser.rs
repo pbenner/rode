@@ -430,7 +430,9 @@ pub(super) fn is_file_dialog(dialog: &Dialog) -> bool {
 fn is_save_dialog(dialog: &Dialog) -> bool {
     matches!(dialog, Dialog::Save(_) | Dialog::NotebookImage(_))
 }
-fn parent(path: &str) -> String {
+/// Pickers and transfer panes share lexical parent navigation. Root and empty
+/// leaves stay at `/`; resolving access and canonical paths belongs to the host.
+pub(super) fn parent(path: &str) -> String {
     std::path::Path::new(path)
         .parent()
         .filter(|path| !path.as_os_str().is_empty())

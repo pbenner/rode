@@ -18,24 +18,41 @@ use std::{
 
 /// Immutable destination captured before a task leaves the UI thread.
 #[derive(Clone)]
-pub(crate) struct Endpoint {
-    pub remote: Option<crate::ssh::Remote>,
-    pub plan: Option<crate::sandbox::Plan>,
+pub(crate) enum Endpoint {
+    Local,
+    Ssh(Box<SshEndpoint>),
+}
+
+/// Connection and policy form one captured authority; neither can be omitted
+/// or attached to a desktop endpoint. Construct through `Endpoint::ssh`.
+#[derive(Clone)]
+pub(crate) struct SshEndpoint {
+    remote: crate::ssh::Remote,
+    plan: crate::sandbox::Plan,
 }
 impl Endpoint {
     pub fn local() -> Self {
-        Self {
-            remote: None,
-            plan: None,
+        Self::Local
+    }
+    pub fn ssh(remote: crate::ssh::Remote, plan: crate::sandbox::Plan) -> Self {
+        Self::Ssh(Box::new(SshEndpoint { remote, plan }))
+    }
+    pub fn remote(&self) -> Option<&crate::ssh::Remote> {
+        match self {
+            Self::Local => None,
+            Self::Ssh(endpoint) => Some(&endpoint.remote),
+        }
+    }
+    pub fn plan(&self) -> Option<&crate::sandbox::Plan> {
+        match self {
+            Self::Local => None,
+            Self::Ssh(endpoint) => Some(&endpoint.plan),
         }
     }
     pub fn open(&self, cancel: Arc<AtomicBool>) -> Result<Client> {
-        if let Some(remote) = &self.remote {
+        if let Self::Ssh(endpoint) = self {
+            let SshEndpoint { remote, plan } = endpoint.as_ref();
             ensure!(remote.connected(), "SSH disconnected");
-            let plan = self
-                .plan
-                .as_ref()
-                .context("Missing captured project policy")?;
             ensure!(
                 plan.host_context.is_some(),
                 "Remote transfers require a prepared project context"
@@ -53,7 +70,6 @@ impl Endpoint {
             client.ready()?;
             Ok(Client::Stream(Box::new(client)))
         } else {
-            ensure!(self.plan.is_none(), "Local transfer scope must be explicit");
             Ok(Client::Local(Box::default()))
         }
     }
@@ -195,13 +211,9 @@ impl Drop for Stream {
     fn drop(&mut self) {
         // A cooperative Abort acknowledges stage cleanup before closing SSH.
         // Use an independent, short cleanup budget after user cancellation.
-        for pipe in [&mut self.input.cancel, &mut self.output.cancel] {
-            *pipe = Arc::default();
-        }
-        self.input.timeout = Duration::from_secs(2);
-        self.output.timeout = Duration::from_secs(2);
-        self.input.touched = Instant::now();
-        self.output.touched = Instant::now();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        self.input.cleanup_until(deadline);
+        self.output.cleanup_until(deadline);
         while self.writes > 0 {
             if self.reply().is_err() {
                 break;
@@ -220,6 +232,7 @@ struct Pipe<T> {
     cancel: Arc<AtomicBool>,
     touched: Instant,
     timeout: Duration,
+    deadline: Option<Instant>,
 }
 impl<T: AsRawFd> Pipe<T> {
     fn new(inner: T, cancel: Arc<AtomicBool>) -> io::Result<Self> {
@@ -233,14 +246,33 @@ impl<T: AsRawFd> Pipe<T> {
             cancel,
             touched: Instant::now(),
             timeout: Duration::from_secs(60),
+            deadline: None,
         })
     }
+
+    /// Cleanup gets an independent cancellation token and one shared deadline.
+    /// Successful I/O renews the normal idle timeout, never this cleanup budget.
+    fn cleanup_until(&mut self, deadline: Instant) {
+        self.cancel = Arc::default();
+        self.touched = Instant::now();
+        self.deadline = Some(deadline);
+    }
+
     fn ready(&mut self, events: libc::c_short) -> io::Result<()> {
         loop {
             if self.cancel.load(Ordering::Acquire) {
                 return Err(io::Error::new(
                     io::ErrorKind::ConnectionAborted,
                     "Transfer cancelled",
+                ));
+            }
+            if self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Transfer cleanup deadline elapsed",
                 ));
             }
             if self.touched.elapsed() > self.timeout {
@@ -267,6 +299,7 @@ impl<T: AsRawFd> Pipe<T> {
         }
     }
 }
+
 impl<T: Read + AsRawFd> Read for Pipe<T> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         loop {
@@ -308,5 +341,37 @@ impl<T: Write + AsRawFd> Write for Pipe<T> {
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn cleanup_deadline_is_not_renewed_by_successful_io() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let mut pipe = Pipe::new(stream, Arc::default()).unwrap();
+        let (start, ready) = std::sync::mpsc::sync_channel(0);
+        let writer = std::thread::spawn(move || {
+            peer.write_all(b"x").unwrap();
+            ready.recv().unwrap();
+            for _ in 0..100 {
+                if peer.write_all(b"x").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        // Acknowledge the peer before starting the deadline, so scheduling its
+        // first write cannot be mistaken for a stalled connection on a busy CI host.
+        pipe.read_exact(&mut [0]).unwrap();
+        pipe.cleanup_until(Instant::now() + Duration::from_millis(150));
+        start.send(()).unwrap();
+        let error = pipe.read_exact(&mut [0; 200]).unwrap_err();
+        drop(pipe);
+        writer.join().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 }

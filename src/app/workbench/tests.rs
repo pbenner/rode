@@ -291,35 +291,35 @@ fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     assert!(app.workspace.is_none());
-    assert!(app.monitor_ready());
+    assert!(app.monitor_host_ready());
     assert!(!app.project_ready());
     app.workbench_tick(&ctx);
-    assert!(!app.workbench.monitoring.monitor_busy);
+    assert!(!app.host_tools.monitoring.monitor_busy);
     app.toggle_panel(Panel::Monitor, &ctx);
     app.workbench_tick(&ctx);
-    assert!(!app.workbench.monitoring.active);
-    assert!(!app.workbench.monitoring.monitor_busy);
+    assert!(!app.host_tools.monitoring.active);
+    assert!(!app.host_tools.monitoring.monitor_busy);
     assert!(panel_text(&mut app, &ctx).contains("Start monitoring"));
-    app.workbench.monitoring.set_active(true);
+    app.host_tools.monitoring.set_active(true);
     app.open_area(areas::Area::Projects, &ctx);
     assert!(!app.panel_visible(Panel::Monitor));
     app.workbench_tick(&ctx);
-    assert!(app.workbench.monitoring.monitor_busy);
+    assert!(app.host_tools.monitoring.monitor_busy);
     let deadline = Instant::now() + Duration::from_secs(10);
-    while app.workbench.monitoring.monitor_busy && Instant::now() < deadline {
+    while app.host_tools.monitoring.monitor_busy && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
         app.poll(&ctx);
     }
     assert!(
-        !app.workbench.monitoring.monitor_busy,
+        !app.host_tools.monitoring.monitor_busy,
         "Host sampling did not complete"
     );
     assert!(
-        app.workbench.monitoring.monitor_error.is_empty(),
+        app.host_tools.monitoring.monitor_error.is_empty(),
         "{}",
-        app.workbench.monitoring.monitor_error
+        app.host_tools.monitoring.monitor_error
     );
-    let sample = app.workbench.monitoring.monitor.as_ref().unwrap();
+    let sample = app.host_tools.monitoring.monitor.as_ref().unwrap();
     assert!(!sample.cpus.is_empty());
     assert!(sample.memory_total > 0);
     assert!(sample.disk_total > 0);
@@ -334,25 +334,25 @@ fn monitor_requires_start_and_keeps_sampling_when_hidden_without_a_project() {
     assert!(labels.contains("Stop monitoring"), "{labels}");
 
     // Stop prevents due requests in both hidden and open panels and retains history.
-    app.workbench.monitoring.set_active(false);
-    let count = app.workbench.monitoring.history.len();
+    app.host_tools.monitoring.set_active(false);
+    let count = app.host_tools.monitoring.history.len();
     let due = Instant::now() - Duration::from_secs(31);
-    app.workbench.monitoring.monitor_last = Some(due);
+    app.host_tools.monitoring.monitor_last = Some(due);
     app.navigation.zoom = Some(navigation::Pane::Editor);
     app.workbench_tick(&ctx);
-    assert!(!app.workbench.monitoring.monitor_busy);
-    assert_eq!(app.workbench.monitoring.monitor_last, Some(due));
+    assert!(!app.host_tools.monitoring.monitor_busy);
+    assert_eq!(app.host_tools.monitoring.monitor_last, Some(due));
     app.navigation.zoom = None;
     app.workbench_tick(&ctx);
-    assert!(!app.workbench.monitoring.monitor_busy);
-    assert_eq!(app.workbench.monitoring.monitor_last, Some(due));
-    assert_eq!(app.workbench.monitoring.history.len(), count);
+    assert!(!app.host_tools.monitoring.monitor_busy);
+    assert_eq!(app.host_tools.monitoring.monitor_last, Some(due));
+    assert_eq!(app.host_tools.monitoring.history.len(), count);
 }
 #[test]
 fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
-    app.workbench.monitoring.set_active(true);
+    app.host_tools.monitoring.set_active(true);
     app.workbench.prefs.monitor_chart.seconds = 300;
     let view = app.workbench.prefs.monitor_chart;
     for result in [
@@ -362,38 +362,37 @@ fn resetting_monitor_history_rejects_pending_replies_and_starts_a_fresh_baseline
         })),
         Err("pre-reset error".into()),
     ] {
-        app.workbench.monitoring.record(
+        app.host_tools.monitoring.record(
             project::Monitor::default(),
             Instant::now() - Duration::from_secs(3 * 3600),
             Duration::from_secs(2),
         );
-        app.workbench.monitoring.monitor_busy = true;
-        app.workbench.monitoring.monitor_error = "Old error".into();
-        app.workbench.monitoring.reset_history();
-        assert!(app.workbench.monitoring.monitor_busy);
-        assert!(app.workbench.monitoring.history.is_empty());
-        app.handle_tool(ToolJob::Monitor, result, &ctx);
-        assert!(!app.workbench.monitoring.monitor_busy);
-        assert!(app.workbench.monitoring.monitor_last.is_none());
-        assert!(app.workbench.monitoring.monitor_error.is_empty());
-        assert!(app.workbench.monitoring.monitor.is_none());
-        assert!(app.workbench.monitoring.history.is_empty());
+        app.host_tools.monitoring.monitor_busy = true;
+        app.host_tools.monitoring.monitor_error = "Old error".into();
+        app.host_tools.monitoring.reset_history();
+        assert!(app.host_tools.monitoring.monitor_busy);
+        assert!(app.host_tools.monitoring.history.is_empty());
+        app.complete_host_monitor(result, &ctx);
+        assert!(!app.host_tools.monitoring.monitor_busy);
+        assert!(app.host_tools.monitoring.monitor_last.is_none());
+        assert!(app.host_tools.monitoring.monitor_error.is_empty());
+        assert!(app.host_tools.monitoring.monitor.is_none());
+        assert!(app.host_tools.monitoring.history.is_empty());
         assert_eq!(app.workbench.prefs.monitor_chart, view);
     }
-    app.handle_tool(
-        ToolJob::Monitor,
+    app.complete_host_monitor(
         Ok(project::Response::Monitor(project::Monitor {
             hostname: "fresh".into(),
             ..Default::default()
         })),
         &ctx,
     );
-    assert_eq!(app.workbench.monitoring.history.len(), 1);
+    assert_eq!(app.host_tools.monitoring.history.len(), 1);
     assert_eq!(
-        app.workbench.monitoring.monitor.as_ref().unwrap().hostname,
+        app.host_tools.monitoring.monitor.as_ref().unwrap().hostname,
         "fresh"
     );
-    assert!(app.workbench.monitoring.monitor_last.is_some());
+    assert!(app.host_tools.monitoring.monitor_last.is_some());
 }
 
 #[test]
@@ -407,36 +406,36 @@ fn stopping_and_disabling_monitoring_drain_pending_replies_before_a_restart() {
         }))
     };
     for restart_before_reply in [false, true] {
-        app.workbench.monitoring.set_active(true);
-        app.workbench.monitoring.monitor_busy = true;
-        app.workbench.monitoring.set_active(false);
+        app.host_tools.monitoring.set_active(true);
+        app.host_tools.monitoring.monitor_busy = true;
+        app.host_tools.monitoring.set_active(false);
         if restart_before_reply {
-            app.workbench.monitoring.set_active(true);
+            app.host_tools.monitoring.set_active(true);
         }
-        assert!(app.workbench.monitoring.monitor_busy);
-        app.handle_tool(ToolJob::Monitor, reply(), &ctx);
-        assert!(!app.workbench.monitoring.monitor_busy);
-        assert!(app.workbench.monitoring.monitor.is_none());
-        assert!(app.workbench.monitoring.history.is_empty());
+        assert!(app.host_tools.monitoring.monitor_busy);
+        app.complete_host_monitor(reply(), &ctx);
+        assert!(!app.host_tools.monitoring.monitor_busy);
+        assert!(app.host_tools.monitoring.monitor.is_none());
+        assert!(app.host_tools.monitoring.history.is_empty());
     }
-    app.workbench.monitoring.monitor_busy = true;
+    app.host_tools.monitoring.monitor_busy = true;
     app.set_extension(crate::extensions::Feature::Monitor.id(), false);
-    assert!(!app.workbench.monitoring.active);
-    assert!(app.workbench.monitoring.monitor_busy);
-    app.handle_tool(ToolJob::Monitor, reply(), &ctx);
-    assert!(!app.workbench.monitoring.monitor_busy);
+    assert!(!app.host_tools.monitoring.active);
+    assert!(app.host_tools.monitoring.monitor_busy);
+    app.complete_host_monitor(reply(), &ctx);
+    assert!(!app.host_tools.monitoring.monitor_busy);
     app.set_extension(crate::extensions::Feature::Monitor.id(), true);
-    assert!(!app.workbench.monitoring.active);
-    app.workbench.monitoring.set_active(true);
-    app.handle_tool(ToolJob::Monitor, reply(), &ctx);
-    assert_eq!(app.workbench.monitoring.history.len(), 1);
+    assert!(!app.host_tools.monitoring.active);
+    app.host_tools.monitoring.set_active(true);
+    app.complete_host_monitor(reply(), &ctx);
+    assert_eq!(app.host_tools.monitoring.history.len(), 1);
     app.workbench.reset_project();
-    assert!(app.workbench.monitoring.active);
-    assert_eq!(app.workbench.monitoring.history.len(), 1);
+    assert!(app.host_tools.monitoring.active);
+    assert_eq!(app.host_tools.monitoring.history.len(), 1);
 }
 
 #[test]
-fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
+fn remote_monitor_waits_for_authentication_before_sampling() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
@@ -454,11 +453,11 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
         sandbox_options: Default::default(),
     }));
     app.workbench.panel = Some(Panel::Monitor);
-    app.workbench.monitoring.set_active(true);
-    assert!(!app.monitor_ready());
+    app.host_tools.monitoring.set_active(true);
+    assert!(!app.monitor_host_ready());
     app.workbench_tick(&ctx);
-    assert!(!app.workbench.monitoring.monitor_busy);
-    assert!(app.workbench.monitoring.monitor.is_none());
+    assert!(!app.host_tools.monitoring.monitor_busy);
+    assert!(app.host_tools.monitoring.monitor.is_none());
 
     let labels = panel_text(&mut app, &ctx);
     assert!(labels.contains("Connect or reconnect"), "{labels}");
@@ -466,10 +465,10 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
     assert!(!labels.contains("Host overview"), "{labels}");
 
     app.workspace.as_mut().unwrap().connected = true;
-    assert!(app.monitor_ready());
+    assert!(app.monitor_host_ready());
     assert!(!app.project_ready());
-    app.workbench.monitoring.monitor_busy = true;
-    app.workbench.monitoring.record(
+    app.host_tools.monitoring.monitor_busy = true;
+    app.host_tools.monitoring.record(
         project::Monitor {
             hostname: "old-host".into(),
             ..Default::default()
@@ -477,25 +476,12 @@ fn remote_monitor_waits_for_authentication_and_ignores_stale_host_results() {
         Instant::now(),
         Duration::from_secs(2),
     );
-    app.workbench.reset_monitor();
-    let old_generation = app.workers.generation();
-    app.workers.invalidate_workspace();
-    app.workers
-        .workspace_at(&ctx, old_generation)
-        .send(WorkspaceEvent::Tool {
-            job: Box::new(ToolJob::Monitor),
-            result: Box::new(Ok(project::Response::Monitor(project::Monitor {
-                hostname: "old-host".into(),
-                ..Default::default()
-            }))),
-        })
-        .unwrap();
-    app.poll(&ctx);
-    assert!(!app.workbench.monitoring.monitor_busy);
-    assert!(app.workbench.monitoring.monitor.is_none());
-    assert!(app.workbench.monitoring.history.is_empty());
-    assert!(app.workbench.monitoring.monitor_last.is_none());
-    assert!(!app.workbench.monitoring.active);
+    // Host selection, rather than project generation, owns monitor cancellation.
+    app.host_tools.change_monitor_host();
+    assert!(app.host_tools.monitoring.monitor_busy);
+    assert!(app.host_tools.monitoring.monitor.is_none());
+    assert!(app.host_tools.monitoring.history.is_empty());
+    assert!(!app.host_tools.monitoring.active);
 }
 #[test]
 fn live_checks_skip_unbound_buffers_even_with_a_plain_text_adapter() {
@@ -915,10 +901,10 @@ fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits(
 #[test]
 fn legacy_monitor_preferences_import_once_and_project_changes_keep_application_settings() {
     let root = tempfile::tempdir().unwrap();
-    let (mut app, ctx) = app(root.path());
+    let (mut app, _ctx) = app(root.path());
     app.workbench.prefs.monitor_interval = 7;
     app.workbench.prefs.monitor_chart.seconds = 300;
-    app.initialize_host_tool(Panel::Monitor, &ctx);
+    app.initialize_host_tool(Panel::Monitor);
     assert!(app.areas.monitor_configured && app.areas.pending);
     assert_eq!(app.areas.prefs.monitor_interval, 7);
     assert_eq!(app.areas.prefs.monitor_chart.seconds, 300);

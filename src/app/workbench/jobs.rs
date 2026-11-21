@@ -97,10 +97,6 @@ impl EditorApp {
                 .as_ref()
                 .is_some_and(|w| w.ready && w.connected)
     }
-    /// Allow local host sampling without a project; SSH sampling requires its connection.
-    pub(super) fn monitor_ready(&self) -> bool {
-        self.monitor_host_ready()
-    }
     /// Copy the selected project root, or an empty string when no workspace exists.
     pub(in crate::app) fn root(&self) -> String {
         self.workspace
@@ -112,23 +108,23 @@ impl EditorApp {
     /// Schedule explicitly started host monitoring, visible Git refreshes and debounced diagnostics.
     /// Use cached timestamps and in-flight flags to avoid launching work every frame.
     pub(in crate::app) fn workbench_tick(&mut self, ctx: &egui::Context) {
-        if self.workbench.monitoring.active {
-            self.initialize_host_tool(Panel::Monitor, ctx);
+        if self.host_tools.monitoring.active {
+            self.initialize_host_tool(Panel::Monitor);
         }
         if self.feature(crate::extensions::Feature::Monitor)
-            && self.workbench.monitoring.active
+            && self.host_tools.monitoring.active
             && !self.exit_pending()
-            && self.monitor_ready()
+            && self.monitor_host_ready()
         {
             let interval = Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30));
-            if !self.workbench.monitoring.monitor_busy
+            if !self.host_tools.monitoring.monitor_busy
                 && self
-                    .workbench
+                    .host_tools
                     .monitoring
                     .monitor_last
                     .is_none_or(|time| time.elapsed() >= interval)
             {
-                self.workbench.monitoring.monitor_busy = true;
+                self.host_tools.monitoring.monitor_busy = true;
                 self.dispatch_host_monitor(ctx);
             }
             ctx.request_repaint_after(interval);
@@ -268,33 +264,6 @@ impl EditorApp {
                     Err(error) => self.notify(error, true),
                     _ => self.notify("Invalid extension response.", true),
                 }
-            }
-            ToolJob::Monitor => {
-                self.workbench.monitoring.monitor_busy = false;
-                let discard = self.workbench.monitoring.discard_reply();
-                if !self.feature(crate::extensions::Feature::Monitor)
-                    || !self.workbench.monitoring.active
-                    || discard
-                {
-                    ctx.request_repaint();
-                    return;
-                }
-                self.workbench.monitoring.monitor_error.clear();
-                match result {
-                    Ok(project::Response::Monitor(sample)) => {
-                        self.workbench.monitoring.record(
-                            sample,
-                            Instant::now(),
-                            Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30)),
-                        );
-                    }
-                    Err(error) => self.workbench.monitoring.monitor_error = error,
-                    _ => {
-                        self.workbench.monitoring.monitor_error =
-                            "Invalid host monitor response".into()
-                    }
-                }
-                self.workbench.monitoring.monitor_last = Some(Instant::now());
             }
             ToolJob::Environment { activate, selected } => {
                 if !self.feature(crate::extensions::Feature::Python) {

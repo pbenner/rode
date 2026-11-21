@@ -47,9 +47,9 @@ impl EditorApp {
                     } else {
                         format!(
                             "{} / {} · {}/s",
-                            workbench::bytes(progress.bytes),
-                            workbench::bytes(progress.total),
-                            workbench::bytes(
+                            layout::bytes(progress.bytes),
+                            layout::bytes(progress.total),
+                            layout::bytes(
                                 (progress.bytes as f64
                                     / progress.started.elapsed().as_secs_f64().max(0.1))
                                     as u64

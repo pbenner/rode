@@ -81,7 +81,7 @@ impl Area {
 #[serde(default)]
 pub(super) struct Preferences {
     pub monitor_interval: u64,
-    pub monitor_chart: workbench::monitoring::ChartView,
+    pub monitor_chart: monitoring::ChartView,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -162,7 +162,7 @@ impl EditorApp {
             return;
         };
         if let Some(panel) = area.panel() {
-            self.initialize_host_tool(panel, ctx);
+            self.initialize_host_tool(panel);
         }
         self.detach_tab(tab, ctx);
         if self.areas.active == area {
@@ -213,7 +213,7 @@ impl EditorApp {
         self.areas.active = area;
         self.navigation.zoom = None;
         if let Some(panel) = area.panel() {
-            self.initialize_host_tool(panel, ctx);
+            self.initialize_host_tool(panel);
         }
         if area == Area::Projects {
             let pane = match self.workbench.surface {

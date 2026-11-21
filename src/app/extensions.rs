@@ -133,7 +133,7 @@ impl EditorApp {
             }
             if id == Feature::Monitor.id() {
                 // Drain an outstanding reply before a re-enabled collector can restart.
-                self.workbench.stop_monitor();
+                self.host_tools.stop_monitor();
             }
             if self
                 .workbench

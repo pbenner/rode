@@ -9,7 +9,6 @@ mod code_tools;
 mod environment;
 mod git;
 mod jobs;
-pub(super) mod monitoring;
 mod python;
 mod sandbox_access;
 mod settings;
@@ -170,7 +169,6 @@ pub(super) enum ToolJob {
         revision: u64,
         operation: String,
     },
-    Monitor,
     Runtimes {
         settings: crate::environment::Settings,
     },
@@ -232,7 +230,6 @@ pub(super) struct Workbench {
     python: python::State,
     environment: environment::State,
     code_tools: code_tools::State,
-    monitoring: monitoring::State,
     git: git::State,
 }
 
@@ -333,7 +330,6 @@ impl Workbench {
     }
     /// Discard project runtime caches while retaining saved preferences and workspace-view choices.
     pub(super) fn reset_project(&mut self) {
-        let monitoring = std::mem::take(&mut self.monitoring);
         let preferences = std::mem::take(&mut self.preferences);
         let pending = self.preferences_pending;
         let panel = self.panel;
@@ -343,7 +339,6 @@ impl Workbench {
         let last_tool = self.last_tool;
         let floating_tabs = std::mem::take(&mut self.floating_tabs);
         *self = Self {
-            monitoring,
             preferences,
             preferences_pending: pending,
             panel,
@@ -354,23 +349,6 @@ impl Workbench {
             floating_tabs,
             ..Default::default()
         };
-    }
-    /// Stop collection while retaining cached readings and ownership of an in-flight reply.
-    pub(super) fn stop_monitor(&mut self) {
-        self.monitoring.set_active(false);
-    }
-    pub(super) fn change_monitor_host(&mut self) {
-        self.monitoring.set_active(false);
-        self.monitoring.reset_history();
-    }
-    pub(super) fn discard_monitor_completion(&mut self) {
-        self.monitoring.monitor_busy = false;
-        self.monitoring.discard_reply();
-    }
-    /// Clear host telemetry, start intent and rate baselines when changing execution hosts.
-    #[cfg(test)]
-    pub(super) fn reset_monitor(&mut self) {
-        self.monitoring = Default::default();
     }
     /// Snapshot applied settings under the current project key and flag an asynchronous save.
     /// An empty key means no project settings may be persisted yet.
@@ -464,7 +442,7 @@ impl EditorApp {
                     .add(egui::Label::new(palette.tag(&host)).truncate())
                     .on_hover_text(&host);
                 ui_probe::button(ui, &format!("workbench-panel:{}", panel.title()), &heading);
-                if panel == Panel::Monitor && !self.monitor_ready() {
+                if panel == Panel::Monitor && !self.monitor_host_ready() {
                     layout::empty(
                         ui,
                         "Host disconnected",
@@ -589,15 +567,6 @@ impl EditorApp {
 
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
-}
-pub(super) fn bytes(value: u64) -> String {
-    if value >= 1024 * 1024 * 1024 {
-        format!("{:.1} GiB", value as f64 / 1073741824.)
-    } else if value >= 1024 * 1024 {
-        format!("{:.1} MiB", value as f64 / 1048576.)
-    } else {
-        format!("{:.1} KiB", value as f64 / 1024.)
-    }
 }
 
 /// Compact shared selector for project opening, SSH profiles and saved access rules.

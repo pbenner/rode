@@ -19,6 +19,8 @@ enum Reply {
     },
 }
 pub(super) struct State {
+    /// Live host telemetry follows this window's host selection, never project resets.
+    pub monitoring: monitoring::State,
     monitor_initialized: bool,
     monitor_remote: Option<Remote>,
     monitor_generation: u64,
@@ -35,6 +37,7 @@ impl Default for State {
     fn default() -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
+            monitoring: Default::default(),
             monitor_initialized: false,
             monitor_remote: None,
             monitor_generation: 0,
@@ -49,6 +52,23 @@ impl Default for State {
         }
     }
 }
+impl State {
+    /// Stop collection while retaining cached readings and ownership of an in-flight reply.
+    pub fn stop_monitor(&mut self) {
+        self.monitoring.set_active(false);
+    }
+    /// Reset host readings and Start intent without losing an outstanding reply.
+    pub fn change_monitor_host(&mut self) {
+        self.monitoring.set_active(false);
+        self.monitoring.reset_history();
+    }
+    /// Release the old request slot without admitting stale telemetry.
+    pub fn discard_monitor_completion(&mut self) {
+        self.monitoring.monitor_busy = false;
+        self.monitoring.discard_reply();
+    }
+}
+
 impl EditorApp {
     fn selected_host_connected(&self, remote: &Remote) -> bool {
         self.workspace
@@ -61,7 +81,8 @@ impl EditorApp {
             })
             .map_or_else(|| remote.connected(), |workspace| workspace.connected)
     }
-    pub(super) fn initialize_host_tool(&mut self, panel: Panel, _ctx: &egui::Context) {
+    /// Capture each tool’s initial host once; later project changes cannot retarget it.
+    pub(super) fn initialize_host_tool(&mut self, panel: Panel) {
         match panel {
             Panel::Monitor if !self.host_tools.monitor_initialized => {
                 self.migrate_monitor_preferences();
@@ -77,20 +98,15 @@ impl EditorApp {
         }
     }
     pub(super) fn bind_project_transfers(&mut self) {
-        if let Some(workspace) = self
-            .workspace
-            .as_ref()
-            .filter(|w| w.ready && w.connected && w.remote.is_some())
+        if let Some(workspace) = self.workspace.as_ref().filter(|w| w.ready && w.connected)
+            && let Some(remote) = &workspace.remote
         {
             let host = TransferHost {
-                endpoint: crate::transfers::Endpoint {
-                    remote: workspace.remote.clone(),
-                    plan: Some(workspace.plan.clone()),
-                },
+                endpoint: crate::transfers::Endpoint::ssh(remote.clone(), workspace.plan.clone()),
                 project_generation: Some(self.workers.generation()),
             };
             self.transfers.reset();
-            self.host_tools.transfer_remote = host.endpoint.remote.clone();
+            self.host_tools.transfer_remote = host.endpoint.remote().cloned();
             self.host_tools.transfer = Some(host);
             self.host_tools.error = None;
             self.host_tools.transfer_generation =
@@ -118,13 +134,14 @@ impl EditorApp {
             return None;
         }
         host.endpoint
-            .remote
-            .as_ref()
+            .remote()
             .filter(|remote| self.selected_host_connected(remote))?;
         Some(host.endpoint.clone())
     }
     pub(super) fn transfer_host_root(&self) -> Option<String> {
-        self.transfer_host_endpoint()?.plan.map(|plan| plan.root)
+        self.transfer_host_endpoint()?
+            .plan()
+            .map(|plan| plan.root.clone())
     }
     pub(super) fn transfer_host_label(&self) -> String {
         self.host_tools
@@ -156,7 +173,7 @@ impl EditorApp {
         self.host_tools.monitor_initialized = true;
         self.host_tools.monitor_remote = remote;
         self.host_tools.monitor_generation = self.host_tools.monitor_generation.wrapping_add(1);
-        self.workbench.change_monitor_host();
+        self.host_tools.change_monitor_host();
     }
     /// Capture one read-only host request independently of the project reply generation.
     pub(super) fn dispatch_host_monitor(&self, ctx: &egui::Context) {
@@ -230,9 +247,9 @@ impl EditorApp {
             match reply {
                 Reply::Monitor { generation, result } => {
                     if generation == self.host_tools.monitor_generation {
-                        self.handle_tool(workbench::ToolJob::Monitor, result, ctx);
+                        self.complete_host_monitor(result, ctx);
                     } else {
-                        self.workbench.discard_monitor_completion();
+                        self.host_tools.discard_monitor_completion();
                     }
                 }
                 Reply::Prepared {
@@ -247,10 +264,7 @@ impl EditorApp {
                     match result {
                         Ok(plan) => {
                             self.host_tools.transfer = Some(TransferHost {
-                                endpoint: crate::transfers::Endpoint {
-                                    remote: Some(*remote),
-                                    plan: Some(plan),
-                                },
+                                endpoint: crate::transfers::Endpoint::ssh(*remote, plan),
                                 project_generation: None,
                             })
                         }
@@ -260,13 +274,13 @@ impl EditorApp {
             }
         }
         if !self.monitor_host_ready() {
-            self.workbench.stop_monitor();
+            self.host_tools.stop_monitor();
         }
         if self
             .host_tools
             .transfer
             .as_ref()
-            .and_then(|h| h.endpoint.remote.as_ref())
+            .and_then(|h| h.endpoint.remote())
             .is_some_and(|r| !r.connected())
             && self.transfers.pending()
         {
@@ -280,7 +294,7 @@ impl EditorApp {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
     ) {
-        self.initialize_host_tool(panel, ctx);
+        self.initialize_host_tool(panel);
         let remote = self
             .workspace
             .as_ref()

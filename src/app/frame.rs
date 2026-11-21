@@ -41,6 +41,67 @@ impl EditorApp {
         }
     }
 
+    /// Menus and workspace search share the header space left by fixed actions.
+    /// Keep their existing widget identities while the parent clips or scrolls this region.
+    fn titlebar_navigation(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, minimal: bool) {
+        let palette = self.themes.active().palette;
+        ui.horizontal_centered(|ui| {
+            if !minimal {
+                let (mark, _) = ui.allocate_exact_size(egui::vec2(26., 26.), Sense::hover());
+                ui.painter()
+                    .rect_filled(mark, 7, palette.accent.gamma_multiply(0.12));
+                ui.painter().text(
+                    mark.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "[r]",
+                    FontId::monospace(13.),
+                    palette.accent,
+                );
+                ui.label(
+                    RichText::new("RODE")
+                        .strong()
+                        .size(15.)
+                        .color(palette.heading_color()),
+                );
+                ui.add_space(14.);
+            }
+            self.menus(ui, ctx);
+            ui.add_space(if minimal { 4. } else { 12. });
+            let workspace_width = ui.available_width().clamp(0., 360.);
+            if workspace_width < 40. {
+                return;
+            }
+            let label = self
+                .workspace
+                .as_ref()
+                .map(|w| {
+                    format!(
+                        "{}  ·  {}",
+                        ssh::display_name(&w.root),
+                        if w.remote.is_some() {
+                            "SSH workspace"
+                        } else {
+                            "Local workspace"
+                        }
+                    )
+                })
+                .unwrap_or_else(|| "Your next workspace starts here".into());
+            let mut button = IconButton::new(Icon::Search, &label)
+                .color(palette.muted)
+                .truncate();
+            if workspace_width >= 250. {
+                button = button.shortcut("Ctrl+Shift+P");
+            }
+            let search = ui
+                .add_sized([workspace_width, 30.], button)
+                .on_hover_text(format!("{label}\nOpen command palette · Ctrl+Shift+P"));
+            ui_probe::button(ui, "workspace-search", &search);
+            if search.clicked() {
+                self.set_dialog(Dialog::Commands);
+            }
+        });
+    }
+
     /// Reserve actions at the right before measuring search space. A clipped,
     /// scrollable menu region keeps oversized fonts from overlapping those actions.
     pub(super) fn titlebar(&mut self, ctx: &egui::Context) {
@@ -101,71 +162,7 @@ impl EditorApp {
                                 )
                                 .show(ui, |ui| {
                                     ui.set_max_width(width);
-                                    ui.horizontal_centered(|ui| {
-                                        if !minimal {
-                                            let (mark, _) = ui.allocate_exact_size(
-                                                egui::vec2(26., 26.),
-                                                Sense::hover(),
-                                            );
-                                            ui.painter().rect_filled(
-                                                mark,
-                                                7,
-                                                palette.accent.gamma_multiply(0.12),
-                                            );
-                                            ui.painter().text(
-                                                mark.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                "[r]",
-                                                FontId::monospace(13.),
-                                                palette.accent,
-                                            );
-                                            ui.label(
-                                                RichText::new("RODE")
-                                                    .strong()
-                                                    .size(15.)
-                                                    .color(palette.heading_color()),
-                                            );
-                                            ui.add_space(14.);
-                                        }
-                                        self.menus(ui, ctx);
-                                        ui.add_space(if minimal { 4. } else { 12. });
-                                        let workspace_width = ui.available_width().clamp(0., 360.);
-                                        if workspace_width < 40. {
-                                            return;
-                                        }
-                                        let label = self
-                                            .workspace
-                                            .as_ref()
-                                            .map(|w| {
-                                                format!(
-                                                    "{}  ·  {}",
-                                                    ssh::display_name(&w.root),
-                                                    if w.remote.is_some() {
-                                                        "SSH workspace"
-                                                    } else {
-                                                        "Local workspace"
-                                                    }
-                                                )
-                                            })
-                                            .unwrap_or_else(|| {
-                                                "Your next workspace starts here".into()
-                                            });
-                                        let mut button = IconButton::new(Icon::Search, &label)
-                                            .color(palette.muted)
-                                            .truncate();
-                                        if workspace_width >= 250. {
-                                            button = button.shortcut("Ctrl+Shift+P");
-                                        }
-                                        let search = ui
-                                            .add_sized([workspace_width, 30.], button)
-                                            .on_hover_text(format!(
-                                                "{label}\nOpen command palette · Ctrl+Shift+P"
-                                            ));
-                                        ui_probe::button(ui, "workspace-search", &search);
-                                        if search.clicked() {
-                                            self.set_dialog(Dialog::Commands);
-                                        }
-                                    });
+                                    self.titlebar_navigation(ui, ctx, minimal);
                                 });
                         },
                     );

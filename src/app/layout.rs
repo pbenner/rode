@@ -12,6 +12,17 @@ use eframe::egui::{self, Align, Layout, RichText};
 #[cfg(test)]
 pub(super) mod tests;
 
+/// Shared binary-unit labels for monitoring and file-transfer progress.
+pub(super) fn bytes(value: u64) -> String {
+    if value >= 1024 * 1024 * 1024 {
+        format!("{:.1} GiB", value as f64 / 1073741824.)
+    } else if value >= 1024 * 1024 {
+        format!("{:.1} MiB", value as f64 / 1048576.)
+    } else {
+        format!("{:.1} KiB", value as f64 / 1024.)
+    }
+}
+
 /// Shared fixed document header and full-width boundary above a scrolling canvas.
 /// Callers own actions and optional rows; the surface never borrows cell/page scroll state.
 pub(super) fn document_toolbar<R>(

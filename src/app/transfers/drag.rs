@@ -4,17 +4,14 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct Files {
-    pub side: usize,
+    pub side: Side,
     pub generation: u64,
     pub token: u64,
     pub directory: String,
     pub paths: Vec<String>,
 }
 impl Files {
-    pub(super) fn valid(&self, state: &State, target: usize) -> bool {
-        if self.side >= 2 || target >= 2 {
-            return false;
-        }
+    pub(super) fn valid(&self, state: &State, target: Side) -> bool {
         let paths: HashSet<_> = state.panes[self.side]
             .browser
             .entries
@@ -77,7 +74,7 @@ impl EditorApp {
     pub(super) fn transfer_drop_ui(
         &mut self,
         ui: &mut egui::Ui,
-        side: usize,
+        side: Side,
         rect: egui::Rect,
         folder: Option<String>,
         ctx: &egui::Context,
@@ -101,7 +98,7 @@ impl EditorApp {
         let valid = payload
             .as_ref()
             .is_some_and(|files| files.valid(&self.transfers, side))
-            || external && side == 1 && self.transfers.panes[side].ready();
+            || external && side == Side::Remote && self.transfers.panes[side].ready();
         if payload.is_none() && !external {
             return;
         }
@@ -141,11 +138,12 @@ impl EditorApp {
             if let Some(files) = egui::DragAndDrop::take_payload::<Files>(ctx) {
                 self.queue_transfer_to(files.side, files.paths.clone(), destination, ctx);
             }
-        } else if external && side == 1 && ctx.input(|i| !i.raw.dropped_files.is_empty()) {
+        } else if external && side == Side::Remote && ctx.input(|i| !i.raw.dropped_files.is_empty())
+        {
             let files = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
             if valid {
                 match desktop_paths(&files) {
-                    Ok(paths) => self.queue_transfer_to(0, paths, destination, ctx),
+                    Ok(paths) => self.queue_transfer_to(Side::Local, paths, destination, ctx),
                     Err(error) => self.transfers.error = Some(error),
                 }
             } else {
@@ -176,7 +174,7 @@ impl EditorApp {
                     };
                     let label = ui.add(egui::Label::new(RichText::new(text).strong()).truncate());
                     ui_probe::button(ui, "transfer-dragging", &label);
-                    ui.weak(if files.side == 0 {
+                    ui.weak(if files.side == Side::Local {
                         "Copy to remote"
                     } else {
                         "Copy to this computer"

@@ -2,6 +2,9 @@
 //! preserve gaps and unavailable readings instead of plotting invented zeroes.
 use super::*;
 use crate::app::layout::card;
+use crate::project;
+use layout::bytes;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 mod dashboard;
@@ -172,6 +175,37 @@ fn percent_label(value: Option<f32>) -> String {
 }
 
 impl EditorApp {
+    /// Complete the captured host request after the host owner admits its generation.
+    /// Project changes do not participate in this channel; Stop/Reset still drain old replies.
+    pub(in crate::app) fn complete_host_monitor(
+        &mut self,
+        result: Result<project::Response, String>,
+        ctx: &egui::Context,
+    ) {
+        self.host_tools.monitoring.monitor_busy = false;
+        let discard = self.host_tools.monitoring.discard_reply();
+        if !self.feature(crate::extensions::Feature::Monitor)
+            || !self.host_tools.monitoring.active
+            || discard
+        {
+            ctx.request_repaint();
+            return;
+        }
+        self.host_tools.monitoring.monitor_error.clear();
+        match result {
+            Ok(project::Response::Monitor(sample)) => {
+                self.host_tools.monitoring.record(
+                    sample,
+                    Instant::now(),
+                    Duration::from_secs(self.areas.prefs.monitor_interval.clamp(1, 30)),
+                );
+            }
+            Err(error) => self.host_tools.monitoring.monitor_error = error,
+            _ => self.host_tools.monitoring.monitor_error = "Invalid host monitor response".into(),
+        }
+        self.host_tools.monitoring.monitor_last = Some(Instant::now());
+    }
+
     /// Render cached host metadata, responsive chart cards and expandable details;
     /// collection is scheduled separately and does not depend on visibility.
     pub(in crate::app) fn monitor_ui(&mut self, ui: &mut egui::Ui) {
@@ -179,17 +213,17 @@ impl EditorApp {
         layout::header(
             ui,
             "Host overview",
-            if self.workbench.monitoring.active {
+            if self.host_tools.monitoring.active {
                 "Running · collection continues while this panel is hidden"
             } else {
                 "Stopped · start monitoring to collect host readings"
             },
             palette,
             |ui| {
-                if self.workbench.monitoring.monitor_busy {
+                if self.host_tools.monitoring.monitor_busy {
                     ui.spinner();
                 }
-                let state = &mut self.workbench.monitoring;
+                let state = &mut self.host_tools.monitoring;
                 let toggle = crate::keyboard::button(
                     ui,
                     if state.active {
@@ -245,7 +279,7 @@ impl EditorApp {
             self.areas.prefs.monitor_chart = view;
             self.areas.pending = true;
         }
-        let state = &self.workbench.monitoring;
+        let state = &self.host_tools.monitoring;
         if !state.monitor_error.is_empty() {
             ui.colored_label(palette.error, &state.monitor_error);
         }
