@@ -307,7 +307,7 @@ fn global_root_navigation_does_not_hide_a_secondary_editors_explorer() {
 }
 
 #[test]
-fn global_navigation_keeps_visible_detached_project_tools_refreshing() {
+fn global_navigation_and_project_preparation_preserve_detached_tool_selection() {
     let ctx = egui::Context::default();
     let mut app = EditorApp::new(
         &eframe::CreationContext::_new_kittest(ctx.clone()),
@@ -318,9 +318,25 @@ fn global_navigation_keeps_visible_detached_project_tools_refreshing() {
     app.open_area(Area::Settings, &ctx);
     assert!(app.tools_visible());
     assert!(app.panel_visible(Panel::Problems));
+    let project = tempfile::tempdir().unwrap();
+    for login in [false, true] {
+        if login {
+            app.login_terminal_intent();
+        }
+        app.open_area(Area::Welcome, &ctx);
+        let response = files::local(&Request::Prepare {
+            path: project.path().to_string_lossy().into(),
+            sandbox: Default::default(),
+        })
+        .unwrap();
+        app.commit_project(response, false, Default::default(), false, None, &ctx);
+        assert!(app.presentation.detached);
+        assert!(app.tools_visible());
+        assert_eq!(app.presentation.panel, Some(Panel::Problems));
+    }
     app.presentation.hide_tools();
     assert!(!app.panel_visible(Panel::Problems));
-    assert_eq!(app.presentation.area, Area::Settings);
+    assert_eq!(app.presentation.area, Area::Welcome);
 }
 
 #[test]

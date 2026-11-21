@@ -43,9 +43,10 @@ def window_for(process, log_path):
 class ProjectUI(NativeUI):
     """Project-specific checks built on the shared native interaction driver."""
 
-    def __init__(self, window, process, log_path, environment):
+    def __init__(self, window, process, log_path, environment, local_cwd):
         super().__init__(window, process, log_path, environment["RODE_UI_TEST_STATE"])
         self.environment = environment
+        self.local_cwd = local_cwd
 
     def command(self, value):
         palette_command(self.window, self.process, self.log_path, self.state_path, value)
@@ -212,10 +213,24 @@ class ProjectUI(NativeUI):
             "The background terminal replaced the editor",
         )
 
-    def disconnected(self):
-        self.wait(lambda: '"RODE"' in self.title(), "Disconnect did not clear the host")
+    def disconnected(self, *, explorer=True, closed=False):
+        self.project(self.local_cwd)
         self.value("status-connection-value", "LOCAL")
         self.absent("disconnect-ssh")
+        self.value("status-access-value", "Normal")
+        if explorer:
+            self.command("Navigation: Focus explorer")
+            self.control("explorer-row:" + str(self.local_cwd / "local-only.txt"))
+        if closed:
+            self.layout(
+                lambda state: (
+                    not any(
+                        button["name"].startswith(("editor-tab:", "active-document:"))
+                        for button in state["buttons"]
+                    )
+                ),
+                "Disconnect did not close every file tab",
+            )
 
     def failure(self, label):
         state_path = Path(self.state_path)
@@ -241,6 +256,9 @@ def session_rpc(environment, action, **values):
 def run(remote=False, fallback=False):
     label = "ssh" if remote else "fallback" if fallback else "sandbox"
     with fixture_directory(prefix="rode-project-ui-") as base:
+        desktop = base / "desktop"
+        desktop.mkdir()
+        (desktop / "local-only.txt").write_text("Desktop CWD after disconnect\n")
         first, second, local = (
             base / name for name in ("first-project", "second-project", "local-project")
         )
@@ -312,11 +330,11 @@ def run(remote=False, fallback=False):
         else:
             args += [str(first)]
         with (ARTIFACTS / (label + ".log")).open("w") as log:
-            process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
+            process = subprocess.Popen(args, cwd=desktop, env=environment, stdout=log, stderr=log)
             ui = None
             try:
                 window = window_for(process, log.name)
-                ui = ProjectUI(window, process, log.name, environment)
+                ui = ProjectUI(window, process, log.name, environment, desktop)
                 ui.project(first, remote)
                 ui.click("status-project")
                 ui.control("status-copy-project")
@@ -334,6 +352,11 @@ def run(remote=False, fallback=False):
                 if fallback:
                     assert "[Sandbox]" not in ui.title()
                     ui.value("status-access-value", "Normal · unavailable")
+                # Automatic project shells and SSH login must not choose Terminal for the toggle.
+                ui.click("workspace-sidebar")
+                ui.control("agent-composer")
+                ui.click("workspace-sidebar")
+                ui.control("workspace-sidebar-closed")
                 ui.edit_file(first / "alpha.rs", label + "-first-saved")
                 screenshot(window, label + "-project.png")
                 if launch_copy is not None:
@@ -377,14 +400,21 @@ def run(remote=False, fallback=False):
                     temporary = ui.terminal(second)
                     assert temporary["id"] != persistent["id"], temporary
                     assert not temporary["persistent"], temporary
-                    # The complete dirty buffer must survive disconnect, while
-                    # the nonpersistent terminal must not survive its last view.
+                    # Explicit disconnect must allow cancellation before closing any tab or
+                    # terminal, then require discard approval for the unchanged dirty buffer.
                     contents = (second / "beta.rs").read_text()
-                    ui.append(contents, "survives-disconnect")
+                    ui.append(contents, "discarded-on-disconnect")
                     ui.resize(850, 560)
                     screenshot(window, "ssh-disconnect-compact.png")
                     ui.click("disconnect-ssh")
-                    ui.disconnected()
+                    ui.control("guard-discard")
+                    ui.click("guard-keep-editing")
+                    ui.absent("guard-discard")
+                    ui.project(second, remote=True)
+                    ui.copy("source-editor", contents + "\n// discarded-on-disconnect")
+                    ui.click("disconnect-ssh")
+                    ui.click("guard-discard")
+                    ui.disconnected(closed=True)
                     ui.wait(
                         lambda: (
                             [info["id"] for info in session_rpc(environment, "list")]
@@ -394,8 +424,7 @@ def run(remote=False, fallback=False):
                     )
                     assert (second / "beta.rs").read_text() == contents
                     screenshot(window, "ssh-disconnected.png")
-                    # Dirty disconnected remote tabs must not keep folder
-                    # discovery bound to the lost host.
+                    # Folder discovery now belongs to the desktop CWD.
                     ui.picker()
                     screenshot(window, "ssh-disconnected-local-picker.png")
                     ui.click("project-dialog-cancel")
@@ -403,16 +432,15 @@ def run(remote=False, fallback=False):
                     ui.click("status-connection")
                     ui.click("status-reconnect")
                     ui.project(second, remote=True)
-                    ui.remote_editor(second)
-                    ui.copy("source-editor", contents + "\n// survives-disconnect")
+                    ui.remote_editor(second, welcome=True)
+                    ui.edit_file(second / "beta.rs", "saved-before-disconnect")
                     ui.command("Toggle terminal")
                     ui.terminal(second)
                     screenshot(window, "ssh-reconnected-compact.png")
                     ui.resize(1380, 900)
                     ui.editor()
-                    ui.copy("source-editor", contents + "\n// survives-disconnect")
-                    key("s", ("Control_L",))
-                    ui.saved_edit(second / "beta.rs", "survives-disconnect")
+                    contents = (second / "beta.rs").read_text()
+                    ui.copy("source-editor", contents)
                     ui.command("Terminal: Sessions and Slurm allocations")
                     ui.layout(
                         lambda state: persistent["id"] in (state["session_ids"] or []),
@@ -425,10 +453,11 @@ def run(remote=False, fallback=False):
                         "The session manager did not close",
                     )
                     ui.command("Remote: Disconnect SSH")
-                    ui.disconnected()
+                    ui.disconnected(closed=True)
                     ui.command("Remote: Reconnect SSH")
                     ui.project(second, remote=True)
-                    ui.remote_editor(second)
+                    ui.remote_editor(second, welcome=True)
+                    ui.open_file(second / "beta.rs")
                     ui.command("Toggle terminal")
                     ui.terminal(second)
                     # Close only this GUI's private master to exercise
@@ -449,6 +478,8 @@ def run(remote=False, fallback=False):
                         assert str(master_socket).encode() in arguments, arguments
                         os.kill(owner, signal.SIGTERM)
                     ui.disconnected()
+                    ui.editor()
+                    ui.copy("source-editor", contents)
                     screenshot(window, "ssh-lost-local-mode.png")
                     ui.open_project(local)
                     ui.edit_file(local / "local.rs", "saved-locally-after-ssh-loss")
@@ -480,6 +511,7 @@ def run(remote=False, fallback=False):
 def failed_connection(backend):
     """A real refused SSH login must leave copyable diagnostics, not a local shell."""
     with fixture_directory(prefix="rode-ssh-failure-ui-") as base:
+        (base / "local-only.txt").write_text("Local CWD after a failed login\n")
         # Reserve a loopback port without listening; no real host/account is contacted.
         with socket.socket() as reserved:
             reserved.bind(("127.0.0.1", 0))
@@ -519,9 +551,9 @@ def failed_connection(backend):
                 ui = None
                 try:
                     window = window_for(process, log.name)
-                    ui = ProjectUI(window, process, log.name, environment)
+                    ui = ProjectUI(window, process, log.name, environment, base)
                     ui.control("terminal-output-ended")
-                    ui.disconnected()
+                    ui.disconnected(explorer=False)
                     screenshot(window, f"ssh-login-error-output-{backend}.png")
                     ui.click("terminal-output-ended")
                     ui.control("terminal-output-ended", focused=True)

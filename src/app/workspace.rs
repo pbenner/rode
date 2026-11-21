@@ -41,6 +41,66 @@ pub(super) enum PickerReset {
 }
 
 impl EditorApp {
+    /// Return to the desktop after SSH teardown. Keep recovery buffers/leases independent of this
+    /// neutral context, and defer while a close decision or encrypted lock still owns the window.
+    pub(in crate::app) fn restore_local_workspace(&mut self, ctx: &egui::Context) {
+        if self.exit.waiting()
+            || self.exit.closing()
+            || self.pending.as_ref().is_some()
+            || self.vaults.locking()
+            || self.explorer_state.busy
+            || !self.workspace.take_local_fallback()
+        {
+            return;
+        }
+        match std::env::current_dir() {
+            Ok(path) => self.prepare_project(
+                path.to_string_lossy().into_owned(),
+                Default::default(),
+                false,
+                true,
+                PreparationPolicy::LocalFallback,
+                ctx,
+            ),
+            Err(error) => self.notify(
+                format!("Cannot reopen the local working directory: {error}"),
+                true,
+            ),
+        }
+    }
+
+    /// An acknowledged local fallback installs no remote authority and discards no buffer, lease or
+    /// foreground view. A newer project/connection already invalidates its preparation identity.
+    pub(in crate::app) fn commit_local_fallback(
+        &mut self,
+        response: Response,
+        ctx: &egui::Context,
+    ) {
+        if self.workspace.is_some() || self.exit.waiting() || self.exit.closing() {
+            return;
+        }
+        let Some(plan) = response.project else {
+            self.notify("Host returned an invalid local project description.", true);
+            return;
+        };
+        if plan.active || plan.requested || !plan.prefix.is_empty() || plan.host_context.is_some() {
+            self.notify(
+                "Local working-directory fallback requires Normal mode on this computer.",
+                true,
+            );
+            return;
+        }
+        self.workspace
+            .activate_local_fallback(response.path.clone(), plan);
+        self.explorer_state.expanded.insert(response.path.clone());
+        self.explorer_state
+            .directories
+            .insert(response.path, response.entries);
+        self.explorer_state.tree_dirty = true;
+        self.load_project_tools(ctx, false);
+        self.status = "Local project · NORMAL MODE".into();
+    }
+
     /// Capture document versions so a late candidate cannot discard edits made during
     /// preparation. Explorer mutations and preparation are mutually exclusive so a
     /// candidate cannot replace a file operation's captured workspace.
@@ -83,7 +143,7 @@ impl EditorApp {
         }
         // Implicit startup is deliberately independent of global grants,
         // saved per-project policies and sandbox host availability.
-        let options = if policy == PreparationPolicy::CurrentDirectory {
+        let options = if policy.implicit_local() {
             sandbox::Options::default()
         } else {
             options
@@ -188,7 +248,7 @@ impl EditorApp {
             .directories
             .insert(response.path, response.entries);
         self.explorer_state.tree_dirty = true;
-        self.load_project_tools(ctx, policy != PreparationPolicy::CurrentDirectory);
+        self.load_project_tools(ctx, !policy.implicit_local());
         if let Some(draft) = settings_draft {
             self.restore_settings_draft(draft);
         }
@@ -210,6 +270,18 @@ impl EditorApp {
         if show_welcome || (opening_connection && self.documents.active().is_none()) {
             // A fresh login stays on Welcome. Late shell attachment must not
             // take over this presentation or the remembered project view.
+            if self.presentation.surface == tool_windows::Surface::Terminal
+                && self.presentation.last_tool != Some(tool_windows::ToolTab::Terminal)
+            {
+                if let Some(tool_windows::ToolTab::Panel(panel)) = self.presentation.last_tool
+                    && self.panel_enabled(panel)
+                    && !self.tab_detached(tool_windows::ToolTab::Panel(panel))
+                {
+                    self.presentation.select_panel(panel);
+                } else {
+                    self.presentation.select_editor();
+                }
+            }
             self.open_area(areas::Area::Welcome, ctx);
         } else if opening_connection {
             // Reconnect resumes retained buffers, including unsaved recovery

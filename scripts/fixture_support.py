@@ -8,7 +8,9 @@ import hashlib
 import os
 import re
 import shlex
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -118,8 +120,66 @@ def fixture_directory(*, prefix, awkward=True):
     """Own a private fixture directory using the same canonical paths as the host."""
     if awkward and os.environ.get("RODE_TEST_AWKWARD_PATHS") == "1":
         prefix += "space ' -"
-    with tempfile.TemporaryDirectory(prefix=prefix, dir=temporary_root()) as directory:
-        yield Path(directory).resolve()
+    directory = tempfile.TemporaryDirectory(prefix=prefix, dir=temporary_root())
+    try:
+        yield Path(directory.name).resolve()
+    except BaseException:
+        try:
+            directory.cleanup()
+        except OSError as error:
+            print(f"Fixture cleanup failed at {directory.name}: {error}", file=sys.stderr)
+        raise
+    else:
+        directory.cleanup()
+
+
+def cleanup_fixture_mounts(directory, destinations):
+    """Detach declared RODE SSHFS mounts before deleting a failed fixture's directories.
+
+    Run after its processes stop. Successful scenarios must assert ordinary unmount/shutdown
+    before this last-resort cleanup; a lazy detach cannot count as a passing lifecycle check.
+    Inspect mountinfo without traversing potentially disconnected mount paths.
+    """
+    root = Path(directory).resolve()
+    paths = {Path(os.path.abspath(path)) for path in destinations}
+    if any(path == root or not path.is_relative_to(root) for path in paths):
+        raise ValueError("Mount cleanup requires destinations inside its private fixture")
+    if not paths:
+        return
+    entries = {path: [] for path in paths}
+    try:
+        for line in Path("/proc/self/mountinfo").read_text(errors="surrogateescape").splitlines():
+            before, separator, after = line.partition(" - ")
+            fields, kind = before.split(), after.split()
+            if not separator or len(fields) < 5 or len(kind) < 2:
+                continue
+            path = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4]))
+            if path in entries:
+                entries[path].append(kind[:2])
+    except OSError as error:
+        print(f"Cannot inspect fixture mounts: {error}", file=sys.stderr)
+        return
+    tool = shutil.which("fusermount3") or shutil.which("fusermount")
+    for path, mounted in entries.items():
+        if not mounted:
+            continue
+        if (
+            len(mounted) != 1
+            or mounted[0][0] != "fuse.sshfs"
+            or not re.fullmatch(r"rode-share-[0-9a-fA-F]{32}", mounted[0][1])
+        ):
+            print(f"Refusing cleanup of an unrelated or stacked mount at {path}", file=sys.stderr)
+            continue
+        try:
+            if not tool:
+                raise OSError("fusermount3/fusermount is unavailable")
+            result = subprocess.run(
+                [tool, "-uz", "--", str(path)], capture_output=True, text=True, timeout=10
+            )
+            if result.returncode:
+                raise OSError(result.stderr.strip() or f"Unmount exited with {result.returncode}")
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"Cannot detach fixture mount {path}: {error}", file=sys.stderr)
 
 
 def private_directory(path):

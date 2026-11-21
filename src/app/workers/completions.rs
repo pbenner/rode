@@ -145,6 +145,12 @@ impl EditorApp {
                     policy,
                     ..
                 } => {
+                    if policy == workspace::PreparationPolicy::LocalFallback {
+                        if !remote && keep_buffers {
+                            self.commit_local_fallback(response, ctx);
+                        }
+                        return;
+                    }
                     self.workspace.hold_prepared(
                         token,
                         workspace::Prepared {

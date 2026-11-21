@@ -295,6 +295,16 @@ impl EditorApp {
     /// Select and reveal the terminal surface while preserving its running shell.
     pub(in crate::app) fn terminal_intent(&mut self) {
         self.presentation.select_terminal();
+        self.terminal_focus_intent();
+    }
+
+    /// Login output is temporary presentation, not an explicit Project tools selection.
+    pub(in crate::app) fn login_terminal_intent(&mut self) {
+        self.presentation.show_terminal();
+        self.terminal_focus_intent();
+    }
+
+    fn terminal_focus_intent(&mut self) {
         self.navigation.terminal_intent();
         self.navigation.request_focus(
             navigation::Pane::Terminal,
@@ -311,7 +321,6 @@ impl EditorApp {
         }
         self.navigation.zoom = None;
         if visible {
-            self.presentation.remember_selected();
             if self.presentation.detached {
                 self.presentation.hide_tools();
                 keyboard::forget(ctx, Self::tools_viewport());

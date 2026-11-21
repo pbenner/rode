@@ -53,6 +53,8 @@ still consume the per-frame budget, keeping a stale-message flood from starving
 native input. Numeric generation reads outside the inbox are limited to
 project-bound draft/cache identities; producers do not assemble reply lifetimes.
 
+After SSH teardown, the workspace controller queues one Normal-mode local CWD preparation. Its reply must match the current workspace generation and preparation identity. Explicit disconnect first closes all documents through the common versioned unsaved-change and save-acknowledgement guards; forced transport loss keeps recovery buffers. Installing the neutral local context preserves any remaining disconnected buffers and lost encrypted leases; it does not run project teardown or a discard decision again. Vault events may suspend or clear the workspace only while the lease still matches its root and transport, so delayed remote cleanup cannot affect the restored desktop. Only this fallback, rather than an explicitly selected local project, keeps the remembered SSH recovery identity eligible while all documents are unbound.
+
 ## Source map
 
 | Source | Responsibility |
@@ -377,7 +379,7 @@ One UI-thread owner avoids concurrent mutation of source buffers. Cancellation a
 
 ### SSH clients and remote service peers
 
-The default embedded russh client owns a connection process with interactive authentication in a real PTY. Common OpenSSH configuration, keys, agents and native jump-host channels are supported; an explicitly selected OpenSSH backend preserves advanced configuration compatibility. File/tool/project-shell subprocesses attach to the existing connection through bounded local frames. Linux control endpoints reuse the sealed process capability and reject foreign mount namespaces. Neither backend starts a fresh login when a channel loses its master; disconnect preserves recoverable buffers. Native client implementation and compatibility limits live in `src/ssh/native/` and [remote connections](remote.md#client-compatibility).
+The default embedded russh client owns a connection process with interactive authentication in a real PTY. Common OpenSSH configuration, keys, agents and native jump-host channels are supported; an explicitly selected OpenSSH backend preserves advanced configuration compatibility. File/tool/project-shell subprocesses attach to the existing connection through bounded local frames. Linux control endpoints reuse the sealed process capability and reject foreign mount namespaces. Neither backend starts a fresh login when a channel loses its master; unexpected transport loss preserves recoverable buffers. Native client implementation and compatibility limits live in `src/ssh/native/` and [remote connections](remote.md#client-compatibility).
 
 Native SSH deploys a small verified helper and reuses the same Rust services as local execution. Its distribution and protocol checks replace the general interpreter prerequisite. Persistent sessions have a separate process owner because their jobs must survive a gateway or editor exit. Rationale lives in `src/ssh.rs` and `crates/rode-session/src/lib.rs`; [remote setup](remote.md) records the prerequisites.
 

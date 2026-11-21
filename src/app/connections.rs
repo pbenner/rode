@@ -1,8 +1,9 @@
-//! Losing a transport clears workspace selection. Retained buffers have no
+//! Losing a transport restores the desktop CWD. Retained remote buffers have no
 //! writable path until Save As or an explicit reconnect to the same project.
+//! Explicit disconnect closes all tabs after the common unsaved-change decision.
 //!
 //! Disconnect invalidates host work and unbinds retained documents before restoring local
-//! opening. Reconnect restores paths/revisions only for the same explicitly selected
+//! opening in Normal mode. Reconnect restores paths/revisions only for the same explicitly selected
 //! host/project after preparation; recovery metadata alone never authorizes a save.
 use super::*;
 
@@ -44,7 +45,7 @@ impl EditorApp {
                 let alive = terminal.alive.clone();
                 self.ssh_master = Some(terminal);
                 self.show_terminal = true;
-                self.terminal_intent();
+                self.login_terminal_intent();
                 self.status = "Connecting · complete any prompts in the terminal".into();
                 let cancel = self.workspace.begin_connection();
                 let replies = self.workers.workspace(ctx);
@@ -94,8 +95,8 @@ impl EditorApp {
         self.documents.reconnecting();
     }
 
-    /// Await saves/file/lifetime acknowledgements before explicit disconnect; encrypted
-    /// leases retain their lock guard. Forced transport loss uses detach_ssh directly.
+    /// Confirm unsaved changes and await saves/file/lifetime acknowledgements before closing
+    /// all tabs on explicit disconnect. Encrypted leases retain their lock guard.
     pub(super) fn disconnect_ssh(&mut self, ctx: &egui::Context) {
         self.guarded(Action::Disconnect, ctx);
     }
@@ -142,13 +143,13 @@ impl EditorApp {
                 .unwrap_or_default();
             terminal.output_view(format!("SSH ERROR / {host}"))
         });
-        self.detach_ssh(ctx);
+        self.detach_ssh(documents::Retention::Keep, ctx);
         self.status = "SSH connection failed · local mode".into();
         if let Some(output) = output {
             output.set_visible(true);
             self.terminal = Some(output);
             self.show_terminal = true;
-            self.terminal_intent();
+            self.login_terminal_intent();
             self.notify(format!("{message} SSH login output is retained in the terminal. Choose New for a local shell."), true);
         } else {
             self.notify(message, true);
@@ -181,23 +182,22 @@ impl EditorApp {
             self.set_dialog(Dialog::Connect);
         }
     }
-    /// Unbind remote paths before invalidating host work and dropping transport ownership;
-    /// retain buffers and recovery metadata for Save As or an explicit matching reconnect.
-    pub(super) fn detach_ssh(&mut self, ctx: &egui::Context) {
+    /// Release transport ownership after invalidating host work. Guarded explicit disconnect
+    /// discards tabs; unexpected loss unbinds and retains buffers for Save As or reconnect.
+    pub(super) fn detach_ssh(&mut self, retention: documents::Retention, ctx: &egui::Context) {
         let Some(connection) = self.workspace.remember_disconnect() else {
             return;
         };
-        self.documents
-            .detach_connection(&connection, self.vaults.has_active());
+        if retention == documents::Retention::Keep {
+            self.documents
+                .detach_connection(&connection, self.vaults.has_active());
+        }
         self.workspace.cancel_connection();
         self.startup_restore = None;
         // Drop views before the master; persistent services retain their own jobs.
         // A lost encrypted lease still requires explicit unlock/lock recovery.
         let encrypted_lease = self.vaults.retain_for_disconnect();
-        self.clear_project(
-            documents::Retention::Keep,
-            workspace::LeaveReason::Disconnected,
-        );
+        self.clear_project(retention, workspace::LeaveReason::Disconnected);
         self.vaults.disconnected(encrypted_lease);
         self.release_workspace_transport();
         self.invalidate_project_candidate(workspace::PickerReset::Close);
@@ -205,6 +205,7 @@ impl EditorApp {
         self.cancel_guarded_action();
         self.dialog = Dialog::None;
         self.show_terminal = false;
+        self.workspace.request_local_fallback();
         self.status = "SSH disconnected · local mode".into();
         self.focus_editor_in(self.focused_editor(), ctx);
     }
@@ -370,6 +371,49 @@ mod tests {
     }
 
     #[test]
+    fn transport_loss_restores_normal_cwd_without_rebinding_remote_edits_or_saved_grants() {
+        let (mut app, ctx) = remote_buffer();
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let profile = app.workspace.reconnect_profile().unwrap().clone();
+        app.sandbox_defaults.enabled = true;
+        app.sandbox_defaults.read_only = vec!["invalid relative grant".into()];
+        app.detach_ssh(documents::Retention::Keep, &ctx);
+        app.restore_local_workspace(&ctx);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.workspace.preparing() {
+            app.poll(&ctx);
+            assert!(
+                Instant::now() < deadline,
+                "Local fallback did not finish: {:?}",
+                app.notice
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let workspace = app.workspace.as_ref().unwrap();
+        assert_eq!(workspace.root, cwd.to_string_lossy());
+        assert!(workspace.ready && workspace.connected && workspace.remote.is_none());
+        assert!(!workspace.plan.active && !workspace.plan.requested);
+        assert_eq!(workspace.sandbox_options, sandbox::Options::default());
+        assert!(
+            app.explorer_state
+                .directories
+                .contains_key(cwd.to_str().unwrap())
+        );
+        assert_eq!(app.documents[0].text, "retained edits");
+        assert_eq!(app.documents[0].version(), 7);
+        assert!(app.documents[0].is_recovery());
+        assert!(app.documents[0].path.is_none() && app.documents[0].revision.is_none());
+        assert!(app.can_resume_ssh(&profile));
+        app.save_document(
+            app.documents[0].id,
+            "/must-not-write-local.rs".into(),
+            false,
+            &ctx,
+        );
+        assert!(!app.documents[0].saving);
+    }
+
+    #[test]
     fn prepared_ssh_connections_show_welcome_without_late_terminal_takeover() {
         for (ready, connections) in [(false, false), (true, false), (false, true)] {
             let ctx = egui::Context::default();
@@ -379,7 +423,11 @@ mod tests {
             workspace.ready = ready;
             app.workspace.set_fixture(Some(workspace));
             app.show_terminal = true;
-            app.terminal_intent();
+            if ready {
+                app.terminal_intent();
+            } else {
+                app.login_terminal_intent();
+            }
             Terminal::focus(&ctx);
             let project = tempfile::tempdir().unwrap();
             let response = files::local(&Request::Prepare {
@@ -469,6 +517,12 @@ mod tests {
                 assert_eq!(app.connections_visible(), connections);
                 assert_eq!(app.presentation.surface, surface);
                 assert_eq!(app.presentation.panel, panel);
+                assert!(app.presentation.last_tool.is_none());
+                app.dialog = Dialog::None;
+                app.toggle_sidebar(&ctx);
+                assert!(app.tools_visible());
+                assert_eq!(app.presentation.panel, Some(Panel::Agent));
+                assert!(app.agents.focus);
             }
         }
     }
@@ -633,7 +687,7 @@ mod tests {
         std::fs::write(&original, "unrelated local source").unwrap();
         app.documents[0].fixture_content().path = Some(original.clone());
         let id = app.documents[0].id;
-        app.disconnect_ssh(&ctx);
+        app.detach_ssh(documents::Retention::Keep, &ctx);
         app.save_document(id, original.clone(), false, &ctx);
         assert!(!app.documents[0].saving);
         assert_eq!(
@@ -653,7 +707,7 @@ mod tests {
     fn only_the_same_ready_ssh_project_restores_buffer_bindings_and_revisions() {
         let (mut app, ctx) = remote_buffer();
         let mut workspace = remembered_workspace(&app);
-        app.disconnect_ssh(&ctx);
+        app.detach_ssh(documents::Retention::Keep, &ctx);
         assert!(app.can_resume_ssh(app.workspace.reconnect_profile().unwrap()));
         let original_host = workspace.remote.as_ref().unwrap().profile.host.clone();
         workspace.remote.as_mut().unwrap().profile.host = "different-host".into();
@@ -712,7 +766,7 @@ mod tests {
             &workspace::ConnectionId::for_profile(&workspace.remote.as_ref().unwrap().profile),
             true,
         );
-        app.disconnect_ssh(&ctx);
+        app.detach_ssh(documents::Retention::Keep, &ctx);
         app.workspace.set_fixture(Some(workspace));
         app.restore_ssh_buffers();
         assert!(app.documents[0].path.is_none());

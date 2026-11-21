@@ -166,7 +166,7 @@ collapsed and use full-width rows without vertical guide lines. Switching betwee
 the two retains the current editor/tool view and each sidebar’s layout. The top-right header keeps
 **Open project…**; SSH and tunnel entry buttons live in Connections.
 
-The explorer remains beside the project content and can be hidden independently. Opening a project tool replaces the code view instead of shrinking it. Close **Project tools** with the same button, or open a file in the explorer, to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
+The explorer remains beside the project content and can be hidden independently. Opening a project tool replaces the code view instead of shrinking it. **Project tools** initially opens **Chat**, then remembers the tab you select. Automatic project-shell startup and SSH login do not change that choice. Close **Project tools** with the same button, or open a file in the explorer, to return to editing; buffers, cursors, undo history, chats and terminal sessions are retained.
 
 Choose **Detach** at the far right of the project tab bar to move the selected project tools or terminal into a separate native window while the editor stays visible in the main window. **Dock back**, or closing the tools window, returns it without stopping its work. **Ctrl+~** hides or restores that window. Detached tool windows contain only tool tabs and window controls, with no Code, Explorer or editor switch. The window controls are separated from the selectable tabs by a vertical rule; on very narrow windows they move to their own right-aligned row.
 

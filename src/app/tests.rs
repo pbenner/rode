@@ -748,7 +748,7 @@ pub(super) fn remote_workspace() -> Workspace {
 }
 
 #[test]
-fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
+fn transport_loss_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
@@ -768,7 +768,7 @@ fn disconnect_preserves_dirty_remote_buffers_and_invalidates_host_work() {
     let folder_token = app.project_picker.token;
     let cancel = app.workspace.connection_cancellation().clone();
     app.workspace.begin_preparation();
-    app.disconnect_ssh(&ctx);
+    app.detach_ssh(documents::Retention::Keep, &ctx);
     assert!(app.workspace.is_none());
     assert!(!app.project_ready());
     assert!(!app.workspace.preparing());

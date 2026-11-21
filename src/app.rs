@@ -458,12 +458,6 @@ impl EditorApp {
         self.persistence = Some(storage);
     }
 
-    /// Validate/probe a candidate asynchronously while retaining the current working project.
-    /// Request the default nonpersistent native terminal after project preparation.
-    fn start_project_terminal(&mut self, ctx: &egui::Context) {
-        self.new_terminal(ctx);
-    }
-
     /// Queue selected-host project discovery with a superseding folder token; this raw-host
     /// picker is separate from ordinary sandboxed document/file browsing.
     fn browse_folder(&mut self, path: String, ctx: &egui::Context) {
@@ -790,6 +784,7 @@ impl eframe::App for EditorApp {
         self.activate_editor(egui::ViewportId::ROOT);
         self.poll(ctx);
         self.poll_vaults(ctx);
+        self.restore_local_workspace(ctx);
         self.poll_agents(ctx);
         self.poll_debugger(ctx);
         self.stocks.poll(ctx);

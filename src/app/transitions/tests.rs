@@ -19,7 +19,7 @@ fn reopening_a_disconnected_ssh_bookmark_retains_edits_without_a_discard_decisio
         .unwrap()
         .set_source("retained remote edits".into());
     let bookmark = app.bookmark_candidate().unwrap();
-    app.disconnect_ssh(&ctx);
+    app.detach_ssh(documents::Retention::Keep, &ctx);
     assert!(app.workspace.is_none());
     assert_eq!(
         app.documents.active().unwrap().text,
@@ -316,7 +316,7 @@ fn forced_disconnect_cancels_save_waits_and_rejects_late_acknowledgements() {
     app.guarded(Action::Quit, &ctx);
     let (old, _) = app.pending.presentation().unwrap();
     let generation = app.workers.generation();
-    app.detach_ssh(&ctx);
+    app.detach_ssh(documents::Retention::Keep, &ctx);
     app.workers
         .workspace_at(&ctx, generation)
         .send(WorkspaceEvent::Done {
@@ -344,7 +344,7 @@ fn forced_disconnect_cancels_save_waits_and_rejects_late_acknowledgements() {
 }
 
 #[test]
-fn explicit_disconnect_waits_for_save_as_and_recovers_the_acknowledged_binding() {
+fn explicit_disconnect_waits_for_save_acknowledgement_then_closes_all_tabs() {
     let (mut app, ctx) = fixture();
     let workspace = crate::app::tests::remote_workspace();
     app.workspace.set_fixture(Some(workspace));
@@ -370,19 +370,77 @@ fn explicit_disconnect_waits_for_save_as_and_recovers_the_acknowledged_binding()
     app.poll(&ctx);
     app.advance_guarded_action(&ctx);
     assert!(app.workspace.is_none());
-    assert_eq!(
-        app.documents[0].display_path(),
-        Some("acknowledged-copy.txt")
-    );
-    let mut restored = crate::app::tests::remote_workspace();
-    restored.remote.as_mut().unwrap().profile = app.workspace.reconnect_profile().cloned().unwrap();
-    app.workspace.set_fixture(Some(restored));
-    app.restore_ssh_buffers();
-    assert_eq!(
-        app.documents[0].path.as_deref(),
-        Some("acknowledged-copy.txt")
-    );
-    assert_eq!(app.documents[0].revision.as_deref(), Some("acknowledged"));
+    assert!(app.documents.is_empty());
+    assert!(app.pending.is_none());
+}
+
+#[test]
+fn explicit_disconnect_guards_all_editor_windows_and_rechecks_discard_approval() {
+    let (mut app, ctx) = fixture();
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    source(&mut app);
+    let child = app.allocate_editor_window();
+    app.in_editor(child, |app| {
+        app.new_file();
+        app.documents
+            .active_mut()
+            .unwrap()
+            .set_source("unsaved child edit".into());
+    });
+    let generation = app.workers.generation();
+    app.disconnect_ssh(&ctx);
+    let (decision, waiting) = app.pending.presentation().unwrap();
+    assert!(waiting.is_none());
+    assert!(app.workspace.as_ref().unwrap().connected);
+    assert_eq!(app.documents.len(), 2);
+    app.cancel_guarded_decision(decision);
+    assert!(app.pending.is_none());
+    assert_eq!(app.workers.generation(), generation);
+    assert_eq!(app.documents[1].text, "unsaved child edit");
+
+    app.disconnect_ssh(&ctx);
+    let (older, _) = app.pending.presentation().unwrap();
+    app.documents[1].set_source("newer child edit".into());
+    app.discard_guarded_action(older, &ctx);
+    let (current, _) = app.pending.presentation().unwrap();
+    assert_ne!(current, older);
+    assert!(app.workspace.as_ref().unwrap().connected);
+    assert_eq!(app.documents.len(), 2);
+    app.discard_guarded_action(current, &ctx);
+    assert!(app.workspace.is_none());
+    assert!(app.documents.is_empty());
+    assert!(app.documents.selected_in(egui::ViewportId::ROOT).is_none());
+    assert!(app.documents.selected_in(child).is_none());
+    assert!(app.workers.generation() > generation);
+}
+
+#[test]
+fn a_failed_save_cancels_disconnect_and_preserves_the_connection_and_edits() {
+    let (mut app, ctx) = fixture();
+    app.workspace
+        .set_fixture(Some(crate::app::tests::remote_workspace()));
+    let id = source(&mut app);
+    app.documents[0].set_source("unsaved source".into());
+    app.documents[0].fixture_content().saving = true;
+    app.disconnect_ssh(&ctx);
+    assert!(app.pending.waiting_for_save());
+    app.workers
+        .workspace(&ctx)
+        .send(WorkspaceEvent::Done {
+            job: Job::Save {
+                id,
+                text: "unsaved source".into(),
+            },
+            result: Box::new(Err("fixture save refused".into())),
+        })
+        .unwrap();
+    app.poll(&ctx);
+    app.advance_guarded_action(&ctx);
+    assert!(app.pending.is_none());
+    assert!(app.workspace.as_ref().unwrap().connected);
+    assert_eq!(app.documents[0].text, "unsaved source");
+    assert!(app.documents[0].dirty());
 }
 
 #[test]

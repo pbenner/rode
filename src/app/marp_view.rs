@@ -567,7 +567,7 @@ mod tests {
         app.documents[0].fixture_content().path = Some("/remote/slides.marp.md".into());
         app.workspace
             .set_fixture(Some(crate::app::tests::remote_workspace()));
-        app.detach_ssh(&ctx);
+        app.detach_ssh(documents::Retention::Keep, &ctx);
         app.start_marp(app.documents[0].id, Format::Pdf, None, &ctx);
         assert!(!app.documents[0].marp.as_ref().unwrap().busy);
         assert!(

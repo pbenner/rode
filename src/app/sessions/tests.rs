@@ -199,7 +199,7 @@ fn transport_loss_cannot_turn_a_missing_persistence_acknowledgement_into_a_clean
     app.sessions.persistence_pending = true;
     app.request_exit(&ctx);
     assert!(app.exit_pending());
-    app.detach_ssh(&ctx);
+    app.detach_ssh(documents::Retention::Keep, &ctx);
     app.session_tick(&ctx);
     assert!(!app.exit_pending());
     assert!(!app.exit.closing());

@@ -35,7 +35,7 @@ impl EditorApp {
         action: &Action,
         ctx: &egui::Context,
     ) -> (Policy, documents::Changes) {
-        let mut preserve_buffers = matches!(action, Action::Disconnect | Action::DisableTransfers);
+        let mut preserve_buffers = matches!(action, Action::DisableTransfers);
         let mut valid = !self.exit.waiting() && !self.exit.closing();
         let replacing = matches!(
             action,
@@ -273,7 +273,7 @@ impl EditorApp {
                 self.connect(*profile, ctx, resume);
             }
             Action::Reconnect(profile) => self.connect(*profile, ctx, true),
-            Action::Disconnect => self.detach_ssh(ctx),
+            Action::Disconnect => self.detach_ssh(documents::Retention::Discard, ctx),
             Action::CloseTab(id) => {
                 let owner = self.documents.owner(id);
                 if self.documents.notebook_pending(id) {

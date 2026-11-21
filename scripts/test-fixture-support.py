@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fixture portability and acknowledgement data checks without an X server."""
 
+import io
 import json
 import os
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fixture_support import (
+    cleanup_fixture_mounts,
     decode_ron_string,
     fixture_artifacts,
     fixture_directory,
@@ -23,6 +25,75 @@ from fixture_support import (
 
 
 class FixtureSupportTests(unittest.TestCase):
+    def test_failed_directory_cleanup_preserves_the_scenario_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.dict(os.environ, RODE_TEST_TMPDIR=directory),
+                patch(
+                    "fixture_support.tempfile.TemporaryDirectory._rmtree",
+                    side_effect=OSError("disconnected mount"),
+                ) as cleanup,
+                patch("fixture_support.sys.stderr", new_callable=io.StringIO) as output,
+            ):
+                with self.assertRaisesRegex(AssertionError, "original scenario failure"):
+                    with fixture_directory(prefix="cleanup-"):
+                        raise AssertionError("original scenario failure")
+                cleanup.assert_called_once()
+                self.assertIn("disconnected mount", output.getvalue())
+                self.assertIn(directory, output.getvalue())
+                # A cleanup failure must still fail an otherwise successful scenario.
+                with self.assertRaisesRegex(OSError, "disconnected mount"):
+                    with fixture_directory(prefix="cleanup-"):
+                        pass
+
+    def test_mount_cleanup_detaches_only_declared_unambiguous_rode_shares(self):
+        with tempfile.TemporaryDirectory(prefix="mounts ' λ ") as directory:
+            root = Path(directory).resolve()
+            ours, foreign, stacked = (root / name for name in ("ours \\", "foreign", "stacked"))
+            tag = "rode-share-" + "a" * 32
+
+            def entry(path, source=tag, kind="fuse.sshfs"):
+                escaped = str(path).replace("\\", r"\134").replace(" ", r"\040")
+                return f"1 0 0:1 / {escaped} rw - {kind} {source} rw\n"
+
+            mounts = (
+                entry(ours)
+                + entry(foreign, source="another-share")
+                + entry(stacked)
+                + entry(stacked, kind="tmpfs")
+                + entry(root / "not-declared")
+            )
+            with (
+                patch("fixture_support.Path.read_text", return_value=mounts),
+                patch("fixture_support.shutil.which", return_value="/fixture/fusermount3"),
+                patch(
+                    "fixture_support.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 0),
+                ) as unmount,
+                patch("fixture_support.sys.stderr", new_callable=io.StringIO) as output,
+            ):
+                cleanup_fixture_mounts(root, [ours, foreign, stacked])
+                unmount.assert_called_once_with(
+                    ["/fixture/fusermount3", "-uz", "--", str(ours)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertIn(str(foreign), output.getvalue())
+                self.assertIn(str(stacked), output.getvalue())
+                unmount.side_effect = subprocess.TimeoutExpired("fusermount3", 10)
+                cleanup_fixture_mounts(root, [ours])
+                self.assertIn("timed out", output.getvalue())
+
+    def test_mount_cleanup_rejects_the_fixture_root_and_outside_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch("fixture_support.subprocess.run") as unmount:
+                for path in (root, root / ".." / "unrelated"):
+                    with self.assertRaisesRegex(ValueError, "inside its private fixture"):
+                        cleanup_fixture_mounts(root, [path])
+                unmount.assert_not_called()
+
     def test_explicit_root_takes_precedence_and_resolves_aliases(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

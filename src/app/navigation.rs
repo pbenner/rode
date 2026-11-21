@@ -559,7 +559,6 @@ impl EditorApp {
                     self.reattach_tool_tab(tab, ctx);
                     return;
                 }
-                self.presentation.remember_selected();
                 match self.navigation.active {
                     Pane::Explorer => self.set_explorer_visible(ctx.viewport_id(), false),
                     Pane::Terminal => self.show_terminal = false,

@@ -30,6 +30,15 @@ pub(in crate::app) enum PreparationPolicy {
     /// The implicit local CWD opens in Normal mode without restoring or
     /// replacing sandbox preferences. It must not depend on sandbox capability.
     CurrentDirectory,
+    /// Restore the desktop CWD after SSH teardown without replacing retained buffers or leases.
+    LocalFallback,
+}
+
+impl PreparationPolicy {
+    /// Implicit desktop contexts never restore or persist sandbox grants from saved projects.
+    pub fn implicit_local(self) -> bool {
+        matches!(self, Self::CurrentDirectory | Self::LocalFallback)
+    }
 }
 
 impl PreparationId {
@@ -67,6 +76,14 @@ enum Candidate {
     Ready(PreparationId, Box<Prepared>),
 }
 
+#[derive(Default)]
+enum LocalFallback {
+    #[default]
+    None,
+    Needed,
+    Active,
+}
+
 /// Owner of active workspace authority, one candidate and connection cancellation. Dropping it
 /// cancels the owned connection attempt.
 #[derive(Default)]
@@ -76,6 +93,7 @@ pub(in crate::app) struct Controller {
     candidate: Candidate,
     connection_cancel: Arc<AtomicBool>,
     previous_connection: Option<Profile>,
+    local_fallback: LocalFallback,
 }
 
 impl Controller {
@@ -99,9 +117,10 @@ impl Controller {
         self.active.is_some()
     }
 
-    /// Resume only the remembered host/project after every document has been unbound.
+    /// Resume only the remembered host/project after every document has been unbound. A neutral
+    /// local return is allowed; an explicitly opened local project still requires replacement guards.
     pub fn can_resume(&self, profile: &Profile, all_unbound: bool) -> bool {
-        self.active.is_none()
+        (self.active.is_none() || matches!(self.local_fallback, LocalFallback::Active))
             && all_unbound
             && self.previous_connection.as_ref().is_some_and(|last| {
                 ConnectionId::for_profile(last) == ConnectionId::for_profile(profile)
@@ -155,6 +174,7 @@ impl Controller {
         plan: sandbox::Plan,
         options: sandbox::Options,
     ) {
+        self.local_fallback = LocalFallback::None;
         self.active = Some(Workspace {
             root,
             remote,
@@ -165,6 +185,30 @@ impl Controller {
         });
     }
 
+    /// The neutral desktop context keeps the disconnected SSH identity eligible for recovery.
+    pub fn activate_local_fallback(&mut self, root: String, plan: sandbox::Plan) {
+        self.activate(root, None, plan, Default::default());
+        self.local_fallback = LocalFallback::Active;
+    }
+
+    /// Queue one local return after teardown. A later explicit project/connection takes precedence.
+    pub fn request_local_fallback(&mut self) {
+        self.local_fallback = LocalFallback::Needed;
+    }
+
+    /// Consume only when no project or candidate owns the window. Failed probes do not retry forever.
+    pub fn take_local_fallback(&mut self) -> bool {
+        if self.active.is_none()
+            && matches!(self.candidate, Candidate::Idle)
+            && matches!(self.local_fallback, LocalFallback::Needed)
+        {
+            self.local_fallback = LocalFallback::None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Authentication has a context for presentation, but no prepared file grants.
     pub fn connecting(
         &mut self,
@@ -172,6 +216,7 @@ impl Controller {
         root: String,
         options: sandbox::Options,
     ) {
+        self.local_fallback = LocalFallback::None;
         self.active = Some(Workspace {
             plan: sandbox::Plan {
                 root: root.clone(),
@@ -236,12 +281,14 @@ impl Controller {
     /// Domain views must be released before the caller cleans this captured transport.
     pub fn release_transport(&mut self) -> Option<crate::ssh::Remote> {
         self.cancel_connection();
+        self.local_fallback = LocalFallback::None;
         self.active.take().and_then(|workspace| workspace.remote)
     }
 
     /// Install synthetic workspace authority directly in coordinator tests.
     #[cfg(test)]
     pub(in crate::app) fn set_fixture(&mut self, workspace: Option<Workspace>) {
+        self.local_fallback = LocalFallback::None;
         self.active = workspace;
     }
     /// Test-only mutable access to committed context; production uses typed controller operations.
@@ -362,6 +409,34 @@ impl Drop for Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_return_is_once_only_and_only_the_fallback_preserves_ssh_recovery() {
+        let mut state = Controller::default();
+        state.set_fixture(Some(crate::app::tests::remote_workspace()));
+        let profile = state.reconnect_profile().unwrap().clone();
+        state.remember_disconnect();
+        state.release_transport();
+        state.request_local_fallback();
+        assert!(state.take_local_fallback());
+        assert!(!state.take_local_fallback());
+        state.activate_local_fallback("/desktop".into(), Default::default());
+        assert!(state.is_some() && !state.is_none());
+        assert!(state.can_resume(&profile, true));
+        assert!(!state.can_resume(&profile, false));
+        state.activate(
+            "/chosen-project".into(),
+            None,
+            Default::default(),
+            Default::default(),
+        );
+        assert!(!state.can_resume(&profile, true));
+        state.request_local_fallback();
+        assert!(
+            !state.take_local_fallback(),
+            "An explicit project must not be replaced"
+        );
+    }
 
     #[test]
     fn recovery_identity_waits_for_unbinding_and_restoration_requires_preparation() {

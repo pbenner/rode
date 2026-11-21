@@ -416,6 +416,13 @@ impl EditorApp {
     /// Advance unlock/lease/unmount acknowledgements, waiting for tracked work and
     /// controller cleanup before sending lock; failures never publish a locked state.
     pub(super) fn poll_vaults(&mut self, ctx: &egui::Context) {
+        // A disconnected lease can outlive its project. Its late events must not suspend or
+        // discard the local CWD and new buffers installed after the SSH transport was released.
+        let active_project = self.vaults.active.as_ref().is_some_and(|client| {
+            self.workspace
+                .as_ref()
+                .is_some_and(|w| client.matches(&w.root, w.remote.as_ref()))
+        });
         if self.vaults.locking
             && !self.vaults.lock_sent
             && !self.debugger_stopping()
@@ -487,7 +494,9 @@ impl EditorApp {
                                 } else {
                                     self.vaults.lost = true;
                                     self.vaults.released = locked || message.starts_with("Another RODE window still has this encrypted project open.");
-                                    self.workspace.suspend_project();
+                                    if active_project {
+                                        self.workspace.suspend_project();
+                                    }
                                     errors.push(if locked {
                                         "The encrypted filesystem closed on its host. Unsaved buffers are preserved; unlock again to restore file access.".into()
                                     } else {
@@ -501,7 +510,9 @@ impl EditorApp {
                     }
                     crate::process::Event::Error(error) => {
                         self.vaults.lost = true;
-                        self.workspace.suspend_project();
+                        if active_project {
+                            self.workspace.suspend_project();
+                        }
                         errors.push(error);
                     }
                     crate::process::Event::Exited(_) => {
@@ -509,7 +520,9 @@ impl EditorApp {
                         if closed.is_none() {
                             self.vaults.lost = true;
                             errors.push("Encrypted-project connection ended; its lock state is unknown. Reconnect and unlock explicitly before accessing files.".into());
-                            self.workspace.suspend_project();
+                            if active_project {
+                                self.workspace.suspend_project();
+                            }
                         }
                     }
                     _ => {}
@@ -594,11 +607,13 @@ impl EditorApp {
                 let quitting = self.vaults.quit_after_lock;
                 self.vaults.active = None;
                 self.vaults.needs_lock = false;
-                self.clear_project(
-                    documents::Retention::Discard,
-                    workspace::LeaveReason::VaultLock,
-                );
-                self.workspace.clear_project_context();
+                if active_project {
+                    self.clear_project(
+                        documents::Retention::Discard,
+                        workspace::LeaveReason::VaultLock,
+                    );
+                    self.workspace.clear_project_context();
+                }
                 self.status = if shared_exit {
                     "Encrypted project remains open in another RODE window"
                 } else {
@@ -840,6 +855,15 @@ mod tests {
             mountpoint: "/plain".into(),
         });
         app.vaults.active = Some(client);
+        app.workspace.activate(
+            "/plain".into(),
+            None,
+            sandbox::Plan {
+                root: "/plain".into(),
+                ..Default::default()
+            },
+            Default::default(),
+        );
         app.new_file();
         app.documents[0].set_dirty_fixture(false);
         (app, ctx)
@@ -1172,7 +1196,7 @@ mod tests {
         assert!(app.exit.closing());
     }
     #[test]
-    fn ssh_loss_clears_workspace_but_retains_the_unknown_encrypted_lease() {
+    fn ssh_loss_restores_local_cwd_without_adopting_late_encrypted_lease_events() {
         let (mut app, ctx) = active(true);
         let mut workspace = crate::app::tests::remote_workspace();
         workspace.root = "/plain".into();
@@ -1182,7 +1206,7 @@ mod tests {
         app.documents[0].fixture_content().path = Some("/plain/main.rs".into());
         app.documents[0].fixture_content().text = "unsaved encrypted source".into();
         app.documents[0].set_dirty_fixture(true);
-        app.detach_ssh(&ctx);
+        app.detach_ssh(documents::Retention::Keep, &ctx);
         assert!(app.workspace.is_none());
         assert!(app.vaults.active.is_some());
         assert!(app.vaults.lost);
@@ -1192,6 +1216,45 @@ mod tests {
         assert!(app.vaults.remote);
         app.lock_encrypted(true, &ctx);
         assert!(!app.exit.closing() && !app.vaults.locking);
+        app.restore_local_workspace(&ctx);
+        let until = Instant::now() + Duration::from_secs(5);
+        while app.workspace.preparing() {
+            assert!(Instant::now() < until);
+            app.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.project_ready());
+        let cwd = app.workspace.as_ref().unwrap().root.clone();
+        assert!(app.workspace.as_ref().unwrap().remote.is_none());
+        assert!(app.vaults.recovery_required());
+        assert_eq!(
+            app.vaults.admission(Transition::Connection),
+            Barrier::MustLock
+        );
+        app.new_file();
+        app.documents[1].fixture_content().text = "local draft".into();
+        app.vaults
+            .active
+            .as_ref()
+            .unwrap()
+            .session
+            .send(&serde_json::json!({"action":"release"}))
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !app.vaults.active.as_ref().unwrap().session.is_finished() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.poll_vaults(&ctx);
+        assert!(
+            app.project_ready(),
+            "The old lease cannot suspend the local CWD"
+        );
+        assert_eq!(app.workspace.as_ref().unwrap().root, cwd);
+        assert_eq!(app.documents[0].text, "unsaved encrypted source");
+        assert_eq!(app.documents[1].text, "local draft");
+        assert!(app.documents[0].is_recovery());
+        assert!(app.vaults.recovery_required());
     }
     #[test]
     fn cancelled_unlock_cleanup_waits_for_file_operations_and_exit_waits_for_cleanup() {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native shared-folder UI, both SSH clients, kernel mounts and bookmark settings."""
 
+import contextlib
 import hashlib
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 os.environ["RODE_UI_ARTIFACTS"] = str(
     Path(__file__).resolve().parent.parent / "target/shared-folders-ui"
 )
+from fixture_support import cleanup_fixture_mounts
 from test_capabilities import skip
 from ui_fixture import native_session, project_args
 from ui_harness import fixture_directory, fixture_environment, key, screenshot, text
@@ -71,7 +73,8 @@ def project_ready(ui, directory):
 
 def restored(ui, recipes, fuse, ids):
     """Require every saved recipe to start without a manual Mount click."""
-    ui.command("Project: Shared folders")
+    # The palette command toggles the panel off if it is already selected.
+    ui.click("workspace-tab:Shared folders")
     ui.control("share-add")
     state = ui.layout(
         lambda state: all(
@@ -95,7 +98,7 @@ def restored(ui, recipes, fuse, ids):
 
 
 for backend in ("russh", "openssh"):
-    with fixture_directory(prefix="rode-shares-") as base:
+    with fixture_directory(prefix="rode-shares-") as base, contextlib.ExitStack() as cleanup:
         project = base / "project"
         local = base / "local source ' quoted"
         remote = project / "remote source"
@@ -114,6 +117,11 @@ for backend in ("russh", "openssh"):
         bookmark = None
         skipped_mounts = False
         recipes = []
+        cleanup.callback(
+            lambda root=base, saved=recipes: cleanup_fixture_mounts(
+                root, [path for _, path in saved]
+            )
+        )
         with native_session(args, env, project, backend) as ui:
             ui.command("Project: Shared folders")
             for index, (source, reverse, writable) in enumerate(
@@ -226,6 +234,8 @@ for backend in ("russh", "openssh"):
             ui.click("activity:Connections")
             ui.click(bookmark)
             project_ready(ui, project)
+            restored(ui, recipes, fuse, range(1, 5))
+            # Selecting an already visible tab must also work on hosts without FUSE.
             restored(ui, recipes, fuse, range(1, 5))
             if fuse:
                 # Current-project reopening must retain the same live rows, without duplicates.

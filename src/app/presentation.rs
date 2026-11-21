@@ -27,7 +27,7 @@ pub(super) struct Selection {
     pub tools_hidden: bool,
     /// Each tab has at most one independently detached presentation owner.
     pub floating_tabs: Vec<ToolTab>,
-    /// Only project-scoped destinations can replace the tools toggle's history.
+    /// Deliberately selected project destinations; automatic login/shell setup is excluded.
     pub last_tool: Option<ToolTab>,
 }
 
@@ -78,18 +78,17 @@ impl Controller {
             self.0.last_tool = Some(tab);
         }
     }
-    pub fn remember_selected(&mut self) {
-        if let Some(tab) = self.selected_tool() {
-            self.remember(tab);
-        }
-    }
     pub fn select_editor(&mut self) {
-        self.remember_selected();
         self.0.surface = Surface::Editor;
     }
     pub fn select_terminal(&mut self) {
-        self.0.area = Area::Projects;
         self.remember(ToolTab::Terminal);
+        self.show_terminal();
+    }
+    /// Authentication and connection errors need a terminal view without choosing the user's
+    /// preferred project tool. Only explicit terminal navigation updates restoration history.
+    pub fn show_terminal(&mut self) {
+        self.0.area = Area::Projects;
         if !self.floating_tabs.contains(&ToolTab::Terminal) {
             self.0.surface = Surface::Terminal;
             self.show_tools();
@@ -163,6 +162,20 @@ mod tests {
         assert_eq!(state.last_tool, Some(ToolTab::Panel(Panel::Agent)));
         state.clear_panel();
         assert_eq!(state.surface, Surface::Editor);
+    }
+    #[test]
+    fn login_output_preserves_default_and_deliberate_tool_choices() {
+        let mut state = Controller::default();
+        state.show_terminal();
+        state.select_editor();
+        assert!(state.last_tool.is_none());
+        state.select_panel(Panel::Settings);
+        state.show_terminal();
+        state.select_editor();
+        assert_eq!(state.last_tool, Some(ToolTab::Panel(Panel::Settings)));
+        state.select_terminal();
+        state.select_editor();
+        assert_eq!(state.last_tool, Some(ToolTab::Terminal));
     }
     #[test]
     fn placement_is_unique_and_hiding_never_discards_selection() {

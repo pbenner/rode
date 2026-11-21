@@ -256,7 +256,7 @@ fn a_disconnected_notebook_cannot_start_a_local_kernel_or_read_external_images()
     app.documents[0].fixture_content().path = Some("/remote/work.ipynb".into());
     app.workspace
         .set_fixture(Some(crate::app::tests::remote_workspace()));
-    app.detach_ssh(&ctx);
+    app.detach_ssh(documents::Retention::Keep, &ctx);
     app.run_notebook(false, &ctx);
     assert!(app.documents[0].notebook.as_ref().unwrap().kernel.is_none());
     assert!(

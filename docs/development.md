@@ -438,6 +438,13 @@ These data helpers live in `scripts/fixture_support.py` and are re-exported by
 the UI harness. `python3 scripts/test-fixture-support.py` runs their filesystem,
 launcher and RON regressions without a display in `lint:ci`.
 
+Shared-folder checks select the existing tool tab without toggling it closed;
+repeated selection is exercised even without FUSE. After fixture processes stop,
+failure cleanup detaches only declared SSHFS destinations with a RODE mount tag
+inside that fixture. Ordinary unmount and shutdown assertions run before this
+cleanup, so lazy detachment cannot make a broken lifecycle pass. A subsequent
+directory-cleanup error is reported without replacing the original test failure.
+
 Native UI, Rust-runner and SSH fixtures share temporary-root selection:
 `RODE_TEST_TMPDIR` takes precedence, followed by Python's standard temporary
 directory selection (`TMPDIR`, `TEMP`, `TMP`, then platform defaults). The
@@ -830,7 +837,7 @@ After regeneration, check all three files visually, use `ffprobe` to check durat
 
 `cargo test --test persistence --test concurrency` starts real subprocesses to exercise field-level preference/profile merging, external configuration edits, malformed-file preservation, lock release after a killed writer, private GUI snapshots, parallel sandboxed helpers with identical namespace PIDs, concurrent environment creation, and simultaneous desktop/headless document saves. Existing-file checks force writers to wait on the same inode, then verify that only one buffer based on the old revision can win. Save As tests verify atomic creation without overwriting another writer. Native two-window screenshots/logs go to `target/multiprocess-ui/`.
 
-The SSH fixture also opens two independent masters for the same alias and checks that closing one preserves the other. The project UI check (`RODE_SSH_UI=1`) exercises footer-menu/palette disconnect, compact connection controls, dirty buffers across reconnect, local file/folder access after explicit and unexpected disconnect, and persistent versus nonpersistent terminal lifetime. Library tests also cover failed logins, stale replies, disconnected Save As and prevention of remote/local path rebinding. See [configuration and multiple windows](configuration.md) for supported filesystem behavior and limitations.
+The SSH fixture also opens two independent masters for the same alias and checks that closing one preserves the other. The project UI check (`RODE_SSH_UI=1`) exercises header/palette disconnect, cancellation and discard of unsaved edits, closure of all tabs after an accepted disconnect, compact connection controls, buffer recovery after unexpected transport loss, local CWD restoration, local file/folder access, and persistent versus nonpersistent terminal lifetime. Library tests also cover failed logins, stale replies, disconnected Save As and prevention of remote/local path rebinding. See [configuration and multiple windows](configuration.md) for supported filesystem behavior and limitations.
 
 `RODE_PROJECT_UI_CASE=failure RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-project-ui.py` reproduces a real refused loopback SSH login without an SSH server. It checks retained read-only error output, Copy/paste into a saved local file, local folder browsing and a neutral host title. The default project UI run includes it. Library connection/terminal tests also check a real fast SSH exit and late PTY output after cleanup, while ensuring diagnostic views cannot send input or own/signal the old process.
 

@@ -254,6 +254,21 @@ impl EditorApp {
         ctx: &egui::Context,
     ) {
         self.terminal_intent();
+        self.request_terminal(persistent, allocation, reserve, plan, ctx);
+    }
+    /// Prepare the project's default shell without changing tool selection or focus history.
+    pub(in crate::app) fn start_project_terminal(&mut self, ctx: &egui::Context) {
+        let plan = self.terminal_plan(self.workbench.terminal_sandbox());
+        self.request_terminal(false, None, false, plan, ctx);
+    }
+    fn request_terminal(
+        &mut self,
+        persistent: bool,
+        allocation: Option<slurm::Allocation>,
+        reserve: bool,
+        plan: sandbox::Plan,
+        ctx: &egui::Context,
+    ) {
         let ready = self
             .workspace
             .as_ref()

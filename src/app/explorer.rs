@@ -600,8 +600,10 @@ impl EditorApp {
                 ui.separator();
                 self.tree(ui, &root, ctx);
             } else {
-                ui.label(palette.tag("No project folder available."));
-                if crate::keyboard::button(ui, "Open project…").clicked() {
+                if self.workspace.preparing() {
+                    ui.spinner();
+                    ui.weak("Opening local folder…");
+                } else if crate::keyboard::button(ui, "Open project…").clicked() {
                     self.set_dialog(Dialog::Folder);
                 }
             }
