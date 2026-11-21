@@ -18,6 +18,20 @@ use std::sync::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) struct PreparationId(u64);
 
+/// Preparation intent travels with the candidate, never inferred from its path
+/// or from whichever view happens to be selected when the worker replies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum PreparationPolicy {
+    /// Explicit picker/bookmark/settings choices are already resolved.
+    Given,
+    /// Explicit CLI/SSH startup restores this project's saved grants; the flag
+    /// forces sandboxing when the user supplied `--sandbox`.
+    Saved(bool),
+    /// The implicit local CWD opens in Normal mode without restoring or
+    /// replacing sandbox preferences. It must not depend on sandbox capability.
+    CurrentDirectory,
+}
+
 impl PreparationId {
     /// Construct an arbitrary candidate identity for stale-confirmation tests.
     #[cfg(test)]
@@ -35,6 +49,8 @@ pub(in crate::app) struct Prepared {
     pub remote: bool,
     /// Sandbox options captured with the preparation request.
     pub options: sandbox::Options,
+    /// Captured origin controls whether opening this candidate saves its policy.
+    pub policy: PreparationPolicy,
     /// Optional file to open only after the candidate is committed.
     pub open_file: Option<String>,
     /// Preserve existing buffers when reconfiguring the current project.
@@ -391,6 +407,7 @@ mod tests {
 
     fn prepared(path: &str) -> Prepared {
         Prepared {
+            policy: PreparationPolicy::Given,
             response: Response {
                 path: path.into(),
                 ..Default::default()

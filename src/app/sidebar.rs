@@ -10,7 +10,6 @@ pub(super) enum View {
 
 #[derive(Default)]
 pub(super) struct State {
-    pub selected: Option<View>,
     pub connections_width: Option<f32>,
 }
 
@@ -45,7 +44,7 @@ pub(super) fn section<R>(
 
 impl EditorApp {
     pub(super) fn connections_visible(&self) -> bool {
-        self.sidebar.selected == Some(View::Connections)
+        self.presentation.sidebar == Some(View::Connections)
             && !self.tab_detached(tool_windows::ToolTab::Connections)
     }
 
@@ -62,7 +61,7 @@ impl EditorApp {
             self.agents.focus = false;
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("terminal-wants-focus"), false));
             ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("terminal-input")));
-            self.sidebar.selected = Some(View::Connections);
+            self.presentation.show_connections();
             self.navigation.zoom = None;
             self.navigation
                 .request_focus(navigation::Pane::Connections, egui::ViewportId::ROOT);
@@ -75,8 +74,8 @@ impl EditorApp {
 
     pub(super) fn toggle_connections(&mut self, ctx: &egui::Context) {
         if self.connections_visible() {
-            self.sidebar.selected = None;
-            self.open_area(self.areas.active, ctx);
+            self.presentation.hide_sidebar();
+            self.open_area(self.presentation.area, ctx);
         } else {
             self.show_connections(ctx);
         }

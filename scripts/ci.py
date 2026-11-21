@@ -719,6 +719,25 @@ def bundle():
             archive.add(ROOT / "target/ci" / name, arcname=f"target/ci/{name}")
 
 
+def required_checks(results):
+    """Fail closed on required jobs, including extended suites selected by the plan.
+
+    An intentionally unselected extended matrix may be skipped. Cancellation,
+    missing jobs and missing/invalid plan output must never produce a green gate.
+    """
+    required = ["plan", "lint", "build", "fast-ui"]
+    selected = results.get("plan", {}).get("outputs", {}).get("run-extended")
+    if selected not in ("true", "false"):
+        raise ValueError("CI plan did not declare whether extended checks are required")
+    if selected == "true":
+        required.append("extended")
+    elif results.get("extended", {}).get("result") not in ("success", "skipped"):
+        raise ValueError("Unselected extended checks have an unexpected or missing result")
+    failed = [name for name in required if results.get(name, {}).get("result") != "success"]
+    if failed:
+        raise ValueError("Required checks failed or were skipped: " + ", ".join(failed))
+
+
 def main():
     """Dispatch suite inspection, PR selection, bundle publication or one bounded command from the CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -730,6 +749,7 @@ def main():
     matrix.add_argument("--full", action="store_true")
     commands.add_parser("bundle")
     commands.add_parser("list")
+    commands.add_parser("required")
     timed = commands.add_parser("time")
     timed.add_argument("label")
     timed.add_argument("--timeout", type=int, default=600)
@@ -754,6 +774,8 @@ def main():
         print(json.dumps(extended_suites(paths, args.full)))
     elif args.action == "list":
         print(json.dumps({name: SUITES[name] for name in FAST + EXTENDED}, indent=2))
+    elif args.action == "required":
+        required_checks(json.loads(os.environ["RESULTS"]))
     else:
         command = args.command
         if command and command[0] == "--":

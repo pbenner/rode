@@ -38,7 +38,7 @@ fn active_shares_guard_transitions_and_forced_reset_cancels_owned_work() {
         Default::default(),
         true,
         false,
-        None,
+        workspace::PreparationPolicy::Given,
         &ctx,
     );
     assert!(!app.workspace.preparing());
@@ -46,6 +46,7 @@ fn active_shares_guard_transitions_and_forced_reset_cancels_owned_work() {
     app.workspace.hold_prepared(
         candidate,
         workspace::Prepared {
+            policy: workspace::PreparationPolicy::Given,
             response: Response::default(),
             remote: true,
             options: Default::default(),

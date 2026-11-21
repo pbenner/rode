@@ -344,7 +344,7 @@ fn opening_the_debugger_panel_does_not_advertise_or_start_its_f5_action() {
     )));
     app.notice = None;
     click(&mut app, &ctx, size, control(&state, "menu-item:Debugger"));
-    assert_eq!(app.tool_windows.panel, Some(Panel::Debug));
+    assert_eq!(app.presentation.panel, Some(Panel::Debug));
     assert!(app.debugger.client.is_none() && app.notice.is_none());
     let _ = ctx.run(
         egui::RawInput {

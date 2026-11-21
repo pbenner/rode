@@ -549,7 +549,7 @@ impl EditorApp {
                     self.toggle_connections(ctx);
                     return;
                 }
-                if self.areas.active != areas::Area::Projects
+                if self.presentation.area != areas::Area::Projects
                     && ctx.viewport_id() == egui::ViewportId::ROOT
                 {
                     self.open_area(areas::Area::Projects, ctx);
@@ -559,11 +559,11 @@ impl EditorApp {
                     self.reattach_tool_tab(tab, ctx);
                     return;
                 }
-                self.remember_tool_tab();
+                self.presentation.remember_selected();
                 match self.navigation.active {
                     Pane::Explorer => self.set_explorer_visible(ctx.viewport_id(), false),
                     Pane::Terminal => self.show_terminal = false,
-                    Pane::Tools => self.tool_windows.panel = None,
+                    Pane::Tools => self.presentation.clear_panel(),
                     _ => {}
                 }
                 self.set_pane_zoom(ctx.viewport_id(), None);
@@ -621,7 +621,7 @@ impl EditorApp {
             }
             Pane::Editor => true,
             Pane::Terminal => self.terminal_visible(),
-            Pane::Tools => self.areas.active != areas::Area::Projects || self.tools_visible(),
+            Pane::Tools => self.presentation.area != areas::Area::Projects || self.tools_visible(),
             Pane::Menus => true,
         }
     }
@@ -631,22 +631,23 @@ impl EditorApp {
             self.show_connections(ctx);
             return;
         }
-        if ctx.viewport_id() == egui::ViewportId::ROOT && self.areas.active != areas::Area::Projects
+        if ctx.viewport_id() == egui::ViewportId::ROOT
+            && self.presentation.area != areas::Area::Projects
         {
-            if pane == Pane::Tools && self.areas.active != areas::Area::Welcome {
+            if pane == Pane::Tools && self.presentation.area != areas::Area::Welcome {
                 self.navigation.request_focus(pane, egui::ViewportId::ROOT);
                 return;
             }
             if matches!(pane, Pane::Editor | Pane::Explorer | Pane::Terminal)
-                || self.areas.active == areas::Area::Welcome
+                || self.presentation.area == areas::Area::Welcome
             {
-                self.areas.active = areas::Area::Projects;
+                self.presentation.enter_area(areas::Area::Projects);
             }
         }
         let tab = match pane {
             Pane::Terminal => Some(tool_windows::ToolTab::Terminal),
             Pane::Tools => Some(tool_windows::ToolTab::Panel(
-                self.tool_windows.panel.unwrap_or(Panel::Problems),
+                self.presentation.panel.unwrap_or(Panel::Problems),
             )),
             _ => None,
         };
@@ -667,7 +668,7 @@ impl EditorApp {
             |tab| self.tool_viewport(tab),
         );
         if viewport == Self::tools_viewport() {
-            self.tool_windows.tools_hidden = false;
+            self.presentation.show_tools();
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
         }
         if viewport != ctx.viewport_id() {
@@ -690,10 +691,9 @@ impl EditorApp {
                 }
             }
             Pane::Tools => {
-                self.tool_windows.surface = tool_windows::Surface::Tools;
-                self.tool_windows.tools_hidden = false;
-                self.remember_tool_tab();
-                if self.tool_windows.panel.is_none() {
+                if let Some(panel) = self.presentation.panel {
+                    self.presentation.select_panel(panel);
+                } else {
                     self.toggle_panel(Panel::Problems, ctx);
                 }
             }

@@ -142,6 +142,7 @@ impl EditorApp {
                     keep_buffers,
                     documents_at_start,
                     open_file,
+                    policy,
                     ..
                 } => {
                     self.workspace.hold_prepared(
@@ -153,6 +154,7 @@ impl EditorApp {
                             open_file,
                             keep_buffers,
                             approved_documents: documents_at_start,
+                            policy,
                         },
                     );
                     self.guarded(Action::PreparedProject { id: token }, ctx);

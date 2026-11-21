@@ -52,12 +52,13 @@ mod tests {
                 },
                 ..Default::default()
             };
-            chat.apply_view(rode_agent_core::service::ChatView {
-                conversation: "saved-thread".into(),
-                recoverable: true,
-                config: config.clone(),
-                ..Default::default()
-            });
+            chat.fixture_mut()
+                .apply_view(rode_agent_core::service::ChatView {
+                    conversation: "saved-thread".into(),
+                    recoverable: true,
+                    config: config.clone(),
+                    ..Default::default()
+                });
             let frame = |events| {
                 let mut action = None;
                 let output = ctx.run(

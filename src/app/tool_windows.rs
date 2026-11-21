@@ -4,24 +4,6 @@
 //! project settings and caches. Project resets never reconstruct this registry.
 use super::*;
 
-/// Window-lifetime presentation only. No project preferences, host requests or
-/// running jobs are owned here; docking changes their existing view's location.
-#[derive(Default)]
-pub(super) struct State {
-    /// Selected project panel; retained while the editor or an application area is visible.
-    pub panel: Option<Panel>,
-    /// Content selected in the combined project-tool host.
-    pub surface: Surface,
-    /// The combined host has its own native window instead of occupying the editor canvas.
-    pub detached: bool,
-    /// Hide the combined host without ending its jobs or forgetting its selection.
-    pub tools_hidden: bool,
-    /// Individual native hosts; a tab is registered at most once and keeps its controller.
-    floating_tabs: Vec<ToolTab>,
-    /// Project-only destination restored by the Project tools toggle.
-    pub last_tool: Option<ToolTab>,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// The single selected content surface; detached tools retain this same underlying state.
 pub(in crate::app) enum Surface {
@@ -139,14 +121,14 @@ impl EditorApp {
 
     /// Report whether this tab has its own presentation viewport.
     pub(in crate::app) fn tab_detached(&self, tab: ToolTab) -> bool {
-        self.tool_windows.floating_tabs.contains(&tab)
+        self.presentation.floating_tabs.contains(&tab)
     }
 
     /// Resolve the native owner for focus requests and modal dialogs.
     pub(in crate::app) fn tool_viewport(&self, tab: ToolTab) -> egui::ViewportId {
         if self.tab_detached(tab) {
             tab.viewport()
-        } else if self.tool_windows.detached && tab.scope() == areas::Scope::Project {
+        } else if self.presentation.detached && tab.scope() == areas::Scope::Project {
             Self::tools_viewport()
         } else {
             egui::ViewportId::ROOT
@@ -155,26 +137,18 @@ impl EditorApp {
 
     /// Resolve a detached tab by its stable viewport identity, independent of dock selection.
     pub(in crate::app) fn floating_tab(&self, viewport: egui::ViewportId) -> Option<ToolTab> {
-        self.tool_windows
+        self.presentation
             .floating_tabs
             .iter()
             .copied()
             .find(|tab| tab.viewport() == viewport)
     }
 
-    fn selected_tool_tab(&self) -> Option<ToolTab> {
-        match self.tool_windows.surface {
-            Surface::Tools => self.tool_windows.panel.map(ToolTab::Panel),
-            Surface::Terminal => Some(ToolTab::Terminal),
-            Surface::Editor => None,
-        }
-    }
-
     /// Background polling must include independently visible tabs, regardless of dock selection.
     pub(in crate::app) fn panel_visible(&self, panel: Panel) -> bool {
         self.tab_detached(ToolTab::Panel(panel))
-            || self.areas.active.panel() == Some(panel)
-            || (self.tools_visible() && self.tool_windows.panel == Some(panel))
+            || self.presentation.area.panel() == Some(panel)
+            || (self.tools_visible() && self.presentation.panel == Some(panel))
     }
 
     /// Report terminal visibility across the docked, combined and individual tool hosts.
@@ -185,9 +159,7 @@ impl EditorApp {
     /// Raise a tab's existing host without changing the selection of any other window.
     pub(in crate::app) fn focus_tool_tab(&mut self, tab: ToolTab, ctx: &egui::Context) {
         self.editor.tabs.cancel_focus();
-        if tab.scope() == areas::Scope::Project {
-            self.tool_windows.last_tool = Some(tab);
-        }
+        self.presentation.remember(tab);
         self.navigation
             .request_focus(tab.pane(), self.tool_viewport(tab));
         if tab == ToolTab::Panel(Panel::Agent) {
@@ -209,7 +181,8 @@ impl EditorApp {
         let previous_owner = self.tool_viewport(tab);
         // Terminal startup records focus intent. Set its host first so it
         // cannot replace a different tool still selected in the sidebar.
-        self.tool_windows.floating_tabs.push(tab);
+        let selected = self.presentation.selected_tool() == Some(tab);
+        self.presentation.detach_tab(tab);
         match tab {
             ToolTab::Terminal => {
                 self.show_terminal = true;
@@ -223,22 +196,16 @@ impl EditorApp {
         if self.dialog_viewport == previous_owner && self.dialog != Dialog::None {
             self.dialog_viewport = tab.viewport();
         }
-        if self.selected_tool_tab() == Some(tab) {
-            self.tool_windows.surface = Surface::Editor;
-            if self.tool_windows.detached {
-                // Keep the sidebar useful when one of its tabs moves to another window.
-                if let Some(ToolTab::Panel(panel)) = ToolTab::project().find(|candidate| {
-                    matches!(candidate, ToolTab::Panel(panel) if self.panel_enabled(*panel))
-                        && !self.tab_detached(*candidate)
-                }) {
-                    self.toggle_panel(panel, ctx);
-                } else {
-                    self.dock_tools(ctx);
-                }
+        if selected && self.presentation.detached {
+            // Keep the sidebar useful when one of its tabs moves to another window.
+            if let Some(ToolTab::Panel(panel)) = ToolTab::project().find(|candidate| {
+                matches!(candidate, ToolTab::Panel(panel) if self.panel_enabled(*panel))
+                    && !self.tab_detached(*candidate)
+            }) {
+                self.toggle_panel(panel, ctx);
+            } else {
+                self.dock_tools(ctx);
             }
-        }
-        if self.areas.active.tab() == Some(tab) {
-            self.areas.active = areas::Area::Projects;
         }
         self.navigation.zoom = None;
         self.focus_tool_tab(tab, ctx);
@@ -248,9 +215,7 @@ impl EditorApp {
     /// Closing a tab window reattaches it; it never closes the underlying session.
     pub(in crate::app) fn reattach_tool_tab(&mut self, tab: ToolTab, ctx: &egui::Context) {
         keyboard::forget(ctx, tab.viewport());
-        self.tool_windows
-            .floating_tabs
-            .retain(|candidate| *candidate != tab);
+        self.presentation.reattach_tab(tab);
         if self.dialog_viewport == tab.viewport() {
             self.dialog_viewport = self.tool_viewport(tab);
         }
@@ -309,13 +274,10 @@ impl EditorApp {
     /// host.
     pub(in crate::app) fn editor_intent_in(&mut self, viewport: egui::ViewportId) {
         if viewport == egui::ViewportId::ROOT {
-            self.areas.active = areas::Area::Projects;
-        }
-        if viewport == egui::ViewportId::ROOT && !self.tool_windows.detached {
-            self.remember_tool_tab();
-            self.tool_windows.surface = Surface::Editor;
-        }
-        if viewport == egui::ViewportId::ROOT {
+            self.presentation.enter_area(areas::Area::Projects);
+            if !self.presentation.detached {
+                self.presentation.select_editor();
+            }
             self.navigation.editor_intent();
         } else {
             self.set_pane_zoom(
@@ -330,12 +292,7 @@ impl EditorApp {
 
     /// Select and reveal the terminal surface while preserving its running shell.
     pub(in crate::app) fn terminal_intent(&mut self) {
-        self.areas.active = areas::Area::Projects;
-        if !self.tab_detached(ToolTab::Terminal) {
-            self.tool_windows.surface = Surface::Terminal;
-            self.tool_windows.tools_hidden = false;
-        }
-        self.tool_windows.last_tool = Some(ToolTab::Terminal);
+        self.presentation.select_terminal();
         self.navigation.terminal_intent();
         self.navigation.request_focus(
             navigation::Pane::Terminal,
@@ -343,25 +300,18 @@ impl EditorApp {
         );
     }
 
-    /// Remember the selected tool/terminal before leaving it; the editor does not replace that choice.
-    pub(in crate::app) fn remember_tool_tab(&mut self) {
-        if let Some(tab) = self.selected_tool_tab() {
-            self.tool_windows.last_tool = Some(tab);
-        }
-    }
-
     /// Hide or restore the last tool surface, initially Chat, updating pane focus
     /// and detached-window visibility.
     pub(in crate::app) fn toggle_sidebar(&mut self, ctx: &egui::Context) {
-        let visible = self.areas.active == areas::Area::Projects && self.tool_surface();
-        if self.areas.active != areas::Area::Projects {
+        let visible = self.presentation.area == areas::Area::Projects && self.tool_surface();
+        if self.presentation.area != areas::Area::Projects {
             self.open_area(areas::Area::Projects, ctx);
         }
         self.navigation.zoom = None;
         if visible {
-            self.remember_tool_tab();
-            if self.tool_windows.detached {
-                self.tool_windows.tools_hidden = true;
+            self.presentation.remember_selected();
+            if self.presentation.detached {
+                self.presentation.hide_tools();
                 keyboard::forget(ctx, Self::tools_viewport());
                 ctx.send_viewport_cmd_to(
                     Self::tools_viewport(),
@@ -378,7 +328,7 @@ impl EditorApp {
                         ToolTab::Connections | ToolTab::AppSettings => false,
                     }
             };
-            let remembered = self.tool_windows.last_tool.filter(enabled);
+            let remembered = self.presentation.last_tool.filter(enabled);
             let docked_panel = |tab: &ToolTab| {
                 matches!(tab, ToolTab::Panel(_)) && enabled(tab) && !self.tab_detached(*tab)
             };
@@ -399,8 +349,8 @@ impl EditorApp {
                 .unwrap_or(ToolTab::Panel(Panel::Settings));
             match tab {
                 ToolTab::Panel(panel) if self.panel_enabled(panel) => {
-                    if self.tool_windows.surface == Surface::Tools
-                        && self.tool_windows.panel == Some(panel)
+                    if self.presentation.surface == Surface::Tools
+                        && self.presentation.panel == Some(panel)
                     {
                         self.focus_pane(navigation::Pane::Tools, ctx);
                         if panel == Panel::Agent {
@@ -422,25 +372,25 @@ impl EditorApp {
 
     /// Report effective tool visibility, including detached and zoomed-pane state.
     pub(in crate::app) fn tools_visible(&self) -> bool {
-        (self.areas.active == areas::Area::Projects || self.tool_windows.detached)
-            && !self.tool_windows.tools_hidden
-            && self.tool_windows.surface == Surface::Tools
-            && self.tool_windows.panel.is_some()
+        (self.presentation.area == areas::Area::Projects || self.presentation.detached)
+            && !self.presentation.tools_hidden
+            && self.presentation.surface == Surface::Tools
+            && self.presentation.panel.is_some()
             && !self
-                .tool_windows
+                .presentation
                 .panel
                 .is_some_and(|panel| self.tab_detached(ToolTab::Panel(panel)))
-            && (self.tool_windows.detached || self.navigation.visible(navigation::Pane::Tools))
+            && (self.presentation.detached || self.navigation.visible(navigation::Pane::Tools))
     }
 
     /// Report effective terminal visibility without inferring whether its shell is still alive.
     pub(in crate::app) fn terminal_visible(&self) -> bool {
-        (self.areas.active == areas::Area::Projects || self.tool_windows.detached)
-            && !self.tool_windows.tools_hidden
-            && self.tool_windows.surface == Surface::Terminal
+        (self.presentation.area == areas::Area::Projects || self.presentation.detached)
+            && !self.presentation.tools_hidden
+            && self.presentation.surface == Surface::Terminal
             && self.show_terminal
             && !self.tab_detached(ToolTab::Terminal)
-            && (self.tool_windows.detached || self.navigation.visible(navigation::Pane::Terminal))
+            && (self.presentation.detached || self.navigation.visible(navigation::Pane::Terminal))
     }
 
     /// Report whether a shared tools or terminal surface is visible, rather than whether work is
@@ -463,8 +413,7 @@ impl EditorApp {
 
     fn dock_tools(&mut self, ctx: &egui::Context) {
         keyboard::forget(ctx, Self::tools_viewport());
-        self.tool_windows.detached = false;
-        self.tool_windows.tools_hidden = false;
+        self.presentation.dock_tools();
         if self.dialog_viewport == Self::tools_viewport() {
             self.dialog_viewport = egui::ViewportId::ROOT;
         }
@@ -477,7 +426,7 @@ impl EditorApp {
             navigation::Pane::Editor
         };
         self.focus_pane(pane, ctx);
-        if pane == navigation::Pane::Tools && self.tool_windows.panel == Some(Panel::Agent) {
+        if pane == navigation::Pane::Tools && self.presentation.panel == Some(Panel::Agent) {
             self.agents.focus = true;
         }
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
@@ -485,7 +434,7 @@ impl EditorApp {
     }
 
     fn project_tab_button(&mut self, tab: ToolTab, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let selected = self.selected_tool_tab() == Some(tab);
+        let selected = self.presentation.selected_tool() == Some(tab);
         let response = ui.add_enabled(
             !self.tab_detached(tab),
             crate::keyboard::Button::selectable(selected, tab.label()),
@@ -551,14 +500,14 @@ impl EditorApp {
             }
         }
         let response =
-            crate::keyboard::button(ui, dock).on_hover_text(if self.tool_windows.detached {
+            crate::keyboard::button(ui, dock).on_hover_text(if self.presentation.detached {
                 "Return project tools to the main window"
             } else {
                 "Move project tools into a separate window"
             });
         ui_probe::button(
             ui,
-            if self.tool_windows.detached {
+            if self.presentation.detached {
                 "workspace-dock"
             } else {
                 "workspace-detach"
@@ -566,10 +515,10 @@ impl EditorApp {
             &response,
         );
         if response.clicked() {
-            if self.tool_windows.detached {
+            if self.presentation.detached {
                 self.dock_tools(ctx);
             } else {
-                self.tool_windows.detached = true;
+                self.presentation.detach_tools();
                 self.navigation.zoom = None;
                 ctx.request_repaint();
             }
@@ -613,7 +562,7 @@ impl EditorApp {
             ui.disable();
         }
         let dock = if child { "Dock back" } else { "Detach" };
-        let tab = self.selected_tool_tab();
+        let tab = self.presentation.selected_tool();
         let spacing = ui.spacing().item_spacing.x;
         let actions_width = Self::workspace_button_width(ui, dock)
             + 2. * spacing
@@ -655,7 +604,7 @@ impl EditorApp {
         if self.foreign_modal(ctx) {
             ui.disable();
         }
-        match self.tool_windows.surface {
+        match self.presentation.surface {
             Surface::Terminal => self.terminal_content(ui, ctx),
             Surface::Tools => self.selected_panel_content(ui, ctx),
             Surface::Editor => {}
@@ -667,7 +616,7 @@ impl EditorApp {
         if self.navigation.zoom == Some(navigation::Pane::Connections) {
             return;
         }
-        if self.areas.active != areas::Area::Projects {
+        if self.presentation.area != areas::Area::Projects {
             self.global_content(ctx);
             return;
         }
@@ -678,7 +627,7 @@ impl EditorApp {
         let palette = self.themes.active().palette;
         // The editor needs no extra navigation row. Keep the row only in its
         // actual tool host, so hiding or detaching tools restores editor space.
-        if !self.tool_windows.detached && self.tool_surface() {
+        if !self.presentation.detached && self.tool_surface() {
             egui::TopBottomPanel::top("workspace-tabs")
                 .frame(theme::frame(palette.panel))
                 .show(ctx, |ui| {
@@ -687,7 +636,7 @@ impl EditorApp {
                     })
                 });
         }
-        if self.tool_windows.detached || !self.tool_surface() {
+        if self.presentation.detached || !self.tool_surface() {
             self.in_editor(egui::ViewportId::ROOT, |app| {
                 app.git_gutter_tick(ctx);
                 app.editor(ctx);
@@ -717,18 +666,18 @@ impl EditorApp {
 
     /// Closing the whole tools window docks it, retaining its selected surface.
     pub(in crate::app) fn detached_tools(&mut self, ctx: &egui::Context) {
-        if !self.tool_windows.detached {
+        if !self.presentation.detached {
             return;
         }
-        if !self.tool_windows.tools_hidden && !self.tool_surface() {
+        if !self.presentation.tools_hidden && !self.tool_surface() {
             self.dock_tools(ctx);
             return;
         }
         ctx.show_viewport_immediate(
             Self::tools_viewport(),
-            detached_builder("Project tools").with_visible(!self.tool_windows.tools_hidden),
+            detached_builder("Project tools").with_visible(!self.presentation.tools_hidden),
             |ctx, class| {
-                if self.tool_windows.tools_hidden {
+                if self.presentation.tools_hidden {
                     return;
                 }
                 if ctx.input(|input| input.viewport().close_requested()) {
@@ -769,7 +718,7 @@ impl EditorApp {
 
     /// Each tab has a stable viewport; closing reattaches only that tab.
     pub(in crate::app) fn detached_tabs(&mut self, ctx: &egui::Context) {
-        for tab in self.tool_windows.floating_tabs.clone() {
+        for tab in self.presentation.floating_tabs.clone() {
             ctx.show_viewport_immediate(
                 tab.viewport(),
                 detached_builder(tab.label()),
@@ -863,11 +812,11 @@ impl EditorApp {
             self.open_area(area, ctx);
             return;
         }
-        self.areas.active = areas::Area::Projects;
+        self.presentation.enter_area(areas::Area::Projects);
         if self.tab_detached(ToolTab::Panel(panel)) {
             self.focus_tool_tab(ToolTab::Panel(panel), ctx);
-        } else if self.tool_windows.panel == Some(panel)
-            && self.tool_windows.surface == Surface::Tools
+        } else if self.presentation.panel == Some(panel)
+            && self.presentation.surface == Surface::Tools
         {
             self.focus_pane(navigation::Pane::Tools, ctx);
         } else {
@@ -889,38 +838,38 @@ impl EditorApp {
             self.open_area(area, ctx);
             return;
         }
-        let from_project = self.areas.active == areas::Area::Projects;
-        self.areas.active = areas::Area::Projects;
-        self.tool_windows.last_tool = Some(ToolTab::Panel(panel));
+        let from_project = self.presentation.area == areas::Area::Projects;
+        self.presentation.enter_area(areas::Area::Projects);
+        self.presentation.remember(ToolTab::Panel(panel));
         if self.tab_detached(ToolTab::Panel(panel)) {
             self.focus_tool_tab(ToolTab::Panel(panel), ctx);
             return;
         }
-        if self.tool_windows.detached
-            && self.tool_windows.panel == Some(panel)
-            && self.tool_windows.surface == Surface::Tools
+        if self.presentation.detached
+            && self.presentation.panel == Some(panel)
+            && self.presentation.surface == Surface::Tools
         {
-            self.tool_windows.tools_hidden = false;
+            self.presentation.show_tools();
             ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
             return;
         }
-        self.tool_windows.panel = if from_project
-            && self.tool_windows.panel == Some(panel)
-            && self.tool_windows.surface == Surface::Tools
+        if from_project
+            && self.presentation.panel == Some(panel)
+            && self.presentation.surface == Surface::Tools
         {
-            None
+            self.presentation.clear_panel();
         } else {
-            Some(panel)
-        };
-        if self.tool_windows.panel.is_some() {
+            self.presentation.select_panel(panel);
+        }
+        if self.presentation.panel.is_some() {
             self.refresh_project_panel(panel, ctx);
         }
-        if panel == Panel::Agent && self.tool_windows.panel.is_some() {
+        if panel == Panel::Agent && self.presentation.panel.is_some() {
             self.agents.focus = true;
         }
         self.focus_pane(
-            if self.tool_windows.panel.is_some() {
+            if self.presentation.panel.is_some() {
                 navigation::Pane::Tools
             } else {
                 navigation::Pane::Editor

@@ -443,7 +443,7 @@ fn project_preparation_cannot_invalidate_an_inflight_explorer_operation() {
         Default::default(),
         false,
         true,
-        None,
+        workspace::PreparationPolicy::Given,
         &ctx,
     );
     assert!(!app.workspace.preparing());

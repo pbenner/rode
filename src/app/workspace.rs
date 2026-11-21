@@ -5,7 +5,7 @@ mod connection;
 pub(super) use connection::ConnectionId;
 
 mod control;
-pub(super) use control::{Controller, PreparationId, Prepared};
+pub(super) use control::{Controller, PreparationId, PreparationPolicy, Prepared};
 
 /// The operation determines lifetime policy; display text never selects cleanup behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +50,7 @@ impl EditorApp {
         options: sandbox::Options,
         remote: bool,
         keep_buffers: bool,
-        restore_saved: Option<bool>,
+        policy: PreparationPolicy,
         ctx: &egui::Context,
     ) {
         if !self.allow_shared_folder_change(transfers::ContextChange::Project) {
@@ -84,6 +84,13 @@ impl EditorApp {
             );
             return;
         }
+        // Implicit startup is deliberately independent of global grants,
+        // saved per-project policies and sandbox host availability.
+        let options = if policy == PreparationPolicy::CurrentDirectory {
+            sandbox::Options::default()
+        } else {
+            options
+        };
         if let Err(error) = options.validate() {
             self.notify(error.to_string(), true);
             return;
@@ -98,7 +105,7 @@ impl EditorApp {
         self.dispatch(
             Request::Prepare {
                 path,
-                sandbox: if restore_saved.is_some() {
+                sandbox: if matches!(policy, PreparationPolicy::Saved(_)) {
                     Default::default()
                 } else {
                     options.clone()
@@ -110,7 +117,7 @@ impl EditorApp {
                 keep_buffers,
                 token,
                 documents_at_start: self.documents.versions(),
-                restore_saved,
+                policy,
                 open_file: None,
             },
             ctx,
@@ -120,15 +127,16 @@ impl EditorApp {
     /// Install an accepted prepared context after common guards pass. Invalidate old
     /// services/generations before starting commands for the new host and policy.
     /// A startup file is opened through the ordinary reader only after this commit.
-    pub(in crate::app) fn commit_project(
-        &mut self,
-        response: Response,
-        remote: bool,
-        options: sandbox::Options,
-        keep_buffers: bool,
-        open_file: Option<String>,
-        ctx: &egui::Context,
-    ) {
+    pub(in crate::app) fn commit_prepared(&mut self, prepared: Prepared, ctx: &egui::Context) {
+        let Prepared {
+            response,
+            remote,
+            options,
+            policy,
+            keep_buffers,
+            open_file,
+            ..
+        } = prepared;
         let Some(plan) = response.project else {
             self.notify("Host returned an invalid project description.", true);
             return;
@@ -182,7 +190,7 @@ impl EditorApp {
             .directories
             .insert(response.path, response.entries);
         self.explorer_state.tree_dirty = true;
-        self.load_project_tools(ctx);
+        self.load_project_tools(ctx, policy != PreparationPolicy::CurrentDirectory);
         if let Some(draft) = settings_draft {
             self.restore_settings_draft(draft);
         }
@@ -194,7 +202,7 @@ impl EditorApp {
         if plan.requested && !plan.active {
             self.notify(plan.reason.clone(), false);
         }
-        let show_welcome = open_file.is_none() && self.areas.active == areas::Area::Welcome;
+        let show_welcome = open_file.is_none() && self.presentation.area == areas::Area::Welcome;
         self.show_terminal |= remote || options.enabled;
         if let Some(path) = open_file {
             self.open_file_in(path, egui::ViewportId::ROOT, ctx);
@@ -210,6 +218,32 @@ impl EditorApp {
             // text, through the existing editor rather than the login terminal.
             self.focus_editor_in(egui::ViewportId::ROOT, ctx);
         }
+    }
+
+    /// Fixtures may install an already checked context without constructing the
+    /// transition owner's version/admission envelope.
+    #[cfg(test)]
+    pub(in crate::app) fn commit_project(
+        &mut self,
+        response: Response,
+        remote: bool,
+        options: sandbox::Options,
+        keep_buffers: bool,
+        open_file: Option<String>,
+        ctx: &egui::Context,
+    ) {
+        self.commit_prepared(
+            Prepared {
+                response,
+                remote,
+                options,
+                keep_buffers,
+                open_file,
+                policy: PreparationPolicy::Given,
+                approved_documents: vec![],
+            },
+            ctx,
+        );
     }
 
     /// Invalidate project work and release window-owned views before transport cleanup.

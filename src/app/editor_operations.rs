@@ -226,7 +226,7 @@ impl EditorApp {
                 if self.navigation.accepts_editor_focus()
                     && self.documents.owner(id).is_some_and(|owner| {
                         owner != egui::ViewportId::ROOT
-                            || self.areas.active == areas::Area::Projects
+                            || self.presentation.area == areas::Area::Projects
                     })
                 {
                     self.execute_editor_operation(

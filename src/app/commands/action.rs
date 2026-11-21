@@ -478,12 +478,12 @@ impl EditorApp {
     /// local to that editor host.
     pub(in crate::app) fn command_selected(&self, command: Command, ctx: &egui::Context) -> bool {
         match command {
-            Command::Projects => self.areas.active == areas::Area::Projects,
+            Command::Projects => self.presentation.area == areas::Area::Projects,
             Command::Connections => {
                 self.connections_visible() || self.tab_detached(tool_windows::ToolTab::Connections)
             }
             Command::AppSettings => {
-                self.areas.active == areas::Area::Settings
+                self.presentation.area == areas::Area::Settings
                     || self.area_detached(areas::Area::Settings)
             }
             Command::Environment => self.environment_visible(),

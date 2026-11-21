@@ -92,10 +92,10 @@ impl EditorApp {
             );
             let pane = self.pane_zoom(viewport).unwrap_or_else(|| {
                 if viewport == egui::ViewportId::ROOT
-                    && !self.tool_windows.detached
+                    && !self.presentation.detached
                     && self.tool_surface()
                 {
-                    if self.tool_windows.surface == tool_windows::Surface::Terminal {
+                    if self.presentation.surface == tool_windows::Surface::Terminal {
                         navigation::Pane::Terminal
                     } else {
                         navigation::Pane::Tools
@@ -224,7 +224,7 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = app(&ctx, egui::ViewportId::ROOT);
             app.navigation.zoom = Some(navigation::Pane::Explorer);
-            let explorer = app.sidebar.selected;
+            let explorer = app.presentation.sidebar;
             let source = app
                 .documents
                 .active()
@@ -253,7 +253,7 @@ mod tests {
             });
             assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|command| matches!(command, egui::ViewportCommand::Fullscreen(value) if *value == native)));
             assert!(app.editor.pdf_fullscreen.is_none());
-            assert_eq!(app.sidebar.selected, explorer);
+            assert_eq!(app.presentation.sidebar, explorer);
             assert_eq!(app.navigation.zoom, Some(navigation::Pane::Explorer));
             assert_eq!(app.navigation.active, navigation::Pane::Explorer);
         }
@@ -301,19 +301,18 @@ mod tests {
     fn fullscreen_from_tools_preserves_the_surface_through_focus_restoration() {
         let ctx = egui::Context::default();
         let mut app = app(&ctx, egui::ViewportId::ROOT);
-        app.tool_windows.surface = tool_windows::Surface::Tools;
-        app.tool_windows.panel = Some(Panel::Agent);
+        app.presentation.select_panel(Panel::Agent);
         run(&ctx, egui::ViewportId::ROOT, false, |ctx| {
             app.toggle_pdf_fullscreen(ctx);
             assert!(app.pdf_fullscreen_ui(ctx));
             // Closing a dialog schedules the same editor focus request.
             app.focus_editor(ctx);
         });
-        assert_eq!(app.tool_windows.surface, tool_windows::Surface::Tools);
+        assert_eq!(app.presentation.surface, tool_windows::Surface::Tools);
         run(&ctx, egui::ViewportId::ROOT, true, |ctx| {
             app.toggle_pdf_fullscreen(ctx)
         });
-        assert_eq!(app.tool_windows.surface, tool_windows::Surface::Tools);
+        assert_eq!(app.presentation.surface, tool_windows::Surface::Tools);
         assert_eq!(app.navigation.active, navigation::Pane::Tools);
     }
 

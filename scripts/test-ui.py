@@ -7,6 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from ui_fixture import native_session
 from ui_harness import (
     ARTIFACTS,
     BINARY,
@@ -317,3 +318,45 @@ with fixture_directory(prefix="rode-file-ui-") as home:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+
+
+# No-target startup always opens the real CWD in Normal mode, including HOME.
+
+with fixture_directory(prefix="rode-cwd-ui-") as base:
+    home = base / "home"
+    home.mkdir(mode=0o700)
+    project = home / "project"
+    project.mkdir()
+    for index, cwd in enumerate([home, project]):
+        source = cwd / "startup.txt"
+        source.write_text("current directory contents\n")
+        environment = fixture_environment(base, HOME=str(home))
+        preferences = Path(environment["XDG_DATA_HOME"]) / "rode/app.ron"
+        preferences.parent.mkdir(parents=True, exist_ok=True)
+        defaults = {"enabled": True, "backend": "landlock", "read_only": ["invalid relative grant"]}
+        identity = json.dumps([None, str(cwd)], separators=(",", ":"))
+        saved = {identity: {"sandbox": defaults}}
+        preferences.write_text(
+            json.dumps(
+                {"sandbox_defaults": json.dumps(defaults), "project_preferences": json.dumps(saved)}
+            )
+        )
+        with native_session([str(BINARY)], environment, cwd, f"cwd-{index}", cwd=cwd) as ui:
+            ui.control("welcome-screen")
+            ui.absent("pane-Explorer")
+            ui.value("status-access-value", "Normal")
+            ui.click("activity:Projects")
+            ui.absent("welcome-screen")
+            ui.control("pane-Editor")
+            ui.click("workspace-explorer")
+            ui.control(f"explorer-row:{source}")
+            ui.open_file(source.name)
+            ui.source("current directory contents\n")
+            ui.value("status-access-value", "Normal")
+        stored = preferences.read_text()
+        for key_name, expected in [("sandbox_defaults", defaults), ("project_preferences", saved)]:
+            value = re.search(r'"' + key_name + r'"\s*:\s*("(?:\\.|[^"\\])*")', stored)
+            assert value and json.loads(decode_ron_string(value[1])) == expected, (key_name, stored)
+    print(
+        "Implicit CWD startup in HOME/project, Normal mode, Projects/Explorer activation and unchanged sandbox preferences passed."
+    )

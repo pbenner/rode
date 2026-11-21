@@ -7,7 +7,11 @@
 //! and guarded project/window actions remain with the application coordinator.
 use super::*;
 
+#[cfg(test)]
+mod performance;
+
 pub(super) mod gutter;
+pub(super) mod source_layout;
 
 impl EditorApp {
     /// Keep the empty state independent of tab-strip cursor placement and pane width.
@@ -94,11 +98,9 @@ impl EditorApp {
                     return;
                 }
                 if self.documents.active().is_none() {
-                    if ctx.viewport_id() == egui::ViewportId::ROOT {
-                        self.welcome(ui);
-                    } else {
-                        self.empty_editor(ui);
-                    }
+                    // Welcome belongs to the Welcome area. Projects must show
+                    // a distinct editor even before its first file is opened.
+                    self.empty_editor(ui);
                     return;
                 }
                 self.tab_strip(ui, ctx);
@@ -192,6 +194,8 @@ impl EditorApp {
                 let diagnostics = self.document_issues(self.documents.active().unwrap());
                 let git_gutter = &self.editor.git_gutter;
                 let gutter_layout = &mut self.editor.gutter_layout;
+                let source_syntax = &mut self.editor.source_syntax;
+                let source_layout = &mut self.editor.source_layout;
                 let input=&mut self.editor.input;
                 let doc = self.documents.active_mut().unwrap();
                 input.bind_source(doc.id,shortcut_style);
@@ -217,20 +221,11 @@ impl EditorApp {
                         .or_else(|| doc.marp.as_ref().map(|_| "untitled.marp.md")),
                 )
                 .to_owned();
-                let highlight = doc.text.len() < 512 * 1024;
+                let syntax_ready = std::cell::Cell::new(false);
                 let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap: f32| {
-                    let mut job = if highlight {
-                        themes.highlight(ui, buffer.as_str(), &lang, font_size)
-                    } else {
-                        egui::text::LayoutJob::simple(
-                            buffer.as_str().into(),
-                            FontId::monospace(font_size),
-                            palette.text,
-                            f32::INFINITY,
-                        )
-                    };
-                    job.wrap.max_width = if word_wrap { wrap.max(1.) } else { f32::INFINITY };
-                    ui.fonts_mut(|fonts| fonts.layout_job(job))
+                    let job = source_syntax.job(ui.ctx(), buffer.as_str(), &lang, font_size, themes.source_settings());
+                    syntax_ready.set(source_syntax.settled());
+                    source_layout.layout(ui, job, if word_wrap { wrap.max(1.) } else { f32::INFINITY })
                 };
                 let mut source_scroll = egui::ScrollArea::both()
                     .scroll([!word_wrap, true])
@@ -279,6 +274,7 @@ impl EditorApp {
                             input.after_source(ui,doc.id,&mut output,&doc.text,palette);
                             palette.paint_source_artwork(ui, &output, source_canvas);
                             ui_probe::button(ui, "source-editor", &output.response);
+                            if syntax_ready.get() { ui_probe::button(ui, "source-syntax-ready", &output.response); }
                             ui_probe::button(ui, if word_wrap { "source-editor-wrapped" } else { "source-editor-unwrapped" }, &output.response);
                             ui_probe::button(ui, &format!("source-editor-layout:{}:{}", doc.line_count(), output.galley.rows.len()), &output.response);
                             keyboard::editor_target(ui, "Source editor", &output.response);

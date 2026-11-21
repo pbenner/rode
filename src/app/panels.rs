@@ -47,7 +47,7 @@ impl EditorApp {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
     ) {
-        let Some(panel) = self.tool_windows.panel else {
+        let Some(panel) = self.presentation.panel else {
             return;
         };
         self.panel_content(panel, ui, ctx);

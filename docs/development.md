@@ -396,7 +396,7 @@ The **Check** workflow runs on pull requests and pushes to `main`, avoiding dupl
 
 Fast UI checks run in four isolated jobs: `workspace`, `agents`, `terminals` and `ssh`. Extended jobs are `tools`, `documents`, `remote`, `runtimes`, `sandbox` and `landlock`. Each job has its own X display, clipboard and session directories; tests inside a job run sequentially. Specialist dependencies are installed only in their owning jobs. The `runtimes` job explicitly enables installed-tool integration tests that the ordinary Rust run may skip. SSH transport tests run once in the fast SSH job and once with those additional real tools in the runtime job; remote viewer cases share a private sshd without rerunning transport tests per viewer.
 
-`scripts/ci.py` owns the suite manifest and PR selection. Changes under `src/`, `crates/`, `tests/` or `.github/`, Cargo changes, and shared harness changes select every extended job. Individual UI-script changes select their associated extended jobs; documentation-only PRs keep the fast checks. Add the **full-ci** PR label to force the complete extended tier. **Run workflow → full** also includes release packaging; disabling full runs only the fast tier. The nightly check runs at 03:23 UTC. The existing required **linux** check aggregates the fast jobs and reports independently of extended results. Repositories that require extended coverage before merging should also require the corresponding extended checks in branch protection.
+`scripts/ci.py` owns the suite manifest and PR selection. Changes under `src/`, `crates/`, `tests/` or `.github/`, Cargo changes, and shared harness changes select every extended job. Individual UI-script changes select their associated extended jobs; documentation-only PRs keep the fast checks. Add the **full-ci** PR label to force the complete extended tier. **Run workflow → full** also includes release packaging; disabling full runs only the fast tier. The nightly check runs at 03:23 UTC. The required **linux** check waits for the fast jobs and every selected extended job. It rejects failed, cancelled, skipped or missing required results. A skipped extended matrix is accepted only when the successful plan explicitly declares that no extended jobs are required; missing plan outputs fail closed. `scripts/ci.py required` owns this aggregation policy, covered by `scripts/test-ci.py`.
 
 The sandbox job adjusts the unprivileged-user-namespace AppArmor setting only on its disposable GitHub runner. `RODE_TEST_REQUIRE_SANDBOX=1` requires both desktop and headless project preparation to activate the real sandbox; unavailable sandboxing fails that job. Ordinary jobs retain explicit fallback coverage and print unavailable-host diagnostics.
 
@@ -976,6 +976,24 @@ Linux is validated; the automated SSH daemon fixture does not cover every authen
 With Go on PATH and `RODE_TEST_PRETTIER` set, run `RODE_TEST_BINARY="$PWD/target/release/rode" xvfb-run -a -s "-screen 0 1600x1100x24" python3 scripts/test-languages-ui.py` for actual Go format/run/build, TypeScript formatting/Problems, and saves after syntax errors. Screenshots/logs and `toolchain.json` go to `target/languages-ui/`. The standard-library-only Go fixture declares its actual minimum (Go 1.16), disables toolchain/module downloads and uses private caches; shell startup and user Go configuration cannot redirect its tools. CI installs Go, clang-format, shfmt and a pinned test Prettier; the application itself never installs those tools.
 
 The language UI fixture also starts a separate editor with an empty PATH to check bundled formatting, buffer-based saves, syntax diagnostics and recovery without Prettier, Node or npm. `rode-host-core` unit tests cover each linked formatter, idempotence, Unicode positions, BOM/CRLF preservation, embedded code and retained import/property order. The `project` integration tests send the same unsaved snapshots through both executable entry points with an empty PATH, check installed-tool precedence and missing interpreters, and verify that no source/configuration file is executed or rewritten. `RODE_SSH_TEST_NO_PYTHON=1 RODE_SSH_TEST_FILTER=native_generic_operations scripts/test-ssh.sh` repeats native formatting/checks on direct SSH and ProxyJump, including enforced Landlock when required. Helpers must advertise `bundled_web_formatters`; older installed helpers cannot silently retain the Node requirement.
+
+## Source editing performance
+
+The native source widget has an opt-in CPU-frame benchmark:
+
+```sh
+python3 scripts/rust_tests.py --locked --profile ci -p rode --lib source_frame_profile -- --ignored --nocapture
+```
+
+It measures actual TextEdit input for 2,000- and 20,000-line Rust buffers. It
+reports the first frame, initial syntax readiness, median idle/edit frames and
+edit-to-syntax readiness separately. Syntax must settle between edits, so a
+plaintext placeholder cannot masquerade as completed highlighting. Timings are
+reported rather than asserted on shared CI. Compare the same profile, font,
+viewport and machine; these CPU measurements are not display-latency guarantees.
+Checkpoint tests compare incremental syntax with fresh parses after multiline
+edits, line insertions/deletions and palette changes. Layout tests compare native
+rows and every character cursor after wrapping, CRLF, Unicode and font resets.
 
 ## Independent syntax themes
 

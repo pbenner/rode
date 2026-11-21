@@ -21,41 +21,64 @@ impl EditorApp {
         });
         for (id, saved) in entries {
             ui.push_id(("saved-tunnel", &id), |ui| {
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let remove = ui.add(IconButton::toolbar(
-                            Icon::Close,
-                            &format!("Remove saved tunnel {}", saved.spec.name),
-                        ));
-                        ui_probe::button(ui, &format!("tunnel-saved-remove:{id}"), &remove);
-                        if remove.clicked() {
-                            self.tunnels.delete_saved = Some(id.clone());
-                        }
-                        let load = ui
-                            .add_enabled(
-                                saved.host == host,
-                                IconButton::new(Icon::Remote, &saved.spec.name)
-                                    .truncate()
-                                    .min_size(egui::vec2(ui.available_width(), 32.)),
-                            )
-                            .on_hover_text(format!(
-                                "{}\nRelay {} · {}\nLoad and review this setup",
-                                saved.host.label(),
-                                ui::endpoint(&saved.spec.relay_host, saved.spec.relay_port),
-                                saved.spec.listener()
-                            ))
-                            .on_disabled_hover_text(format!(
-                                "Open {} before loading this setup.",
-                                saved.host.label()
-                            ));
-                        ui_probe::button(ui, &format!("tunnel-saved-load:{id}"), &load);
-                        if load.has_focus() {
-                            load.scroll_to_me(None);
-                        }
-                        if load.clicked() {
-                            self.open_saved_tunnel(&id);
-                        }
+                let can_load = saved.host == host;
+                let load = ui
+                    .add_enabled_ui(can_load, |ui| {
+                        ui.add_sized(
+                            egui::vec2(ui.available_width(), 32.),
+                            IconButton::new(Icon::Remote, &saved.spec.name).truncate(),
+                        )
+                    })
+                    .inner;
+                ui_probe::button(ui, &format!("tunnel-saved-load:{id}"), &load);
+                // Keep the host guard on loading, while allowing management of
+                // a disabled foreign-host row. An enabled load already supplies
+                // the row's interaction; only disabled loads need an overlay.
+                let row = if can_load {
+                    load.clone()
+                } else {
+                    let row = ui.interact(load.rect, load.id.with("manage"), Sense::click());
+                    row.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled(),
+                            format!("Manage saved tunnel {}", saved.spec.name),
+                        )
                     });
+                    crate::keyboard::target(
+                        ui,
+                        &format!("Manage saved tunnel {}", saved.spec.name),
+                        &row,
+                    );
+                    row
+                }
+                .on_hover_text(format!(
+                    "{}\nRelay {} · {}\n{}\nRight-click to manage",
+                    saved.host.label(),
+                    ui::endpoint(&saved.spec.relay_host, saved.spec.relay_port),
+                    saved.spec.listener(),
+                    if can_load {
+                        "Load and review this setup".into()
+                    } else {
+                        format!("Open {} before loading this setup.", saved.host.label())
+                    },
+                ));
+                ui_probe::button(ui, &format!("tunnel-saved-row:{id}"), &row);
+                if row.has_focus() {
+                    row.scroll_to_me(None);
+                }
+                if load.clicked() {
+                    self.open_saved_tunnel(&id);
+                }
+                crate::keyboard::context_menu(&row, |ui| {
+                    let remove = ui.add(
+                        IconButton::new(Icon::Close, "Remove saved tunnel").color(palette.error),
+                    );
+                    ui_probe::button(ui, &format!("tunnel-saved-remove:{id}"), &remove);
+                    if remove.clicked() {
+                        self.tunnels.delete_saved = Some(id.clone());
+                        ui.close();
+                    }
                 });
                 if self.tunnels.delete_saved.as_deref() == Some(&id) {
                     ui.label("Delete this saved configuration? Running tunnels are unaffected.");

@@ -251,7 +251,7 @@ impl Agents {
             }
             if answering {
                 let working = agents.chat.busy;
-                let action = questions::show(ui, agents.chat.prompts.front_mut().unwrap(), !offline && !modal, working, palette);
+                let action = agents.chat.edit_answers(|prompt| questions::show(ui, prompt, !offline && !modal, working, palette)).unwrap();
                 answer = action.answer;
                 stop = action.stop;
                 return;
@@ -268,7 +268,7 @@ impl Agents {
                 history_action.delete=panel.delete;
                 return;
             }
-            if let Some(prompt) = agents.chat.prompts.front_mut() {
+            if let Some(prompt) = agents.chat.prompts.front() {
                 egui::Frame::new().fill(palette.raised).stroke(Stroke::new(1.0_f32,palette.accent)).inner_margin(8).corner_radius(4).show(ui,|ui| {
                     egui::ScrollArea::vertical().id_salt("agent-request").max_height((ui.available_height()*0.65).clamp(60.,200.)).show(ui,|ui| {
                         ui.label(RichText::new(&prompt.title).strong().color(palette.accent));
@@ -508,9 +508,7 @@ impl Agents {
         if stop {
             agents.queue.pause();
             if agents.chat.stopping() {
-                agents.chat.completed += u64::from(agents.chat.busy);
-                agents.chat.disconnect();
-                agents.chat.notice("Agent process closed.");
+                agents.chat.force_close();
             } else {
                 agents.chat.cancel();
             }

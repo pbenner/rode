@@ -926,7 +926,7 @@ fn restored_input_history_survives_tool_replay_and_later_submissions() {
         // Reattachment transfers recall even when the display has no user rows.
         let mut view = chat.view();
         view.messages.clear();
-        let mut mirror = Chat::default();
+        let mut mirror = rode_agent_core::protocol::Chat::default();
         mirror.apply_view(view);
         assert_eq!(
             mirror.input_history().collect::<Vec<_>>(),

@@ -109,7 +109,6 @@ fn panel_text(app: &mut EditorApp, ctx: &egui::Context) -> String {
             ..Default::default()
         },
         |ctx| {
-            app.tool_windows.surface = Surface::Tools;
             app.workspace_content(ctx);
         },
     )
@@ -268,7 +267,7 @@ fn opening_a_non_python_project_does_not_probe_python_and_disable_invalidates_to
     use crate::extensions::Feature;
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
-    app.load_project_tools(&ctx);
+    app.load_project_tools(&ctx, true);
     assert!(!app.workbench.python.env_busy);
     app.new_file();
     app.documents[0].fixture_content().text = "keep dirty".into();
@@ -278,7 +277,7 @@ fn opening_a_non_python_project_does_not_probe_python_and_disable_invalidates_to
     assert!(cancel.load(Ordering::Acquire));
     assert!(app.workbench.epoch > epoch);
     app.toggle_panel(Panel::Monitor, &ctx);
-    assert_ne!(app.tool_windows.panel, Some(Panel::Monitor));
+    assert_ne!(app.presentation.panel, Some(Panel::Monitor));
     assert_eq!(app.documents[0].text, "keep dirty");
     assert!(app.documents[0].dirty());
     app.set_extension(Feature::Python.id(), false);
@@ -453,8 +452,7 @@ fn remote_monitor_waits_for_authentication_before_sampling() {
         plan: Default::default(),
         sandbox_options: Default::default(),
     }));
-    app.areas.active = areas::Area::Monitor;
-    app.tool_windows.panel = Some(Panel::Monitor);
+    app.presentation.enter_area(areas::Area::Monitor);
     app.host_tools.monitoring.set_active(true);
     assert!(!app.monitor_host_ready());
     app.monitor_tick(&ctx);
@@ -606,7 +604,7 @@ fn fresh_formatter_result_updates_buffer_and_diagnostics_without_saving_it() {
 fn applying_a_local_project_policy_keeps_unsaved_buffers() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
-    app.load_project_tools(&ctx);
+    app.load_project_tools(&ctx, true);
     app.workbench.draft.latex.program = "unfinished-tool".into();
     app.workbench.settings_section = SettingsSection::Sandbox;
     app.new_file();
@@ -884,8 +882,7 @@ fn settings_categories_keep_drafts_and_save_only_validated_selected_fields() {
 fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits() {
     let root = tempfile::tempdir().unwrap();
     let (mut app, ctx) = app(root.path());
-    app.tool_windows.surface = Surface::Tools;
-    app.tool_windows.panel = Some(Panel::Settings);
+    app.presentation.select_panel(Panel::Settings);
     app.workbench.draft.ruff = "/unfinished/ruff".into();
     for category in [
         SettingsSection::Latex,
@@ -894,8 +891,8 @@ fn settings_links_select_their_category_without_closing_the_tab_or_losing_edits(
     ] {
         app.reveal_settings(category, &ctx);
         assert_eq!(app.workbench.settings_section, category);
-        assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
-        assert_eq!(app.tool_windows.surface, Surface::Tools);
+        assert_eq!(app.presentation.panel, Some(Panel::Settings));
+        assert_eq!(app.presentation.surface, Surface::Tools);
         assert_eq!(app.workbench.draft.ruff, "/unfinished/ruff");
     }
 }

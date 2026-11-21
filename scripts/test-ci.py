@@ -18,6 +18,51 @@ from unittest.mock import patch
 import ci
 
 
+class RequiredChecksTests(unittest.TestCase):
+    def results(self, extended=True):
+        return {
+            "plan": {
+                "result": "success",
+                "outputs": {"run-extended": "true" if extended else "false"},
+            },
+            "lint": {"result": "success"},
+            "build": {"result": "success"},
+            "fast-ui": {"result": "success"},
+            "extended": {"result": "success" if extended else "skipped"},
+        }
+
+    def test_selected_extended_failures_and_cancellations_cannot_pass_the_gate(self):
+        ci.required_checks(self.results())
+        for job in self.results():
+            for status in ("failure", "cancelled", "skipped", ""):
+                with self.subTest(job=job, status=status):
+                    results = self.results()
+                    results[job]["result"] = status
+                    with self.assertRaises(ValueError):
+                        ci.required_checks(results)
+
+    def test_only_explicitly_unselected_extended_suites_may_be_skipped(self):
+        ci.required_checks(self.results(False))
+        for selected in (None, "", "unknown"):
+            results = self.results(False)
+            results["plan"]["outputs"]["run-extended"] = selected
+            with self.assertRaises(ValueError):
+                ci.required_checks(results)
+        for status in ("failure", "cancelled", ""):
+            results = self.results(False)
+            results["extended"]["result"] = status
+            with self.assertRaises(ValueError):
+                ci.required_checks(results)
+
+    def test_missing_job_results_fail_closed(self):
+        for extended in (False, True):
+            for job in self.results():
+                results = self.results(extended)
+                del results[job]
+                with self.subTest(job=job, extended=extended), self.assertRaises(ValueError):
+                    ci.required_checks(results)
+
+
 def process_exited(status):
     """Treat a zombie or vanished proc entry as exited, including races during read."""
     try:

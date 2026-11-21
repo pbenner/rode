@@ -34,7 +34,7 @@ pub(super) fn resolve_startup_path(
         Request::Prepare { path, .. },
         Job::Prepare {
             remote: false,
-            restore_saved: Some(force),
+            policy: workspace::PreparationPolicy::Saved(force),
             options,
             token,
             open_file,
@@ -159,7 +159,7 @@ impl EditorApp {
         let restore_policies = if matches!(
             job,
             Job::Prepare {
-                restore_saved: Some(_),
+                policy: workspace::PreparationPolicy::Saved(_),
                 ..
             }
         ) {
@@ -246,7 +246,7 @@ impl EditorApp {
                 })
                 .and_then(|response| {
                     if let Job::Prepare {
-                        restore_saved: Some(force),
+                        policy: workspace::PreparationPolicy::Saved(force),
                         options,
                         ..
                     } = &mut job

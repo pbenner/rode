@@ -10,6 +10,12 @@ use serde_json::Value;
 use std::sync::Arc;
 
 /// GUI-facing conversation with host-owned execution and disposable attachment.
+/// Core state is readable; mutations must pass through this controller.
+///
+/// ```compile_fail
+/// let mut chat = rode::agent::protocol::Chat::default();
+/// chat.busy = true; // cannot bypass native lifecycle admission
+/// ```
 #[derive(Default)]
 pub struct Chat {
     inner: rode_agent_core::protocol::Chat,
@@ -26,12 +32,47 @@ impl std::ops::Deref for Chat {
         &self.inner
     }
 }
-impl std::ops::DerefMut for Chat {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+impl Chat {
+    /// Edit only the answer drafts of the current form. The renderer receives a
+    /// disposable copy: request identity, delivery state and permission choices
+    /// remain owned by the controller, even if the form edits other fields.
+    pub fn edit_answers<R>(&mut self, edit: impl FnOnce(&mut Prompt) -> R) -> Option<R> {
+        let prompt = self.inner.prompts.front_mut()?;
+        let mut draft = prompt.clone();
+        let result = edit(&mut draft);
+        if !prompt.sending {
+            for question in &mut prompt.questions {
+                if !question.answered
+                    && let Some(answer) = draft.questions.iter().find(|q| q.id == question.id)
+                {
+                    question.answer.clone_from(&answer.answer);
+                }
+            }
+        }
+        Some(result)
+    }
+
+    /// Add a bounded presentation notice without mutating the host's lifecycle.
+    pub fn notice(&mut self, text: &str) {
+        self.inner.notice(text);
+    }
+
+    /// Acknowledge a stopped turn once before explicitly closing its process.
+    /// Keep this metadata change with the wrapper that owns managed sessions.
+    pub(crate) fn force_close(&mut self) {
+        if self.inner.busy && self.native.as_ref().is_none_or(|client| !client.ending) {
+            self.inner.completed += 1;
+        }
+        self.disconnect();
+        self.notice("Agent process closed.");
+    }
+
+    /// Synthetic protocol state belongs to fixtures, never production UI code.
+    #[cfg(test)]
+    pub(crate) fn fixture_mut(&mut self) -> &mut rode_agent_core::protocol::Chat {
         &mut self.inner
     }
-}
-impl Chat {
+
     /// Host-owned reversible changes; an absent view means no prepared undo record.
     pub fn undo_view(&self) -> Option<&rode_agent_core::undo::View> {
         self.native.as_ref()?.state.as_ref()?.chat.undo.as_ref()
@@ -439,6 +480,47 @@ impl Chat {
 #[cfg(test)]
 mod persistence_tests {
     use super::*;
+
+    #[test]
+    fn answer_edits_cannot_replace_request_or_acknowledged_delivery_state() {
+        let mut chat = Chat::default();
+        let form: Prompt = serde_json::from_value(serde_json::json!({
+            "id":401, "title":"Questions", "summary":"", "detail":"",
+            "blocking":true, "sending":false, "error":"kept", "partial_answers":false, "async_message":false,
+            "choices":[], "cancel":null, "questions":[
+                {"id":"open", "header":"", "text":"Question", "options":[], "descriptions":[], "answer":"draft", "secret":false, "answered":false},
+                {"id":"done", "header":"", "text":"Question", "options":[], "descriptions":[], "answer":"acknowledged", "secret":false, "answered":true}
+            ]
+        })).unwrap();
+        chat.inner.prompts.push_back(form);
+        assert_eq!(
+            chat.edit_answers(|draft| {
+                draft.id = Value::Null;
+                draft.sending = true;
+                draft.error.clear();
+                draft.questions[0].answer = "edited".into();
+                draft.questions[0].answered = true;
+                draft.questions[1].answer = "replaced".into();
+                7
+            }),
+            Some(7)
+        );
+        let prompt = &chat.prompts[0];
+        assert_eq!(prompt.id, 401);
+        assert!(!prompt.sending);
+        assert_eq!(prompt.error, "kept");
+        assert_eq!(prompt.questions[0].answer, "edited");
+        assert!(!prompt.questions[0].answered);
+        assert_eq!(prompt.questions[1].answer, "acknowledged");
+        chat.inner.prompts[0].sending = true;
+        chat.edit_answers(|draft| draft.questions[0].answer.clear());
+        assert_eq!(chat.prompts[0].questions[0].answer, "edited");
+        chat.inner.prompts.clear();
+        assert!(
+            chat.edit_answers(|_| panic!("Absent form must not render"))
+                .is_none()
+        );
+    }
 
     #[test]
     fn replaced_views_release_their_old_undo_acknowledgement() {

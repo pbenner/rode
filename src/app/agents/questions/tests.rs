@@ -153,10 +153,10 @@ fn questions_replace_the_composer_without_losing_drafts_and_actions_fit_compact_
                 );
                 ctx.set_zoom_factor(scale);
                 app.agents.config.provider = Provider::Acp;
-                app.agents.chat.busy = working;
+                app.agents.chat.fixture_mut().busy = working;
                 let mut question = prompt();
                 question.blocking = working;
-                app.agents.chat.prompts.push_back(question);
+                app.agents.chat.fixture_mut().prompts.push_back(question);
                 app.agents.draft = "Keep my unsent draft".into();
                 app.agents.queue.push("Queued follow-up".into()).unwrap();
                 app.agents.history_open = true;

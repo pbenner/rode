@@ -158,10 +158,15 @@ with fixture_directory(prefix="rode-areas-ui-") as base:
         assert len(rows) == 4, rows
         assert max(rect[2] for rect in rows) - min(rect[0] for rect in rows) <= 450, rows
         screenshot(ui.window, "connections-library.png")
+        ui.absent("tunnel-saved-remove:remote-setup")
+        ui.click("tunnel-saved-row:remote-setup", mouse_button=3)
         ui.click("tunnel-saved-remove:remote-setup")
         ui.control("tunnel-saved-confirm-delete:remote-setup")
         ui.click("tunnel-saved-cancel-delete:remote-setup")
         ui.control("tunnel-saved-load:remote-setup", enabled=False)
+        ui.hint("Manage saved tunnel Cluster return")
+        ui.control("tunnel-saved-row:remote-setup", focused=True)
+        key("F10", ("Shift_L",))
         ui.click("tunnel-saved-remove:remote-setup")
         ui.click("tunnel-saved-confirm-delete:remote-setup")
         ui.absent("tunnel-saved-load:remote-setup")

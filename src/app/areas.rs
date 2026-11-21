@@ -75,7 +75,6 @@ impl Default for Preferences {
 }
 #[derive(Default)]
 pub(super) struct State {
-    pub active: Area,
     pub prefs: Preferences,
     pub pending: bool,
     saved: Preferences,
@@ -137,7 +136,7 @@ impl EditorApp {
     /// tool and detached-window owners intact when deselecting Projects.
     pub(super) fn toggle_projects(&mut self, ctx: &egui::Context) {
         self.open_area(
-            if self.areas.active == Area::Projects {
+            if self.presentation.area == Area::Projects {
                 Area::Welcome
             } else {
                 Area::Projects
@@ -160,21 +159,21 @@ impl EditorApp {
             self.focus_tool_tab(tab, ctx);
             return;
         }
-        self.areas.active = area;
+        self.presentation.enter_area(area);
         self.navigation.zoom = None;
         if let Some(panel) = area.panel() {
             self.initialize_host_tool(panel);
         }
         if area == Area::Projects {
-            let pane = match self.tool_windows.surface {
+            let pane = match self.presentation.surface {
                 tool_windows::Surface::Terminal => navigation::Pane::Terminal,
-                tool_windows::Surface::Tools if self.tool_windows.panel.is_some() => {
+                tool_windows::Surface::Tools if self.presentation.panel.is_some() => {
                     navigation::Pane::Tools
                 }
                 _ => navigation::Pane::Editor,
             };
             self.focus_pane(pane, ctx);
-            if self.tool_windows.panel == Some(Panel::Agent) {
+            if pane == navigation::Pane::Tools && self.presentation.panel == Some(Panel::Agent) {
                 self.agents.focus = true;
             }
         } else {
@@ -184,7 +183,7 @@ impl EditorApp {
         ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
     pub(super) fn global_content(&mut self, ctx: &egui::Context) {
-        let area = self.areas.active;
+        let area = self.presentation.area;
         let palette = self.themes.active().palette;
         egui::CentralPanel::default()
             .frame(layout::pane_frame(if area == Area::Welcome {

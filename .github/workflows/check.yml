@@ -252,25 +252,20 @@ jobs:
           path: target/ci-results/
           retention-days: 7
 
-  # Preserve the original required check name while extended checks report
-  # separately, so ordinary feedback does not wait for every document viewer.
+  # Preserve the required check name and wait for every selected extended suite.
+  # A documentation-only plan may intentionally skip that matrix.
   linux:
     if: always()
-    needs: [plan, lint, build, fast-ui]
+    needs: [plan, lint, build, fast-ui, extended]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - env:
           RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          results = json.loads(os.environ['RESULTS'])
-          failed = [name for name, job in results.items() if job['result'] != 'success']
-          if failed:
-              raise SystemExit('Required checks failed or were skipped: ' + ', '.join(failed))
-          PY
+        run: python3 scripts/ci.py required
 
   release:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full)

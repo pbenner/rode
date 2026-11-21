@@ -81,8 +81,8 @@ impl EditorApp {
     /// preference stays with its host.
     pub(super) fn explorer_visible(&self, viewport: egui::ViewportId) -> bool {
         if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
-            self.sidebar.selected == Some(sidebar::View::Explorer)
-                && self.areas.active == areas::Area::Projects
+            self.presentation.sidebar == Some(sidebar::View::Explorer)
+                && self.presentation.area == areas::Area::Projects
         } else {
             self.editor_view(viewport)
                 .is_none_or(|view| view.show_explorer)
@@ -96,12 +96,7 @@ impl EditorApp {
             self.set_pane_zoom(viewport, None);
         }
         if viewport == egui::ViewportId::ROOT || !self.editors.contains(viewport) {
-            if visible {
-                self.areas.active = areas::Area::Projects;
-                self.sidebar.selected = Some(sidebar::View::Explorer);
-            } else if self.sidebar.selected == Some(sidebar::View::Explorer) {
-                self.sidebar.selected = None;
-            }
+            self.presentation.explorer(visible);
         } else if let Some(view) = self.editor_view_mut(viewport) {
             view.show_explorer = visible;
         }
@@ -465,7 +460,8 @@ impl EditorApp {
 
     /// Render cached directory rows and explicit project actions; directory I/O is delegated to workers.
     pub(super) fn explorer(&mut self, ctx: &egui::Context) {
-        if ctx.viewport_id() == egui::ViewportId::ROOT && self.areas.active != areas::Area::Projects
+        if ctx.viewport_id() == egui::ViewportId::ROOT
+            && self.presentation.area != areas::Area::Projects
         {
             return;
         }

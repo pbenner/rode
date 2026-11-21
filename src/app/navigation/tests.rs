@@ -390,7 +390,7 @@ fn directions_and_zoom_restore_the_existing_layout_without_closing_documents() {
     app.navigate(NavAction::Previous, &ctx);
     assert_eq!(app.navigation.active, Pane::Explorer);
     app.navigate(NavAction::Hide, &ctx);
-    assert!(app.sidebar.selected.is_none());
+    assert!(app.presentation.sidebar.is_none());
     assert_eq!(app.navigation.active, Pane::Editor);
     assert_eq!(app.documents[0].text, "keep unsaved text");
     assert!(app.documents[0].dirty());

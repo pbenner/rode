@@ -497,7 +497,7 @@ impl EditorApp {
                 // Background attachment has no presentation effects. Avoid
                 // replaying navigation, which can clear another pane's focus,
                 // zoom or modal after the user has moved away from the terminal.
-                let reveal = self.areas.active == areas::Area::Projects
+                let reveal = self.presentation.area == areas::Area::Projects
                     && self.navigation.active == navigation::Pane::Terminal;
                 self.attach_info(info.clone(), ctx, reveal);
                 if let Some(error) = self.sessions.finish_creation(&info) {

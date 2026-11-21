@@ -125,7 +125,7 @@ fn provider_controls_follow_native_selection_and_settings_visibility_without_sta
     assert!(!app.agents.chat.busy && !app.agents.chat.connected());
 
     app.agents.settings = true;
-    app.agents.chat.busy = true;
+    app.agents.chat.fixture_mut().busy = true;
     app.agents.chat.notice("Keep this conversation");
     let config = app.agents.config.clone();
     frame(&mut app, vec![]);
@@ -291,14 +291,18 @@ fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
     agents.chat.set_persistence(agent::Persistence::On).unwrap();
     agents.draft = "unsent draft".into();
     agents.queue.push("queued work".into()).unwrap();
-    agents.chat.messages.push_back(agent::protocol::Message {
-        id: "working-message".into(),
-        role: Role::User,
-        title: "You".into(),
-        text: "current work".into(),
-        tool_state: None,
-    });
-    agents.chat.busy = true;
+    agents
+        .chat
+        .fixture_mut()
+        .messages
+        .push_back(agent::protocol::Message {
+            id: "working-message".into(),
+            role: Role::User,
+            title: "You".into(),
+            text: "current work".into(),
+            tool_state: None,
+        });
+    agents.chat.fixture_mut().busy = true;
     let queued = agents.queue.head_id();
     assert!(!agents.start_new_chat());
     assert!(agents.chat.busy);
@@ -311,7 +315,7 @@ fn new_chat_rejects_active_work_without_discarding_the_conversation_or_queue() {
     assert!(!agents.start_new_chat());
     assert_eq!(agents.chat.messages.len(), 1);
     assert_eq!(agents.queue.head_id(), queued);
-    agents.chat.busy = false;
+    agents.chat.fixture_mut().busy = false;
     assert!(agents.start_new_chat());
     assert_eq!(agents.chat.persistence(), agent::Persistence::Auto);
     assert!(!agents.attaching);
@@ -339,6 +343,7 @@ fn recovery_actions_fit_the_panel_and_preserve_unsent_work() {
             app.agents.draft = "unsent draft".into();
             app.agents
                 .chat
+                .fixture_mut()
                 .apply_view(rode_agent_core::service::ChatView {
                     recoverable: true,
                     conversation: "saved-thread".into(),
@@ -467,6 +472,7 @@ fn long_responses_wrap_to_the_visible_chat_width_after_resizing() {
         app.agents.config.provider = Provider::Acp;
         app.agents
             .chat
+            .fixture_mut()
             .messages
             .push_back(agent::protocol::Message {
                 id: "wrapped-response".into(),
@@ -551,6 +557,7 @@ fn copy_response_copies_displayed_content_without_code_fences() {
         app.agents.config.provider = Provider::Acp;
         app.agents
             .chat
+            .fixture_mut()
             .messages
             .push_back(agent::protocol::Message {
                 id: "copy-response-test".into(),
@@ -608,14 +615,14 @@ fn busy_submission_queues_without_starting_another_turn_and_replacement_clears_i
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.agents.chat.busy = true;
+    app.agents.chat.fixture_mut().busy = true;
     app.agents.draft = "Follow up after this task".into();
     app.send_agent(&ctx);
     assert_eq!(app.agents.queue.next(), Some("Follow up after this task"));
     assert!(app.agents.draft.is_empty());
     assert!(!app.agents.chat.connected());
     assert!(app.agents.chat.messages.is_empty());
-    app.agents.chat.busy = false;
+    app.agents.chat.fixture_mut().busy = false;
     app.dialog = Dialog::Shortcuts;
     app.dispatch_agent_queue(&ctx);
     assert_eq!(app.agents.queue.next(), Some("Follow up after this task"));

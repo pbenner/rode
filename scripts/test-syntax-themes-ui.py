@@ -108,6 +108,7 @@ fn dispatch<'a>(packet: &Packet<'a>) -> Option<String> {
                         assert source.read_text() == original, (
                             "Switching palettes saved a dirty buffer"
                         )
+                        ui.control("source-syntax-ready")
                         filename = identity.replace(":", "-") + ".png"
                         background(window, filename, (16, 16, 16))
                         pixels = subprocess.check_output(

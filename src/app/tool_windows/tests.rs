@@ -32,7 +32,9 @@ fn detached_headers_offer_only_tool_navigation_and_reattachment() {
             Startup::default(),
         );
         app.toggle_panel(Panel::Agent, &ctx);
-        app.tool_windows.detached = !individual;
+        if !individual {
+            app.presentation.detach_tools();
+        }
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("header.json");
         ui_probe::install_at(&ctx, path.clone());
@@ -88,18 +90,18 @@ fn project_tools_can_reopen_after_the_remembered_tab_detaches_without_starting_a
     app.documents[0].fixture_content().text = "unsaved source".into();
     app.agents.chat.notice("retained conversation");
     app.toggle_sidebar(&ctx);
-    assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+    assert_eq!(app.presentation.panel, Some(Panel::Agent));
     app.detach_tab(ToolTab::Panel(Panel::Agent), &ctx);
-    assert_eq!(app.tool_windows.surface, Surface::Editor);
+    assert_eq!(app.presentation.surface, Surface::Editor);
     app.toggle_sidebar(&ctx);
     assert!(app.tools_visible());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Problems));
+    assert_eq!(app.presentation.panel, Some(Panel::Problems));
     assert!(app.tab_detached(ToolTab::Panel(Panel::Agent)));
     assert!(app.terminal.is_none() && !app.agents.chat.busy);
     app.toggle_sidebar(&ctx);
-    assert_eq!(app.tool_windows.surface, Surface::Editor);
+    assert_eq!(app.presentation.surface, Surface::Editor);
     assert_eq!(
-        app.tool_windows.last_tool,
+        app.presentation.last_tool,
         Some(ToolTab::Panel(Panel::Problems))
     );
     assert_eq!(app.documents[0].text, "unsaved source");
@@ -130,18 +132,18 @@ fn reopening_tools_does_not_start_a_terminal_when_enabled_panels_are_all_detache
     app.reveal_panel(Panel::Agent, &ctx);
     app.set_extension(crate::extensions::Feature::Agents.id(), false);
     assert_eq!(
-        app.tool_windows.last_tool,
+        app.presentation.last_tool,
         Some(ToolTab::Panel(Panel::Agent))
     );
     assert!(!app.show_terminal);
-    let windows = app.tool_windows.floating_tabs.clone();
+    let windows = app.presentation.floating_tabs.clone();
     app.toggle_sidebar(&ctx);
     assert!(
         !app.show_terminal,
         "Opening tool navigation requested an unrelated terminal"
     );
-    assert_ne!(app.tool_windows.surface, Surface::Terminal);
-    assert_eq!(app.tool_windows.floating_tabs, windows);
+    assert_ne!(app.presentation.surface, Surface::Terminal);
+    assert_eq!(app.presentation.floating_tabs, windows);
     assert!(app.tab_detached(ToolTab::Panel(Panel::Problems)));
 }
 
@@ -169,12 +171,12 @@ fn individual_tabs_keep_their_state_and_do_not_replace_other_windows_selections(
     // Activity icons/shortcuts raise the floating tab without stealing the dock selection.
     app.toggle_panel(Panel::Agent, &ctx);
     app.detach_tab(ToolTab::Panel(Panel::Agent), &ctx);
-    assert_eq!(app.tool_windows.panel, Some(Panel::Problems));
-    assert_eq!(app.tool_windows.floating_tabs.len(), 2);
+    assert_eq!(app.presentation.panel, Some(Panel::Problems));
+    assert_eq!(app.presentation.floating_tabs.len(), 2);
     assert!(app.terminal.is_none());
 
     app.reattach_tool_tab(ToolTab::Panel(Panel::Agent), &ctx);
-    assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+    assert_eq!(app.presentation.panel, Some(Panel::Agent));
     assert!(app.tools_visible());
     assert!(app.tab_detached(ToolTab::Panel(Panel::Settings)));
     assert_eq!(
@@ -195,16 +197,20 @@ fn detaching_an_unselected_terminal_keeps_the_sidebar_selection_and_visibility()
         workspace.connected = false;
         app.workspace.set_fixture(Some(workspace));
         app.toggle_panel(Panel::Settings, &ctx);
-        app.tool_windows.detached = detached;
-        app.tool_windows.tools_hidden = hidden;
+        if detached {
+            app.presentation.detach_tools();
+        }
+        if hidden {
+            app.presentation.hide_tools();
+        }
 
         // Even a failed shell startup must leave the other tool selected.
         app.detach_tab(ToolTab::Terminal, &ctx);
-        assert_eq!(app.tool_windows.surface, Surface::Tools);
-        assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
-        assert_eq!(app.tool_windows.tools_hidden, hidden);
+        assert_eq!(app.presentation.surface, Surface::Tools);
+        assert_eq!(app.presentation.panel, Some(Panel::Settings));
+        assert_eq!(app.presentation.tools_hidden, hidden);
         assert_eq!(app.tools_visible(), !hidden);
-        assert_eq!(app.tool_windows.detached, detached);
+        assert_eq!(app.presentation.detached, detached);
         assert!(app.tab_detached(ToolTab::Terminal));
     }
 }
@@ -215,13 +221,13 @@ fn individual_tabs_and_whole_sidebar_can_detach_and_dock_independently() {
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
     app.toggle_panel(Panel::Settings, &ctx);
-    app.tool_windows.detached = true;
+    app.presentation.detach_tools();
     app.detach_tab(ToolTab::Panel(Panel::Settings), &ctx);
-    assert!(app.tool_windows.detached);
+    assert!(app.presentation.detached);
     assert!(app.tools_visible());
-    assert_ne!(app.tool_windows.panel, Some(Panel::Settings));
+    assert_ne!(app.presentation.panel, Some(Panel::Settings));
     app.reattach_tool_tab(ToolTab::Panel(Panel::Settings), &ctx);
-    assert!(app.tool_windows.detached);
+    assert!(app.presentation.detached);
     assert_eq!(
         app.tool_viewport(ToolTab::Panel(Panel::Settings)),
         EditorApp::tools_viewport()
@@ -230,12 +236,12 @@ fn individual_tabs_and_whole_sidebar_can_detach_and_dock_independently() {
     app.detach_tab(ToolTab::Panel(Panel::Settings), &ctx);
     app.dock_tools(&ctx);
     assert!(app.tab_detached(ToolTab::Panel(Panel::Settings)));
-    assert!(!app.tool_windows.detached);
+    assert!(!app.presentation.detached);
     app.workbench.reset_project();
     assert!(app.tab_detached(ToolTab::Panel(Panel::Settings)));
     app.reattach_tool_tab(ToolTab::Panel(Panel::Settings), &ctx);
     assert!(!app.tab_detached(ToolTab::Panel(Panel::Settings)));
-    assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
+    assert_eq!(app.presentation.panel, Some(Panel::Settings));
 }
 
 #[test]
@@ -249,7 +255,7 @@ fn tab_dialog_owner_follows_only_its_own_tab_when_docking() {
     app.detach_tab(chat, &ctx);
     app.ui_viewport = app.tool_viewport(settings);
     app.set_dialog(Dialog::Shortcuts);
-    app.tool_windows.detached = true;
+    app.presentation.detach_tools();
     app.dock_tools(&ctx);
     assert_eq!(app.dialog_viewport, settings.viewport());
     app.reattach_tool_tab(chat, &ctx);
@@ -275,7 +281,7 @@ fn a_tool_command_from_a_floating_tab_focuses_the_requested_tools_host() {
     };
     input.viewports.insert(chat.viewport(), Default::default());
     let output = ctx.run(input, |ctx| app.toggle_panel(Panel::Settings, ctx));
-    assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
+    assert_eq!(app.presentation.panel, Some(Panel::Settings));
     assert!(app.tools_visible());
     assert!(app.tab_detached(chat));
     assert!(
@@ -342,9 +348,8 @@ fn tool_dialogs_keep_their_owner_until_docking_and_block_other_viewports() {
     let ctx = egui::Context::default();
     let cc = eframe::CreationContext::_new_kittest(ctx.clone());
     let mut app = EditorApp::new(&cc, Startup::default());
-    app.tool_windows.panel = Some(Panel::Settings);
-    app.tool_windows.surface = Surface::Tools;
-    app.tool_windows.detached = true;
+    app.presentation.select_panel(Panel::Settings);
+    app.presentation.detach_tools();
     app.ui_viewport = EditorApp::tools_viewport();
     app.set_dialog(Dialog::Shortcuts);
     assert!(app.foreign_modal(&ctx));
@@ -364,23 +369,23 @@ fn detaching_restores_code_and_docking_retains_the_selected_tool_and_chat() {
     render(&mut app, &ctx);
     let code = app.navigation.rect(navigation::Pane::Editor).unwrap();
     app.toggle_panel(Panel::Settings, &ctx);
-    app.tool_windows.detached = true;
+    app.presentation.detach_tools();
     render(&mut app, &ctx);
     assert_eq!(app.navigation.rect(navigation::Pane::Editor), Some(code));
     app.focus_editor(&ctx);
-    assert!(app.tool_windows.detached);
-    assert_eq!(app.tool_windows.surface, Surface::Tools);
+    assert!(app.presentation.detached);
+    assert_eq!(app.presentation.surface, Surface::Tools);
     app.toggle_sidebar(&ctx);
     render(&mut app, &ctx);
-    assert!(app.tool_windows.tools_hidden);
+    assert!(app.presentation.tools_hidden);
     assert_eq!(app.navigation.rect(navigation::Pane::Editor), Some(code));
     app.toggle_sidebar(&ctx);
     app.dock_tools(&ctx);
     render(&mut app, &ctx);
-    assert!(!app.tool_windows.detached);
+    assert!(!app.presentation.detached);
     assert!(app.navigation.rect(navigation::Pane::Editor).is_none());
     assert!(app.navigation.rect(navigation::Pane::Tools).unwrap().top() > code.top());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
+    assert_eq!(app.presentation.panel, Some(Panel::Settings));
     assert_eq!(
         app.agents.chat.messages.back().unwrap().text,
         "retained conversation"
@@ -411,19 +416,19 @@ fn sidebar_shortcut_remembers_chat_and_other_tabs_without_starting_a_terminal() 
     app.documents[0].fixture_content().text = "unsaved source".into();
     app.agents.chat.notice("retained conversation");
     // The first sidebar opening selects Chat without starting a shell or model turn.
-    assert!(app.tool_windows.last_tool.is_none());
+    assert!(app.presentation.last_tool.is_none());
     shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
     assert!(app.tools_visible());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+    assert_eq!(app.presentation.panel, Some(Panel::Agent));
     assert!(app.agents.focus);
     assert!(app.terminal.is_none() && !app.agents.chat.busy);
     shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
-    assert_eq!(app.tool_windows.surface, Surface::Editor);
+    assert_eq!(app.presentation.surface, Surface::Editor);
     for panel in [Panel::Agent, Panel::Settings, Panel::Problems] {
         app.toggle_panel(panel, &ctx);
         shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
         assert!(!app.tools_visible());
-        assert_eq!(app.tool_windows.surface, Surface::Editor);
+        assert_eq!(app.presentation.surface, Surface::Editor);
         // Ctrl+Shift+` is the physical Ctrl+~ chord on US keyboards.
         shortcut(
             &mut app,
@@ -432,7 +437,7 @@ fn sidebar_shortcut_remembers_chat_and_other_tabs_without_starting_a_terminal() 
             egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
         );
         assert!(app.tools_visible());
-        assert_eq!(app.tool_windows.panel, Some(panel));
+        assert_eq!(app.presentation.panel, Some(panel));
         assert!(app.terminal.is_none());
     }
     assert_eq!(app.documents[0].text, "unsaved source");
@@ -444,11 +449,11 @@ fn sidebar_shortcut_remembers_chat_and_other_tabs_without_starting_a_terminal() 
     app.focus_editor(&ctx);
     app.workbench.reset_project();
     app.toggle_sidebar(&ctx);
-    assert_eq!(app.tool_windows.panel, Some(Panel::Problems));
+    assert_eq!(app.presentation.panel, Some(Panel::Problems));
     app.navigation.zoom = Some(navigation::Pane::Editor);
     app.toggle_sidebar(&ctx);
     assert!(app.tools_visible());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Problems));
+    assert_eq!(app.presentation.panel, Some(Panel::Problems));
 }
 
 #[test]
@@ -458,20 +463,20 @@ fn closing_a_tool_and_hiding_a_detached_window_retain_the_selection() {
     let mut app = EditorApp::new(&cc, Startup::default());
     app.toggle_panel(Panel::Settings, &ctx);
     app.toggle_panel(Panel::Settings, &ctx);
-    assert!(app.tool_windows.panel.is_none());
+    assert!(app.presentation.panel.is_none());
     app.toggle_sidebar(&ctx);
     assert!(app.tools_visible());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
-    app.tool_windows.detached = true;
+    assert_eq!(app.presentation.panel, Some(Panel::Settings));
+    app.presentation.detach_tools();
     app.toggle_sidebar(&ctx);
-    assert!(app.tool_windows.detached);
-    assert!(app.tool_windows.tools_hidden);
+    assert!(app.presentation.detached);
+    assert!(app.presentation.tools_hidden);
     assert!(!app.tools_visible());
     app.toggle_sidebar(&ctx);
-    assert!(app.tool_windows.detached);
-    assert!(!app.tool_windows.tools_hidden);
+    assert!(app.presentation.detached);
+    assert!(!app.presentation.tools_hidden);
     assert!(app.tools_visible());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
+    assert_eq!(app.presentation.panel, Some(Panel::Settings));
 }
 
 #[test]
@@ -488,12 +493,12 @@ fn terminal_shortcut_is_separate_and_dialogs_do_not_toggle_the_sidebar() {
         egui::Modifiers::CTRL | egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
     );
     assert!(!app.terminal_visible());
-    assert_eq!(app.tool_windows.last_tool, Some(ToolTab::Terminal));
+    assert_eq!(app.presentation.last_tool, Some(ToolTab::Terminal));
     app.toggle_panel(Panel::Agent, &ctx);
     app.set_dialog(Dialog::Open);
     shortcut(&mut app, &ctx, Key::Backtick, egui::Modifiers::CTRL);
     assert!(app.tools_visible());
-    assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+    assert_eq!(app.presentation.panel, Some(Panel::Agent));
 }
 
 #[test]

@@ -62,7 +62,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/documents.rs` | Shared document factories, save/reload baselines, structural tab mutations, active selection and pending reads |
 | `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
 | `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
-| `src/app/tool_windows.rs`, `src/app/tool_windows/` | Application-owned tool navigation and native-window registry, project/global presentation hosts and docking regressions; independent of project resets |
+| `src/app/presentation.rs`, `src/app/tool_windows.rs`, `src/app/tool_windows/` | Pure root navigation/placement controller, native presentation adapters and docking regressions; independent of project resets |
 | `src/app/panels.rs` | Shared panel identities, scope classification and rendering routes for application, host and project views; project caches remain in `workbench` |
 | `src/keyboard.rs`, `src/keyboard/` | Window-local control metadata, native focus handoffs, hints/search and button-only focus groups |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
@@ -166,6 +166,12 @@ incoming Codex/ACP messages, checks their conversation/call identities and appli
 the same controller's permission policy. Routing creates no second controller or
 transport owner; outgoing work and recovery retain their existing lifecycle guards.
 
+The desktop `agent::protocol::Chat` exposes the underlying core as a read-only
+projection. Lifecycle, transport and notices use explicit wrapper operations;
+`edit_answers` edits a disposable form and copies back only unacknowledged answer
+drafts. UI code cannot replace request identities, delivery state or permissions
+through the form editor, or call a core mutation that bypasses native ownership.
+
 The session service keeps its tagged wire types in `protocol.rs` and re-exports
 `Info`, `Request`, `Response` and `PROTOCOL` from the crate root. Filesystem
 startup in `runtime_directory.rs` holds the validated directory inode open;
@@ -188,6 +194,27 @@ Keep the desktop coordinator focused on application state and shared lifecycle g
 ### Theme composition
 
 `src/theme.rs` owns theme selection, startup loading and highlighting invalidation. `theme/palette.rs` defines interface/terminal color roles; `theme/definition.rs` parses each JSON definition once per resolution and resolves built-in inheritance by ID, with cycle detection independent of menu order. `theme/interface.rs` defines and validates inheritable component tokens. `theme/install.rs` applies the resolved palette and metrics to egui, assigning each style role once; `theme/typography.rs` installs the embedded interface font once per context. `theme/components.rs` supplies control metrics, padded form inputs, secondary labels, primary actions and card/dialog/panel frames. The app’s layout helpers reuse those controls and own page/pane geometry; keyboard discovery reuses the shared button wrapper. `theme/surfaces.rs` draws optional native decoration, while `theme/syntax.rs` handles independently selected code palettes and cached highlighting.
+
+`theme/source.rs` owns one lazy syntax worker per native editor view. A bounded
+mailbox replaces unsent requests with the latest source; revision, language and
+palette identities reject stale results. The worker saves multiline parser and
+highlighter checkpoints and reuses an unchanged suffix only after both states
+converge. While it works, unchanged lines retain their colors and edited lines
+use the syntax palette's default foreground. There is no size-based highlighting
+cutoff. A dropped view cancels its worker between lines. Context resets discard
+derived source caches and cancel workers in parked editor windows. The document
+owner retains recovery buffers; native TextEdit retains undo and cursor state.
+Thread creation failure uses the same parser synchronously.
+
+`app/editor_view/source_layout.rs` groups native paragraph layouts into bounded
+multi-line chunks. Only changed chunks rebuild their paragraph concatenation.
+The complete exact source and galley still reach TextEdit, so cursor, selection,
+undo, wrap and gutter coordinates retain their native semantics. Each frame
+resolves a small sentinel through egui's native font cache; an atlas, font or DPI
+reset replaces that sentinel and invalidates retained galleys. Styled chunks
+have immutable identities, so unchanged chunks and complete idle layouts can be
+reused without copying or hashing every token. The renderer retains native
+TextEdit and its complete source model.
 
 All presets use the shared component baseline in `InterfaceStyle::default`. Their optional `ui` data inherits the base theme's metrics and records only differences; an empty `"ui": {}` retains those inherited metrics. Carbon Edge adds decoration to Carbon; Studio Neutral and Studio Hacker change Studio's colors while inheriting its components. Atelier, Sumi-e and SynthWave likewise override only their distinct metrics. Presets supply data to the shared renderer. UI, syntax, terminal colors and frame treatment remain independently composable, and views must not branch on preset IDs.
 
@@ -247,24 +274,30 @@ Tool pages and dialogs share presentation helpers in `src/app/layout.rs`, follow
 
 The Rust/egui application keeps the editor independent of an embedded browser application runtime. Cached layouts, virtualized rows and explicit worker jobs keep slow I/O and tool execution out of ordinary input/rendering. On-demand activation limits idle work, at the cost of waiting for a tool or preview's first result. This choice does not by itself establish a performance claim: measure relevant release workloads when changing those boundaries. Rationale lives in `src/lib.rs` and `src/app.rs`.
 
-`areas::Area` selects the main window's application surface without changing the
-project's selected `tool_windows::Surface` or controllers. `tool_windows::State`
-owns panel selection, remembered navigation, visibility and detached hosts for
-the application lifetime. `Workbench` owns project settings and caches; resetting
-it never reconstructs or manually preserves window fields. The Project tools toggle
+`presentation::Controller` is the only writer for the root area's selection,
+sidebar choice and tool placement. Its read-only projection has no `DerefMut`;
+named transitions select a panel and its surface together, retain remembered
+project tools, and register each floating tab once before native side effects.
+`areas::Area` and `tool_windows::Surface` remain view identities. Area changes
+preserve the selected project tool and its controller for the application lifetime.
+`Workbench` owns project settings and caches; resetting it never reconstructs or manually preserves window fields. The Project tools toggle
 in the left activity bar reveals the full-width tool view. Its wrapping tab bar uses
 the `ToolTab` registry and scope classification and occupies space only while
 tools are docked and open; detached tool hosts omit editor controls;
 Environment is a category of Project settings, with its own retained draft;
 secondary editor/tool windows keep their existing owners. Application navigation
 is presentation state, not execution authority. Welcome is an explicit area,
-independent of project readiness or open tabs. Startup prepares CWD when no local
-or SSH target is supplied, while Welcome and a hidden Explorer remain the initial
-presentation. Deselecting Projects changes only the area; its documents, tool
-selection and service owners remain intact. Explorer and Project tools are always
+independent of project readiness or open tabs. Startup prepares CWD in Normal mode
+when no local or SSH target is supplied, while Welcome and a hidden Explorer remain the initial presentation. `Startup::cwd`
+retains the implicit origin separately from explicit file/directory arguments.
+The candidate carries `PreparationPolicy` through worker and transition admission:
+implicit CWD neither restores sandbox grants nor overwrites saved policies;
+explicit `--sandbox`, CLI targets and SSH preparation retain their normal checks.
+Deselecting Projects changes only the area; its documents, tool selection and service owners remain intact. Explorer and Project tools are always
 present in the root rail and can enter the project view directly. Connections
 is a sidebar destination: it retains the central area rather than replacing it.
-`sidebar::State` selects Explorer, Connections or neither; a dedicated Connections
+The presentation controller selects Explorer, Connections or neither;
+`sidebar::State` retains only the Connections width hint. A dedicated Connections
 pane identity keeps focus and geometry separate from the editor and tool panes.
 The same compact library renders in its detached host, with one owner for saved
 profiles, bookmarks and tunnel drafts. Explorer renders only project files; the

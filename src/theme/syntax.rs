@@ -5,7 +5,6 @@ use eframe::egui::{
     self, Color32, FontId, Stroke,
     text::{LayoutJob, LayoutSection, TextFormat},
 };
-use egui_extras::syntax_highlighting::SyntectSettings;
 use serde::Deserialize;
 use std::{
     io::Read,
@@ -14,6 +13,15 @@ use std::{
 };
 use syntect::highlighting::{FontStyle, StyleModifier, Theme, ThemeItem};
 use two_face::theme::EmbeddedThemeName as Embedded;
+
+/// Grammar and palette snapshots are shared by frame caches and source workers.
+/// Palette replacement creates a new snapshot, so an old worker never reads new
+/// colors under an old generation. Grammars are immutable for the app lifetime.
+#[derive(Clone)]
+pub(super) struct Engine {
+    pub ps: std::sync::Arc<syntect::parsing::SyntaxSet>,
+    pub theme: std::sync::Arc<Theme>,
+}
 
 /// Shared preference key for syntax styling, independent of the interface palette.
 pub const STORAGE_KEY: &str = "syntax_theme";
@@ -246,7 +254,7 @@ pub(super) fn generation() -> u64 {
 
 #[derive(Clone, Copy)]
 struct Settings<'a> {
-    settings: &'a SyntectSettings,
+    settings: &'a Engine,
     generation: u64,
     glow: bool,
 }
@@ -270,7 +278,7 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
             .find_syntax_by_name(language)
             .or_else(|| settings.ps.find_syntax_by_extension(language))
             .unwrap_or_else(|| settings.ps.find_syntax_plain_text());
-        let theme = &settings.ts.themes["base16-mocha.dark"];
+        let theme = &settings.theme;
         let font_id = FontId::monospace(f32::from_bits(size));
         let foreground = theme
             .settings
@@ -293,25 +301,10 @@ impl egui::cache::ComputerMut<(&str, &str, u32, Settings<'_>), LayoutJob> for Hi
                 return LayoutJob::simple(code.into(), font_id, foreground, f32::INFINITY);
             };
             for (style, token) in tokens {
-                let mut color =
-                    Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b);
-                if glow {
-                    color = super::glow::foreground(color);
-                }
                 job.sections.push(LayoutSection {
                     leading_space: 0.,
                     byte_range: offset..offset + token.len(),
-                    format: TextFormat {
-                        font_id: font_id.clone(),
-                        color,
-                        italics: style.font_style.contains(FontStyle::ITALIC),
-                        underline: if style.font_style.contains(FontStyle::UNDERLINE) {
-                            Stroke::new(1_f32, color)
-                        } else {
-                            Stroke::NONE
-                        },
-                        ..Default::default()
-                    },
+                    format: token_format(style, &font_id, glow),
                 });
                 offset += token.len();
             }
@@ -327,7 +320,7 @@ pub(super) fn highlight(
     code: &str,
     language: &str,
     font_size: f32,
-    settings: &SyntectSettings,
+    settings: &Engine,
     generation: u64,
     glow: bool,
 ) -> LayoutJob {
@@ -377,5 +370,28 @@ pub(super) fn syntax_color(color: Color32) -> syntect::highlighting::Color {
         g: color.g(),
         b: color.b(),
         a: 255,
+    }
+}
+
+/// Convert parser tokens consistently in source and embedded-code views.
+pub(super) fn token_format(
+    style: syntect::highlighting::Style,
+    font_id: &FontId,
+    glow: bool,
+) -> TextFormat {
+    let mut color = Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+    if glow {
+        color = super::glow::foreground(color);
+    }
+    TextFormat {
+        font_id: font_id.clone(),
+        color,
+        italics: style.font_style.contains(FontStyle::ITALIC),
+        underline: if style.font_style.contains(FontStyle::UNDERLINE) {
+            Stroke::new(1_f32, color)
+        } else {
+            Stroke::NONE
+        },
+        ..Default::default()
     }
 }

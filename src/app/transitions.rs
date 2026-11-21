@@ -231,21 +231,14 @@ impl EditorApp {
         match action {
             Action::PreparedProject { id } => {
                 if let Some(prepared) = self.workspace.take_prepared(id) {
-                    self.commit_project(
-                        prepared.response,
-                        prepared.remote,
-                        prepared.options,
-                        prepared.keep_buffers,
-                        prepared.open_file,
-                        ctx,
-                    );
+                    self.commit_prepared(prepared, ctx);
                 }
             }
             Action::Project {
                 path,
                 remote,
                 options,
-            } => self.prepare_project(path, options, remote, false, None, ctx),
+            } => self.prepare_project(path, options, remote, false, workspace::PreparationPolicy::Given, ctx),
             Action::Remote(profile) => {
                 let resume = self.can_resume_ssh(&profile);
                 self.connect(*profile, ctx, resume);

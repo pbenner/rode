@@ -63,6 +63,7 @@ mod navigation;
 mod notebook_view;
 mod panels;
 mod pdf_view;
+mod presentation;
 mod project_bookmarks;
 mod project_dialog;
 mod sandbox_presets;
@@ -117,6 +118,9 @@ pub(crate) fn project_preference_defaults(
 pub struct Startup {
     /// Optional existing local project directory or file; a file uses its containing directory as the workspace.
     pub local: Option<PathBuf>,
+    /// Implicit CLI working directory when no local/SSH target was supplied.
+    /// Opens in Normal mode without restoring grants unless `sandbox` is explicit.
+    pub cwd: Option<PathBuf>,
     /// Optional SSH connection/profile, taking the remote startup route.
     pub remote: Option<Profile>,
     /// Optional interface-theme identifier override.
@@ -192,7 +196,7 @@ pub struct EditorApp {
     navigation: navigation::State,
     areas: areas::State,
     host_tools: host_tools::State,
-    tool_windows: tool_windows::State,
+    presentation: presentation::Controller,
     workbench: Workbench,
     debugger: debugging::State,
     extensions: extensions::Extensions,
@@ -261,7 +265,7 @@ impl EditorApp {
     }
 
     /// Initialize settings and inert domain state from a preference snapshot, then
-    /// start only the explicit local-project or SSH startup preparation path.
+    /// prepare the explicit target or implicit Normal-mode CWD off the UI thread.
     fn from_storage(
         cc: &eframe::CreationContext<'_>,
         startup: Startup,
@@ -318,7 +322,7 @@ impl EditorApp {
             navigation: navigation::State::load(storage),
             areas: areas::State::load(storage),
             host_tools: Default::default(),
-            tool_windows: Default::default(),
+            presentation: Default::default(),
             workbench: Workbench::load(storage),
             debugger: Default::default(),
             extensions: extensions::Extensions::load(storage),
@@ -379,7 +383,22 @@ impl EditorApp {
             app.connection_profiles.select(profile.clone(), false);
             app.connect(profile, &cc.egui_ctx, false);
             app.startup_restore = Some(startup.sandbox);
-        } else if let Some(path) = startup.local {
+        } else if let Some((path, policy)) = startup
+            .local
+            .map(|path| (path, workspace::PreparationPolicy::Saved(startup.sandbox)))
+            .or_else(|| {
+                startup.cwd.map(|path| {
+                    (
+                        path,
+                        if startup.sandbox {
+                            workspace::PreparationPolicy::Saved(true)
+                        } else {
+                            workspace::PreparationPolicy::CurrentDirectory
+                        },
+                    )
+                })
+            })
+        {
             let mut options = app.sandbox_defaults.clone();
             options.enabled |= startup.sandbox;
             app.prepare_project(
@@ -387,7 +406,7 @@ impl EditorApp {
                 options,
                 false,
                 false,
-                Some(startup.sandbox),
+                policy,
                 &cc.egui_ctx,
             );
         }
@@ -714,7 +733,7 @@ impl EditorApp {
             self.focus_tool_tab(tool_windows::ToolTab::Terminal, ctx);
             return;
         }
-        self.show_terminal = !self.terminal_visible() || self.tool_windows.detached;
+        self.show_terminal = !self.terminal_visible() || self.presentation.detached;
         if self.show_terminal {
             self.terminal_intent();
             if self.terminal.is_none() && self.ssh_master.is_none() && !self.session_busy() {
@@ -779,9 +798,9 @@ impl eframe::App for EditorApp {
         self.session_tick(ctx);
         self.tunnel_tick(ctx);
         if ctx.input(|i| i.focused)
-            && self.areas.active == areas::Area::Projects
+            && self.presentation.area == areas::Area::Projects
             && (self.editor.pdf_fullscreen.is_some()
-                || self.tool_windows.detached
+                || self.presentation.detached
                 || !self.tool_surface())
         {
             self.remember_editor_focus(egui::ViewportId::ROOT);

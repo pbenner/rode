@@ -11,8 +11,8 @@ pub(in crate::app) enum Job {
         keep_buffers: bool,
         token: workspace::PreparationId,
         documents_at_start: Vec<(u64, u64)>,
-        /// Startup restores saved host/project grants, optionally forcing sandboxing on.
-        restore_saved: Option<bool>,
+        /// Explicit requests may restore saved grants; implicit CWD must not.
+        policy: workspace::PreparationPolicy,
         /// Local startup file to open only after its containing project is accepted.
         open_file: Option<String>,
     },

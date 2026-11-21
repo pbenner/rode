@@ -21,8 +21,11 @@ Open **Connections** in the left rail, then choose **Connect SSH…**. Every con
 The left-rail **Connections** button opens a resizable sidebar beside the current
 editor, Welcome screen or application tool. Click it again to hide it. The top
 provides **Open project…**, **Connect SSH…** and **New tunnel…**; below are saved
-projects, SSH connections and saved tunnels in one scrolling list. Explorer
-contains the project file browser, independently of these saved locations.
+projects, SSH connections and saved tunnels in one scrolling list. Right-click a
+saved tunnel and choose **Remove saved tunnel**, then confirm deletion. The menu
+also works for tunnels on other hosts; running tunnels are unaffected. With the
+row focused, **Shift+F10** opens the same menu. Explorer contains the project file
+browser, independently of these saved locations.
 The same Connections sidebar can detach through its rail context menu.
 
 Click a saved SSH connection to connect, or right-click it to **Edit connection…**,

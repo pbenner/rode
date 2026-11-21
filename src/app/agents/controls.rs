@@ -734,7 +734,7 @@ mod tests {
             let ctx = egui::Context::default();
             let mut config = Config::default();
             let mut chat = Chat::default();
-            chat.models = (0..8)
+            chat.fixture_mut().models = (0..8)
                 .map(|index| Model {
                     value: OptionValue {
                         id: format!("model-{index}"),

@@ -561,7 +561,7 @@ impl EditorApp {
                     self.vaults.options.clone(),
                     self.vaults.remote,
                     true,
-                    None,
+                    workspace::PreparationPolicy::Given,
                     ctx,
                 );
             } else {
@@ -902,6 +902,7 @@ mod tests {
                 app.workspace.hold_prepared(
                     id,
                     workspace::Prepared {
+                        policy: workspace::PreparationPolicy::Given,
                         response,
                         remote: false,
                         options: Default::default(),

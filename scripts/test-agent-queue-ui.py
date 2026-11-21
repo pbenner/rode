@@ -180,6 +180,21 @@ with fixture_directory(prefix="rode-agent-queue-ui-") as base:
                 "Compact window discarded queue height",
             )
             ui.resize(850, 900)
+            # Startup intentionally hides Explorer. A narrow native window is
+            # not itself a narrow chat pane; explicitly create that layout.
+            ui.navigate("f")
+            ui.control("pane-Explorer")
+            ui.layout(
+                lambda state: (
+                    next(
+                        b["rect"][2] - b["rect"][0]
+                        for b in state["buttons"]
+                        if b["name"] == "agent-queue-panel"
+                    )
+                    < 600
+                ),
+                "Explorer did not provide a compact queue pane",
+            )
             aligned_rows(compact=True)
             screenshot(window, "compact-queue.png")
             ui.resize(1380, 900)

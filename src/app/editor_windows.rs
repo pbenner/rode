@@ -15,6 +15,10 @@ pub(super) struct View {
     pub git_gutter: git_gutter::State,
     /// Cached logical-line projection for the most recently rendered source layout.
     pub gutter_layout: editor_view::gutter::Layout,
+    /// Latest-only parser worker; draft buffers and undo remain in TextEdit.
+    pub source_syntax: crate::theme::source::Source,
+    /// Native galley chunks, validated against the font cache each frame.
+    pub source_layout: editor_view::source_layout::Cache,
     /// Last applied shared wrap preference, used to reveal the caret after reflow.
     pub rendered_wrap: bool,
     pub show_find: bool,
@@ -38,6 +42,8 @@ impl Default for View {
             input: Default::default(),
             git_gutter: Default::default(),
             gutter_layout: Default::default(),
+            source_syntax: Default::default(),
+            source_layout: Default::default(),
             rendered_wrap: false,
             show_find: false,
             find: String::new(),
@@ -299,6 +305,11 @@ impl EditorApp {
     pub(super) fn reset_editor_contexts(&mut self, retention: documents::Retention) {
         for view in std::iter::once(&mut self.editor).chain(self.editors.parked.values_mut()) {
             view.git_gutter.reset();
+            // Derived source snapshots belong to this context, including parked
+            // editors. Drop cancels pending parses without touching retained
+            // recovery buffers or TextEdit's undo/cursor state.
+            view.source_syntax = Default::default();
+            view.source_layout = Default::default();
             view.input = Default::default();
             view.show_find = false;
             if retention == documents::Retention::Discard {

@@ -474,7 +474,7 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
             .unwrap()
             .contains("Changed tests only")
     );
-    chat.prompts[0].questions[0].answer = "Changed tests only".into();
+    chat.edit_answers(|prompt| prompt.questions[0].answer = "Changed tests only".into());
     chat.answer(chat.prompts[0].answers().unwrap()).unwrap();
     finish_turn(&mut chat);
     assert!(
@@ -549,8 +549,10 @@ fn codex_turn(program: &str, isolated: bool, backend: sandbox::Backend) {
         assert_eq!(chat.prompts.len(), 1);
         assert!(chat.prompts[0].is_async_message());
         assert_eq!(chat.prompts[0].questions.len(), 2);
-        chat.prompts[0].questions[0].answer = "Disabled".into();
-        chat.prompts[0].questions[1].answer = "Only the async regression".into();
+        chat.edit_answers(|prompt| {
+            prompt.questions[0].answer = "Disabled".into();
+            prompt.questions[1].answer = "Only the async regression".into();
+        });
         chat.answer(chat.prompts[0].answers().unwrap()).unwrap();
         finish_turn(&mut chat);
         assert!(chat.prompts.is_empty());

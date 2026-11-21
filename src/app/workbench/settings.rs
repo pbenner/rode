@@ -344,7 +344,14 @@ impl EditorApp {
                 let options = self.workbench.prefs.sandbox.clone();
                 self.sandbox_defaults = options.clone();
                 let remote = self.workspace.as_ref().is_some_and(|w| w.remote.is_some());
-                self.prepare_project(self.root(), options, remote, true, None, ctx);
+                self.prepare_project(
+                    self.root(),
+                    options,
+                    remote,
+                    true,
+                    workspace::PreparationPolicy::Given,
+                    ctx,
+                );
                 return;
             }
         }
@@ -580,7 +587,13 @@ impl EditorApp {
     }
     /// Select host/project-keyed settings after preparation, retain the actual requested
     /// sandbox options and refresh only tools needed by the visible context.
-    pub(in crate::app) fn load_project_tools(&mut self, ctx: &egui::Context) {
+    /// Implicit CWD startup uses a temporary Normal policy; it must not overwrite
+    /// the grants that an explicit reopen will restore.
+    pub(in crate::app) fn load_project_tools(
+        &mut self,
+        ctx: &egui::Context,
+        remember_policy: bool,
+    ) {
         let Some(w) = self.workspace.as_ref() else {
             return;
         };
@@ -594,7 +607,9 @@ impl EditorApp {
         prefs.sandbox = w.sandbox_options.clone();
         self.workbench.prefs = prefs.clone();
         self.workbench.draft = prefs;
-        self.workbench.save_preferences();
+        if remember_policy {
+            self.workbench.save_preferences();
+        }
         self.sync_project_environment();
         if self.environment_visible() {
             self.refresh_runtimes(ctx);

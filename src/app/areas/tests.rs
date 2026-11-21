@@ -26,7 +26,7 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
     app.agents.chat.notice("retained conversation");
     app.toggle_panel(Panel::Agent, &ctx);
     app.show_connections(&ctx);
-    assert_eq!(app.areas.active, Area::Projects);
+    assert_eq!(app.presentation.area, Area::Projects);
     assert!(app.connections_visible());
     assert!(app.tools_visible());
     app.toggle_connections(&ctx);
@@ -38,9 +38,9 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
         Area::Transfers,
     ] {
         app.open_area(area, &ctx);
-        assert_eq!(app.areas.active, area);
-        assert_eq!(app.tool_windows.surface, Surface::Tools);
-        assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+        assert_eq!(app.presentation.area, area);
+        assert_eq!(app.presentation.surface, Surface::Tools);
+        assert_eq!(app.presentation.panel, Some(Panel::Agent));
         assert!(!app.tools_visible());
         assert_eq!(
             app.agents.chat.messages.back().unwrap().text,
@@ -50,7 +50,7 @@ fn global_areas_preserve_project_selection_drafts_and_unsaved_source() {
         assert!(app.documents[0].dirty());
         app.open_area(Area::Projects, &ctx);
         assert!(app.tools_visible());
-        assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+        assert_eq!(app.presentation.panel, Some(Panel::Agent));
     }
 }
 
@@ -61,8 +61,8 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
         &eframe::CreationContext::_new_kittest(ctx.clone()),
         Startup::default(),
     );
-    assert_eq!(app.areas.active, Area::Welcome);
-    assert!(app.sidebar.selected.is_none());
+    assert_eq!(app.presentation.area, Area::Welcome);
+    assert!(app.presentation.sidebar.is_none());
     let project = tempfile::tempdir().unwrap();
     let response = files::local(&Request::Prepare {
         path: project.path().to_string_lossy().into(),
@@ -71,7 +71,7 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
     .unwrap();
     app.commit_project(response, false, Default::default(), false, None, &ctx);
     assert!(app.project_ready());
-    assert_eq!(app.areas.active, Area::Welcome);
+    assert_eq!(app.presentation.area, Area::Welcome);
     let probe = project.path().join("ui.json");
     ui_probe::install_at(&ctx, probe.clone());
     let render = |app: &mut EditorApp| {
@@ -110,7 +110,7 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
     };
     render(&mut app);
     app.execute_command(Command::Explorer, &ctx);
-    assert_eq!(app.areas.active, Area::Projects);
+    assert_eq!(app.presentation.area, Area::Projects);
     assert!(app.explorer_visible(egui::ViewportId::ROOT));
     app.new_file();
     app.documents[0].fixture_content().text = "unsaved source".into();
@@ -118,11 +118,11 @@ fn welcome_keeps_the_prepared_project_and_rail_without_exposing_hidden_content()
     app.toggle_panel(Panel::Agent, &ctx);
     app.agents.chat.notice("retained conversation");
     app.execute_command(Command::Projects, &ctx);
-    assert_eq!(app.areas.active, Area::Welcome);
+    assert_eq!(app.presentation.area, Area::Welcome);
     assert!(!app.explorer_visible(egui::ViewportId::ROOT));
     render(&mut app);
     app.execute_command(Command::Sidebar, &ctx);
-    assert_eq!(app.areas.active, Area::Projects);
+    assert_eq!(app.presentation.area, Area::Projects);
     assert!(app.tools_visible());
     assert_eq!(
         app.agents.chat.messages.back().unwrap().text,
@@ -186,31 +186,33 @@ fn area_windows_preserve_project_state_and_raise_without_replacing_the_root_view
             app.documents[0].fixture_content().text = "unsaved source".into();
             app.agents.chat.notice("retained conversation");
             app.toggle_panel(Panel::Agent, &ctx);
-            app.tool_windows.detached = detached_tools;
+            if detached_tools {
+                app.presentation.detach_tools();
+            }
             app.execute_command(tab.command(), &ctx);
             app.detach_tab(tab, &ctx);
             let owner = app.tool_viewport(tab);
             assert_ne!(owner, egui::ViewportId::ROOT);
             assert_ne!(owner, EditorApp::tools_viewport());
             assert_eq!(app.floating_tab(owner), Some(tab));
-            assert_eq!(app.areas.active, Area::Projects);
+            assert_eq!(app.presentation.area, Area::Projects);
 
             // Repeated requests reuse the sole window and leave the root view alone.
             app.detach_tab(tab, &ctx);
             app.execute_command(tab.command(), &ctx);
             assert_eq!(app.tool_viewport(tab), owner);
-            assert_eq!(app.areas.active, Area::Projects);
-            assert_eq!(app.tool_windows.surface, Surface::Tools);
-            assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
+            assert_eq!(app.presentation.area, Area::Projects);
+            assert_eq!(app.presentation.surface, Surface::Tools);
+            assert_eq!(app.presentation.panel, Some(Panel::Agent));
             app.reattach_tool_tab(tab, &ctx);
             assert!(!app.tab_detached(tab));
             assert_eq!(app.tool_viewport(tab), egui::ViewportId::ROOT);
-            assert_eq!(app.areas.active, area);
+            assert_eq!(app.presentation.area, area);
             if tab == ToolTab::Connections {
                 assert!(app.connections_visible());
             }
-            assert_eq!(app.tool_windows.panel, Some(Panel::Agent));
-            assert_eq!(app.tool_windows.detached, detached_tools);
+            assert_eq!(app.presentation.panel, Some(Panel::Agent));
+            assert_eq!(app.presentation.detached, detached_tools);
             assert_eq!(app.documents.owner(document), Some(egui::ViewportId::ROOT));
             assert_eq!(
                 app.documents.by_id(document).unwrap().text,
@@ -301,7 +303,7 @@ fn global_root_navigation_does_not_hide_a_secondary_editors_explorer() {
             })
         });
     }
-    assert_eq!(app.areas.active, Area::Settings);
+    assert_eq!(app.presentation.area, Area::Settings);
 }
 
 #[test]
@@ -312,13 +314,13 @@ fn global_navigation_keeps_visible_detached_project_tools_refreshing() {
         Startup::default(),
     );
     app.toggle_panel(Panel::Problems, &ctx);
-    app.tool_windows.detached = true;
+    app.presentation.detach_tools();
     app.open_area(Area::Settings, &ctx);
     assert!(app.tools_visible());
     assert!(app.panel_visible(Panel::Problems));
-    app.tool_windows.tools_hidden = true;
+    app.presentation.hide_tools();
     assert!(!app.panel_visible(Panel::Problems));
-    assert_eq!(app.areas.active, Area::Settings);
+    assert_eq!(app.presentation.area, Area::Settings);
 }
 
 #[test]
@@ -329,8 +331,8 @@ fn the_project_tools_shortcut_stays_in_projects_when_no_tool_is_selected() {
         Startup::default(),
     );
     app.focus_pane(navigation::Pane::Tools, &ctx);
-    assert_eq!(app.areas.active, Area::Projects);
-    assert_eq!(app.tool_windows.panel, Some(Panel::Problems));
+    assert_eq!(app.presentation.area, Area::Projects);
+    assert_eq!(app.presentation.panel, Some(Panel::Problems));
     assert!(app.tools_visible());
 }
 
@@ -345,16 +347,16 @@ fn invoking_a_remembered_project_tool_from_a_global_area_reveals_it() {
         app.toggle_panel(panel, &ctx);
         app.open_area(Area::Settings, &ctx);
         app.toggle_panel(panel, &ctx);
-        assert_eq!(app.areas.active, Area::Projects);
-        assert_eq!(app.tool_windows.panel, Some(panel));
+        assert_eq!(app.presentation.area, Area::Projects);
+        assert_eq!(app.presentation.panel, Some(panel));
         assert!(app.tools_visible());
         app.open_area(Area::Settings, &ctx);
         app.reveal_panel(panel, &ctx);
-        assert_eq!(app.areas.active, Area::Projects);
+        assert_eq!(app.presentation.area, Area::Projects);
         assert!(app.tools_visible());
         // The ordinary project command keeps its existing toggle behavior.
         app.toggle_panel(panel, &ctx);
-        assert!(app.tool_windows.panel.is_none());
+        assert!(app.presentation.panel.is_none());
     }
 }
 
@@ -386,7 +388,9 @@ fn project_tabs_wrap_without_overflow_and_hide_disabled_extensions() {
                 app.new_file();
                 if mode > 0 {
                     app.reveal_panel(Panel::Problems, &ctx);
-                    app.tool_windows.detached = mode == 2;
+                    if mode == 2 {
+                        app.presentation.detach_tools();
+                    }
                 }
                 app.set_extension(crate::extensions::Feature::Debugger.id(), debug);
                 let temp = tempfile::tempdir().unwrap();
@@ -661,7 +665,7 @@ fn late_file_reads_keep_global_areas_visible_and_existing_edits_intact() {
                 &ctx,
             );
             assert_eq!(
-                app.areas.active, area,
+                app.presentation.area, area,
                 "Late file completion stole the application area"
             );
             assert_eq!(app.documents.by_id(old).unwrap().text, "unsaved original");

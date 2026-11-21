@@ -339,7 +339,7 @@ mod tests {
             name: "notes.txt".into(),
             text: "snapshot".into(),
         };
-        app.agents.chat.busy = true;
+        app.agents.chat.fixture_mut().busy = true;
         app.agents.files.files.push(doc.clone());
         app.send_agent(&ctx);
         assert_eq!(app.agents.queue.next(), Some(""));
@@ -348,7 +348,7 @@ mod tests {
             std::slice::from_ref(&doc)
         );
         assert!(app.agents.files.files.is_empty());
-        app.agents.chat.busy = false;
+        app.agents.chat.fixture_mut().busy = false;
         app.agents.queue.clear();
         app.agents.config.codex = "bad\0program".into();
         app.agents.files.files.push(doc.clone());

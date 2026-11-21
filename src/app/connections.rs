@@ -111,7 +111,17 @@ impl EditorApp {
                         self.encrypted_dialog();
                         self.vaults.reconnected();
                     } else {
-                        self.prepare_project(root, options, true, true, restore, ctx);
+                        self.prepare_project(
+                            root,
+                            options,
+                            true,
+                            true,
+                            restore.map_or(
+                                workspace::PreparationPolicy::Given,
+                                workspace::PreparationPolicy::Saved,
+                            ),
+                            ctx,
+                        );
                     }
                 }
             }
@@ -380,7 +390,7 @@ mod tests {
             app.commit_project(response, true, Default::default(), true, None, &ctx);
             assert!(app.project_ready());
             assert!(app.session_busy(), "The background shell still starts");
-            assert!(app.sidebar.selected.is_none());
+            assert!(app.presentation.sidebar.is_none());
             assert!(!app.panel_visible(Panel::Agent));
             assert_eq!(app.terminal_visible(), ready);
             if !ready {
@@ -402,14 +412,14 @@ mod tests {
                     );
                 };
                 render(&mut app);
-                assert_eq!(app.areas.active, areas::Area::Welcome);
+                assert_eq!(app.presentation.area, areas::Area::Welcome);
                 assert_eq!(app.navigation.active, navigation::Pane::Tools);
                 assert!(app.navigation.rect(navigation::Pane::Explorer).is_none());
                 assert!(app.navigation.rect(navigation::Pane::Tools).is_some());
                 assert!(app.documents.active().is_none());
                 assert!(!app.agents.chat.busy);
-                let surface = app.tool_windows.surface;
-                let panel = app.tool_windows.panel;
+                let surface = app.presentation.surface;
+                let panel = app.presentation.panel;
                 if connections {
                     app.show_connections(&ctx);
                     app.navigation.zoom = Some(navigation::Pane::Connections);
@@ -445,7 +455,7 @@ mod tests {
                 render(&mut app);
                 assert!(!app.panel_visible(Panel::Agent));
                 assert!(!app.terminal_visible());
-                assert_eq!(app.areas.active, areas::Area::Welcome);
+                assert_eq!(app.presentation.area, areas::Area::Welcome);
                 assert_eq!(app.navigation.active, pane);
                 assert_eq!(app.navigation.zoom, zoom);
                 assert!(
@@ -457,8 +467,8 @@ mod tests {
                         }
                 );
                 assert_eq!(app.connections_visible(), connections);
-                assert_eq!(app.tool_windows.surface, surface);
-                assert_eq!(app.tool_windows.panel, panel);
+                assert_eq!(app.presentation.surface, surface);
+                assert_eq!(app.presentation.panel, panel);
             }
         }
     }

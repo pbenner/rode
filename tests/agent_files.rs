@@ -856,7 +856,7 @@ fn installed_codex_file_only_tools_work_without_shell_mcp_hooks_or_external_infe
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    chat.prompts[0].questions[0].answer = "Let me run the tests".into();
+    chat.edit_answers(|prompt| prompt.questions[0].answer = "Let me run the tests".into());
     chat.answer(chat.prompts[0].answers().unwrap()).unwrap();
     wait(&mut chat);
     assert!(chat.last_turn_succeeded, "{:?}", chat.messages);

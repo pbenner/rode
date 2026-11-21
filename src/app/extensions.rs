@@ -106,10 +106,10 @@ impl EditorApp {
         // Invalidates all source-tool results, including jobs queued before disabling.
         self.workbench.invalidate_tools();
         if !enabled {
-            if self.areas.active.panel().is_some_and(|panel| {
+            if self.presentation.area.panel().is_some_and(|panel| {
                 Self::panel_feature(panel).is_some_and(|feature| feature.id() == id)
             }) {
-                self.areas.active = areas::Area::Projects;
+                self.presentation.enter_area(areas::Area::Projects);
             }
             if id == Feature::Transfers.id() {
                 self.transfers.reset();
@@ -142,11 +142,11 @@ impl EditorApp {
                 self.host_tools.stop_monitor();
             }
             if self
-                .tool_windows
+                .presentation
                 .panel
                 .is_some_and(|panel| !self.panel_enabled(panel))
             {
-                self.tool_windows.panel = None;
+                self.presentation.clear_panel();
             }
             for doc in &mut self.documents {
                 if doc

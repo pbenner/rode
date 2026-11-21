@@ -20,7 +20,6 @@
 //! coordinates selection and startup loading; views consume roles, not preset IDs.
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32};
-use egui_extras::syntax_highlighting::SyntectSettings;
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -34,6 +33,7 @@ mod glow;
 mod install;
 mod interface;
 mod palette;
+pub(crate) mod source;
 mod surfaces;
 pub mod syntax;
 mod typography;
@@ -113,7 +113,7 @@ pub struct Themes {
     pub syntax_entries: Vec<syntax::SyntaxPalette>,
     selected_syntax: usize,
     syntax_generation: u64,
-    syntax: Box<SyntectSettings>,
+    syntax: syntax::Engine,
     original_syntax: SyntaxTheme,
     code_glow: bool,
 }
@@ -198,15 +198,14 @@ impl Themes {
                 }
                 fallback
             });
-        let mut syntax = Box::new(SyntectSettings {
-            ps: two_face::syntax::extra_newlines(),
-            ts: syntect::highlighting::ThemeSet::load_defaults(),
-        });
-        let original_syntax = syntax.ts.themes["base16-mocha.dark"].clone();
-        syntax.ts.themes.insert(
-            "base16-mocha.dark".into(),
-            entries[selected].syntax_theme(&original_syntax),
-        );
+        let original_syntax = syntect::highlighting::ThemeSet::load_defaults()
+            .themes
+            .remove("base16-mocha.dark")
+            .unwrap();
+        let syntax = syntax::Engine {
+            ps: std::sync::Arc::new(two_face::syntax::extra_newlines()),
+            theme: std::sync::Arc::new(entries[selected].syntax_theme(&original_syntax)),
+        };
         let (syntax_entries, syntax_warnings) =
             syntax::load(&directory.with_file_name("syntax-themes"));
         warnings.extend(syntax_warnings);
@@ -266,10 +265,7 @@ impl Themes {
             .theme
             .clone()
             .unwrap_or_else(|| self.active().syntax_theme(&self.original_syntax));
-        self.syntax
-            .ts
-            .themes
-            .insert("base16-mocha.dark".into(), theme);
+        self.syntax.theme = std::sync::Arc::new(theme);
         self.syntax_generation = syntax::generation();
     }
 
@@ -288,6 +284,15 @@ impl Themes {
             ctx.request_repaint();
         }
         Ok(())
+    }
+
+    /// Immutable grammar/palette snapshot for a source view's parser worker.
+    pub(crate) fn source_settings(&self) -> source::Settings {
+        source::Settings {
+            engine: self.syntax.clone(),
+            generation: self.syntax_generation,
+            glow: self.code_glow,
+        }
     }
 
     /// Build or reuse cached highlighted text for the active syntax choice and UI font size.

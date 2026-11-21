@@ -198,7 +198,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--ssh-backend russh|openssh] [--remote-helper PATH] [--no-x11] [--sandbox]\n\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nRust SSH is the default and needs no local ssh executable.\nCommon ~/.ssh/config settings are supported; select openssh for advanced configurations.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: atelier-dark (default), atelier-light, phosphor, sumie-light, sumie-dark, synthwave84, synthwave84-neon, carbon, carbon-edge, code-dark, matrix, amber, ice, neon, afterglow, knight-rider, hologram, telemetry, studio, studio-neutral, studio-hacker, or custom:FILENAME.\nSyntax themes: ui (follow UI), synthwave84, synthwave84-neon, dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
+            "RODE — native Rust editor\n\nUsage: rode [FILE|DIRECTORY] [--theme THEME] [--syntax-theme THEME] [--sandbox]\n       rode --ssh HOST [--remote-path PATH] [--user USER] [--port PORT]\n            [--identity FILE] [--jump HOST] [--ssh-config FILE] [--ssh-backend russh|openssh] [--remote-helper PATH] [--no-x11] [--sandbox]\n\nWith no target, the current directory opens in Normal mode unless --sandbox is explicit.\nLocal files open in a tab. Their folder becomes a project when safe to infer one.\nRust SSH is the default and needs no local ssh executable.\nCommon ~/.ssh/config settings are supported; select openssh for advanced configurations.\nAuthentication happens in the terminal. Host services use a matching native Linux helper.\nThemes: atelier-dark (default), atelier-light, phosphor, sumie-light, sumie-dark, synthwave84, synthwave84-neon, carbon, carbon-edge, code-dark, matrix, amber, ice, neon, afterglow, knight-rider, hologram, telemetry, studio, studio-neutral, studio-hacker, or custom:FILENAME.\nSyntax themes: ui (follow UI), synthwave84, synthwave84-neon, dracula, catppuccin-mocha, nord, monokai, one-half-dark, or custom:FILENAME.\nEmbedded acknowledgements: rode --syntax-licenses / --theme-licenses."
         );
         println!(
             "\nOptional Codex runtime: rode --codex [ARGUMENTS], e.g. rode --codex login.\nInstall rode-codex or supply an installed Codex executable."
@@ -274,10 +274,10 @@ fn main() -> eframe::Result {
         }
         i += 1;
     }
-    // No target defaults to CWD; Welcome only controls presentation.
+    // No target defaults to CWD in Normal mode; retain that implicit intent.
     // Explicit files/directories and SSH targets retain their normal resolution.
     if startup.local.is_none() && startup.remote.is_none() {
-        startup.local = Some(std::env::current_dir().map_err(|error| {
+        startup.cwd = Some(std::env::current_dir().map_err(|error| {
             eframe::Error::AppCreation(format!("Cannot open the current directory: {error}").into())
         })?);
     }

@@ -843,11 +843,18 @@ fn connections_sidebar_orders_actions_and_host_bound_lists_without_replacing_the
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let buttons = state["buttons"].as_array().unwrap();
         let button = |name| buttons.iter().find(|b| b["name"] == name).unwrap().clone();
-        assert_eq!(app.areas.active, areas::Area::Projects);
+        assert_eq!(app.presentation.area, areas::Area::Projects);
         assert!(buttons.iter().any(|b| b["name"] == "source-editor"));
         assert!(!buttons.iter().any(|b| b["name"] == "pane-Explorer"));
         assert_eq!(button("tunnel-saved-load:current")["enabled"], true);
         assert_eq!(button("tunnel-saved-load:foreign")["enabled"], false);
+        assert_eq!(button("tunnel-saved-row:foreign")["enabled"], true);
+        assert!(
+            !buttons.iter().any(|button| button["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("tunnel-saved-remove:"))),
+            "Removal belongs to the context menu: {state}"
+        );
         let pane = button("pane-Connections");
         let mut bottom = 0.;
         for name in [

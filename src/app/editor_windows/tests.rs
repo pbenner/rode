@@ -195,7 +195,7 @@ fn prepared_project_waits_for_same_frame_source_input_in_another_editor() {
                 options: Default::default(),
                 keep_buffers: false,
                 documents_at_start: app.documents.versions(),
-                restore_saved: None,
+                policy: workspace::PreparationPolicy::Given,
                 open_file: None,
             },
             result: Box::new(Ok(response)),

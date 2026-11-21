@@ -126,6 +126,134 @@ fn workspace_status_fits_the_footer_and_open_project_stays_in_the_header() {
     }
 }
 
+/// Implicit CWD must be usable even when stored policy would reject HOME or
+/// fail validation, without changing the policy an explicit reopen will use.
+#[test]
+fn implicit_cwd_opens_normal_without_restoring_or_saving_sandbox_grants() {
+    let home = files::expand_home("~").canonicalize().unwrap();
+    let project = tempfile::tempdir_in(&home).unwrap();
+    let alias = project.path().join("home-alias");
+    std::os::unix::fs::symlink(&home, &alias).unwrap();
+    for root in [
+        home.clone(),
+        home.parent().unwrap().to_owned(),
+        project.path().to_owned(),
+        alias,
+    ] {
+        for backend in [sandbox::Backend::Bwrap, sandbox::Backend::Landlock] {
+            let ctx = egui::Context::default();
+            let mut storage = MemoryStorage::default();
+            let defaults = sandbox::Options {
+                enabled: true,
+                backend,
+                read_only: vec!["invalid relative grant".into()],
+                project_read_only: true,
+                ..Default::default()
+            };
+            let canonical = root.canonicalize().unwrap();
+            let key = EditorApp::project_settings_key_for(canonical.to_str().unwrap(), None);
+            let saved = serde_json::json!({ key.clone(): {"sandbox": defaults, "ruff":"retained formatter"} });
+            storage.0.insert(
+                "sandbox_defaults".into(),
+                serde_json::to_string(&defaults).unwrap(),
+            );
+            storage
+                .0
+                .insert("project_preferences".into(), saved.to_string());
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = EditorApp::new(
+                &cc,
+                Startup {
+                    cwd: Some(root.clone()),
+                    ..Default::default()
+                },
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.workspace.preparing() {
+                app.poll(&ctx);
+                assert!(
+                    Instant::now() < deadline,
+                    "CWD preparation stalled: {:?}",
+                    app.notice
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let workspace = app
+                .workspace
+                .as_ref()
+                .unwrap_or_else(|| panic!("CWD {root:?} was not opened: {:?}", app.notice));
+            assert!(workspace.ready && workspace.connected);
+            assert_eq!(workspace.root, canonical.to_string_lossy());
+            assert!(
+                !workspace.plan.requested
+                    && !workspace.plan.active
+                    && !workspace.plan.project_read_only
+            );
+            assert_eq!(workspace.sandbox_options, sandbox::Options::default());
+            assert!(
+                app.notice.as_ref().is_none_or(|notice| !notice.1),
+                "{:?}",
+                app.notice
+            );
+            assert_eq!(app.presentation.area, areas::Area::Welcome);
+            assert!(app.presentation.sidebar.is_none());
+            assert_eq!(app.sandbox_defaults, defaults);
+            assert_eq!(
+                app.saved_sandbox_for(canonical.to_str().unwrap(), false),
+                Some(defaults)
+            );
+            assert!(
+                !app.workbench.preferences_pending,
+                "Implicit startup must not rewrite saved grants"
+            );
+            assert!(app.terminal.is_none() && !app.agents.chat.busy);
+            app.toggle_projects(&ctx);
+            assert_eq!(app.presentation.area, areas::Area::Projects);
+            app.set_explorer_visible(egui::ViewportId::ROOT, true);
+            assert!(app.explorer_visible(egui::ViewportId::ROOT));
+            assert!(
+                app.explorer_state
+                    .directories
+                    .contains_key(canonical.to_str().unwrap())
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_startup_sandbox_requests_are_not_downgraded_to_normal_cwd() {
+    let home = files::expand_home("~").canonicalize().unwrap();
+    for implicit in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::new(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            Startup {
+                cwd: implicit.then(|| home.clone()),
+                local: (!implicit).then(|| home.clone()),
+                sandbox: true,
+                ..Default::default()
+            },
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.workspace.preparing() {
+            app.poll(&ctx);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            app.workspace.is_none(),
+            "Explicit whole-home sandbox must still be rejected"
+        );
+        assert!(
+            app.notice.as_ref().is_some_and(|(message, error, _)| *error
+                && message.contains("Sandboxing the whole home directory")),
+            "{:?}",
+            app.notice
+        );
+    }
+}
+
 #[test]
 fn local_startup_home_file_opens_without_a_project_and_saves_safely() {
     let file = tempfile::Builder::new()
@@ -251,7 +379,7 @@ fn startup_file_mode_never_overrides_explicit_policies_or_directory_requests() {
             keep_buffers: false,
             token: workspace::PreparationId::fixture(7),
             documents_at_start: vec![],
-            restore_saved: Some(force),
+            policy: workspace::PreparationPolicy::Saved(force),
             open_file: None,
         };
         let policies = if saved {
@@ -327,7 +455,7 @@ fn local_startup_opens_files_and_directories_and_saves_to_the_original_file() {
             assert_eq!(doc.path.as_deref(), absolute_file.to_str());
             assert_eq!(doc.text, "startup contents\n");
             assert!(!doc.dirty());
-            assert_eq!(app.tool_windows.surface, tool_windows::Surface::Editor);
+            assert_eq!(app.presentation.surface, tool_windows::Surface::Editor);
             doc.fixture_content().text.push_str("edited\n");
             doc.set_dirty_fixture(true);
             doc.advance_version_fixture();
@@ -535,7 +663,7 @@ fn edits_made_while_a_project_opens_are_not_silently_discarded() {
                 keep_buffers: false,
                 token: preparation,
                 documents_at_start: vec![],
-                restore_saved: None,
+                policy: workspace::PreparationPolicy::Given,
                 open_file: Some(file.to_string_lossy().into_owned()),
             },
             result: Box::new(Ok(response)),

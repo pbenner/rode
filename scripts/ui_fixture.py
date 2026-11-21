@@ -112,17 +112,18 @@ def capture_failure(label, process, window=None, *, files=(), observations=()):
 
 
 @contextlib.contextmanager
-def native_session(args, environment, project, label):
+def native_session(args, environment, project, label, *, cwd=None):
     """Wait for the owning window/project and retain diagnostics even on startup failure.
 
     A successful scenario must close normally, including application shutdown.
     Failure cleanup never retries UI actions or replaces the original exception.
+    Optional cwd changes only the child process directory, never the test runner.
     """
     state = Path(environment["RODE_UI_TEST_STATE"])
     log_path = ARTIFACTS / f"{label}.log"
     window = None
     with log_path.open("w") as log:
-        process = subprocess.Popen(args, env=environment, stdout=log, stderr=log)
+        process = subprocess.Popen(args, cwd=cwd, env=environment, stdout=log, stderr=log)
         try:
             ui = project_ui(process, environment, project, log_path)
             window = ui.window

@@ -562,7 +562,7 @@ mod tests {
             },
             sandbox_options: Default::default(),
         }));
-        app.load_project_tools(&ctx);
+        app.load_project_tools(&ctx, true);
         app.prepare_environment_draft();
         app.workbench.environment.variables =
             "# keep the comment\nMODE=unfinished\ninvalid assignment".into();
@@ -624,7 +624,7 @@ mod tests {
         app.prepare_environment_draft();
         app.workbench.environment.variables = "MODE=unsaved".into();
         app.execute_command(Command::Environment, &ctx);
-        assert_eq!(app.tool_windows.panel, Some(Panel::Settings));
+        assert_eq!(app.presentation.panel, Some(Panel::Settings));
         assert_eq!(app.workbench.settings_section, SettingsSection::Environment);
         app.reveal_settings(SettingsSection::CodeTools, &ctx);
         app.reveal_settings(SettingsSection::Environment, &ctx);
