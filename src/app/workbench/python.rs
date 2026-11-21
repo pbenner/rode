@@ -326,7 +326,7 @@ impl EditorApp {
         let Some(terminal) = &mut self.terminal else {
             return;
         };
-        if terminal.native && !force {
+        if terminal.is_native() && !force {
             return;
         }
         if terminal.python.as_deref() == Some(&env.executable) {

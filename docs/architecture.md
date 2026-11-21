@@ -63,6 +63,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/app/editor_operations.rs` | Bounded editor operation queue, native input acknowledgement and generation-checked ownership changes |
 | `src/app/editor_windows.rs` | Editor viewport registry and presentation borrowing; shared buffers and project services retain their owners |
 | `src/app/tool_windows.rs`, `src/app/tool_windows/` | Application-owned tool navigation and native-window registry, project/global presentation hosts and docking regressions; independent of project resets |
+| `src/app/panels.rs` | Shared panel identities, scope classification and rendering routes for application, host and project views; project caches remain in `workbench` |
 | `src/keyboard.rs`, `src/keyboard/` | Window-local control metadata, native focus handoffs, hints/search and button-only focus groups |
 | `src/app/workspace.rs`, `src/app/connections.rs` | Project preparation/activation, ordered teardown, transport release and disconnect/reconnect recovery |
 | `src/app/editor_view.rs` | Active document/preview routing, source buffer rendering and in-buffer find/replace; retains native undo, cursor and document-version state |
@@ -126,6 +127,7 @@ project-bound draft/cache identities; producers do not assemble reply lifetimes.
 | `src/notebook/`, `src/notebook.rs`, `crates/rode-host-core/src/notebook_kernel.py`, `src/app/notebook_view.rs`, `notebook_view/ui.rs`, `notebook_view/source.rs` | Metadata-preserving notebook model, kernel ownership/versioned execution, cell/output rendering and stateful source editing |
 | `src/marp.rs`, `src/latex.rs`, corresponding `src/app/` and `crates/rode-host-core/src/` modules | Explicit installed-tool builds/renders, compiler issues, preview/export lifecycles |
 | `src/terminal.rs`, `src/terminal/colors.rs`, `src/app/terminal_colors.rs`, `src/sessions.rs`, `src/app/sessions.rs`, `src/bin/rode-sessiond.rs`, `crates/rode-session/` | Native terminal rendering, workspace policy, shared host PTYs, the Cargo-installed headless frontend and view lifetimes |
+| `src/terminal/backend.rs` | Typed raw-PTY, framed-attachment, debugger-stream and retained-output ownership; backend-specific input, resize and cleanup |
 | `crates/rode-session/src/tunnels.rs`, `src/app/tunnels.rs`, `src/ssh.rs` | Daemon-owned reverse SSH forwarding, reconnect/trust state, explicit host controls and return profiles preserving compute identity |
 | `src/slurm.rs`, `crates/rode-host-core/src/slurm/`, `src/app/sessions/allocation.rs`, `crates/rode-session/src/workspace.rs` | Interactive allocations, persistent notebook reservations, captured execution targets, stdio compute steps, compute-node sandbox policy, scheduler snapshots and ownership-checked cancellation |
 | `src/vault.rs`, `crates/rode-host-core/src/vault.rs`, `src/app/vaults.rs` | Verified gocryptfs mounts, cross-window leases and guarded locking |
@@ -239,6 +241,13 @@ Panel selection and detachment use `refresh_project_panel` for the same Git and
 environment refresh rules. Settings drafts remain with the project owner, so
 moving a view neither copies a draft nor applies it to running work.
 
+`app/panels.rs` owns the shared panel catalogue and rendering routes across all
+three scopes. Host tools and application views therefore need no project-tool
+selection or project-ready state to render. `tool_windows` owns reveal/toggle
+navigation; the project workbench supplies its domain views and explicit refresh
+operations without owning global panel routing. Existing widget identities and
+domain readiness checks remain stable when the presentation moves.
+
 The main header reserves its fixed actions before measuring the menus/search
 region. Project tab rendering, sizing and fallback selection use the same ordered
 registry. Inline and wrapped toolbars share their window-control allocation;
@@ -300,6 +309,16 @@ A stable configuration lock survives atomic replacement; locking only the old in
 Persistence uses a worker because lock waits and filesystem sync can stall. Failed writes pause until explicit retry, and eframe receives a private snapshot because its whole-file persistence cannot perform the shared merge. This makes `Storage::flush` asynchronous and final shutdown flushing best-effort when storage fails. Rationale lives in `src/persistence.rs` and `src/files.rs`; [configuration](configuration.md) records supported behavior and limits.
 
 ### Separate process and terminal ownership
+
+`terminal/backend.rs` represents each terminal transport with its required
+resources: a raw PTY, a framed native attachment with persistence state, a
+debugger callback stream, or retained output without input/process ownership.
+`Terminal::is_native()` is a read-only query; changing a flag cannot switch an
+existing view's protocol. Native resize requests use the input queue and wait for
+the host's parser-size acknowledgement. Debugger resize/end events go to their
+existing coordinator, while retained output cannot send input or end that owner.
+PTY cleanup signals only the owned client/child under the existing liveness guard;
+host-session lifetime remains with the persistent service.
 
 Bounded stdio protocols reuse authenticated transport without a new application listener or embedded agent runtime. Queue bounds make slow-consumer pressure visible instead of allowing unlimited memory or UI-thread pipe waits. Protocol clients must handle queue-full results; JSON/base64 encoding has overhead in return for simple bounded framing. Background workers start in new sessions to remove the launcher's controlling terminal while retaining owned process groups for cancellation. Interactive shells instead establish their own PTYs. Rationale lives in `src/process.rs`.
 

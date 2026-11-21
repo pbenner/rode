@@ -12,7 +12,11 @@ use std::{
     },
     time::Duration,
 };
+mod backend;
+use backend::{Backend, Process, Protocol};
 mod colors;
+#[cfg(test)]
+mod fixtures;
 mod framing;
 mod selection;
 #[cfg(test)]
@@ -39,18 +43,12 @@ pub(crate) struct TerminalView {
 /// transport.
 pub struct Terminal {
     parser: Arc<Mutex<vt100::Parser>>,
-    input: mpsc::SyncSender<Vec<u8>>,
-    master: Option<Box<dyn MasterPty + Send>>,
-    killer: Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
-    control: Option<Box<dyn Fn(StreamControl) + Send + Sync>>,
+    backend: Backend,
     /// Shared liveness flag updated by the worker when the backing stream ends.
     pub alive: Arc<AtomicBool>,
     size: (u16, u16),
     /// User-visible terminal title.
     pub title: String,
-    /// Whether this view uses the native framed terminal/session transport.
-    pub native: bool,
-    persistent: Arc<AtomicBool>,
     /// Interpreter selected when this shell was created, for display/activation context.
     pub python: Option<String>,
     visible: Arc<AtomicBool>,
@@ -127,15 +125,13 @@ impl Terminal {
         (
             Self {
                 parser,
-                input,
-                master: None,
-                killer: None,
-                control: Some(Box::new(move |event| end_control(event))),
+                backend: Backend::Debugger {
+                    input,
+                    control: Box::new(move |event| end_control(event)),
+                },
                 alive: alive.clone(),
                 size: (24, 80),
                 title,
-                native: false,
-                persistent: Arc::new(AtomicBool::new(false)),
                 python: None,
                 visible,
                 contrast: Default::default(),
@@ -203,7 +199,7 @@ impl Terminal {
 
     /// Spawn a directly owned PTY command with background I/O and scoped cleanup.
     pub fn spawn(ctx: &egui::Context, command: CommandBuilder, title: String) -> Result<Self> {
-        Self::spawn_mode(ctx, command, title, false, false)
+        Self::spawn_pty(ctx, command, title, Protocol::Raw)
     }
     /// Spawn a command using the native framed attachment mode rather than raw terminal output.
     pub fn spawn_native(
@@ -211,7 +207,7 @@ impl Terminal {
         command: CommandBuilder,
         title: String,
     ) -> Result<Self> {
-        Self::spawn_mode(ctx, command, title, true, true)
+        Self::spawn_pty(ctx, command, title, Protocol::framed(true))
     }
     /// Attach a view to an existing native host session without restarting its shell or
     /// replaying startup input.
@@ -252,12 +248,11 @@ impl Terminal {
         };
         command.env_remove("TMUX");
         command.env_remove("TMUX_PANE");
-        Self::spawn_mode(
+        Self::spawn_pty(
             ctx,
             command,
             format!("NATIVE · {} / {}", info.name, info.mode),
-            true,
-            info.persistent,
+            Protocol::framed(info.persistent),
         )
     }
     /// Set visibility so hidden output does not request unnecessary GUI repaints.
@@ -266,14 +261,17 @@ impl Terminal {
     }
     /// Return the persistent-service lifetime state observed by this native attachment.
     pub fn persistent(&self) -> bool {
-        self.native && self.persistent.load(Ordering::Acquire)
+        self.backend.persistent()
     }
-    fn spawn_mode(
+    /// Whether this view uses the framed native session protocol.
+    pub fn is_native(&self) -> bool {
+        self.backend.is_native()
+    }
+    fn spawn_pty(
         ctx: &egui::Context,
         mut command: CommandBuilder,
         title: String,
-        native: bool,
-        keep_running: bool,
+        protocol: Protocol,
     ) -> Result<Self> {
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
@@ -283,6 +281,7 @@ impl Terminal {
             pixel_width: 0,
             pixel_height: 0,
         })?;
+        let native = protocol.is_native();
         if native && let Some(fd) = pair.master.as_raw_fd() {
             let mut attributes: libc::termios = unsafe { std::mem::zeroed() };
             if unsafe { libc::tcgetattr(fd, &mut attributes) } == 0 {
@@ -308,8 +307,7 @@ impl Terminal {
         let mut writer = pair.master.take_writer()?;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(24, 100, 4000)));
         let alive = Arc::new(AtomicBool::new(true));
-        let persistent = Arc::new(AtomicBool::new(keep_running));
-        let read_persistent = persistent.clone();
+        let read_protocol = protocol.clone();
         let visible = Arc::new(AtomicBool::new(true));
         let read_visible = visible.clone();
         let read_parser = parser.clone();
@@ -319,7 +317,7 @@ impl Terminal {
             let mut buffer = [0u8; 8192];
             let mut native_started = false;
             loop {
-                if native {
+                if let Protocol::Framed(read_persistent) = &read_protocol {
                     let result = if native_started {
                         rode_session::read_stream(&mut reader)
                     } else {
@@ -425,17 +423,12 @@ impl Terminal {
         });
         Ok(Self {
             parser,
-            input,
-            master: Some(pair.master),
-            killer: Some(killer),
-            control: None,
+            backend: Backend::process(Process::new(pair.master, killer), input, protocol),
             alive,
             // A native host may have a different size before its first view.
             // Always publish the first layout, even if it matches this PTY.
             size: if native { (0, 0) } else { (24, 100) },
             title,
-            native,
-            persistent,
             python: None,
             visible,
             contrast: Default::default(),
@@ -452,19 +445,12 @@ impl Terminal {
     /// process ownership. Late reader output remains visible after the original
     /// terminal is dropped, so an SSH exit cannot race away its final error.
     pub(crate) fn output_view(&self, title: String) -> Self {
-        let (input, closed) = mpsc::sync_channel(1);
-        drop(closed);
         Self {
             parser: self.parser.clone(),
-            input,
-            master: None,
-            killer: None,
-            control: None,
+            backend: Backend::Output,
             alive: Arc::new(AtomicBool::new(false)),
             size: self.size,
             title,
-            native: false,
-            persistent: Arc::new(AtomicBool::new(false)),
             python: None,
             visible: self.visible.clone(),
             contrast: Default::default(),
@@ -534,46 +520,15 @@ impl Terminal {
             bytes.len() <= 1024 * 1024,
             "Terminal paste exceeds 1 MiB. Paste a smaller chunk."
         );
-        if self.native {
-            self.send_frame(b'I', &bytes)
-        } else {
-            self.queue(bytes)
-        }
-    }
-
-    fn send_frame(&self, kind: u8, bytes: &[u8]) -> Result<()> {
-        let mut frame = Vec::with_capacity(bytes.len() + 5);
-        rode_session::write_stream(&mut frame, kind, bytes)?;
-        self.queue(frame)
-    }
-
-    fn queue(&self, bytes: Vec<u8>) -> Result<()> {
-        self.input.try_send(bytes).map_err(|error| match error {
-            mpsc::TrySendError::Full(_) => anyhow::anyhow!("Terminal input queue is full. Input was not sent; try again when the shell responds."),
-            mpsc::TrySendError::Disconnected(_) => anyhow::anyhow!("Terminal session has ended."),
-        })
+        self.backend.send(bytes)
     }
 
     fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        if self.native {
-            // Input uses this queue too, so the shell receives the new size
-            // before a command typed into the resized pane.
-            self.send_frame(b'R', &[rows.to_be_bytes(), cols.to_be_bytes()].concat())?;
-        } else {
-            if let Some(control) = &self.control {
-                control(StreamControl::Resize(rows, cols));
-            }
-            if let Some(master) = &self.master {
-                master.resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })?;
-            }
-            if let Ok(mut parser) = self.parser.lock() {
-                parser.screen_mut().set_size(rows, cols);
-            }
+        self.backend.resize(rows, cols)?;
+        if !self.is_native()
+            && let Ok(mut parser) = self.parser.lock()
+        {
+            parser.screen_mut().set_size(rows, cols);
         }
         self.size = (rows, cols);
         self.selection = None;
@@ -941,16 +896,8 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        // clone_killer retains a numeric PID even after the waiter reaps it.
-        // A finished view must not signal a later process reusing that PID.
-        if self.is_alive()
-            && let Some(killer) = &mut self.killer
-        {
-            let _ = killer.kill();
-        }
-        if let Some(control) = &self.control {
-            control(StreamControl::End);
-        }
+        let alive = self.is_alive();
+        self.backend.close(alive);
     }
 }
 
@@ -1061,6 +1008,59 @@ pub fn ansi_color(color: vt100::Color, default: Color32, ansi: &[Color32; 16]) -
 mod lifecycle_tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn process_backends_keep_input_and_resize_on_their_selected_wire_protocol() {
+        for protocol in [Protocol::Raw, Protocol::framed(true)] {
+            let native = protocol.is_native();
+            let (mut terminal, _stream, input, signals) =
+                fixtures::process(&egui::Context::default(), "Transport".into(), protocol);
+            assert_eq!(terminal.is_native(), native);
+            assert_eq!(terminal.persistent(), native);
+            terminal.send(b"command\r".to_vec()).unwrap();
+            let bytes = input.recv_timeout(Duration::from_secs(1)).unwrap();
+            if native {
+                let (kind, payload) = rode_session::read_stream(&mut bytes.as_slice()).unwrap();
+                assert_eq!(kind, b'I');
+                assert_eq!(payload, b"command\r");
+            } else {
+                assert_eq!(bytes, b"command\r");
+            }
+            terminal.resize(12, 50).unwrap();
+            if native {
+                let bytes = input.recv_timeout(Duration::from_secs(1)).unwrap();
+                let (kind, payload) = rode_session::read_stream(&mut bytes.as_slice()).unwrap();
+                assert_eq!(kind, b'R');
+                assert_eq!(payload, [0, 12, 0, 50]);
+                assert_eq!(terminal.parser.lock().unwrap().screen().size(), (24, 80));
+            } else {
+                assert_eq!(terminal.parser.lock().unwrap().screen().size(), (12, 50));
+                assert!(input.try_recv().is_err());
+            }
+            drop(terminal);
+            assert_eq!(signals.load(Ordering::Acquire), 1);
+        }
+    }
+
+    #[test]
+    fn output_views_never_end_their_debugger_owner() {
+        let ended = Arc::new(AtomicUsize::new(0));
+        let count = ended.clone();
+        let (terminal, _stream) =
+            Terminal::stream(&egui::Context::default(), "Debug".into(), move |event| {
+                if matches!(event, StreamControl::End) {
+                    count.fetch_add(1, Ordering::AcqRel);
+                }
+            });
+        let output = terminal.output_view("Retained output".into());
+        assert!(!output.is_native());
+        assert!(!output.persistent());
+        assert!(output.send(b"do not send".to_vec()).is_err());
+        drop(output);
+        assert_eq!(ended.load(Ordering::Acquire), 0);
+        drop(terminal);
+        assert_eq!(ended.load(Ordering::Acquire), 1);
+    }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
@@ -1292,24 +1292,11 @@ mod lifecycle_tests {
         }
     }
 
-    #[derive(Debug)]
-    struct CountSignals(Arc<AtomicUsize>);
-    impl portable_pty::ChildKiller for CountSignals {
-        fn kill(&mut self) -> std::io::Result<()> {
-            self.0.fetch_add(1, Ordering::AcqRel);
-            Ok(())
-        }
-        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
-            Box::new(Self(self.0.clone()))
-        }
-    }
     #[test]
     fn dropping_a_finished_view_does_not_signal_its_reaped_child() {
         for finished in [false, true] {
-            let signals = Arc::new(AtomicUsize::new(0));
-            let (mut terminal, stream) =
-                Terminal::stream(&egui::Context::default(), "Fixture".into(), |_| {});
-            terminal.killer = Some(Box::new(CountSignals(signals.clone())));
+            let (terminal, stream, _input, signals) =
+                fixtures::process(&egui::Context::default(), "Fixture".into(), Protocol::Raw);
             if finished {
                 stream.end();
             }
@@ -1320,10 +1307,11 @@ mod lifecycle_tests {
 
     #[test]
     fn output_view_keeps_late_error_bytes_without_input_or_process_ownership() {
-        let signals = Arc::new(AtomicUsize::new(0));
-        let (mut terminal, stream) =
-            Terminal::stream(&egui::Context::default(), "SSH fixture".into(), |_| {});
-        terminal.killer = Some(Box::new(CountSignals(signals.clone())));
+        let (terminal, stream, _input, signals) = fixtures::process(
+            &egui::Context::default(),
+            "SSH fixture".into(),
+            Protocol::Raw,
+        );
         let output = terminal.output_view("SSH ERROR / fixture".into());
         drop(terminal);
         assert_eq!(signals.load(Ordering::Acquire), 1);

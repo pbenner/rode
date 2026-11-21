@@ -14,6 +14,17 @@ struct Harness {
 }
 
 impl Harness {
+    fn native() -> Self {
+        let mut harness = Self::new();
+        let (terminal, stream, input, _) =
+            fixtures::process(&harness.ctx, "Selection".into(), Protocol::framed(false));
+        harness.terminal = terminal;
+        harness.stream = stream;
+        harness.input = input;
+        harness.frame(vec![]);
+        harness
+    }
+
     fn new() -> Self {
         let ctx = egui::Context::default();
         let (tx, input) = mpsc::channel();
@@ -273,10 +284,9 @@ fn typing_then_interrupt_in_one_frame_does_not_copy_an_old_selection() {
 
 #[test]
 fn native_view_resize_clears_selection_before_shared_size_acknowledgement() {
-    let mut harness = Harness::new();
+    let mut harness = Harness::native();
     harness.write("selected output");
     harness.drag((0, 0), (0, 8));
-    harness.terminal.native = true;
     let parser_size = harness.terminal.parser.lock().unwrap().screen().size();
     harness.size = egui::vec2(320., 200.);
     harness.frame(vec![]);

@@ -180,7 +180,7 @@ impl EditorApp {
         let height = layout::compact_control_height(ui);
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let native = self.terminal.as_ref().is_some_and(|t| t.native && t.is_alive());
+                let native = self.terminal.as_ref().is_some_and(|t| t.is_native() && t.is_alive());
                 let persistent = self.terminal.as_ref().is_some_and(Terminal::persistent);
                 let mut persist_button = crate::keyboard::Button::new(
                     RichText::new(if persistent { "Persist: on" } else { "Persist: off" })
@@ -244,7 +244,7 @@ impl EditorApp {
                 if wide && self
                     .terminal
                     .as_ref()
-                    .is_some_and(|terminal| terminal.native)
+                    .is_some_and(|terminal| terminal.is_native())
                     && ui.add_enabled(persistent, crate::keyboard::Button::new("Detach session").small().min_size(egui::vec2(0., height)))
                         .on_hover_text("Enable Persist to detach and keep this terminal running.").clicked()
                 {
@@ -256,7 +256,7 @@ impl EditorApp {
                             if self
                                 .terminal
                                 .as_ref()
-                                .is_some_and(|terminal| terminal.native)
+                                .is_some_and(|terminal| terminal.is_native())
                             {
                                 "VIEW ENDED"
                             } else {

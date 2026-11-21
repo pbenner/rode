@@ -602,9 +602,8 @@ fn document_terminal_and_dialog_buttons_align_at_multiple_sizes_and_scales() {
                     lease: std::sync::Arc::new(app.image_budget.reserve(16).unwrap()),
                 });
                 // Include native-only actions without starting a host service.
-                let (mut terminal, _stream) =
-                    crate::terminal::Terminal::stream(&ctx, "Layout fixture".into(), |_| {});
-                terminal.native = true;
+                let (terminal, _stream) =
+                    crate::terminal::Terminal::fixture_native(&ctx, "Layout fixture".into());
                 app.terminal = Some(terminal);
                 for scene in [
                     "terminal", "notebook", "image", "binary", "markdown", "slides", "dialogs",

@@ -609,7 +609,7 @@ impl EditorApp {
         }
         match self.tool_windows.surface {
             Surface::Terminal => self.terminal_content(ui, ctx),
-            Surface::Tools => self.workbench_content(ui, ctx),
+            Surface::Tools => self.selected_panel_content(ui, ctx),
             Surface::Editor => {}
         }
     }
@@ -801,6 +801,80 @@ impl EditorApp {
             ToolTab::Panel(panel) => self.panel_content(panel, ui, ctx),
             ToolTab::Area(area) => self.area_content(area, ui, ctx),
         }
+    }
+}
+
+impl EditorApp {
+    /// Reveal a tool without toggling it off, including an independently detached tab.
+    pub(in crate::app) fn reveal_panel(&mut self, panel: Panel, ctx: &egui::Context) {
+        if let Some(area) = areas::Area::for_panel(panel) {
+            self.open_area(area, ctx);
+            return;
+        }
+        self.areas.active = areas::Area::Projects;
+        if self.tab_detached(ToolTab::Panel(panel)) {
+            self.focus_tool_tab(ToolTab::Panel(panel), ctx);
+        } else if self.tool_windows.panel == Some(panel)
+            && self.tool_windows.surface == Surface::Tools
+        {
+            self.focus_pane(navigation::Pane::Tools, ctx);
+        } else {
+            self.toggle_panel(panel, ctx);
+        }
+    }
+
+    /// Select or hide a tool panel, refreshing its cached data when appropriate.
+    /// An already selected detached panel is revealed and focused instead of hidden.
+    pub(super) fn toggle_panel(&mut self, panel: Panel, ctx: &egui::Context) {
+        if !self.panel_enabled(panel) {
+            self.notify(
+                "This extension is disabled. Enable it in View → Extensions.",
+                false,
+            );
+            return;
+        }
+        if let Some(area) = areas::Area::for_panel(panel) {
+            self.open_area(area, ctx);
+            return;
+        }
+        let from_project = self.areas.active == areas::Area::Projects;
+        self.areas.active = areas::Area::Projects;
+        self.tool_windows.last_tool = Some(ToolTab::Panel(panel));
+        if self.tab_detached(ToolTab::Panel(panel)) {
+            self.focus_tool_tab(ToolTab::Panel(panel), ctx);
+            return;
+        }
+        if self.tool_windows.detached
+            && self.tool_windows.panel == Some(panel)
+            && self.tool_windows.surface == Surface::Tools
+        {
+            self.tool_windows.tools_hidden = false;
+            ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd_to(Self::tools_viewport(), egui::ViewportCommand::Focus);
+            return;
+        }
+        self.tool_windows.panel = if from_project
+            && self.tool_windows.panel == Some(panel)
+            && self.tool_windows.surface == Surface::Tools
+        {
+            None
+        } else {
+            Some(panel)
+        };
+        if self.tool_windows.panel.is_some() {
+            self.refresh_project_panel(panel, ctx);
+        }
+        if panel == Panel::Agent && self.tool_windows.panel.is_some() {
+            self.agents.focus = true;
+        }
+        self.focus_pane(
+            if self.tool_windows.panel.is_some() {
+                navigation::Pane::Tools
+            } else {
+                navigation::Pane::Editor
+            },
+            ctx,
+        );
     }
 }
 

@@ -438,7 +438,11 @@ impl EditorApp {
         if self.session_busy() {
             return;
         }
-        let Some(terminal) = self.terminal.as_ref().filter(|t| t.native && t.is_alive()) else {
+        let Some(terminal) = self
+            .terminal
+            .as_ref()
+            .filter(|t| t.is_native() && t.is_alive())
+        else {
             return;
         };
         let Some(info) = self

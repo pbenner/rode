@@ -61,6 +61,7 @@ mod menus;
 mod monitoring;
 mod navigation;
 mod notebook_view;
+mod panels;
 mod pdf_view;
 mod project_bookmarks;
 mod project_dialog;
@@ -80,6 +81,7 @@ mod workspace;
 use commands::Command;
 use eframe::egui::{self, Align, FontId, Key, Layout, RichText, Sense, Stroke};
 use icons::{Icon, IconButton};
+use panels::Panel;
 use saved_connections::Completion as ProfileEvent;
 use std::{
     collections::{HashMap, HashSet},
@@ -91,8 +93,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tool_windows::{Surface, ToolTab};
-use workbench::{Panel, ToolJob, Workbench};
+use tool_windows::ToolTab;
+use workbench::{ToolJob, Workbench};
 use workers::{Job, WorkspaceEvent};
 
 /// Validate the serialized map before shared preference merging accepts project settings.

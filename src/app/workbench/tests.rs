@@ -1,6 +1,7 @@
 //! Workbench regressions for responsive panels, captured settings and versioned results.
 
 use super::*;
+use crate::app::tool_windows::Surface;
 
 #[test]
 fn interpreter_discovery_does_not_change_the_agent_launch_identity() {
