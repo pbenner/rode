@@ -39,6 +39,18 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
     (local / "folder/note.txt").write_text("nested file\n")
     for name in ("drag-note.txt", "batch-a.txt", "batch-b.txt"):
         (local / name).write_text(name + "\n")
+    managed = local / "manage ' 日本.txt"
+    managed.write_text("rename and delete me\n")
+    detached_delete = local / "detached-delete.txt"
+    detached_delete.write_text("delete from the detached browser\n")
+    protected_target = local / "link-target.txt"
+    protected_target.write_text("keep the symlink target\n")
+    (local / "link-to-delete").symlink_to(protected_target)
+    for name in ("manage-a.tmp", "manage-b.tmp"):
+        (local / name).write_text(name + "\n")
+    removed_tree = remote / "remove-tree"
+    (removed_tree / "nested").mkdir(parents=True)
+    (removed_tree / "nested/note.txt").write_text("recursive deletion\n")
     expected = hashlib.sha256(payload).hexdigest()
     current_project = remote
     environment = fixture_environment(base)
@@ -127,6 +139,85 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
                 f"{name} did not reset with Home",
             )
         screenshot(ui.window, "resize-grips.png")
+        # File management shares the list's keyboard focus, ordinary modal
+        # host and project guards. The submitted source remains on disk until
+        # the explicit confirmation is accepted.
+        select(managed)
+        key("F2")
+        ui.control("transfer-file-name", focused=True)
+        renamed = local / "managed-renamed.txt"
+        ui.fill("transfer-file-name", renamed.name)
+        key("Tab")
+        ui.control("transfer-file-apply", focused=True)
+        key("Tab")
+        ui.control("transfer-file-cancel", focused=True)
+        key("Return")
+        ui.absent("transfer-file-name")
+        assert managed.exists() and not renamed.exists(), "Enter on Cancel renamed the file"
+        ui.click("transfer-actions:0")
+        ui.click("transfer-rename:0")
+        ui.control("transfer-file-name", focused=True)
+        ui.fill("transfer-file-name", renamed.name)
+        key("Return")
+        ui.wait(lambda: renamed.exists() and not managed.exists(), "Local rename did not finish")
+        ui.control("transfer-idle")
+        browse(0, local)
+        select(renamed)
+        key("Delete")
+        ui.control("transfer-file-cancel", focused=True)
+        key("Return")
+        ui.absent("transfer-file-apply")
+        assert renamed.exists(), "Enter on Cancel deleted the selected file"
+        ui.click("transfer-actions:0")
+        ui.click("transfer-delete:0")
+        screenshot(ui.window, "delete-confirmation.png")
+        ui.click("transfer-file-apply")
+        ui.wait(lambda: not renamed.exists(), "Confirmed local deletion did not finish")
+        ui.control("transfer-idle")
+        browse(0, local)
+
+        def remove_entry(side, path):
+            row = "file-picker-row:" + hashlib.sha256(str(path).encode()).hexdigest()
+            ui.click(row, mouse_button=3)
+            ui.click(f"transfer-delete:{side}")
+            ui.click("transfer-file-apply")
+            ui.wait(
+                lambda: not path.is_symlink() and not path.exists(),
+                f"Deletion did not remove {path}",
+            )
+            ui.control("transfer-idle")
+
+        remove_entry(0, local / "link-to-delete")
+        assert protected_target.read_text() == "keep the symlink target\n"
+        browse(0, local)
+        for name in ("manage-a.tmp", "manage-b.tmp"):
+            select(local / name)
+        ui.click("transfer-actions:0")
+        ui.click("transfer-delete:0")
+        ui.click("transfer-file-apply")
+        ui.wait(
+            lambda: all(not (local / name).exists() for name in ("manage-a.tmp", "manage-b.tmp")),
+            "Multi-selection deletion did not remove both files",
+        )
+        ui.control("transfer-idle")
+        browse(0, local)
+        ui.click(
+            "file-picker-row:" + hashlib.sha256(str(removed_tree).encode()).hexdigest(),
+            mouse_button=3,
+        )
+        ui.click("transfer-rename:1")
+        renamed_tree = remote / "renamed-tree"
+        ui.fill("transfer-file-name", renamed_tree.name)
+        ui.click("transfer-file-apply")
+        ui.wait(
+            lambda: renamed_tree.is_dir() and not removed_tree.exists(),
+            "Remote folder rename did not finish",
+        )
+        ui.control("transfer-idle")
+        browse(1, remote)
+        remove_entry(1, renamed_tree)
+        browse(1, remote)
+        unchanged_project()
         selected = "file-picker-checked:" + hashlib.sha256(str(source).encode()).hexdigest()
         select(source)
         ui.control(selected)
@@ -151,6 +242,7 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
         screenshot(ui.window, "detached-transfers.png")
         select(source)
         ui.absent(selected)
+        remove_entry(0, detached_delete)
         screenshot(ui.window, "icon-views.png")
         drag(source, 1)
         copied(remote / source.name, expected)
@@ -307,5 +399,5 @@ with fixture_directory(prefix="rode-transfers-ui-") as base:
         unchanged_project()
 
 print(
-    "Transfers: binary upload/download, folders, conflicts, cancellation, feature gating and independent project navigation passed."
+    "Transfers: rename/delete and symlink safeguards, binary upload/download, folders, conflicts, cancellation, feature gating and independent project navigation passed."
 )

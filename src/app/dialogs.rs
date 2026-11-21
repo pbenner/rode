@@ -135,6 +135,8 @@ impl EditorApp {
                                 self.extensions_dialog(ui, ctx);
                             } else if self.dialog == Dialog::Explorer {
                                 self.explorer_dialog(ui, ctx);
+                            } else if self.dialog == Dialog::TransferFiles {
+                                self.transfer_file_dialog(ui, ctx);
                             } else if self.dialog == Dialog::Encrypted {
                                 self.encrypted_ui(ui, ctx);
                             } else if matches!(self.dialog, Dialog::MarpExport(..)) {

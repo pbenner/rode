@@ -166,6 +166,7 @@ enum Dialog {
     Encrypted,
     HexOpen,
     Explorer,
+    TransferFiles,
     MarpExport(u64, crate::marp::Format),
 }
 

@@ -47,6 +47,11 @@ impl EditorApp {
             }
             if self.transfers.panes[side].browser.needs_load
                 && !self.transfers.panes[side].browser.loading
+                // A completion refreshes the listed directory; it must not
+                // submit a different path while the user is still typing it.
+                && (self.transfers.panes[side].browser.directory.is_empty()
+                    || self.transfers.panes[side].browser.location
+                        == self.transfers.panes[side].browser.directory)
             {
                 self.transfers.panes[side].browser.needs_load = false;
                 self.transfer_list(
@@ -69,10 +74,15 @@ impl EditorApp {
                             ui.set_max_height(260.);
                             self.transfer_queue_ui(ui, ctx);
                         });
-                        if self.transfers.running.is_none() && self.transfers.queue.is_empty() {
+                        if self.transfers.running.is_none()
+                            && self.transfers.queue.is_empty()
+                            && self.transfers.file_operation.is_none()
+                        {
                             ui_probe::button(ui, "transfer-idle", &menu.response);
                         }
-                        ui.weak(if self.transfers.running.is_some() {
+                        ui.weak(if self.transfers.file_operation.is_some() {
+                            "Updating files…".into()
+                        } else if self.transfers.running.is_some() {
                             "Transferring…".into()
                         } else {
                             format!("{} finished", self.transfers.history.len())

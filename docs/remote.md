@@ -103,6 +103,19 @@ queue height. Press Home or double-click the divider to restore its default size
 On short windows, the tray becomes an **Activity…** bar; open it for progress,
 cancel, retry and finished copies while both file panes retain their space.
 
+Use **Rename…** or **Delete…** in a pane's **···** menu for checked files, or
+right-click a file or folder. **F2** renames one item and **Delete** opens the
+confirmation for checked items (or the keyboard cursor when nothing is checked).
+Rename never replaces an existing destination. Delete permanently removes the
+selected entries, including folder contents; symbolic-link targets are preserved.
+The confirmation names the host and items and initially focuses **Cancel**.
+The current folder itself cannot be deleted via **Select this folder**.
+File operations are disabled while copies are active and follow the selected
+host's access policy.
+Project editor paths update after a successful rename; deleting files keeps open
+buffers and unsaved edits available for **Save As**. Both browser views refresh
+after a file operation.
+
 Drag files or folders to the opposite pane to copy them into that displayed
 folder, or drop onto a folder row to copy into that folder. Dragging a selected
 row copies the whole selection; dragging an unselected row copies just that item.

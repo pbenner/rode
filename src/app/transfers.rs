@@ -4,6 +4,7 @@
 use super::*;
 mod browser;
 mod drag;
+mod operations;
 mod queue;
 #[cfg(test)]
 mod tests;
@@ -132,6 +133,10 @@ enum Event {
         id: u64,
         result: Result<(), String>,
     },
+    Mutated {
+        id: u64,
+        completed: Vec<operations::Completed>,
+    },
 }
 struct Finished {
     job: Job,
@@ -157,6 +162,8 @@ pub(super) struct State {
     remaining: bool,
     pending: Arc<AtomicUsize>,
     refresh: Option<String>,
+    file_form: Option<operations::Form>,
+    file_operation: Option<operations::Running>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -178,6 +185,8 @@ impl Default for State {
             remaining: false,
             pending: Arc::default(),
             refresh: None,
+            file_form: None,
+            file_operation: None,
         }
     }
 }
@@ -221,6 +230,10 @@ impl State {
         self.error = None;
         self.rename.clear();
         self.remaining = false;
+        self.file_form = None;
+        if let Some(operation) = &self.file_operation {
+            operation.cancel.store(true, Ordering::Release);
+        }
         if let Some(running) = &self.running {
             running.cancel.store(true, Ordering::Release);
         }
@@ -332,7 +345,10 @@ impl EditorApp {
         directory: String,
         ctx: &egui::Context,
     ) {
-        if paths.is_empty() || !self.panel_enabled(Panel::Transfers) {
+        if paths.is_empty()
+            || !self.panel_enabled(Panel::Transfers)
+            || self.transfers.file_operation.is_some()
+        {
             return;
         }
         let target = &self.transfers.panes[side.other()];
@@ -408,6 +424,10 @@ impl EditorApp {
     }
     /// Refresh dirty-destination guards and drain replies even when the tab is hidden or disabled.
     pub(super) fn transfer_tick(&mut self, ctx: &egui::Context) {
+        if self.dialog != Dialog::TransferFiles {
+            self.transfers.file_form = None;
+        }
+        let mut mutations = Vec::new();
         if self.transfers.running.is_some() || !self.transfers.queue.is_empty() {
             *self.transfers.protected.lock().unwrap() = self
                 .documents
@@ -498,10 +518,20 @@ impl EditorApp {
                     state.rename.clear();
                     state.remaining = false;
                 }
+                Event::Mutated { id, completed }
+                    if state
+                        .file_operation
+                        .as_ref()
+                        .is_some_and(|operation| operation.id == id) =>
+                {
+                    let operation = state.file_operation.take().unwrap();
+                    mutations.push((operation, completed));
+                }
                 _ => {}
             }
         }
         if state.running.is_none()
+            && state.file_operation.is_none()
             && let Some(task) = state.queue.pop_front()
         {
             state.next = state.next.wrapping_add(1);
@@ -531,7 +561,7 @@ impl EditorApp {
                 ctx.request_repaint_of(egui::ViewportId::ROOT);
             });
         }
-        if state.running.is_some() {
+        if state.running.is_some() || state.file_operation.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         if let Some(directory) = state.refresh.take() {
@@ -552,6 +582,9 @@ impl EditorApp {
                     self.list(path, ctx);
                 }
             }
+        }
+        for (operation, completed) in mutations {
+            self.finish_transfer_files(operation, completed, ctx);
         }
     }
     /// Explorer entry points reuse this view and leave the project/chat/terminal roots intact.

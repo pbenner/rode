@@ -1,5 +1,6 @@
-//! Dedicated channels share authentication, but never occupy the document RPC
-//! writer. Pipe polling bounds stalled peers and observes per-job cancellation.
+//! Bulk-copy channels share authentication without occupying the document RPC
+//! writer. File management reuses Explorer RPC with the same captured policy.
+//! Pipe polling bounds stalled streams and observes per-job cancellation.
 use anyhow::{Context, Result, ensure};
 use rode_host_protocol::{
     framing,
@@ -47,6 +48,21 @@ impl Endpoint {
         match self {
             Self::Local => None,
             Self::Ssh(endpoint) => Some(&endpoint.plan),
+        }
+    }
+    /// Reuse Explorer's literal-path operations on this captured endpoint. A
+    /// remote mutation keeps its prepared policy and never falls back locally.
+    pub fn mutate(&self, mutation: crate::files::Mutation) -> Result<crate::files::Response> {
+        let request = crate::files::Request::Mutate { mutation };
+        match self {
+            Self::Local => crate::files::local(&request),
+            Self::Ssh(endpoint) => {
+                ensure!(
+                    endpoint.plan.host_context.is_some(),
+                    "Remote file operations require a prepared host context"
+                );
+                endpoint.remote.request_in(&request, Some(&endpoint.plan))
+            }
         }
     }
     pub fn open(&self, cancel: Arc<AtomicBool>) -> Result<Client> {

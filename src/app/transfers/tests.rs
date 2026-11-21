@@ -484,3 +484,19 @@ fn dividers_resize_by_keyboard_and_drag_reset_and_survive_compact_windows() {
         );
     }
 }
+
+#[test]
+fn completion_refresh_does_not_submit_a_folder_path_that_is_still_being_typed() {
+    let (mut app, ctx) = app();
+    let pane = &mut app.transfers.panes[Side::Local];
+    pane.browser.needs_load = true;
+    pane.browser.location = "/unfinished-folder".into();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.transfers_ui(ui, ctx));
+    });
+    let pane = &app.transfers.panes[Side::Local];
+    assert_eq!(pane.browser.directory, "/local");
+    assert_eq!(pane.browser.location, "/unfinished-folder");
+    assert!(pane.browser.needs_load);
+    assert!(!pane.browser.loading);
+}

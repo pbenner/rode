@@ -1,13 +1,18 @@
 //! Compact file panes. Shared directory rows retain keyboard navigation; secondary
 //! actions live in one menu and the primary copy action stays in a fixed footer.
 use super::*;
+use operations::Action;
 
 impl EditorApp {
     pub(super) fn transfer_pane_ui(&mut self, ui: &mut egui::Ui, side: Side, ctx: &egui::Context) {
         let palette = self.themes.active().palette;
         let generation = self.transfers.generation;
         let host_ready = self.transfer_host_endpoint().is_some();
-        let can_transfer = host_ready && self.transfers.panes.iter().all(Pane::ready);
+        let can_transfer = host_ready
+            && self.transfers.file_operation.is_none()
+            && self.transfers.panes.iter().all(Pane::ready);
+        let writable = self.dialog == Dialog::None && self.transfer_files_writable(side);
+        let mut operation = None;
         if side == Side::Remote && !host_ready {
             ui.disable();
         }
@@ -88,7 +93,9 @@ impl EditorApp {
                             browse = Some(pane.browser.directory.clone());
                             ui.close();
                         }
-                        pane_actions(ui, pane);
+                        if let Some(action) = pane_actions(ui, pane, side, writable) {
+                            operation = Some((action, selected_entries(pane)));
+                        }
                     });
                     ui_probe::button(ui, &format!("transfer-actions:{side}"), &response);
                     Icon::More.paint(
@@ -210,7 +217,7 @@ impl EditorApp {
                     );
                     if ui
                         .add_enabled(
-                            explorer::valid_name(&pane.new_folder) && pane.ready(),
+                            explorer::valid_name(&pane.new_folder) && writable,
                             crate::keyboard::Button::new("Create"),
                         )
                         .clicked()
@@ -257,9 +264,33 @@ impl EditorApp {
                 .collect();
             let ready = pane.ready();
             let selected = &pane.selected;
+            let pane_entries = &pane.browser.entries;
+            let mut context_selection = None;
             let token = pane.browser.token;
             let directory = &pane.browser.directory;
             let mut on_row = |ui: &mut egui::Ui, entry: &Entry, response: &egui::Response| {
+                if response.secondary_clicked() && !selected.contains(&entry.path) {
+                    context_selection = Some(entry.path.clone());
+                }
+                response.context_menu(|ui| {
+                    let entries = if selected.contains(&entry.path) {
+                        pane_entries
+                            .iter()
+                            .filter(|entry| selected.contains(&entry.path))
+                            .cloned()
+                            .collect()
+                    } else {
+                        vec![entry.clone()]
+                    };
+                    if let Some(action) = file_actions(ui, side, &entries, writable) {
+                        operation = Some((action, entries));
+                    }
+                    ui.separator();
+                    if crate::keyboard::button(ui, "Copy path").clicked() {
+                        ctx.copy_text(entry.path.clone());
+                        ui.close();
+                    }
+                });
                 if ready && can_transfer && response.drag_started() {
                     let mut paths = if selected.contains(&entry.path) {
                         selected.iter().cloned().collect::<Vec<_>>()
@@ -307,6 +338,37 @@ impl EditorApp {
                     on_row: Some(&mut on_row),
                 },
             );
+            if let Some(path) = context_selection {
+                pane.selected = HashSet::from([path]);
+            }
+            let host = ui.make_persistent_id((format!("transfer-rows:{side}"), "focus"));
+            if writable && !egui::Popup::is_any_open(ctx) && ctx.memory(|m| m.has_focus(host)) {
+                let action = if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Delete))
+                {
+                    Some(Action::Delete)
+                } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2)) {
+                    Some(Action::Rename)
+                } else {
+                    None
+                };
+                if let Some(action) = action {
+                    let mut entries = selected_entries(pane);
+                    if entries.is_empty() && pane.selected.is_empty() && pane.list.navigated {
+                        entries.extend(
+                            pane.browser
+                                .entries
+                                .iter()
+                                .filter(|entry| {
+                                    (pane.hidden || !entry.name.starts_with('.'))
+                                        && entry.name.to_lowercase().contains(&query)
+                                })
+                                .nth(pane.list.index)
+                                .cloned(),
+                        );
+                    }
+                    operation = Some((action, entries));
+                }
+            }
             match choice {
                 Some(file_browser::Choice::Select(entry)) => {
                     if !pane.selected.insert(entry.path.clone()) {
@@ -341,6 +403,9 @@ impl EditorApp {
             }
         });
         self.transfer_drop_ui(ui, side, list_rect, folder_target, ctx);
+        if let Some((action, entries)) = operation {
+            self.transfer_file_form(side, action, entries);
+        }
         if let Some(path) = create {
             self.transfer_list(
                 side,
@@ -366,7 +431,7 @@ impl EditorApp {
     }
 }
 
-fn pane_actions(ui: &mut egui::Ui, pane: &mut Pane) {
+fn pane_actions(ui: &mut egui::Ui, pane: &mut Pane, side: Side, writable: bool) -> Option<Action> {
     crate::keyboard::checkbox(ui, &mut pane.hidden, "Show hidden files");
     ui.separator();
     for label in [
@@ -375,7 +440,14 @@ fn pane_actions(ui: &mut egui::Ui, pane: &mut Pane) {
         "Select this folder",
         "New folder…",
     ] {
-        if crate::keyboard::button(ui, label).clicked() {
+        let response = ui.add_enabled(
+            label != "New folder…" || writable,
+            crate::keyboard::Button::new(label),
+        );
+        if label == "New folder…" {
+            ui_probe::button(ui, &format!("transfer-new-folder:{side}"), &response);
+        }
+        if response.clicked() {
             match label {
                 "Select all" => {
                     pane.selected = pane
@@ -402,4 +474,39 @@ fn pane_actions(ui: &mut egui::Ui, pane: &mut Pane) {
             ui.close();
         }
     }
+    ui.separator();
+    file_actions(ui, side, &selected_entries(pane), writable)
+}
+
+fn selected_entries(pane: &Pane) -> Vec<Entry> {
+    pane.browser
+        .entries
+        .iter()
+        .filter(|entry| pane.selected.contains(&entry.path))
+        .cloned()
+        .collect()
+}
+
+/// Folder and row menus expose the same selection rules and keyboard targets.
+fn file_actions(
+    ui: &mut egui::Ui,
+    side: Side,
+    entries: &[Entry],
+    writable: bool,
+) -> Option<Action> {
+    let mut chosen = None;
+    for (action, name, label) in [
+        (Action::Rename, "rename", "Rename…"),
+        (Action::Delete, "delete", "Delete…"),
+    ] {
+        let enabled =
+            writable && !entries.is_empty() && (action != Action::Rename || entries.len() == 1);
+        let response = ui.add_enabled(enabled, crate::keyboard::Button::new(label));
+        ui_probe::button(ui, &format!("transfer-{name}:{side}"), &response);
+        if response.clicked() {
+            chosen = Some(action);
+            ui.close();
+        }
+    }
+    chosen
 }

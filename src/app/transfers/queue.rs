@@ -7,8 +7,15 @@ impl EditorApp {
         let mut remove = None;
         ui.horizontal_wrapped(|ui| {
             let heading = ui.strong("Activity");
-            if self.transfers.running.is_none() && self.transfers.queue.is_empty() {
+            if self.transfers.running.is_none()
+                && self.transfers.queue.is_empty()
+                && self.transfers.file_operation.is_none()
+            {
                 ui_probe::button(ui, "transfer-idle", &heading);
+            }
+            if self.transfers.file_operation.is_some() {
+                ui.spinner();
+                ui.label("Updating files…");
             }
             ui.weak(if self.transfers.queue.is_empty() {
                 "No waiting transfers".into()
@@ -88,6 +95,7 @@ impl EditorApp {
                     });
                 }
                 if self.transfers.running.is_none()
+                    && self.transfers.file_operation.is_none()
                     && self.transfers.queue.is_empty()
                     && self.transfers.history.is_empty()
                 {

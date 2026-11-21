@@ -53,6 +53,20 @@ pub(super) struct Change {
     entry: Entry,
 }
 
+impl Change {
+    /// Transfer-browser operations acknowledge the same project-cache and open
+    /// editor effects as Explorer operations, after checking their host identity.
+    pub(super) fn from_mutation(entry: Entry, mutation: &files::Mutation) -> Self {
+        let kind = match mutation {
+            files::Mutation::Rename { .. } => Kind::Rename,
+            files::Mutation::Remove { .. } => Kind::Delete,
+            files::Mutation::CreateDirectory { .. } => Kind::Folder,
+            files::Mutation::Copy { .. } => Kind::Duplicate,
+        };
+        Self { kind, entry }
+    }
+}
+
 pub(super) fn valid_name(name: &str) -> bool {
     !name.trim().is_empty()
         && name != "."
@@ -98,7 +112,7 @@ impl EditorApp {
 
     /// A deleted entry can still own an open buffer. Do not create a second
     /// binding or silently reopen retained contents under a newly reused name.
-    fn explorer_destination_in_use(&self, destination: &std::path::Path) -> bool {
+    pub(super) fn explorer_destination_in_use(&self, destination: &std::path::Path) -> bool {
         self.documents.iter().any(|doc| {
             doc.path
                 .as_ref()
@@ -390,31 +404,53 @@ impl EditorApp {
         result: Result<Response, String>,
         ctx: &egui::Context,
     ) {
-        let effects = self.explorer_state.finish(
-            change,
-            result,
-            self.workspace.as_ref().map(|w| w.root.as_str()),
-        );
-        if let Some((entry, destination)) = effects.rename {
-            for doc in &mut self.documents {
-                if let Some(path) = doc
-                    .path
-                    .as_deref()
-                    .and_then(|path| renamed(path, &entry, &destination))
-                {
-                    doc.renamed(path);
+        self.finish_file_changes(std::iter::once((change, result)), ctx);
+    }
+
+    /// A batch applies every acknowledged binding/cache change before scheduling
+    /// one refresh per directory. Shared by Explorer and transfer-browser jobs.
+    pub(super) fn finish_file_changes(
+        &mut self,
+        changes: impl IntoIterator<Item = (Change, Result<Response, String>)>,
+        ctx: &egui::Context,
+    ) {
+        let mut refresh = HashSet::new();
+        let mut open = Vec::new();
+        let mut error = None;
+        for (change, result) in changes {
+            let effects = self.explorer_state.finish(
+                change,
+                result,
+                self.workspace.as_ref().map(|w| w.root.as_str()),
+            );
+            if let Some((entry, destination)) = effects.rename {
+                for doc in &mut self.documents {
+                    if let Some(path) = doc
+                        .path
+                        .as_deref()
+                        .and_then(|path| renamed(path, &entry, &destination))
+                    {
+                        doc.renamed(path);
+                    }
                 }
             }
+            self.status = effects.status;
+            if error.is_none() {
+                error = effects.error;
+            }
+            refresh.extend(effects.refresh);
+            open.extend(effects.open);
         }
-        self.status = effects.status;
-        if let Some(error) = effects.error {
+        if let Some(error) = error {
             self.abort_lifecycle(error, ctx);
         }
         self.file_browser.invalidate_rows();
-        for path in effects.refresh {
+        let mut refresh: Vec<_> = refresh.into_iter().collect();
+        refresh.sort();
+        for path in refresh {
             self.list(path, ctx);
         }
-        if let Some(path) = effects.open {
+        for path in open {
             self.open_file(path, ctx);
         }
     }

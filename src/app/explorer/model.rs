@@ -102,7 +102,7 @@ impl State {
 
     /// Fence older directory replies with a new mutation epoch, clear loading markers and retain
     /// busy state until the mutation is acknowledged.
-    pub(super) fn begin_mutation(&mut self) {
+    pub(in crate::app) fn begin_mutation(&mut self) {
         self.form = None;
         self.epoch = self.epoch.wrapping_add(1);
         self.loading.clear();
